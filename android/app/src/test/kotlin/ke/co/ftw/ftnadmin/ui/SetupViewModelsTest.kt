@@ -132,7 +132,7 @@ class SetupViewModelsTest {
         await(vm.state) { requests("GET /api/v1/routers/s1/checks").any { r -> r.requestUrl!!.queryParameter("fresh") == "1" } }
     }
 
-    @Test fun confirmFixIsSentDirectlyWithoutASecondConfirmStep() = runTest(main.dispatcher) {
+    @Test fun confirmFixWaitsForDialogThenSendsConfirm() = runTest(main.dispatcher) {
         val fixJson = ""","fix":{"kind":"confirm","label":"Remove OLT port","confirm_text":"Learned MACs: AA","role":"owner"}"""
         routes["GET /api/v1/routers/s1/checks"] = ok(checks(item("olt.bridge_conflict", "fail", fixJson)))
         routes["POST /api/v1/routers/s1/checks/olt.bridge_conflict/fix"] = ok("""{"item":${item("olt.bridge_conflict", "ok")},"applied":[]}""")
@@ -141,7 +141,17 @@ class SetupViewModelsTest {
         val i = (vm.state.value.checks as Loadable.Ready).value.items.single()
 
         vm.requestFix(i)
-        await(vm.state) { it.fixing.isEmpty() && requests("POST").isNotEmpty() }
+        advanceUntilIdle()
+        assertEquals(i.id, vm.state.value.confirmFix?.id)
+        assertTrue("nothing is sent before the person taps Apply", requests("POST").isEmpty())
+
+        vm.cancelFix()
+        advanceUntilIdle()
+        assertTrue(requests("POST").isEmpty())
+
+        vm.requestFix(i)
+        vm.confirmFix()
+        await(vm.state) { it.fixing.isEmpty() && it.confirmFix == null && requests("POST").isNotEmpty() }
         assertTrue(requests("POST").single().body.readUtf8().contains("\"confirm\":true"))
     }
 

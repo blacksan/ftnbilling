@@ -136,6 +136,15 @@ fun SetupScreen(siteId: String, user: UserInfo, onBack: () -> Unit, onStatus: ()
         }
     }
 
+    ui.confirmFix?.let { item ->
+        AlertDialog(
+            onDismissRequest = vm::cancelFix,
+            title = { Text(item.fix?.label.orEmpty().ifBlank { item.title }) },
+            text = { Text(item.fix?.confirmText.orEmpty().ifBlank { "Apply this change on the router?" }) },
+            confirmButton = { TextButton(onClick = vm::confirmFix) { Text("Apply") } },
+            dismissButton = { TextButton(onClick = vm::cancelFix) { Text("Cancel") } },
+        )
+    }
     ui.modeConflict?.let { conflict ->
         AlertDialog(
             onDismissRequest = vm::dismissModeConflict,
@@ -324,13 +333,6 @@ private fun FixArea(item: CheckItem, user: UserInfo, busy: Boolean, onFix: () ->
         FixKind.AUTO, FixKind.CONFIRM -> {
             Button(onClick = onFix, enabled = canRunFix(user, fix) && !busy, modifier = Modifier.fillMaxWidth()) {
                 Text(if (busy) "Working..." else fix.label.ifBlank { "Fix" })
-            }
-            if (fix.kind == FixKind.CONFIRM && fix.confirmText.isNotBlank() && canRunFix(user, fix)) {
-                Text(
-                    fix.confirmText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AppTheme.extended.warning,
-                )
             }
             if (!canRunFix(user, fix)) {
                 Text(

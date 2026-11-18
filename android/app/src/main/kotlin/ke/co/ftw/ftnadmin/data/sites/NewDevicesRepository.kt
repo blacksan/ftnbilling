@@ -23,6 +23,7 @@ class NewDevicesRepository(private val api: ApiClient) {
         "unregistered", "attach",
         body = buildJsonObject {
             put("site_id", siteId)
+            put("router_id", siteId)
             put("mac", mac)
             put("account_id", accountId)
         },
@@ -33,6 +34,7 @@ class NewDevicesRepository(private val api: ApiClient) {
             "unregistered", "create",
             body = buildJsonObject {
                 put("site_id", siteId)
+            put("router_id", siteId)
                 put("mac", mac)
                 put("flat", flat)
                 putIfNotBlank("tenant", tenant)
@@ -45,6 +47,7 @@ class NewDevicesRepository(private val api: ApiClient) {
         "POST", "unregistered", "dismiss",
         body = buildJsonObject {
             put("site_id", siteId)
+            put("router_id", siteId)
             put("mac", mac)
         },
     )
