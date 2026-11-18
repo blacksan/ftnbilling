@@ -126,7 +126,12 @@ envget() { [ -f "$ENVF" ] && grep -m1 "^$1=" "$ENVF" | cut -d= -f2- || true; }
 # setkv sets KEY=VAL in the env file (replacing); addkv only adds it when missing.
 setkv() {
   if [ "$DRY" = 1 ]; then printf '    [dry-run] env %s=%s\n' "$1" "$2"; return 0; fi
-  if grep -q "^$1=" "$ENVF"; then sed -i "s|^$1=.*|$1=$2|" "$ENVF"; else echo "$1=$2" >>"$ENVF"; fi
+  # awk, not sed: values such as database URLs contain & and | that sed would mangle.
+  if grep -q "^$1=" "$ENVF"; then
+    local tmp; tmp=$(mktemp "$ENVF.XXXXXX")
+    K="$1" V="$2" awk 'BEGIN{k=ENVIRON["K"]; v=ENVIRON["V"]} index($0, k "=")==1 {print k "=" v; next} {print}' "$ENVF" >"$tmp"
+    chmod --reference="$ENVF" "$tmp"; chown --reference="$ENVF" "$tmp"; mv -f "$tmp" "$ENVF"
+  else echo "$1=$2" >>"$ENVF"; fi
 }
 addkv() {
   if grep -qs "^$1=" "$ENVF"; then return 0; fi
@@ -239,7 +244,7 @@ caddy_rclone() {
   # The Drive backup needs rclone >= 1.60 (older distro packages lack features it uses).
   rclone_ok() { have rclone && [ "$(printf '%s\n1.60\n' "$(rclone version 2>/dev/null | awk 'NR==1{sub(/^rclone v/,""); print $1}')" | sort -V | head -1)" = "1.60" ]; }
   if rclone_ok; then
-    note "rclone: ok ($(rclone version | head -1))"
+    note "rclone: ok ($(rclone version 2>/dev/null | awk 'NR==1'))"
   elif [ "$DRY" = 1 ]; then
     printf '    [dry-run] apt install rclone; if older than 1.60, run the official installer (rclone.org/install.sh)\n'
   else
@@ -685,7 +690,15 @@ SQL
         note "saved $BACKUPS/pre-postgres-$(date +%F).tgz"
       fi
     fi
-    addkv DATABASE_URL "postgres://ftnbilling:$pw@/ftnbilling?host=/var/run/postgresql&sslmode=disable&pool_max_conns=4&application_name=ftnbilling"
+    addkv DATABASE_URL "postgres://ftnbilling:$pw@/ftnbilling?host=/var/run/postgresql&sslmode=disable&application_name=ftnbilling"
+  fi
+  # pool_max_conns is pgx-only: psql/pg_dump reject it. The app defaults to 4
+  # connections without it, so remove it from env files written by older installers.
+  if [ "$DRY" != 1 ]; then
+    dburl=$(envget DATABASE_URL)
+    case $dburl in *pool_max_conns=*)
+      setkv DATABASE_URL "$(printf '%s' "$dburl" | sed -E 's/([?&])pool_max_conns=[0-9]+&?/\1/; s/[?&]$//')" ;;
+    esac
   fi
   # DATA_KEY encrypts national IDs. Losing it makes stored IDs unreadable: it is in the Drive backup.
   addkv DATA_KEY "$(head -c 32 /dev/urandom | base64 -w0)"
