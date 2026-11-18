@@ -91,7 +91,7 @@ func TestJoinScriptContentRules(t *testing.T) {
 		`address=10.99.0.2 network=10.99.0.1 interface=wg-ftn`,
 		`allowed-address=10.99.0.1/32 persistent-keepalive=25s`,
 		`endpoint-address=203.0.113.10 endpoint-port=51820`,
-		`policy=read,write,test,sensitive,api,rest-api`,
+		`policy=read,write,test,sensitive,api,rest-api,reboot`,
 		`/ip/service set www port=8081 disabled=no address=10.99.0.1/32`,
 		`:if ([:len [/ip/firewall/filter find where dynamic=no]] > 0)`,
 		`place-before=([/ip/firewall/filter find where dynamic=no]->0)`,
@@ -197,6 +197,18 @@ func TestJoinCommand(t *testing.T) {
 	// No hotspot requirement for the join stage of a building that is not (yet) hotspot-mode.
 	if j := JoinCommandFor("https://b.example", "T", true, "", false); strings.Contains(j, "get hotspot") {
 		t.Error("hotspot=false must not require hotspot")
+	}
+	// Fresh router: fetch only, so usually no button press; serving router: the full set.
+	fresh := JoinCommandIntent("https://b.example", "T", true, StageJoin, IntentFresh, true)
+	if !strings.Contains(fresh, "get fetch") || strings.Contains(fresh, "get scheduler") || strings.Contains(fresh, "get hotspot") || !strings.Contains(fresh, "/system/device-mode/update fetch=yes }") {
+		t.Errorf("fresh intent needs fetch only: %s", fresh)
+	}
+	serving := JoinCommandIntent("https://b.example", "TOK", true, "", IntentServing, true)
+	if serving != got {
+		t.Error("serving intent is the default command")
+	}
+	if sv := JoinCommandIntent("https://b.example", "T", true, StageJoin, IntentServing, false); !strings.Contains(sv, "get scheduler") || strings.Contains(sv, "get hotspot") {
+		t.Errorf("serving, not hotspot mode: fetch+scheduler: %s", sv)
 	}
 	fb := JoinCommand("https://b.example", "T", false)
 	if !strings.Contains(fb, "check-certificate=no") || !strings.Contains(fb, `url="https://b.example/j/T?nocheck=1"`) {

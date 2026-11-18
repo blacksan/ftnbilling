@@ -42,9 +42,9 @@
 :put "ftn 3/9: REST API for the billing server"
 :onerror e in={
   :if ([:len [/user/group/find where name="ftn-api"]] = 0) do={
-    /user/group add name=ftn-api policy=read,write,test,sensitive,api,rest-api comment="ftn: billing API"
+    /user/group add name=ftn-api policy=read,write,test,sensitive,api,rest-api,reboot comment="ftn: billing API"
   } else={
-    /user/group set [find where name="ftn-api"] policy=read,write,test,sensitive,api,rest-api
+    /user/group set [find where name="ftn-api"] policy=read,write,test,sensitive,api,rest-api,reboot
   }
   :if ([:len [/user/find where name="ftn-api"]] = 0) do={
     /user/add name=ftn-api group=ftn-api password="Zx3Kp9Qw7Lm2Vb5Nc8Td1Rf4Gh6Jy0Ua" address=10.99.0.1/32 comment="ftn: billing API"

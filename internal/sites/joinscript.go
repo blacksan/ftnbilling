@@ -250,6 +250,26 @@ func JoinCommandStage(base, token string, checkCert bool, stage string) string {
 // BENCH-CHECK: [/system/device-mode/get <feature>] returns a bool or "yes"/"no"
 // on 7.25.1 (both are accepted); the update command's argument names.
 func JoinCommandFor(base, token string, checkCert bool, stage string, hotspot bool) string {
+	return JoinCommandIntent(base, token, checkCert, stage, IntentServing, hotspot)
+}
+
+// JoinIntent says what the router is for, and so which device-mode features
+// the pasted line insists on.
+type JoinIntent string
+
+const (
+	// IntentFresh: a router not serving customers yet. Only fetch is needed
+	// (the line itself); no kit is wanted, so usually no button press.
+	IntentFresh JoinIntent = "fresh"
+	// IntentServing: a router already serving customers. The cutover safety
+	// net needs the scheduler (and hotspot buildings the hotspot feature).
+	IntentServing JoinIntent = "serving"
+)
+
+// JoinCommandIntent is JoinCommandFor with the router's intent. The kit
+// section of the script still installs whenever the scheduler is available
+// and is skipped with a message otherwise.
+func JoinCommandIntent(base, token string, checkCert bool, stage string, intent JoinIntent, hotspot bool) string {
 	file, q := "ftn-join.rsc", ""
 	if stage != "" {
 		file, q = "ftn-"+stage+".rsc", "?stage="+stage
@@ -264,10 +284,10 @@ func JoinCommandFor(base, token string, checkCert bool, stage string, hotspot bo
 		}
 	}
 	feats := []string{"fetch"}
-	if stage != StageCleanup {
+	if stage != StageCleanup && intent != IntentFresh {
 		feats = append(feats, "scheduler")
 	}
-	if hotspot {
+	if hotspot && intent != IntentFresh {
 		feats = append(feats, "hotspot")
 	}
 	var conds, sets []string
