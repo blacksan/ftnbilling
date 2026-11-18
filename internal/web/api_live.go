@@ -103,14 +103,25 @@ func (s *Server) apiRouterLive(w http.ResponseWriter, r *http.Request, c *apiCtx
 	if !ok {
 		return
 	}
-	lv, err := s.mgr.LiveRouter(r.Context(), st.ID)
+	lv, err := s.buildLive(r.Context(), st)
 	if err != nil {
 		apiErr(w, http.StatusNotFound, codeNotFound, "No such router.", nil)
 		return
 	}
+	writeJSON(w, http.StatusOK, lv)
+}
+
+// buildLive is the whole RouterLive answer: the router's half from the sites
+// manager, the store's half and the tunnel from here. The API and the web
+// admin's router page both use it.
+func (s *Server) buildLive(ctx context.Context, st store.Site) (sites.RouterLive, error) {
+	lv, err := s.mgr.LiveRouter(ctx, st.ID)
+	if err != nil {
+		return lv, err
+	}
 	now := s.svc.Now()
 	// tunnel
-	h := s.siteHealths(r.Context(), []store.Site{st})[st.ID]
+	h := s.siteHealths(ctx, []store.Site{st})[st.ID]
 	switch v := h.handshake.(type) {
 	case int64:
 		lv.Tunnel.HandshakeAgeS = &v
@@ -142,7 +153,7 @@ func (s *Server) apiRouterLive(w http.ResponseWriter, r *http.Request, c *apiCtx
 	ps := s.svc.ProvisionStatus(st.ID)
 	lv.Provision = sites.LiveProvision{InSync: ps.InSync, Drift: ps.Drift, PendingOps: ps.PendingOps, LastError: ps.LastError}
 	lv.SetupState = s.mgr.Jobs().State(st.ID)
-	writeJSON(w, http.StatusOK, lv)
+	return lv, nil
 }
 
 // ---- GET interfaces ------------------------------------------------------------------------------------
@@ -167,30 +178,22 @@ func (s *Server) apiRouterInterfaces(w http.ResponseWriter, r *http.Request, c *
 
 const maxClients = 1000
 
-func (s *Server) apiRouterClients(w http.ResponseWriter, r *http.Request, c *apiCtx) {
-	st, ok := s.site404(w, r.PathValue("id"))
-	if !ok {
-		return
-	}
-	q := r.URL.Query()
-	kind, online := q.Get("kind"), q.Get("online")
-	switch kind {
-	case "", "all", "flats", "unregistered":
-	default:
-		validationErr(w, map[string]string{"kind": "must be all, flats or unregistered"})
-		return
-	}
-	switch online {
-	case "", "true", "false":
-	default:
-		validationErr(w, map[string]string{"online": "must be true or false"})
-		return
-	}
+// clientsView is the answer of the clients view.
+type clientsView struct {
+	Items       []sites.Client
+	Counts      sites.ClientCounts
+	Truncated   bool
+	GeneratedAt time.Time
+	Reachable   bool
+}
+
+// buildClients merges the accounts, the unregistered devices and the router's
+// tables; q, kind and online are the API's filters (already validated).
+func (s *Server) buildClients(ctx context.Context, st store.Site, q, kind, online string) (clientsView, error) {
 	now := s.svc.Now()
-	tables, err := s.mgr.LiveClientTables(r.Context(), st.ID)
+	tables, err := s.mgr.LiveClientTables(ctx, st.ID)
 	if err != nil {
-		apiErr(w, http.StatusNotFound, codeNotFound, "No such router.", nil)
-		return
+		return clientsView{}, err
 	}
 	facts := s.flatFacts()
 	col := s.mgr.Collector(st.ID)
@@ -213,13 +216,41 @@ func (s *Server) apiRouterClients(w http.ResponseWriter, r *http.Request, c *api
 		in.Devices = append(in.Devices, sites.ClientDevice{MAC: d.MAC, IP: d.IP, HostName: "", Vendor: d.Vendor, RouterUser: d.RouterUser, Online: d.Online, LastSeen: d.LastSeen})
 	}
 	all := sites.MergeClients(in)
-	items := sites.FilterClients(all, q.Get("q"), kind, online)
-	truncated := false
+	items := sites.FilterClients(all, q, kind, online)
+	v := clientsView{Counts: sites.CountClients(all), GeneratedAt: tables.GeneratedAt, Reachable: tables.Reachable}
 	if len(items) > maxClients {
-		items, truncated = items[:maxClients], true
+		items, v.Truncated = items[:maxClients], true
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "counts": sites.CountClients(all), "truncated": truncated,
-		"generated_at": tables.GeneratedAt.UTC().Format(time.RFC3339), "reachable": tables.Reachable})
+	v.Items = items
+	return v, nil
+}
+
+func (s *Server) apiRouterClients(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	st, ok := s.site404(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	q := r.URL.Query()
+	kind, online := q.Get("kind"), q.Get("online")
+	switch kind {
+	case "", "all", "flats", "unregistered":
+	default:
+		validationErr(w, map[string]string{"kind": "must be all, flats or unregistered"})
+		return
+	}
+	switch online {
+	case "", "true", "false":
+	default:
+		validationErr(w, map[string]string{"online": "must be true or false"})
+		return
+	}
+	v, err := s.buildClients(r.Context(), st, q.Get("q"), kind, online)
+	if err != nil {
+		apiErr(w, http.StatusNotFound, codeNotFound, "No such router.", nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": v.Items, "counts": v.Counts, "truncated": v.Truncated,
+		"generated_at": v.GeneratedAt.UTC().Format(time.RFC3339), "reachable": v.Reachable})
 }
 
 // ---- actions -------------------------------------------------------------------------------------------
@@ -256,6 +287,48 @@ func (g *rebootGuard) release(id string, prev time.Time) {
 	}
 }
 
+// rebootFail is why a reboot was not sent.
+type rebootFail struct {
+	Kind   string // validation | bad_state | rate | refused
+	Msg    string
+	Wait   time.Duration
+	Fields map[string]string
+}
+
+// rebootRouter is the one guarded reboot path (release plan A2), used by the
+// API and the web admin: the typed name, no provisioning job running, the
+// router connected, one reboot per router per 10 minutes (one shared limiter),
+// then /system/reboot. The caller has already checked the owner role and audits.
+func (s *Server) rebootRouter(ctx context.Context, st store.Site, confirmName string) *rebootFail {
+	if !strings.EqualFold(strings.TrimSpace(confirmName), strings.TrimSpace(st.Name)) {
+		return &rebootFail{Kind: "validation", Msg: "type the router's name to confirm", Fields: map[string]string{"confirm_name": "type the router's name to confirm"}}
+	}
+	if s.mgr.Jobs().Running(st.ID) {
+		return &rebootFail{Kind: "bad_state", Msg: "The router is being set up right now. Wait for that to finish before rebooting."}
+	}
+	insp, isInsp := s.mgr.Router(st.ID).(routeros.Inspector)
+	if !isInsp || !st.Runnable() {
+		return &rebootFail{Kind: "bad_state", Msg: "The router is not connected."}
+	}
+	now := s.svc.Now()
+	prev, wait, ok := s.reboots.reserve(st.ID, now)
+	if !ok {
+		return &rebootFail{Kind: "rate", Wait: wait, Msg: "This router was rebooted a moment ago. Try again in " + billing.DescribeMinutes(int(wait.Minutes())+1) + "."}
+	}
+	cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	err := insp.Call(cctx, "/system/reboot", nil)
+	if err != nil && !rebootDropped(err) {
+		s.reboots.release(st.ID, prev)
+		var ae *routeros.APIError
+		if errors.As(err, &ae) {
+			return &rebootFail{Kind: "refused", Msg: "The router refused the reboot: " + firstLine(ae.Error())}
+		}
+		return &rebootFail{Kind: "refused", Msg: "The router did not accept the reboot. Check that it is online."}
+	}
+	return nil
+}
+
 func (s *Server) apiRouterReboot(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 	st, ok := s.site404(w, r.PathValue("id"))
 	if !ok {
@@ -267,36 +340,16 @@ func (s *Server) apiRouterReboot(w http.ResponseWriter, r *http.Request, c *apiC
 	if !decode(w, r, &req, false) {
 		return
 	}
-	if !strings.EqualFold(strings.TrimSpace(req.ConfirmName), strings.TrimSpace(st.Name)) {
-		validationErr(w, map[string]string{"confirm_name": "type the router's name to confirm"})
-		return
-	}
-	if s.mgr.Jobs().Running(st.ID) {
-		apiErr(w, http.StatusConflict, codeBadState, "The router is being set up right now. Wait for that to finish before rebooting.", nil)
-		return
-	}
-	insp, isInsp := s.mgr.Router(st.ID).(routeros.Inspector)
-	if !isInsp || !st.Runnable() {
-		apiErr(w, http.StatusConflict, codeBadState, "The router is not connected.", nil)
-		return
-	}
-	now := s.svc.Now()
-	prev, wait, ok := s.reboots.reserve(st.ID, now)
-	if !ok {
-		rateLimited(w, wait, false)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
-	defer cancel()
-	err := insp.Call(ctx, "/system/reboot", nil)
-	if err != nil && !rebootDropped(err) {
-		s.reboots.release(st.ID, prev)
-		var ae *routeros.APIError
-		switch {
-		case errors.As(err, &ae):
-			apiErr(w, http.StatusConflict, codeRouterRefused, "The router refused the reboot: "+firstLine(ae.Error()), nil)
+	if f := s.rebootRouter(r.Context(), st, req.ConfirmName); f != nil {
+		switch f.Kind {
+		case "validation":
+			validationErr(w, f.Fields)
+		case "bad_state":
+			apiErr(w, http.StatusConflict, codeBadState, f.Msg, nil)
+		case "rate":
+			rateLimited(w, f.Wait, false)
 		default:
-			apiErr(w, http.StatusConflict, codeRouterRefused, "The router did not accept the reboot. Check that it is online.", nil)
+			apiErr(w, http.StatusConflict, codeRouterRefused, f.Msg, nil)
 		}
 		return
 	}

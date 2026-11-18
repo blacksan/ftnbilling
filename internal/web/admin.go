@@ -45,6 +45,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	post("/admin/accounts/move", s.adminAccountMove)
 	s.siteRoutes(get, post)
 	s.setupAdminRoutes(get, post)
+	s.overviewAliases(get)
 	get("/admin/accounts", s.adminAccounts)
 	get("/admin/accounts/view", s.adminAccount)
 	post("/admin/accounts/create", s.adminAccountCreate)
@@ -345,49 +346,68 @@ func customerFormOf(r *http.Request, site string) customerForm {
 }
 
 // createCustomer is the single place the web admin creates a customer account.
-// W5c: replace the body with one call to billing.CreateCustomer(ctx,
-// CustomerInput{SiteID, Flat, Tenant, Phone, MAC, PackageID, Activate, Note});
-// the form, the JSON answer and the status poll stay as they are.
-func (s *Server) createCustomer(ctx context.Context, in customerForm) (store.Account, error) {
+// It is billing.CreateCustomer (the call behind POST /accounts): the account,
+// its package, optionally the package's time, and one synchronous attempt to
+// put the flat on the router. The router state it returns is what the dialog
+// shows ("Provisioned", "Queued", or the error).
+func (s *Server) createCustomer(ctx context.Context, in customerForm) (store.Account, billing.AccountRouterState, error) {
 	if in.SiteID == "" {
-		return store.Account{}, errors.New("choose a router")
+		return store.Account{}, billing.AccountRouterState{}, errors.New("choose a router")
 	}
 	if in.Activate && in.PackageID == "" {
-		return store.Account{}, errors.New("choose a plan to activate")
+		return store.Account{}, billing.AccountRouterState{}, errors.New("choose a plan to activate")
 	}
-	var a store.Account
-	var err error
-	if in.PackageID != "" {
-		a, err = s.svc.CreateFromDevice(ctx, billing.DeviceAccountInput{SiteID: in.SiteID, MAC: in.MAC, Flat: in.Flat, Tenant: in.Tenant, Phone: in.Phone, PackageID: in.PackageID})
-		if err == nil && (in.Notes != "" || in.WhatsApp != "" || in.WASame) {
-			_ = s.svc.UpdateAccount(a.ID, a.Flat, a.Tenant, a.Phone, in.Notes)
-			_ = s.svc.SetWhatsApp(a.ID, in.WhatsApp, in.WASame, false)
-		}
-	} else {
-		a, err = s.svc.CreateAccount(billing.AccountInput{Flat: in.Flat, MAC: in.MAC, Tenant: in.Tenant, Phone: in.Phone, Notes: in.Notes, SiteID: in.SiteID,
-			WhatsApp: in.WhatsApp, WASamePhone: in.WASame})
+	mac := in.MAC
+	if n, err := billing.NormalizeMAC(in.MAC); err == nil {
+		mac = n
 	}
+	a, rs, err := s.svc.CreateCustomer(ctx, billing.AddCustomerInput{SiteID: in.SiteID, Flat: in.Flat, Tenant: in.Tenant, Phone: in.Phone, MAC: mac,
+		PackageID: in.PackageID, Activate: in.Activate, Note: in.Notes})
 	if err != nil {
-		return store.Account{}, err
-	}
-	if in.Activate {
-		if err := s.svc.ExtendAccount(ctx, a.ID, in.PackageID, "activated when the account was added", false); err != nil {
-			return a, fmt.Errorf("the account was created but could not be activated: %w", err)
+		if a.ID != "" {
+			err = fmt.Errorf("the account was created but could not be activated: %w", err)
 		}
-		a, _ = s.svc.GetAccount(a.ID)
+		return a, rs, err
 	}
-	return a, nil
+	if in.WhatsApp != "" || in.WASame {
+		_ = s.svc.SetWhatsApp(a.ID, in.WhatsApp, in.WASame, false)
+	}
+	return a, rs, nil
+}
+
+// routerStateJSON says what the router side of one account looks like:
+// state ok (provisioned), wait (queued: router offline or not joined yet),
+// work (being applied) or bad (the router refused or failed, with the message).
+// done is true once nothing more will change without the operator.
+func (s *Server) routerStateJSON(ctx context.Context, a store.Account, rs billing.AccountRouterState) map[string]any {
+	out := map[string]any{"in_sync": rs.InSync, "pending_task": rs.PendingTask, "lease_status": rs.LeaseStatus, "last_error": rs.LastError}
+	st, _ := s.siteByID(a.SiteID)
+	switch {
+	case !st.Runnable():
+		out["state"], out["done"], out["text"] = "wait", true, "Saved. Queued: the router has not joined yet, it applies when it does"
+	case rs.PendingTask && !s.siteOnline(ctx, a.SiteID):
+		out["state"], out["done"], out["text"] = "wait", true, "Queued: the router is offline, this applies automatically"
+	case rs.PendingTask && rs.LastError != "":
+		out["state"], out["done"], out["text"] = "bad", false, "Failed on the router: "+rs.LastError+". The server keeps trying"
+	case rs.PendingTask || !rs.InSync:
+		out["state"], out["done"], out["text"] = "work", false, "Applying on the router"
+	default:
+		out["state"], out["done"], out["text"] = "ok", true, "Provisioned on router"
+	}
+	return out
 }
 
 func (s *Server) adminAccountCreate(w http.ResponseWriter, r *http.Request) {
 	in := customerFormOf(r, s.siteFor(r))
-	a, err := s.createCustomer(r.Context(), in)
+	a, rs, err := s.createCustomer(r.Context(), in)
 	if wantsJSON(r) {
 		if err != nil && a.ID == "" {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}
-		out := map[string]any{"ok": true, "id": a.ID, "code": a.Code, "flat": a.Flat, "url": s.accountURL(a.ID)}
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		out := map[string]any{"ok": true, "id": a.ID, "code": a.Code, "flat": a.Flat, "url": s.accountURL(a.ID), "router": s.routerStateJSON(ctx, a, rs)}
 		if err != nil {
 			out["warning"] = err.Error()
 		}
@@ -398,7 +418,18 @@ func (s *Server) adminAccountCreate(w http.ResponseWriter, r *http.Request) {
 		s.back(w, r, "/admin/accounts?mac="+url.QueryEscape(in.MAC)+"&flat="+url.QueryEscape(in.Flat), "Error: "+err.Error())
 		return
 	}
-	s.back(w, r, "/admin/accounts/view?code="+a.Code, "Account created: "+a.Flat+" ("+a.Code+")")
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	msg := "Account created: " + a.Flat + " (" + a.Code + "). " + routerStateText(s.routerStateJSON(ctx, a, rs))
+	if err != nil {
+		msg += " " + err.Error()
+	}
+	s.back(w, r, "/admin/accounts/view?code="+a.Code, msg)
+}
+
+func routerStateText(m map[string]any) string {
+	t, _ := m["text"].(string)
+	return t + "."
 }
 
 // adminAccountStatus is what the Add customer dialog polls after a create: has
@@ -409,25 +440,9 @@ func (s *Server) adminAccountStatus(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	st, _ := s.siteByID(a.SiteID)
-	rs := s.svc.AccountRouterState(a.ID)
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
-	out := map[string]any{"in_sync": rs.InSync, "pending_task": rs.PendingTask, "lease_status": rs.LeaseStatus, "last_error": rs.LastError}
-	switch {
-	case !st.Runnable():
-		out["state"], out["done"], out["text"] = "wait", true, "Saved. Queued: the router has not joined yet, it applies when it does"
-	case rs.PendingTask && !s.siteOnline(ctx, a.SiteID):
-		out["state"], out["done"], out["text"] = "wait", true, "Queued: the router is offline, this applies automatically"
-	case rs.PendingTask || !rs.InSync:
-		out["state"], out["done"], out["text"] = "work", false, "Applying on the router"
-		if rs.LastError != "" {
-			out["text"] = "Applying on the router (" + rs.LastError + ")"
-		}
-	default:
-		out["state"], out["done"], out["text"] = "ok", true, "Provisioned on router"
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, s.routerStateJSON(ctx, a, s.svc.AccountRouterState(a.ID)))
 }
 
 func (s *Server) adminAccount(w http.ResponseWriter, r *http.Request) {
@@ -612,6 +627,17 @@ func (s *Server) payRows(sc scope, status string, limit int) []payRow {
 
 func (s *Server) adminPayments(w http.ResponseWriter, r *http.Request) {
 	p := s.page(r, "payments")
+	// /admin/payments?tab=unmatched is the address the overview hands out: the tab is the status or method filter.
+	if q := r.URL.Query(); q.Get("tab") != "" && q.Get("status") == "" && q.Get("method") == "" {
+		switch t := q.Get("tab"); t {
+		case "unmatched", "refunded":
+			q.Set("status", t)
+		case "mpesa", "cash", "voucher":
+			q.Set("method", t)
+		}
+		q.Del("tab")
+		r.URL.RawQuery = q.Encode()
+	}
 	f, form := s.payFilter(r)
 	rows, tot := s.svc.FilterPayments(f)
 	const limit = 500

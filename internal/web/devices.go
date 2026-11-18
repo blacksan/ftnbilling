@@ -161,15 +161,19 @@ func (s *Server) resolveFlat(siteID, text string) (store.Account, bool) {
 }
 
 func (s *Server) adminDeviceCreate(w http.ResponseWriter, r *http.Request) {
-	a, err := s.svc.CreateFromDevice(r.Context(), billing.DeviceAccountInput{
-		SiteID: s.siteFor(r), MAC: r.PostFormValue("mac"), Flat: r.PostFormValue("flat"),
-		Tenant: r.PostFormValue("tenant"), Phone: r.PostFormValue("phone"), PackageID: r.PostFormValue("package"),
-	})
-	if err != nil {
+	in := customerFormOf(r, s.siteFor(r))
+	a, rs, err := s.createCustomer(r.Context(), in)
+	if err != nil && a.ID == "" {
 		s.back(w, r, "/admin/devices", "Error: "+err.Error())
 		return
 	}
-	s.back(w, r, "/admin/accounts/view?code="+a.Code, "Account created: "+a.Flat+" ("+a.Code+")")
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	msg := "Account created: " + a.Flat + " (" + a.Code + "). " + routerStateText(s.routerStateJSON(ctx, a, rs))
+	if err != nil {
+		msg += " " + err.Error()
+	}
+	s.back(w, r, "/admin/accounts/view?code="+a.Code, msg)
 }
 
 // adminDeviceAttach gives an existing flat this device's MAC (an ONT swap, or

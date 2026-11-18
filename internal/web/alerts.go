@@ -192,7 +192,7 @@ func (s *Server) adminAlertUnmute(w http.ResponseWriter, r *http.Request) {
 
 // adminOutageNotice tells a building's tenants about the outage (WhatsApp).
 func (s *Server) adminOutageNotice(w http.ResponseWriter, r *http.Request) {
-	back := "/admin/fleet"
+	back := "/admin/routers"
 	if s.ops.Tenant == nil || s.ops.Alerts == nil {
 		s.back(w, r, back, "Error: tenant messages are not running")
 		return

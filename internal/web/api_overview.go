@@ -21,8 +21,14 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request, c *apiCtx) 
 		apiErr(w, http.StatusNotFound, codeNotFound, "No such router.", nil)
 		return
 	}
+	writeJSON(w, http.StatusOK, s.buildOverview(r.Context(), site))
+}
+
+// buildOverview is the one overview implementation: GET /overview and the web
+// admin's Overview page both show this (site "" = every router).
+func (s *Server) buildOverview(ctx context.Context, site string) billing.Overview {
 	list := s.liveSites(site)
-	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	hs := s.siteHealths(ctx, list)
 	now := s.svc.Now()
@@ -54,5 +60,5 @@ func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request, c *apiCtx) 
 	cfg := s.live()
 	in.MpesaConfigured = cfg.MpesaKey != "" && cfg.MpesaSecret != "" && cfg.MpesaShortcode != ""
 	in.WhatsAppConfigured = cfg.WhatsAppConfigured()
-	writeJSON(w, http.StatusOK, s.svc.Overview(in))
+	return s.svc.Overview(in)
 }
