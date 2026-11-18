@@ -517,3 +517,25 @@ func TestSettingsValidationAndTestMessage(t *testing.T) {
 		t.Fatalf("%+v", m)
 	}
 }
+
+func TestAnnounceSendsOnceAndIsNotAnAlert(t *testing.T) {
+	r := newRig(t, 1)
+	r.e.Announce("s0", "Router Site 0 was rolled back to its old setup", "prov:s0:rolled_back:1")
+	r.e.Announce("s0", "Router Site 0 was rolled back to its old setup", "prov:s0:rolled_back:1") // same job: once
+	got := r.out.texts(notify.ChanEmail)
+	if len(got) != 1 || !strings.Contains(got[0], "rolled back") || !strings.Contains(got[0], "Site 0") {
+		t.Fatalf("%v", got)
+	}
+	if r.e.OpenCount("") != 0 {
+		t.Fatal("an announcement is not an open alert")
+	}
+	r.e.Announce("s0", "Router Site 0 is set up and live.", "prov:s0:live:2")
+	if len(r.out.texts(notify.ChanEmail)) != 2 {
+		t.Fatal("a different dedupe key is a new message")
+	}
+	r.e.Announce("s0", "again", "") // no key: never deduplicated
+	r.e.Announce("s0", "again", "")
+	if len(r.out.texts(notify.ChanEmail)) != 4 {
+		t.Fatalf("%v", r.out.texts(notify.ChanEmail))
+	}
+}

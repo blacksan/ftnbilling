@@ -1088,7 +1088,17 @@ func (j *jobCtl) rollbackTail(reason string) {
 		if time.Now().After(deadline) {
 			break
 		}
-		time.Sleep(j.tm.Poll)
+		base := j.m.ctx
+		if base == nil {
+			base = context.Background()
+		}
+		select {
+		case <-base.Done():
+			j.job.LastError = "stopped while waiting for the router to roll back: " + reason
+			j.setState(JobFailed)
+			return
+		case <-time.After(j.tm.Poll):
+		}
 	}
 	if !back {
 		j.job.LastError = "waiting for the router to roll back: " + reason
@@ -1145,6 +1155,13 @@ func (m *Manager) RollbackNow(siteID, actor string) error {
 	m.st.View(func(d *store.Data) { site, found = d.Sites[siteID] })
 	if !found || site.Removed {
 		return billing.ErrNoSite
+	}
+	m.prov.mu.Lock()
+	cur := m.prov.runs[siteID]
+	following := cur != nil && cur.state == JobRollingBack
+	m.prov.mu.Unlock()
+	if following { // a rollback is already under way: asking again changes nothing
+		return nil
 	}
 	m.abortProvision(siteID)
 	prev, _ := m.ProvJobOf(siteID)
