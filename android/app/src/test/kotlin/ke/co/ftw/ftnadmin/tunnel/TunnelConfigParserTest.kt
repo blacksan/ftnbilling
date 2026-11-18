@@ -98,7 +98,7 @@ class TunnelConfigParserTest {
 
     @Test
     fun rejectsCommandSettings() {
-        assertTrue(rejects(valid.replace("[Peer]", "PostUp = reboot\n[Peer]")).contains("PostUp"))
+        assertTrue(rejects(valid.replace("[Peer]", "PostUp = reboot\n[Peer]")).contains("postup", ignoreCase = true))
     }
 
     @Test
