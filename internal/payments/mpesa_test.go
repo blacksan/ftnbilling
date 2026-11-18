@@ -57,6 +57,7 @@ func (f *fakeDaraja) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type rig struct {
 	svc  *billing.Service
 	st   *store.Store
+	h    *storetest.Handle
 	site string
 	rt   *routeros.Mock
 	mp   *payments.Mpesa
@@ -72,7 +73,8 @@ func newRig(t *testing.T) *rig {
 	fd := &fakeDaraja{}
 	srv := httptest.NewServer(fd)
 	t.Cleanup(srv.Close)
-	st, _ := storetest.Open(t, t.TempDir())
+	h := storetest.NewIn(t, t.TempDir())
+	st := h.Store
 	rt := routeros.NewMock()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	site := store.NewSiteID()
@@ -81,7 +83,7 @@ func newRig(t *testing.T) *rig {
 		return nil
 	})
 	svc := billing.NewService(st, billing.MockRouters{site: rt}, log)
-	r := &rig{svc: svc, st: st, site: site, rt: rt, fd: fd, now: time.Date(2026, 11, 17, 21, 30, 5, 0, time.UTC)}
+	r := &rig{svc: svc, st: st, h: h, site: site, rt: rt, fd: fd, now: time.Date(2026, 11, 17, 21, 30, 5, 0, time.UTC)}
 	svc.SetClock(func() time.Time { return r.now })
 	svc.SeedPackages()
 	svc.SyncProfiles(context.Background(), site)

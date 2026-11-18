@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -93,6 +94,29 @@ func run(log *slog.Logger) error {
 		Passkey: cfg.MpesaPasskey, PublicBaseURL: cfg.PublicBaseURL, CallbackToken: cfg.MpesaCallbackToken,
 		Enabled: cfg.MpesaEnabled(),
 	}, svc, st, log)
+	// Callbacks the database could not take are kept on disk and replayed.
+	mp.SetSpool(payments.NewSpool(filepath.Join(cfg.DataDir, "spool")))
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		tick := time.NewTicker(60 * time.Second)
+		defer tick.Stop()
+		for first := true; ; first = false {
+			if !first {
+				select {
+				case <-ctx.Done():
+					return
+				case <-tick.C:
+				}
+			}
+			if st.Healthy() != nil {
+				continue
+			}
+			if n, err := mp.Replay(ctx); n > 0 || err != nil {
+				log.Info("replayed spooled payment callbacks", "applied", n, "err", err)
+			}
+		}
+	}()
 	providers := map[string]payments.Provider{
 		"test":    &payments.Test{Enabled_: cfg.TestMode, Delay: 3 * time.Second, C: svc, Logf: log.Warn},
 		"voucher": payments.Voucher{C: svc},
