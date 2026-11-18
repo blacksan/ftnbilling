@@ -205,3 +205,10 @@ func (c *Collector) addFlowLocked(now time.Time, r V5Record, mult uint64) {
 		days[k][svc] += bytes
 	}
 }
+
+// NetflowStats returns a copy of the receiver counters.
+func (c *Collector) NetflowStats() NFStats {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.D.NF
+}

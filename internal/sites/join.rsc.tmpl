@@ -1,0 +1,138 @@
+# Fast Tech Net: join script for {{rq .SiteName}} ({{.SiteID}}), generated {{.Generated}}
+# Single use. It holds this router's WireGuard private key and REST password,
+# so keep it private. It removes itself from the router when it finishes.
+# Every object it creates has a comment that starts with "ftn:".
+:local fails 0
+
+:put "ftn 0/9: checking RouterOS"
+:local ver [/system/resource/get version]
+:put ("   RouterOS " . $ver)
+:local major [:tonum [:pick $ver 0 [:find $ver "."]]]
+:if ($major < 7) do={ :error "ftn: RouterOS 7 or newer is required" }
+
+:put "ftn 1/9: WireGuard tunnel to the billing server"
+:do {
+  :if ([:len [/interface/wireguard/find where name="{{.WGIface}}"]] = 0) do={
+    /interface/wireguard add name={{.WGIface}} private-key="{{.PrivateKey}}" mtu={{.MTU}} comment="ftn: tunnel to the billing server"
+  } else={
+    /interface/wireguard set [find where name="{{.WGIface}}"] private-key="{{.PrivateKey}}" mtu={{.MTU}}
+  }
+  /ip/address remove [find where comment="ftn: tunnel address"]
+  /ip/address add address={{.TunnelIP}} network={{.ServerIP}} interface={{.WGIface}} comment="ftn: tunnel address"
+  /interface/wireguard/peers remove [find where comment="ftn: billing server"]
+  /interface/wireguard/peers add interface={{.WGIface}} public-key="{{.ServerPublicKey}}" endpoint-address={{.EndpointHost}} endpoint-port={{.EndpointPort}} allowed-address={{.ServerIP}}/32 persistent-keepalive=25s comment="ftn: billing server"
+} on-error={ :error "ftn: section 1 (WireGuard) failed" }
+
+:put "ftn 2/9: firewall (the tunnel can only reach the REST API)"
+:do {
+  /ip/firewall/filter remove [find where comment~"^ftn: wg"]
+{{fw (printf "chain=forward action=drop out-interface=%s" .WGIface) "ftn: wg no forward out"}}
+{{fw (printf "chain=forward action=drop in-interface=%s" .WGIface) "ftn: wg no forward in"}}
+{{fw (printf "chain=input action=drop in-interface=%s" .WGIface) "ftn: wg drop other input"}}
+{{fw (printf "chain=input action=accept protocol=icmp in-interface=%s src-address=%s" .WGIface .ServerIP) "ftn: wg icmp"}}
+{{fw (printf "chain=input action=accept protocol=tcp in-interface=%s src-address=%s dst-port=%d" .WGIface .ServerIP .RESTPort) "ftn: wg rest"}}
+} on-error={ :error "ftn: section 2 (firewall) failed" }
+
+:put "ftn 3/9: REST API for the billing server"
+:do {
+  :if ([:len [/user/group/find where name="{{.RESTUser}}"]] = 0) do={
+    /user/group add name={{.RESTUser}} policy=read,write,test,sensitive,rest-api comment="ftn: billing API"
+  } else={
+    /user/group set [find where name="{{.RESTUser}}"] policy=read,write,test,sensitive,rest-api
+  }
+  :if ([:len [/user/find where name="{{.RESTUser}}"]] = 0) do={
+    /user/add name={{.RESTUser}} group={{.RESTUser}} password="{{.RESTPass}}" address={{.ServerIP}}/32 comment="ftn: billing API"
+  } else={
+    /user/set [find where name="{{.RESTUser}}"] group={{.RESTUser}} password="{{.RESTPass}}" address={{.ServerIP}}/32
+  }
+  /ip/service set www port={{.RESTPort}} disabled=no address={{.ServerIP}}/32{{if .LegacyContainer}},172.17.0.0/24{{end}}
+} on-error={ :error "ftn: section 3 (REST API) failed" }
+{{if .Provision}}
+:put "ftn 4/9: customer network {{.CustomerNetwork}}"
+:do {
+  /interface/bridge/port remove [find where interface="{{.OLTInterface}}"]
+{{- if .VLANID}}
+  :if ([:len [/interface/vlan/find where name="{{.VLANName}}"]] = 0) do={
+    /interface/vlan add name={{.VLANName}} vlan-id={{.VLANID}} interface={{.OLTInterface}} comment="ftn: customer VLAN"
+  }
+{{- end}}
+  :if ([:len [/interface/bridge/find where name="{{.Bridge}}"]] = 0) do={
+    /interface/bridge add name={{.Bridge}} comment="ftn: customer bridge"
+  }
+  :if ([:len [/interface/bridge/port/find where bridge="{{.Bridge}}" and interface="{{.CustomerIface}}"]] = 0) do={
+    /interface/bridge/port add bridge={{.Bridge}} interface={{.CustomerIface}} comment="ftn: customer port"
+  }
+  :if ([:len [/ip/address/find where address="{{.GatewayCIDR}}" and interface="{{.Bridge}}"]] = 0) do={
+    /ip/address add address={{.GatewayCIDR}} interface={{.Bridge}} comment="ftn: customer gateway"
+  }
+  :if ([:len [/ip/pool/find where name="pool-hotspot"]] = 0) do={
+    /ip/pool add name=pool-hotspot ranges={{.PoolFrom}}-{{.PoolTo}} comment="ftn: customer pool"
+  } else={
+    /ip/pool set [find where name="pool-hotspot"] ranges={{.PoolFrom}}-{{.PoolTo}}
+  }
+  :if ([:len [/ip/dhcp-server/find where name="dhcp-hotspot"]] = 0) do={
+    /ip/dhcp-server add name=dhcp-hotspot interface={{.Bridge}} address-pool=pool-hotspot lease-time=1h disabled=no comment="ftn: customer DHCP"
+  }
+  :if ([:len [/ip/dhcp-server/network/find where address="{{.CustomerNetwork}}"]] = 0) do={
+    /ip/dhcp-server/network add address={{.CustomerNetwork}} gateway={{.Gateway}} dns-server={{.Gateway}} comment="ftn: customer DHCP network"
+  }
+  /ip/firewall/nat remove [find where comment="ftn: customer masquerade"]
+  /ip/firewall/nat add chain=srcnat action=masquerade out-interface-list={{.WANList}} src-address={{.CustomerNetwork}} comment="ftn: customer masquerade"
+  /ip/dns set allow-remote-requests=yes
+{{- if .BenchPort}}
+  /interface/bridge/port remove [find where interface="{{.BenchPort}}"]
+  /interface/bridge/port add bridge={{.Bridge}} interface={{.BenchPort}} comment="ftn: bench port"
+{{- end}}
+} on-error={ :set fails ($fails + 1); :put "ftn: section 4 (customer network) failed, continuing" }
+
+:put "ftn 5/9: hotspot {{.HotspotServer}}"
+:do {
+  :if ([:len [/ip/hotspot/profile/find where name="{{.HotspotProfile}}"]] = 0) do={
+    /ip/hotspot/profile add name={{.HotspotProfile}} hotspot-address={{.Gateway}} login-by=http-pap,http-chap,mac-cookie html-directory=hotspot-ftn
+  }
+  :if ([:len [/file/find where name="flash"]] > 0) do={
+    /ip/hotspot/profile set [find where name="{{.HotspotProfile}}"] html-directory=flash/hotspot-ftn
+  }
+  :if ([:len [/ip/hotspot/find where name="{{.HotspotServer}}"]] = 0) do={
+    /ip/hotspot add name={{.HotspotServer}} interface={{.Bridge}} address-pool=pool-hotspot profile={{.HotspotProfile}} disabled=no
+  }
+  /ip/firewall/filter remove [find where comment~"^ftn: hs"]
+{{fw (printf "chain=forward action=drop in-interface=%s out-interface=%s" .Bridge .Bridge) "ftn: hs isolate flats"}}
+{{fw (printf "chain=input action=drop protocol=tcp in-interface=%s dst-port=%d" .Bridge .RESTPort) "ftn: hs block rest"}}
+} on-error={ :set fails ($fails + 1); :put "ftn: section 5 (hotspot) failed, continuing" }
+{{else}}
+:put "ftn 4/9 and 5/9: customer network and hotspot are left as they are (Provision is off)"
+{{end}}
+:put "ftn 6/9: hotspot login pages and walled garden"
+:do {
+  :local dir [/ip/hotspot/profile/get [find where name="{{.HotspotProfile}}"] html-directory]
+  :foreach f in={ {{range $i, $f := .PageFiles}}{{if $i}};{{end}}"{{$f}}"{{end}} } do={
+    /tool/fetch url=("{{.PublicBase}}/routeros/hotspot/{{.SiteID}}/" . $f) dst-path=($dir . "/" . $f){{if .HTTPSBase}} check-certificate=yes{{end}}
+  }
+{{- if .PublicIP}}
+  /ip/hotspot/walled-garden/ip remove [find where comment="ftn: portal"]
+  /ip/hotspot/walled-garden/ip add action=accept dst-address={{.PublicIP}} comment="ftn: portal"
+{{- else}}
+  :put "   PUBLIC_IP is not set on the server: add the portal address to the walled garden by hand"
+{{- end}}
+} on-error={ :set fails ($fails + 1); :put "ftn: section 6 (login pages) failed, continuing" }
+
+:put "ftn 7/9: traffic flow to the billing server"
+:do {
+  /ip/traffic-flow set enabled=yes interfaces={{.Bridge}}
+  /ip/traffic-flow/target remove [find where comment="ispbill metrics"]
+  /ip/traffic-flow/target remove [find where comment="ftn: netflow"]
+  /ip/traffic-flow/target add dst-address={{.ServerIP}} port={{.NetflowPort}} version=5 comment="ftn: netflow"
+  :put "   note: per-flat totals do not depend on traffic flow; the per-service split can be incomplete while FastTrack is on"
+} on-error={ :set fails ($fails + 1); :put "ftn: section 7 (traffic flow) failed, continuing" }
+{{if .LegacyContainer}}
+:put "ftn 8/9: stopping the old ispbill and tailscale containers"
+:do { [[:parse "/container/stop [find where comment=\"ispbill\"]"]] } on-error={}
+:do { [[:parse "/container/set [find where comment=\"ispbill\"] start-on-boot=no"]] } on-error={}
+:do { [[:parse "/container/stop [find where comment=\"tailscale\"]"]] } on-error={}
+:do { [[:parse "/container/set [find where comment=\"tailscale\"] start-on-boot=no"]] } on-error={}
+{{end}}
+:put "ftn 9/9: checking the tunnel"
+:do { /ping {{.ServerIP}} count=3 } on-error={ :put "   no answer from the billing server yet; the tunnel can take a few seconds to come up" }
+:if ($fails > 0) do={ :put ("ftn: finished with " . $fails . " section(s) failed, see the messages above") } else={ :put "ftn: all sections done" }
+/file remove [find where name="ftn-join.rsc"]
