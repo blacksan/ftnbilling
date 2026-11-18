@@ -162,6 +162,10 @@ func (s *Series) Sum(tier Tier, from, to time.Time) Cell {
 	return c
 }
 
+// Prune drops buckets older than the retention of their tier and reports
+// whether the series is now empty.
+func (s *Series) Prune(now time.Time) bool { return s.prune(now) }
+
 func (s *Series) prune(now time.Time) bool {
 	for tr := T5; tr < numTiers; tr++ {
 		cut := now.Add(-retention[tr]).Unix()
