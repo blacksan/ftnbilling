@@ -311,3 +311,47 @@ func TestSMTPErrorClasses(t *testing.T) {
 		t.Fatal()
 	}
 }
+
+// A server that accepts the connection and then says nothing (or never
+// finishes a TLS handshake) must not hold the caller past its context
+// deadline: the web server's write timeout is 30 s.
+func TestSMTPStopsAtContextDeadline(t *testing.T) {
+	for _, implicit := range []bool{false, true} {
+		ln, _ := net.Listen("tcp", "127.0.0.1:0")
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				defer c.Close() // held open, silent
+			}
+		}()
+		s := &SMTP{Host: "127.0.0.1", Port: listenPort(t, ln), Implicit: implicit, User: "ops", Pass: "pw", From: "alerts@ftn.example", Timeout: 30 * time.Second}
+		ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+		start := time.Now()
+		_, err := s.Send(ctx, testMsg())
+		cancel()
+		ln.Close()
+		if err == nil || time.Since(start) > 3*time.Second {
+			t.Fatalf("implicit=%v: err=%v after %v", implicit, err, time.Since(start))
+		}
+	}
+	// Cancelling the context also ends it.
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			defer c.Close()
+			time.Sleep(5 * time.Second)
+		}
+	}()
+	s := &SMTP{Host: "127.0.0.1", Port: listenPort(t, ln), From: "alerts@ftn.example", Timeout: 30 * time.Second}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(200 * time.Millisecond); cancel() }()
+	start := time.Now()
+	if _, err := s.Send(ctx, testMsg()); err == nil || time.Since(start) > 3*time.Second {
+		t.Fatalf("cancel: err=%v after %v", err, time.Since(start))
+	}
+}

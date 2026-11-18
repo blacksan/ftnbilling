@@ -16,7 +16,10 @@ import (
 	"ispbill/internal/store"
 )
 
-const actionTimeout = 25 * time.Second // the server's write timeout is 30 s
+const (
+	actionTimeout = 25 * time.Second // tools: the server's write timeout is 30 s
+	testTimeout   = 20 * time.Second // test buttons (Meta, Daraja, the mail server)
+)
 
 // noManager answers a settings POST when the server runs without a manager.
 func (s *Server) noManager(w http.ResponseWriter, r *http.Request, to string) bool {
@@ -248,7 +251,7 @@ func (s *Server) settingsWhatsAppTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snd := &notify.WhatsApp{Token: live.WAToken, PhoneNumberID: live.WAPhoneNumberID, APIVersion: live.WAAPIVersion, Lang: live.WALang}
-	ctx, cancel := context.WithTimeout(r.Context(), actionTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), testTimeout)
 	defer cancel()
 	id, err := snd.Send(ctx, notify.Message{To: num, Template: tpl, Params: params, Lang: live.WALang})
 	if err != nil {
@@ -291,7 +294,7 @@ func (s *Server) settingsMpesaOAuth(w http.ResponseWriter, r *http.Request) {
 		s.back(w, r, to, "Error: M-Pesa is not available in this build")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), actionTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), testTimeout)
 	defer cancel()
 	ttl, err := s.mpesa.TestOAuth(ctx)
 	if err != nil {
@@ -310,7 +313,7 @@ func (s *Server) settingsMpesaRegister(w http.ResponseWriter, r *http.Request) {
 		s.back(w, r, to, "Error: M-Pesa is not available in this build")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), actionTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), testTimeout)
 	defer cancel()
 	desc, err := s.mpesa.RegisterC2B(ctx)
 	if err != nil {
@@ -330,7 +333,7 @@ func (s *Server) settingsMpesaSTK(w http.ResponseWriter, r *http.Request) {
 		s.back(w, r, to, "Error: M-Pesa is not available in this build")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), actionTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), testTimeout)
 	defer cancel()
 	t, err := s.mpesa.StartTest(ctx, r.PostFormValue("phone"))
 	if err != nil {
@@ -431,7 +434,7 @@ func (s *Server) settingsEmailTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snd := &notify.SMTP{Host: live.SMTPHost, Port: live.SMTPPort, User: live.SMTPUser, Pass: live.SMTPPass, From: live.SMTPFrom, Implicit: live.SMTPImplicit}
-	ctx, cancel := context.WithTimeout(r.Context(), actionTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), testTimeout)
 	defer cancel()
 	_, err = snd.Send(ctx, notify.Message{ID: "test", To: norm, Kind: notify.KindTest, Subject: "[" + s.cfg.BrandName + "] test email",
 		Text: "This is a test email from Settings > Email. If you can read it, alert emails will reach you."})
