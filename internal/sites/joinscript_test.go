@@ -90,7 +90,8 @@ func TestJoinScriptContentRules(t *testing.T) {
 		`endpoint-address=203.0.113.10 endpoint-port=51820`,
 		`policy=read,write,test,sensitive,rest-api`,
 		`/ip/service set www port=8081 disabled=no address=10.99.0.1/32`,
-		`:if ([:len [/ip/firewall/filter find]] > 0)`,
+		`:if ([:len [/ip/firewall/filter find where dynamic=no]] > 0)`,
+		`place-before=([/ip/firewall/filter find where dynamic=no]->0)`,
 		`ranges=10.5.50.10-10.5.50.254`,
 		`login-by=http-pap,http-chap,mac-cookie`,
 		`https://billing.example.co.ke/routeros/hotspot/sab12cd/`,
@@ -174,7 +175,33 @@ func TestJoinCommand(t *testing.T) {
 	if got != want {
 		t.Fatal(got)
 	}
-	if !strings.Contains(JoinCommand("https://b.example", "T", false), "check-certificate=no") {
-		t.Fatal("fallback")
+	fb := JoinCommand("https://b.example", "T", false)
+	if !strings.Contains(fb, "check-certificate=no") {
+		t.Fatal("fallback: ", fb)
+	}
+}
+
+// The script file holds the WireGuard private key and the REST password, so it
+// must be removed whether the script finishes or stops on an error, and no
+// firewall rule may be placed relative to a dynamic rule.
+func TestJoinScriptRemovesItselfOnEveryExit(t *testing.T) {
+	b, err := RenderJoinScript(baseInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	rm := `/file remove [find where name="ftn-join.rsc"]`
+	if strings.Count(s, rm) != 2 {
+		t.Fatalf("want a removal on the success path and on the abort path, got %d", strings.Count(s, rm))
+	}
+	open, handler := strings.Index(s, ":do {\n\n:put \"ftn 0/9"), strings.LastIndex(s, "} on-error={\n")
+	if open < 0 || handler < open || strings.Index(s[handler:], rm) < 0 || !strings.Contains(s[handler:], ":error ") {
+		t.Fatal("the body is not wrapped in a do/on-error that removes the file and re-raises")
+	}
+	if strings.Contains(s, "/ip/firewall/filter find]") {
+		t.Error("a firewall find without where dynamic=no")
+	}
+	if strings.Contains(s, `:error "ftn: section`) {
+		t.Error("section errors must go through $abort so the wrapper can report them")
 	}
 }

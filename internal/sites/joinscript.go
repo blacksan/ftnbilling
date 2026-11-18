@@ -66,11 +66,14 @@ func rq(s string) string {
 }
 
 // fw renders one firewall rule that goes to the top of the filter table. The
-// guard is needed because place-before=0 fails on an empty table. Rules are
-// added bottom-up, so the last one added ends up first.
+// guard is needed because place-before=0 fails on an empty table. Only
+// static rules are counted and chosen: the first row can be a dynamic rule
+// (the FastTrack dummy), and RouterOS refuses to place a rule before one,
+// which would abort the whole script. Rules are added bottom-up, so the last
+// one added ends up first.
 func fw(args, comment string) string {
 	const f = "/ip/firewall/filter"
-	return fmt.Sprintf("  :if ([:len [%s find]] > 0) do={ %s add %s place-before=([%s find]->0) comment=\"%s\" } else={ %s add %s comment=\"%s\" }",
+	return fmt.Sprintf("  :if ([:len [%s find where dynamic=no]] > 0) do={ %s add %s place-before=([%s find where dynamic=no]->0) comment=\"%s\" } else={ %s add %s comment=\"%s\" }",
 		f, f, args, f, rq(comment), f, args, rq(comment))
 }
 
@@ -150,10 +153,10 @@ func splitEndpoint(ep string) (string, int, error) {
 // JoinCommand is the one-line paste shown to the admin. The fallback skips
 // certificate checking and is for routers with a wrong clock or no CA store.
 func JoinCommand(base, token string, checkCert bool) string {
-	chk := "yes"
+	chk, q := "yes", ""
 	if !checkCert {
-		chk = "no"
+		chk, q = "no", ""
 	}
-	return fmt.Sprintf(`/tool/fetch url="%s/j/%s" dst-path=ftn-join.rsc check-certificate=%s; :delay 1s; /import ftn-join.rsc`,
-		strings.TrimRight(base, "/"), token, chk)
+	return fmt.Sprintf(`/tool/fetch url="%s/j/%s%s" dst-path=ftn-join.rsc check-certificate=%s; :delay 1s; /import ftn-join.rsc`,
+		strings.TrimRight(base, "/"), token, q, chk)
 }

@@ -1,14 +1,17 @@
 # Fast Tech Net: join script for {{rq .SiteName}} ({{.SiteID}}), generated {{.Generated}}
 # Single use. It holds this router's WireGuard private key and REST password,
-# so keep it private. It removes itself from the router when it finishes.
+# so keep it private. It removes itself from the router when it finishes, and
+# also when it stops on an error (the whole body is wrapped for that).
 # Every object it creates has a comment that starts with "ftn:".
 :local fails 0
+:local abort ""
+:do {
 
 :put "ftn 0/9: checking RouterOS"
 :local ver [/system/resource/get version]
 :put ("   RouterOS " . $ver)
 :local major [:tonum [:pick $ver 0 [:find $ver "."]]]
-:if ($major < 7) do={ :error "ftn: RouterOS 7 or newer is required" }
+:if ($major < 7) do={ :set abort "ftn: RouterOS 7 or newer is required"; :error $abort }
 
 :put "ftn 1/9: WireGuard tunnel to the billing server"
 :do {
@@ -21,7 +24,7 @@
   /ip/address add address={{.TunnelIP}} network={{.ServerIP}} interface={{.WGIface}} comment="ftn: tunnel address"
   /interface/wireguard/peers remove [find where comment="ftn: billing server"]
   /interface/wireguard/peers add interface={{.WGIface}} public-key="{{.ServerPublicKey}}" endpoint-address={{.EndpointHost}} endpoint-port={{.EndpointPort}} allowed-address={{.ServerIP}}/32 persistent-keepalive=25s comment="ftn: billing server"
-} on-error={ :error "ftn: section 1 (WireGuard) failed" }
+} on-error={ :set abort "ftn: section 1 (WireGuard) failed"; :error $abort }
 
 :put "ftn 2/9: firewall (the tunnel can only reach the REST API)"
 :do {
@@ -31,7 +34,7 @@
 {{fw (printf "chain=input action=drop in-interface=%s" .WGIface) "ftn: wg drop other input"}}
 {{fw (printf "chain=input action=accept protocol=icmp in-interface=%s src-address=%s" .WGIface .ServerIP) "ftn: wg icmp"}}
 {{fw (printf "chain=input action=accept protocol=tcp in-interface=%s src-address=%s dst-port=%d" .WGIface .ServerIP .RESTPort) "ftn: wg rest"}}
-} on-error={ :error "ftn: section 2 (firewall) failed" }
+} on-error={ :set abort "ftn: section 2 (firewall) failed"; :error $abort }
 
 :put "ftn 3/9: REST API for the billing server"
 :do {
@@ -46,7 +49,7 @@
     /user/set [find where name="{{.RESTUser}}"] group={{.RESTUser}} password="{{.RESTPass}}" address={{.ServerIP}}/32
   }
   /ip/service set www port={{.RESTPort}} disabled=no address={{.ServerIP}}/32{{if .LegacyContainer}},172.17.0.0/24{{end}}
-} on-error={ :error "ftn: section 3 (REST API) failed" }
+} on-error={ :set abort "ftn: section 3 (REST API) failed"; :error $abort }
 {{if .Provision}}
 :put "ftn 4/9: customer network {{.CustomerNetwork}}"
 :do {
@@ -135,4 +138,10 @@
 :put "ftn 9/9: checking the tunnel"
 :do { /ping {{.ServerIP}} count=3 } on-error={ :put "   no answer from the billing server yet; the tunnel can take a few seconds to come up" }
 :if ($fails > 0) do={ :put ("ftn: finished with " . $fails . " section(s) failed, see the messages above") } else={ :put "ftn: all sections done" }
+} on-error={
+  :put "ftn: the join script stopped early, see below"
+  :if ([:len $abort] > 0) do={ :put $abort }
+  /file remove [find where name="ftn-join.rsc"]
+  :error "ftn: join stopped; the script file was removed from the router. Fix the cause, then make a new join command"
+}
 /file remove [find where name="ftn-join.rsc"]
