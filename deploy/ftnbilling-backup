@@ -1,0 +1,432 @@
+#!/usr/bin/env bash
+# Weekly encrypted backup of the Fast Tech Net billing server to Google Drive.
+# Installed as /usr/local/sbin/ftnbilling-backup by deploy/install.sh.
+#
+#   ftnbilling-backup setup            connect Google Drive (interactive; once)
+#   ftnbilling-backup run              take a snapshot and upload it now
+#   ftnbilling-backup list             list snapshots on Drive
+#   ftnbilling-backup restore <name|latest> [dir]
+#                                      download + decrypt into a NEW folder
+#                                      (never touches live data)
+#   ftnbilling-backup status           last run, schedule, Drive usage
+#
+# Everything is encrypted with an rclone "crypt" remote before it leaves the
+# server (file contents and file names), so the env file, the WireGuard key and
+# the router passwords are not readable on Drive. See deploy/BACKUP.md.
+#
+# Test/override variables (all optional):
+#   FTN_ROOT          prefix for every server path (default empty = real paths)
+#   RCLONE_CONFIG     rclone config file (default /root/.config/rclone/rclone.conf)
+#   FTN_REMOTE        crypt remote that holds the snapshots (default ftn-backup)
+#   BACKUP_KEEP_WEEKS snapshots older than this many weeks are deleted from
+#                     Drive (default 12)
+#   BACKUP_BWLIMIT    passed to rclone --bwlimit, e.g. 2M (default unlimited)
+#   GDRIVE_TOKEN      token JSON from `rclone authorize "drive"` (setup, non-interactive)
+#   GDRIVE_CLIENT_ID / GDRIVE_CLIENT_SECRET   your own Google OAuth client (optional)
+#   GDRIVE_CRYPT_PASSWORD / GDRIVE_CRYPT_SALT reuse existing passphrases instead
+#                     of generating new ones (setup on a replacement server)
+set -Eeuo pipefail
+
+APP=ftnbilling
+ROOT=${FTN_ROOT:-}
+DATA=$ROOT/var/lib/$APP
+ETC=$ROOT/etc/$APP
+ENVF=$ETC/$APP.env
+WGCONF=$ROOT/etc/wireguard/wg0.conf
+CADDYF=$ROOT/etc/caddy/Caddyfile
+SRC=$ROOT/opt/$APP/src
+LOCALDIR=$ROOT/var/backups/$APP/weekly
+STATEDIR=$ROOT/var/lib/$APP-backup
+STATE=$STATEDIR/last.json
+RESTORE_BASE=$ROOT/root
+
+export RCLONE_CONFIG=${RCLONE_CONFIG:-/root/.config/rclone/rclone.conf}
+GREMOTE=ftn-gdrive
+GFOLDER=FastTechNet-backups
+REMOTE=${FTN_REMOTE:-ftn-backup}
+SNAPDIR=weekly
+KEEP_WEEKS=${BACKUP_KEEP_WEEKS:-12}
+UNIT=$APP-backup.timer
+SELF=ftnbilling-backup
+
+export RCLONE_DRIVE_CHUNK_SIZE=${RCLONE_DRIVE_CHUNK_SIZE:-32M}
+RC_FLAGS=(--stats-one-line --log-level NOTICE)
+[ -n "${BACKUP_BWLIMIT:-}" ] && RC_FLAGS+=(--bwlimit "$BACKUP_BWLIMIT")
+
+ERRMSG=""
+log()  { printf '%s\n' "$*" >&2; }
+warn() { printf 'WARNING: %s\n' "$*" >&2; }
+die()  { ERRMSG="$*"; printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+trap 'ERRMSG=${ERRMSG:-"command failed near line $LINENO"}' ERR
+
+need_root() { [ -n "$ROOT" ] || [ "$(id -u)" = 0 ] || die "run as root (sudo $SELF $CMD)"; }
+
+# Read KEY from the env file without sourcing it (values may contain spaces).
+envval() {
+  [ -r "$ENVF" ] || return 0
+  local v
+  v=$(grep -m1 "^$1=" "$ENVF" | cut -d= -f2- || true)
+  v=${v%$'\r'}
+  case "$v" in \"*\") v=${v#\"}; v=${v%\"};; \'*\') v=${v#\'}; v=${v%\'};; esac
+  printf '%s' "$v"
+}
+
+json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n\t' '  '; }
+
+write_state() { # status snapshot bytes sha256 error
+  mkdir -p "$STATEDIR"
+  umask 077
+  printf '{"status":"%s","time":"%s","host":"%s","snapshot":"%s","bytes":%s,"sha256":"%s","keep_weeks":%s,"error":"%s"}\n' \
+    "$1" "$(date -u +%FT%TZ)" "$(json_escape "$HOST")" "$(json_escape "${2:-}")" "${3:-0}" "${4:-}" "$KEEP_WEEKS" \
+    "$(json_escape "${5:-}")" >"$STATE.tmp"
+  mv -f "$STATE.tmp" "$STATE"
+}
+
+notify_failure() {
+  local tok chat msg
+  tok=$(envval TELEGRAM_BOT_TOKEN); chat=$(envval TELEGRAM_CHAT_ID)
+  [ -n "$tok" ] && [ -n "$chat" ] || return 0
+  command -v curl >/dev/null || return 0
+  msg="Backup FAILED on $HOST: $1"
+  # The token goes in through stdin so it never shows up in the process list.
+  printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$tok" |
+    curl -fsS -m 20 -K - --data-urlencode "chat_id=$chat" --data-urlencode "text=$msg" \
+      >/dev/null 2>&1 || warn "could not send the Telegram message"
+}
+
+rclone_ver_ok() { # rclone present and >= 1.60
+  command -v rclone >/dev/null || return 1
+  local v
+  v=$(rclone version 2>/dev/null | awk 'NR==1{sub(/^rclone v/,""); print $1}')
+  [ -n "$v" ] && [ "$(printf '%s\n1.60\n' "$v" | sort -V | head -1)" = "1.60" ]
+}
+
+ensure_rclone() {
+  rclone_ver_ok && return 0
+  need_root
+  log "Installing rclone..."
+  if command -v apt-get >/dev/null; then
+    DEBIAN_FRONTEND=noninteractive apt-get update -qq || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq rclone unzip >/dev/null || true
+  fi
+  if ! rclone_ver_ok; then
+    log "The distro rclone is missing or older than 1.60; using the official installer."
+    command -v unzip >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq unzip >/dev/null
+    curl -fsSL https://rclone.org/install.sh | bash >/dev/null || die "could not install rclone"
+    hash -r
+  fi
+  rclone_ver_ok || die "rclone >= 1.60 is required (found: $(rclone version 2>/dev/null | head -1))"
+}
+
+rand() { local s; s=$(head -c 192 /dev/urandom | base64 -w0 | tr -dc 'A-Za-z0-9'); printf '%s' "${s:0:$1}"; }
+
+cfg_has() { rclone listremotes 2>/dev/null | grep -qx "$1:"; }
+
+# ---------------------------------------------------------------- setup
+cmd_setup() {
+  need_root
+  ensure_rclone
+  mkdir -p "$(dirname "$RCLONE_CONFIG")"; chmod 700 "$(dirname "$RCLONE_CONFIG")" 2>/dev/null || true
+  [ -f "$RCLONE_CONFIG" ] || { umask 077; : >"$RCLONE_CONFIG"; }
+  chmod 600 "$RCLONE_CONFIG"
+
+  local token="${GDRIVE_TOKEN:-}"
+  if [ -z "$token" ] && cfg_has "$GREMOTE" && [ -z "${FTN_FORCE_TOKEN:-}" ]; then
+    log "Google Drive is already connected (remote $GREMOTE). Using the saved token."
+    log "To replace it, run again with GDRIVE_TOKEN='...' set."
+  elif [ -z "$token" ]; then
+    [ -t 0 ] || die "no terminal and no GDRIVE_TOKEN set"
+    cat <<'EOF'
+
+Step 1 of 2: authorise Google Drive (do this on your LAPTOP, not here).
+  Install rclone on the laptop (https://rclone.org/downloads/), then run:
+
+      rclone authorize "drive" --drive-scope drive.file
+
+  A browser opens; sign in with the Google account whose Drive should hold the
+  backups and press Allow. The terminal then prints a line of text that starts
+  with { and ends with }. Copy that whole line and paste it below.
+
+EOF
+    read -r -p "Paste the token line here: " token
+  fi
+
+  if [ -n "$token" ]; then
+    token=$(printf '%s' "$token" | tr -d '\r' | grep -o '{.*}' | head -1 || true)
+    printf '%s' "$token" | grep -q '"access_token"' || die "that does not look like the token: it must be one line like {\"access_token\":\"...\",...}"
+    printf '%s' "$token" | grep -q '"refresh_token"' || die "the token has no refresh_token; run 'rclone authorize \"drive\"' again on the laptop"
+    rclone config delete "$GREMOTE" >/dev/null 2>&1 || true
+    {
+      printf '\n[%s]\ntype = drive\nscope = drive.file\n' "$GREMOTE"
+      [ -n "${GDRIVE_CLIENT_ID:-}" ] && printf 'client_id = %s\n' "$GDRIVE_CLIENT_ID"
+      [ -n "${GDRIVE_CLIENT_SECRET:-}" ] && printf 'client_secret = %s\n' "$GDRIVE_CLIENT_SECRET"
+      printf 'token = %s\n' "$token"
+    } >>"$RCLONE_CONFIG"
+  fi
+
+  local pw="" salt="" generated=0
+  if cfg_has "$REMOTE" && [ -z "${GDRIVE_CRYPT_PASSWORD:-}" ]; then
+    log "The encrypted remote $REMOTE already exists; keeping its passphrases."
+  else
+    pw=${GDRIVE_CRYPT_PASSWORD:-}; salt=${GDRIVE_CRYPT_SALT:-}
+    if [ -z "$pw" ]; then
+      if [ -t 0 ] && [ -z "${GDRIVE_TOKEN:-}" ]; then
+        printf '\nSetting up a NEW backup? Press Enter to generate fresh passphrases.\n'
+        printf 'Replacing a lost server? Paste your SAVED passphrase now instead.\n'
+        read -r -p "Saved passphrase (or Enter): " pw
+        if [ -n "$pw" ]; then read -r -p "Saved salt (password2): " salt; fi
+      fi
+    fi
+    if [ -z "$pw" ]; then pw=$(rand 40); salt=$(rand 40); generated=1; fi
+    [ -n "$salt" ] || die "a passphrase was given without its salt (password2)"
+    local opw osalt
+    opw=$(printf '%s' "$pw" | rclone obscure -)
+    osalt=$(printf '%s' "$salt" | rclone obscure -)
+    rclone config delete "$REMOTE" >/dev/null 2>&1 || true
+    {
+      printf '\n[%s]\ntype = crypt\nremote = %s:%s\n' "$REMOTE" "$GREMOTE" "$GFOLDER"
+      printf 'filename_encryption = standard\ndirectory_name_encryption = true\n'
+      printf 'password = %s\npassword2 = %s\n' "$opw" "$osalt"
+    } >>"$RCLONE_CONFIG"
+  fi
+
+  if [ "$generated" = 1 ]; then
+    cat <<EOF
+
+================================================================================
+ SAVE THESE TWO LINES IN YOUR PASSWORD MANAGER NOW. They are shown only once.
+ Without them the backups on Google Drive can NOT be opened, by anyone.
+
+   Backup passphrase (password):  $pw
+   Backup salt (password2):       $salt
+
+ (A copy is also stored on this server in $RCLONE_CONFIG,
+  but that is lost if the server is lost. Keep your own copy elsewhere.)
+================================================================================
+EOF
+    if [ -t 0 ]; then read -r -p "Press Enter once you have saved them: " _ || true; fi
+  fi
+
+  log "Testing the connection (small encrypted upload, download, delete)..."
+  local t probe
+  t=$(mktemp -d); probe="setup-test-$(date +%s)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$t'" EXIT
+  printf 'ftnbilling backup test %s\n' "$(date -u +%FT%TZ)" >"$t/probe.txt"
+  rclone copyto "${RC_FLAGS[@]}" "$t/probe.txt" "$REMOTE:$probe/probe.txt" || die "upload test failed (check the token and internet access)"
+  rclone lsf "$REMOTE:$probe" | grep -qx 'probe.txt' || die "uploaded test file not listed"
+  rclone copyto "$REMOTE:$probe/probe.txt" "$t/back.txt" || die "download test failed"
+  cmp -s "$t/probe.txt" "$t/back.txt" || die "downloaded test file differs"
+  log "On Drive the same folder looks like this (scrambled names are expected):"
+  rclone lsf --recursive "$GREMOTE:$GFOLDER" 2>/dev/null | head -5 | sed 's/^/    /' >&2 || true
+  rclone purge "$REMOTE:$probe" --drive-use-trash=false >/dev/null 2>&1 || warn "could not delete the test folder"
+  log "Connection OK."
+
+  if [ -z "$ROOT" ] && command -v systemctl >/dev/null && [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+    systemctl enable --now "$UNIT" >/dev/null || warn "could not enable $UNIT (is it installed? re-run the installer)"
+    log "Weekly timer enabled. Next run:"
+    systemctl list-timers "$UNIT" --no-pager 2>/dev/null | sed -n '1,2p' >&2 || true
+  else
+    log "(systemd not used here: timer not enabled)"
+  fi
+  log "Done. Take a first backup now with:  sudo $SELF run"
+}
+
+# ---------------------------------------------------------------- run
+HOST=$(hostname 2>/dev/null || echo unknown)
+HOST=${FTN_HOSTNAME:-$HOST}
+STAGE=""
+
+run_exit() {
+  local rc=$?
+  [ -n "$STAGE" ] && rm -rf "$STAGE"
+  if [ "$rc" -ne 0 ] && [ "${IN_RUN:-0}" = 1 ]; then
+    ERRMSG=${ERRMSG:-"exit status $rc"}
+    write_state failed "${SNAP:-}" 0 "" "$ERRMSG" || true
+    notify_failure "$ERRMSG"
+  fi
+}
+
+cmd_run() {
+  need_root
+  rclone_ver_ok || die "rclone >= 1.60 not installed; run: sudo $SELF setup"
+  cfg_has "$REMOTE" || die "Google Drive is not set up; run: sudo $SELF setup"
+  case "$KEEP_WEEKS" in ''|*[!0-9]*|0) die "BACKUP_KEEP_WEEKS must be a whole number >= 1";; esac
+  IN_RUN=1
+  trap run_exit EXIT
+  umask 077
+
+  local day base tarball rev sums dburl
+  day=$(TZ=Africa/Nairobi date +%F)
+  base=$APP-$HOST-$day
+  SNAP=$base.tar.gz
+  STAGE=$(mktemp -d "${TMPDIR:-/var/tmp}/ftn-backup.XXXXXX")
+  local top=$STAGE/$base
+  mkdir -p "$top/data" "$top/etc-$APP" "$top/wireguard" "$top/caddy"
+
+  log "Collecting files..."
+  [ -d "$DATA" ] || die "$DATA not found"
+  # Data files first (strict), then the folders (best effort: metrics rotate).
+  local f
+  for f in "$DATA"/*; do
+    [ -f "$f" ] && cp -a "$f" "$top/data/"
+  done
+  for f in "$DATA"/*/; do
+    [ -d "$f" ] || continue
+    cp -a "${f%/}" "$top/data/" || warn "some files in $f changed while copying; continuing"
+  done
+  [ -d "$ETC" ] && cp -a "$ETC/." "$top/etc-$APP/"
+  [ -f "$WGCONF" ] && cp -a "$WGCONF" "$top/wireguard/"
+  [ -f "$CADDYF" ] && cp -a "$CADDYF" "$top/caddy/"
+
+  dburl=$(envval DATABASE_URL)
+  if [ -n "$dburl" ]; then
+    command -v pg_dump >/dev/null || die "DATABASE_URL is set but pg_dump is missing (apt install postgresql-client)"
+    log "Dumping PostgreSQL..."
+    pg_dump --format=custom --file "$top/database.dump" "$dburl" || die "pg_dump failed"
+  fi
+
+  rev=unknown
+  if [ -d "$SRC/.git" ] && command -v git >/dev/null; then
+    rev=$(git -c safe.directory='*' -C "$SRC" rev-parse --short HEAD 2>/dev/null || echo unknown)
+  fi
+  sums=$(cd "$top" && find . -type f ! -name MANIFEST.txt -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum)
+  {
+    echo "# Fast Tech Net backup"
+    echo "# host: $HOST"
+    echo "# created: $(date -u +%FT%TZ)"
+    echo "# app revision: $rev"
+    echo "# database dump: $([ -f "$top/database.dump" ] && echo yes || echo no)"
+    echo "# format: sha256  path"
+    printf '%s\n' "$sums"
+  } >"$top/MANIFEST.txt"
+
+  tarball=$STAGE/$SNAP
+  tar -C "$STAGE" -czf "$tarball" "$base"
+  local bytes sha
+  bytes=$(stat -c %s "$tarball"); sha=$(sha256sum "$tarball" | cut -d' ' -f1)
+  log "Snapshot $SNAP: $bytes bytes"
+
+  log "Uploading to Google Drive (encrypted)..."
+  rclone copy "${RC_FLAGS[@]}" "$tarball" "$REMOTE:$SNAPDIR/" || die "upload failed"
+
+  log "Verifying the upload..."
+  if ! rclone cryptcheck "${RC_FLAGS[@]}" --one-way --include "/$SNAP" "$STAGE" "$REMOTE:$SNAPDIR" 2>/dev/null; then
+    warn "hash check unavailable or failed; falling back to a size comparison"
+    rclone check "${RC_FLAGS[@]}" --size-only --one-way --include "/$SNAP" "$STAGE" "$REMOTE:$SNAPDIR" \
+      || die "verification failed: the uploaded file does not match"
+  fi
+
+  # Keep the newest copy on this server too (it is the one the daily cron does not hold).
+  mkdir -p "$LOCALDIR"
+  cp -f "$tarball" "$LOCALDIR/$SNAP"
+  find "$LOCALDIR" -maxdepth 1 -name "$APP-*.tar.gz" ! -name "$SNAP" -delete
+
+  log "Removing snapshots older than $KEEP_WEEKS weeks from Drive..."
+  rclone delete "${RC_FLAGS[@]}" --drive-use-trash=false --min-age "${KEEP_WEEKS}w" \
+    --include "$APP-*.tar.gz" "$REMOTE:$SNAPDIR" || warn "pruning old snapshots failed (backup itself is fine)"
+
+  write_state ok "$SNAP" "$bytes" "$sha" ""
+  IN_RUN=0
+  log "Backup OK: $SNAP"
+}
+
+# ---------------------------------------------------------------- list
+snaps() { rclone lsf --format "sp" --separator " " "$REMOTE:$SNAPDIR" --include "$APP-*.tar.gz" 2>/dev/null | sort -k2 || true; }
+
+cmd_list() {
+  need_root
+  rclone_ver_ok && cfg_has "$REMOTE" || die "Google Drive is not set up; run: sudo $SELF setup"
+  local out
+  out=$(snaps)
+  [ -n "$out" ] || { log "No snapshots found on Drive."; return 0; }
+  printf '%s\n' "$out" | awk '{printf "%-50s %8.1f MB\n", $2, $1/1048576}'
+}
+
+# ---------------------------------------------------------------- restore
+cmd_restore() {
+  need_root
+  local name=${1:-} target=${2:-}
+  [ -n "$name" ] || die "usage: $SELF restore <snapshot-name|latest> [target-dir]"
+  rclone_ver_ok && cfg_has "$REMOTE" || die "Google Drive is not set up; run: sudo $SELF setup"
+  if [ "$name" = latest ]; then
+    name=$(snaps | awk '{print $2}' | tail -1)
+    [ -n "$name" ] || die "no snapshots on Drive"
+  fi
+  case "$name" in *.tar.gz) ;; *) name=$name.tar.gz;; esac
+  case "$name" in */*|*..*) die "bad snapshot name";; esac
+  [ -n "$target" ] || target=$RESTORE_BASE/$APP-restore-$(TZ=Africa/Nairobi date +%F)
+  case "$(realpath -m "$target")" in
+    "$DATA"|"$DATA"/*|"$ETC"|"$ETC"/*|"$ROOT"/etc/wireguard|"$ROOT"/etc/wireguard/*)
+      die "refusing to restore into live data ($target); pick another folder";;
+  esac
+  if [ -d "$target" ] && [ -n "$(ls -A "$target" 2>/dev/null)" ]; then
+    die "$target already exists and is not empty"
+  fi
+  umask 077
+  mkdir -p "$target"
+  log "Downloading and decrypting $name ..."
+  rclone copy "${RC_FLAGS[@]}" "$REMOTE:$SNAPDIR/$name" "$target" || die "download failed (wrong passphrase, or no such snapshot? see: $SELF list)"
+  [ -f "$target/$name" ] || die "download produced no file"
+  tar -C "$target" -xzf "$target/$name"
+  local dir=$target/${name%.tar.gz}
+  [ -f "$dir/MANIFEST.txt" ] || die "snapshot has no MANIFEST.txt"
+  if ( cd "$dir" && grep -E '^[0-9a-f]{64}  ' MANIFEST.txt | sha256sum --quiet -c - ); then
+    log "Checksums in MANIFEST.txt all match."
+  else
+    die "checksum mismatch: the snapshot is damaged"
+  fi
+  cat <<EOF
+
+Restored into: $dir
+Nothing on this server was changed. To put it back, step by step:
+
+  1. Stop the app:          sudo systemctl stop $APP
+  2. Billing data:          sudo cp -a $dir/data/. /var/lib/$APP/
+                            sudo chown -R $APP:$APP /var/lib/$APP
+  3. Settings:              sudo cp -a $dir/etc-$APP/. /etc/$APP/
+  4. WireGuard (same key, so routers keep working):
+                            sudo cp -a $dir/wireguard/wg0.conf /etc/wireguard/wg0.conf
+                            sudo systemctl restart wg-quick@wg0
+  5. Caddy (optional):      sudo cp -a $dir/caddy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
+  6. PostgreSQL (only if the folder contains database.dump):
+                            pg_restore --clean --if-exists --no-owner -d "\$DATABASE_URL" $dir/database.dump
+  7. Start the app:         sudo systemctl start $APP
+
+On a brand-new VPS run the installer first (it creates the user and folders),
+then do the steps above. Full guide: deploy/BACKUP.md
+EOF
+}
+
+# ---------------------------------------------------------------- status
+cmd_status() {
+  need_root
+  if [ -f "$STATE" ]; then echo "Last run: $(cat "$STATE")"; else echo "Last run: never"; fi
+  if [ -z "$ROOT" ] && command -v systemctl >/dev/null && [ -d /run/systemd/system ]; then
+    if systemctl is-enabled --quiet "$UNIT" 2>/dev/null; then
+      systemctl list-timers "$UNIT" --no-pager 2>/dev/null | sed -n '1,2p'
+    else
+      echo "Timer: not enabled (run: sudo $SELF setup)"
+    fi
+  fi
+  if rclone_ver_ok && cfg_has "$REMOTE"; then
+    echo "On Drive ($REMOTE:$SNAPDIR):"
+    rclone size "$REMOTE:$SNAPDIR" 2>/dev/null | sed 's/^/  /' || echo "  (could not read the remote)"
+    rclone about "$GREMOTE:" 2>/dev/null | sed 's/^/  Drive: /' || true
+  else
+    echo "Google Drive is not set up (run: sudo $SELF setup)"
+  fi
+}
+
+# ---------------------------------------------------------------- main
+CMD=${1:-help}
+[ $# -gt 0 ] && shift
+case "$CMD" in
+  setup)   cmd_setup "$@";;
+  run)     cmd_run "$@";;
+  list)    cmd_list "$@";;
+  restore) cmd_restore "$@";;
+  status)  cmd_status "$@";;
+  *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; [ "$CMD" = help ] || exit 2;;
+esac

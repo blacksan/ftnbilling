@@ -319,6 +319,24 @@ find \$D -name '$APP-metrics-*.tgz' -mtime +28 -delete
 EOF
 chmod 755 /etc/cron.daily/$APP-backup
 
+# ---- BEGIN weekly Google Drive backup (see deploy/BACKUP.md) -----------------
+# Installs the script and timer only. Nothing is uploaded and the timer stays
+# off until the owner runs:  sudo ftnbilling-backup setup
+install -m 0755 "$SRC/deploy/$APP-backup" /usr/local/sbin/$APP-backup
+install -m 0644 "$SRC/deploy/$APP-backup.service" /etc/systemd/system/$APP-backup.service
+BK_CAL='Sun *-*-* 02:30:00 Africa/Nairobi'
+if ! systemd-analyze calendar "$BK_CAL" >/dev/null 2>&1; then BK_CAL='Sat *-*-* 23:30:00 UTC'; fi   # same moment, older systemd
+sed "s|^OnCalendar=.*|OnCalendar=$BK_CAL|" "$SRC/deploy/$APP-backup.timer" >/etc/systemd/system/$APP-backup.timer
+chmod 644 /etc/systemd/system/$APP-backup.timer
+systemctl daemon-reload
+BK_MSG="Google Drive weekly backup: run  sudo $APP-backup setup"
+if grep -qs '^\[ftn-backup\]' /root/.config/rclone/rclone.conf; then
+  systemctl enable --now $APP-backup.timer >/dev/null 2>&1 || true   # re-arm after a reinstall; harmless if already on
+  BK_NEXT=$(systemctl list-timers $APP-backup.timer --no-pager 2>/dev/null | awk 'NR==2{print $1, $2, $3, $4}' || true)
+  BK_MSG="Google Drive weekly backup: on, next run ${BK_NEXT:-see: systemctl list-timers}   (status: sudo $APP-backup status)"
+fi
+# ---- END weekly Google Drive backup ------------------------------------------
+
 say "8/8 start"
 systemctl daemon-reload
 systemctl enable $APP >/dev/null
@@ -355,5 +373,6 @@ case "$BASE" in https://*) ;; *) echo " NOTE: join commands need HTTPS. Re-run t
 if grep -q '^ROUTER_URL=' "$ENVF"; then
   echo " NOTE: this server still has a legacy ROUTER_URL router. It keeps working as the building \"Main building\"."
 fi
+echo " ${BK_MSG:-}"
 echo "────────────────────────────────────────────────────────────────────"
 exit 0
