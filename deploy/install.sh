@@ -139,6 +139,16 @@ addkv() {
   echo "$1=$2" >>"$ENVF"
 }
 
+# fillkv gives KEY a value when the file has the line but it is empty (KEY=,
+# KEY="" or KEY='' with nothing else). A non-empty value is never replaced.
+fillkv() {
+  local cur
+  cur=$(envget "$1")
+  case "$cur" in "" | '""' | "''") ;; *) return 0 ;; esac
+  grep -qs "^$1=" "$ENVF" || return 0
+  setkv "$1" "$2"
+}
+
 PGSU() { run runuser -u postgres -- "$@"; }
 
 # ---------------------------------------------------------------------------
@@ -581,6 +591,9 @@ EOF
   # install gets one. Losing it makes both unreadable: it is in the Drive
   # backup, and must be restored together with the database.
   addkv DATA_KEY "$(head -c 32 /dev/urandom | base64 -w0)"
+  # An existing but empty "DATA_KEY=" line (a file edited by hand, or an older
+  # template) would otherwise stay empty and refuse every secret setting.
+  fillkv DATA_KEY "$(head -c 32 /dev/urandom | base64 -w0)"
   if [ "$DRY" != 1 ]; then chown root:$APP "$ENVF"; chmod 640 "$ENVF"; fi
 }
 
