@@ -154,7 +154,7 @@ func TestAdminSwitcherFiltersLists(t *testing.T) {
 	m := newMulti(t)
 	A, B := m.addSite(t, "Alpha"), m.addSite(t, "Beta")
 	m.svc.CreateAccount(billing.AccountInput{SiteID: A.ID, Flat: "Flat A1", MAC: "AA:BB:CC:00:00:01"})
-	m.svc.CreateAccount(billing.AccountInput{SiteID: B.ID, Flat: "Flat B1", MAC: "AA:BB:CC:00:00:01"})
+	m.svc.CreateAccount(billing.AccountInput{SiteID: B.ID, Flat: "Flat B1", MAC: "AA:BB:CC:00:00:0B"})
 	m.svc.CreateAccount(billing.AccountInput{SiteID: B.ID, Flat: "Flat B2", MAC: "AA:BB:CC:00:00:02"})
 
 	html := m.adminGet(t, "/admin/accounts") // no cookie, two buildings: all

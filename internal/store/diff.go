@@ -20,6 +20,9 @@ func (x Site) norm() Site {
 	if len(x.PkgOverrides) == 0 {
 		x.PkgOverrides = nil
 	}
+	if x.AccessMode == "" {
+		x.AccessMode = AccessHotspot
+	}
 	return x
 }
 func (x Package) norm() Package { return x }
@@ -34,6 +37,9 @@ func (x Equipment) norm() Equipment {
 func (x Account) norm() Account {
 	x.ExpiresAt, x.RemindedFor, x.ExpiredFor = nt(x.ExpiresAt), nt(x.RemindedFor), nt(x.ExpiredFor)
 	x.CreatedAt, x.ClosedAt = nt(x.CreatedAt), nt(x.ClosedAt)
+	if m, ok := CanonMAC(x.MAC); ok {
+		x.MAC = m
+	}
 	return x
 }
 func (x Tenancy) norm() Tenancy { x.MoveIn, x.MoveOut = nt(x.MoveIn), nt(x.MoveOut); return x }
@@ -53,6 +59,24 @@ func (x EquipmentEvent) norm() EquipmentEvent {
 func (x Note) norm() Note       { x.Time = nt(x.Time); return x }
 func (x Setting) norm() Setting { x.UpdatedAt = nt(x.UpdatedAt); return x }
 func (x Event) norm() Event     { x.Time = nt(x.Time); return x }
+func (x AdminUser) norm() AdminUser {
+	x.TOTPConfirmedAt, x.PassChangedAt = nt(x.TOTPConfirmedAt), nt(x.PassChangedAt)
+	x.CreatedAt, x.UpdatedAt = nt(x.CreatedAt), nt(x.UpdatedAt)
+	if len(x.RecoveryCodes) == 0 {
+		x.RecoveryCodes = nil
+	}
+	return x
+}
+func (x AdminSession) norm() AdminSession {
+	x.CreatedAt, x.LastSeenAt, x.ExpiresAt = nt(x.CreatedAt), nt(x.LastSeenAt), nt(x.ExpiresAt)
+	return x
+}
+func (x APIDevice) norm() APIDevice {
+	x.AccessExpiresAt, x.RefreshRotatedAt = nt(x.AccessExpiresAt), nt(x.RefreshRotatedAt)
+	x.RefreshExpiresAt, x.AbsoluteExpiresAt = nt(x.RefreshExpiresAt), nt(x.AbsoluteExpiresAt)
+	x.CreatedAt, x.LastSeenAt, x.RevokedAt = nt(x.CreatedAt), nt(x.LastSeenAt), nt(x.RevokedAt)
+	return x
+}
 
 // Norm returns the row as it will be stored: times in UTC at microsecond
 // precision. Backends apply it on load; the Store applies it on write.
@@ -71,6 +95,9 @@ func (x EquipmentEvent) Norm() EquipmentEvent { return x.norm() }
 func (x Note) Norm() Note                     { return x.norm() }
 func (x Event) Norm() Event                   { return x.norm() }
 func (x Setting) Norm() Setting               { return x.norm() }
+func (x AdminUser) Norm() AdminUser           { return x.norm() }
+func (x AdminSession) Norm() AdminSession     { return x.norm() }
+func (x APIDevice) Norm() APIDevice           { return x.norm() }
 
 func eqc[V comparable](a, b V) bool { return a == b }
 func eqDeep[V any](a, b V) bool     { return reflect.DeepEqual(a, b) }
@@ -180,6 +207,13 @@ func cloneSite(s Site) Site {
 	return s
 }
 
+func cloneAdminUser(u AdminUser) AdminUser {
+	if u.RecoveryCodes != nil {
+		u.RecoveryCodes = append([]string(nil), u.RecoveryCodes...)
+	}
+	return u
+}
+
 // tables lists every table except accounts (two maps, one key space) and
 // events (a slice).
 var tables = []table{
@@ -211,6 +245,12 @@ var tables = []table{
 		eqc[Note], Note.norm, func(v Note) string { return v.ID }, nil},
 	tbl[Setting]{func(d *Data) *map[string]Setting { return &d.Settings }, func(c *ChangeSet) *Delta[Setting] { return &c.Settings },
 		eqc[Setting], Setting.norm, func(v Setting) string { return v.Key }, nil},
+	tbl[AdminUser]{func(d *Data) *map[string]AdminUser { return &d.AdminUsers }, func(c *ChangeSet) *Delta[AdminUser] { return &c.AdminUsers },
+		eqDeep[AdminUser], AdminUser.norm, func(v AdminUser) string { return v.ID }, cloneAdminUser},
+	tbl[AdminSession]{func(d *Data) *map[string]AdminSession { return &d.AdminSessions }, func(c *ChangeSet) *Delta[AdminSession] { return &c.AdminSessions },
+		eqc[AdminSession], AdminSession.norm, func(v AdminSession) string { return v.ID }, nil},
+	tbl[APIDevice]{func(d *Data) *map[string]APIDevice { return &d.APIDevices }, func(c *ChangeSet) *Delta[APIDevice] { return &c.APIDevices },
+		eqc[APIDevice], APIDevice.norm, func(v APIDevice) string { return v.ID }, nil},
 }
 
 // ---- accounts: open and closed share one key space ------------------------
@@ -392,6 +432,7 @@ func cloneData(d *Data) Data {
 		Payments: cloneMap(d.Payments, nil), Devices: cloneMap(d.Devices, nil), Tasks: cloneMap(d.Tasks, nil),
 		Customers: cloneMap(d.Customers, nil), Tenancies: cloneMap(d.Tenancies, nil), Contacts: cloneMap(d.Contacts, nil),
 		Equipment: cloneMap(d.Equipment, nil), EquipmentEvents: cloneMap(d.EquipmentEvents, nil), Notes: cloneMap(d.Notes, nil), Settings: cloneMap(d.Settings, nil),
+		AdminUsers: cloneMap(d.AdminUsers, cloneAdminUser), AdminSessions: cloneMap(d.AdminSessions, nil), APIDevices: cloneMap(d.APIDevices, nil),
 		Events: append([]Event(nil), d.Events...),
 	}
 }

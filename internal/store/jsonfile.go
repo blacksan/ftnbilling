@@ -78,7 +78,7 @@ func (j *jsonBackend) write(d *Data) error {
 
 func (j *jsonBackend) Commit(_ context.Context, d *Data, _ *ChangeSet) error { return j.write(d) }
 
-// ReadJSON reads a JSON database file of format 2, 3, 4 or 5 and returns it in
+// ReadJSON reads a JSON database file of format 2 to 6 and returns it in
 // the current format, in memory only: nothing is written or backed up. from is
 // the format the file had.
 func ReadJSON(path string) (d *Data, from int, err error) {
@@ -95,7 +95,7 @@ func ReadJSON(path string) (d *Data, from int, err error) {
 	return d, from, nil
 }
 
-// WriteJSON writes d as a format 5 JSON database file (export-json).
+// WriteJSON writes d as a format 6 JSON database file (export-json).
 func WriteJSON(path string, d *Data) error {
 	d.Format = FormatVersion
 	b, err := json.MarshalIndent(d, "", " ")
@@ -115,7 +115,7 @@ func decodeJSON(raw []byte, path string) (*Data, int, error) {
 	}
 	d := &Data{}
 	switch probe.Format {
-	case FormatVersion, 4, 3, 2:
+	case FormatVersion, 5, 4, 3, 2:
 		if err := json.Unmarshal(raw, d); err != nil {
 			return nil, 0, fmt.Errorf("corrupt %s: %w", path, err)
 		}
@@ -131,6 +131,9 @@ func decodeJSON(raw []byte, path string) (*Data, int, error) {
 		d.migrateV3toV4(timeNow())
 	}
 	// 4 -> 5 only adds the settings table, which init() has just created empty.
+	if probe.Format < 6 {
+		d.migrateV5toV6(timeNow())
+	}
 	d.Format = FormatVersion
 	return d, probe.Format, nil
 }

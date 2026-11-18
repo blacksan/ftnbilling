@@ -18,12 +18,37 @@ var (
 	ErrVoucherUsed  = errors.New("voucher is invalid or already used")
 	ErrNoPackage    = errors.New("no package matches that amount")
 	ErrSuspended    = errors.New("this account is suspended")
-	ErrDuplicateMAC = errors.New("that MAC address already belongs to another account")
+	ErrDuplicateMAC = store.ErrDuplicateMAC
 	ErrDuplicateKey = errors.New("that transaction code is already recorded")
 	ErrBadState     = errors.New("that payment is not waiting for a decision")
 	ErrVoucherSite  = errors.New("this voucher is for another building")
 	ErrNoSite       = errors.New("choose a building")
 )
+
+// DuplicateMACError says which open account already owns a MAC. It matches
+// ErrDuplicateMAC (and store.ErrDuplicateMAC) with errors.Is; use errors.As to
+// get the owner, e.g. for the API's mac_in_use details. A MAC is unique across
+// all buildings among open accounts.
+type DuplicateMACError struct {
+	AccountID string
+	Code      string
+	Flat      string
+	SiteID    string
+	SiteName  string
+}
+
+func (e *DuplicateMACError) Error() string {
+	return fmt.Sprintf("%s (%s in %s, code %s)", ErrDuplicateMAC.Error(), e.Flat, e.SiteName, e.Code)
+}
+
+// Unwrap makes errors.Is(err, ErrDuplicateMAC) true.
+func (e *DuplicateMACError) Unwrap() error { return ErrDuplicateMAC }
+
+// duplicateMAC builds the error for the account that owns the MAC. Call it
+// inside View/Update with d.
+func duplicateMAC(d *store.Data, owner store.Account) error {
+	return &DuplicateMACError{AccountID: owner.ID, Code: owner.Code, Flat: owner.Flat, SiteID: owner.SiteID, SiteName: d.Sites[owner.SiteID].Name}
+}
 
 // Account states shown to people.
 const (
@@ -210,8 +235,8 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 		if st, ok := d.Sites[in.SiteID]; !ok || st.Removed {
 			return ErrNoSite
 		}
-		if other, ok := d.AccountByMAC(in.SiteID, mac); ok {
-			return fmt.Errorf("%w (%s)", ErrDuplicateMAC, other.Flat)
+		if other, ok := d.AccountByMAC(mac); ok {
+			return duplicateMAC(d, other)
 		}
 		if flatTaken(d, in.SiteID, flat, "") {
 			return fmt.Errorf("an account for %q already exists in this building", flat)
@@ -268,8 +293,8 @@ func (s *Service) ChangeMAC(ctx context.Context, id, rawMAC string) error {
 		if !ok {
 			return ErrNotFound
 		}
-		if other, ok := d.AccountByMAC(a.SiteID, mac); ok && other.ID != id {
-			return fmt.Errorf("%w (%s)", ErrDuplicateMAC, other.Flat)
+		if other, ok := d.AccountByMAC(mac); ok && other.ID != id {
+			return duplicateMAC(d, other)
 		}
 		if strings.EqualFold(a.MAC, mac) {
 			return store.ErrNoChange
@@ -319,8 +344,9 @@ func (s *Service) AccountByCode(code string) (a store.Account, ok bool) {
 	return
 }
 
-func (s *Service) AccountByMAC(siteID, mac string) (a store.Account, ok bool) {
-	s.st.View(func(d *store.Data) { a, ok = d.AccountByMAC(siteID, mac) })
+// AccountByMAC finds the open account that owns a MAC in any building.
+func (s *Service) AccountByMAC(mac string) (a store.Account, ok bool) {
+	s.st.View(func(d *store.Data) { a, ok = d.AccountByMAC(mac) })
 	return
 }
 
@@ -332,8 +358,8 @@ func (s *Service) NoteDevice(siteID, mac, ip, source string) {
 		return
 	}
 	_ = s.st.Update(func(d *store.Data) error {
-		if _, ok := d.AccountByMAC(siteID, mac); ok {
-			return store.ErrNoChange
+		if _, ok := d.AccountByMAC(mac); ok {
+			return store.ErrNoChange // already a customer (here or in another building)
 		}
 		if st, ok := d.Sites[siteID]; !ok || st.Removed {
 			return store.ErrNoChange

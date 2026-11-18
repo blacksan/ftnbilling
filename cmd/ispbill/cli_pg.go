@@ -114,6 +114,16 @@ func runDBCommand(cmd string, args []string, getenv func(string) string, out io.
 			return json.NewEncoder(out).Encode(counts)
 		}
 		printCounts(out, counts)
+		if counts.MACConflicts > 0 {
+			d, err := b.LoadAll(ctx)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "\nMAC conflicts: %d open flat(s) share a MAC with another flat (or have a malformed one). They are not provisioned until fixed:\n", counts.MACConflicts)
+			for _, l := range store.Conflicts(d) {
+				fmt.Fprintf(out, "  - %s\n", l)
+			}
+		}
 		return nil
 	}
 	return nil

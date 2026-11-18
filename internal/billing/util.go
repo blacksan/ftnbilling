@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"ispbill/internal/store"
 )
 
 // EAT is East Africa Time (UTC+3, no DST).
@@ -86,40 +88,12 @@ func Slugify(s string) string {
 }
 
 // ErrBadMAC is returned for text that is not a unicast MAC address.
-var ErrBadMAC = errors.New("enter the ONT WAN MAC address like AA:BB:CC:DD:EE:FF")
+var ErrBadMAC = store.ErrBadMAC
 
 // NormalizeMAC accepts AA:BB:CC:DD:EE:FF, AA-BB-..., aabb.ccdd.eeff or
 // aabbccddeeff and returns the upper-case colon form. Multicast and all-zero
-// addresses are refused.
-func NormalizeMAC(s string) (string, error) {
-	s = strings.ToUpper(strings.TrimSpace(s))
-	s = strings.NewReplacer(":", "", "-", "", ".", "", " ", "").Replace(s)
-	if len(s) != 12 {
-		return "", ErrBadMAC
-	}
-	for _, c := range s {
-		if !(c >= '0' && c <= '9' || c >= 'A' && c <= 'F') {
-			return "", ErrBadMAC
-		}
-	}
-	second := s[1]
-	odd := false
-	switch second {
-	case '1', '3', '5', '7', '9', 'B', 'D', 'F':
-		odd = true
-	}
-	if odd || s == "000000000000" {
-		return "", ErrBadMAC
-	}
-	var b strings.Builder
-	for i := 0; i < 12; i += 2 {
-		if i > 0 {
-			b.WriteByte(':')
-		}
-		b.WriteString(s[i : i+2])
-	}
-	return b.String(), nil
-}
+// addresses are refused. The work is done by store.NormalizeMAC.
+func NormalizeMAC(s string) (string, error) { return store.NormalizeMAC(s) }
 
 var mpesaCodeRe = regexp.MustCompile(`^[A-Z0-9]{10}$`)
 

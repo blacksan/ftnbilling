@@ -89,6 +89,9 @@ func (b *Backend) Migrate(ctx context.Context) error {
 		return err
 	}
 	for _, m := range ms {
+		if b.opt.maxVersion > 0 && m.version > b.opt.maxVersion {
+			break // tests: stop at an old schema
+		}
 		if err := b.applyOne(ctx, m, ms[len(ms)-1].version); err != nil {
 			return err
 		}

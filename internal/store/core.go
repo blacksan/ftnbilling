@@ -134,11 +134,19 @@ func (s *Store) Update(fn func(d *Data) error) error {
 	if cs.Empty() {
 		return nil
 	}
+	if err := checkAccountInvariants(&s.data, cs); err != nil {
+		rollbackData(&s.data, &s.shadow, cs)
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.commitTimeout)
 	defer cancel()
 	if err := s.b.Commit(ctx, &s.data, cs); err != nil {
 		rollbackData(&s.data, &s.shadow, cs)
 		switch {
+		case errors.Is(err, ErrDuplicateMAC), errors.Is(err, ErrDuplicateIP):
+			// The database refused a duplicate the in-memory check could not
+			// see (the database is the final word). Not an outage.
+			return err
 		case errors.Is(err, ErrAmbiguous):
 			s.reloadLocked()
 		case isConnErr(err):

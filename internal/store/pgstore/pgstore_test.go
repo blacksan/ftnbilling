@@ -143,8 +143,11 @@ func TestForeignKeyViolationRollsBackMemory(t *testing.T) {
 		d.Accounts["a3"] = store.Account{ID: "a3", SiteID: "s1", Code: "BBB222", Flat: "3", MAC: "aa:bb:cc:dd:ee:01", CreatedAt: time.Now()}
 		return nil
 	})
-	if !errors.Is(err, store.ErrPersist) || !strings.Contains(err.Error(), "accounts_site_mac_open") {
+	if !errors.Is(err, store.ErrDuplicateMAC) {
 		t.Fatalf("want a duplicate MAC failure (case-insensitive), got %v", err)
+	}
+	if h.Store.Healthy() != nil {
+		t.Fatal("a duplicate MAC must not degrade the store")
 	}
 	// Payments can never be deleted.
 	h.Store.Update(func(d *store.Data) error {

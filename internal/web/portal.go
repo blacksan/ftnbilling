@@ -147,7 +147,10 @@ func (s *Server) view(r *http.Request, errMsg, phone, selected string) portalPag
 	if p.Ctx.MAC == "" {
 		return p
 	}
-	a, ok := s.svc.AccountByMAC(p.Ctx.Site, p.Ctx.MAC)
+	a, ok := s.svc.AccountByMAC(p.Ctx.MAC)
+	if ok && a.SiteID != p.Ctx.Site {
+		ok = false // another building's customer: not a customer of this router
+	}
 	if !ok {
 		s.svc.NoteDevice(p.Ctx.Site, p.Ctx.MAC, p.Ctx.IP, "portal")
 		return p
@@ -204,7 +207,10 @@ func (s *Server) need(w http.ResponseWriter, r *http.Request) (store.Account, Po
 		s.render(w, "portal", s.view(r, "", "", ""))
 		return store.Account{}, pc, false
 	}
-	a, ok := s.svc.AccountByMAC(pc.Site, pc.MAC)
+	a, ok := s.svc.AccountByMAC(pc.MAC)
+	if ok && a.SiteID != pc.Site {
+		ok = false
+	}
 	if !ok {
 		w.WriteHeader(http.StatusForbidden)
 		s.render(w, "portal", s.view(r, "", "", ""))

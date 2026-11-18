@@ -406,7 +406,7 @@ func TestC2BAmountMatchesTheAccountsOwnSitePrices(t *testing.T) {
 	svc.SyncProfiles(ctx, siteB)
 	mp := payments.NewMpesa(payments.MpesaConfig{PublicBaseURL: "https://example.org", Enabled: true}, svc, r.st, log)
 	mp.SetClock(func() time.Time { return r.now })
-	bAcct, err := svc.CreateAccount(billing.AccountInput{SiteID: siteB, Flat: "Flat 3B", MAC: ontMAC})
+	bAcct, err := svc.CreateAccount(billing.AccountInput{SiteID: siteB, Flat: "Flat 3B", MAC: "AA:BB:CC:DD:EE:0B"})
 	if err != nil {
 		t.Fatal(err)
 	}

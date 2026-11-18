@@ -33,6 +33,8 @@ type Options struct {
 	NoLock bool
 	// AppName shows in pg_stat_activity.
 	AppName string
+
+	maxVersion int // tests: migrate only up to this version
 }
 
 // Backend implements store.Backend and store.EventReader.
@@ -239,6 +241,12 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	do(err)
 	sets, err := queryAll(ctx, tx, settingsC, "")
 	do(err)
+	ausers, err := queryAll(ctx, tx, adminUsersC, "")
+	do(err)
+	asess, err := queryAll(ctx, tx, adminSessionsC, "")
+	do(err)
+	adevs, err := queryAll(ctx, tx, apiDevicesC, "")
+	do(err)
 	limit := 300
 	if all {
 		limit = 1 << 30
@@ -256,6 +264,7 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	d.Orders, d.Vouchers, d.Payments, d.Devices = map[string]store.Order{}, map[string]store.Voucher{}, map[string]store.Payment{}, map[string]store.Device{}
 	d.Tasks, d.EquipmentEvents, d.Notes = map[string]store.Task{}, map[string]store.EquipmentEvent{}, map[string]store.Note{}
 	d.Settings = map[string]store.Setting{}
+	d.AdminUsers, d.AdminSessions, d.APIDevices = map[string]store.AdminUser{}, map[string]store.AdminSession{}, map[string]store.APIDevice{}
 	fill(d.Sites, sites, sitesC)
 	fill(d.Packages, pk, packagesC)
 	fill(d.Customers, cust, customersC)
@@ -277,6 +286,9 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	fill(d.EquipmentEvents, eqe, eqEventsC)
 	fill(d.Notes, nts, notesC)
 	fill(d.Settings, sets, settingsC)
+	fill(d.AdminUsers, ausers, adminUsersC)
+	fill(d.AdminSessions, asess, adminSessionsC)
+	fill(d.APIDevices, adevs, apiDevicesC)
 	for i := len(evs) - 1; i >= 0; i-- { // oldest first in memory
 		d.Events = append(d.Events, evs[i])
 	}
@@ -311,6 +323,9 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	eqEventsC.queueDeletes(batch, cs.EquipmentEvents.Delete)
 	notesC.queueDeletes(batch, cs.Notes.Delete)
 	settingsC.queueDeletes(batch, cs.Settings.Delete)
+	adminSessionsC.queueDeletes(batch, cs.AdminSessions.Delete)
+	apiDevicesC.queueDeletes(batch, cs.APIDevices.Delete)
+	adminUsersC.queueDeletes(batch, cs.AdminUsers.Delete)
 	mark("delete")
 	sitesC.queueUpserts(batch, cs.Sites)
 	mark("sites")
@@ -344,6 +359,12 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	mark("notes")
 	settingsC.queueUpserts(batch, cs.Settings)
 	mark("settings")
+	adminUsersC.queueUpserts(batch, cs.AdminUsers)
+	mark("admin_users")
+	adminSessionsC.queueUpserts(batch, cs.AdminSessions)
+	mark("admin_sessions")
+	apiDevicesC.queueUpserts(batch, cs.APIDevices)
+	mark("api_devices")
 	eventsC.queueUpserts(batch, store.Delta[store.Event]{Upsert: cs.NewEvents})
 	mark("events")
 	if batch.Len() == 0 {
@@ -358,7 +379,7 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	for i := 0; i < batch.Len(); i++ {
 		if _, err := br.Exec(); err != nil {
 			br.Close()
-			return connErr(fmt.Errorf("%s: %w", names[i], err))
+			return connErr(dupErr(fmt.Errorf("%s: %w", names[i], err)))
 		}
 	}
 	if err := br.Close(); err != nil {
@@ -372,6 +393,23 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 		return fmt.Errorf("%w: %w", store.ErrAmbiguous, err)
 	}
 	return nil
+}
+
+// dupErr marks a violation of the one-MAC-per-open-account index (or the
+// per-building IP index) with store.ErrDuplicateMAC / ErrDuplicateIP, so the
+// caller can tell it from any other refusal. The original error stays in the
+// chain and the message.
+func dupErr(err error) error {
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) && pe.Code == "23505" {
+		switch pe.ConstraintName {
+		case "accounts_mac_open":
+			return fmt.Errorf("%w: %w", store.ErrDuplicateMAC, err)
+		case "accounts_site_ip_open":
+			return fmt.Errorf("%w: %w", store.ErrDuplicateIP, err)
+		}
+	}
+	return err
 }
 
 // connErr marks an error that did not come from the server (timeout, reset,
@@ -388,7 +426,7 @@ func connErr(err error) error {
 	return fmt.Errorf("%w: %w", store.ErrConnection, err)
 }
 
-// queueAccountPrepare frees the unique slots (code, open MAC per site) held by
+// queueAccountPrepare frees the unique slots (code, open MAC, open IP per site) held by
 // accounts whose code, MAC, site or open/closed state is changing. Swapping a
 // MAC or code between two accounts, or moving a MAC from one account to a new
 // one, would otherwise collide in whatever order the rows are written. The
@@ -401,7 +439,8 @@ func queueAccountPrepare(b *pgx.Batch, d store.Delta[store.Account]) {
 		if !ok {
 			continue
 		}
-		if old.Code != cur.Code || !strings.EqualFold(old.MAC, cur.MAC) || old.SiteID != cur.SiteID || old.ClosedAt.IsZero() != cur.ClosedAt.IsZero() {
+		if old.Code != cur.Code || !strings.EqualFold(old.MAC, cur.MAC) || old.SiteID != cur.SiteID || old.ClosedAt.IsZero() != cur.ClosedAt.IsZero() ||
+			old.IP != cur.IP || old.MACConflict != cur.MACConflict {
 			ids = append(ids, cur.ID)
 		}
 	}
@@ -409,7 +448,7 @@ func queueAccountPrepare(b *pgx.Batch, d store.Delta[store.Account]) {
 		return
 	}
 	sort.Strings(ids)
-	b.Queue("UPDATE accounts SET code = '', mac = '' WHERE id = ANY($1)", ids)
+	b.Queue("UPDATE accounts SET code = '', mac = '', ip = '' WHERE id = ANY($1)", ids)
 }
 
 // Events reads the full event history, newest first.

@@ -109,8 +109,8 @@ func (s *Service) changeMACLocked(d *store.Data, id, mac string) error {
 	if !ok {
 		return ErrNotFound
 	}
-	if other, ok := d.AccountByMAC(a.SiteID, mac); ok && other.ID != id {
-		return fmt.Errorf("%w (%s)", ErrDuplicateMAC, other.Flat)
+	if other, ok := d.AccountByMAC(mac); ok && other.ID != id {
+		return duplicateMAC(d, other)
 	}
 	if strings.EqualFold(a.MAC, mac) {
 		return nil

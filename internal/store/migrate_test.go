@@ -57,11 +57,11 @@ func TestMigrateV2ToV3(t *testing.T) {
 		if !ok || dev.SiteID != siteID || dev.Hits != 2 {
 			t.Fatalf("device not re-keyed: %+v", d.Devices)
 		}
-		if _, ok := d.AccountByMAC(siteID, "AA:BB:CC:DD:EE:01"); !ok {
-			t.Fatal("AccountByMAC by site failed")
+		if a, ok := d.AccountByMAC("AA:BB:CC:DD:EE:01"); !ok || a.SiteID != siteID {
+			t.Fatal("AccountByMAC failed")
 		}
-		if _, ok := d.AccountByMAC("other", "AA:BB:CC:DD:EE:01"); ok {
-			t.Fatal("MAC must not match another site")
+		if _, ok := d.AccountByMAC("AA:BB:CC:DD:EE:FE"); ok {
+			t.Fatal("unknown MAC must not match")
 		}
 	})
 	// The original is backed up byte for byte, mode 0600.
@@ -138,7 +138,7 @@ func TestV3RoundTrip(t *testing.T) {
 }
 
 func TestUnknownFormatRefused(t *testing.T) {
-	for _, f := range []string{"1", "6", "0"} {
+	for _, f := range []string{"1", "7", "0"} {
 		dir := t.TempDir()
 		p := filepath.Join(dir, "ispbill.json")
 		raw := []byte(`{"format":` + f + `}`)
@@ -243,7 +243,7 @@ func TestMigrateV2OrphanDevicesDropped(t *testing.T) {
 }
 
 // A format 4 file (from before settings existed) loads, is backed up as
-// .v4.bak, is rewritten as format 5 and keeps every row.
+// .v4.bak, is rewritten as the current format and keeps every row.
 func TestMigrateV4ToV5(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "ispbill.json")
@@ -254,7 +254,7 @@ func TestMigrateV4ToV5(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.View(func(d *Data) {
-		if d.Format != 5 || len(d.Sites) != 1 || d.Settings == nil || len(d.Settings) != 0 {
+		if d.Format != FormatVersion || len(d.Sites) != 1 || d.Settings == nil || len(d.Settings) != 0 {
 			t.Fatalf("format %d sites %d settings %v", d.Format, len(d.Sites), d.Settings)
 		}
 	})
@@ -278,7 +278,7 @@ func TestMigrateV4ToV5(t *testing.T) {
 	var probe struct{ Format int }
 	raw, _ := os.ReadFile(p)
 	json.Unmarshal(raw, &probe)
-	if probe.Format != 5 {
+	if probe.Format != FormatVersion {
 		t.Fatalf("saved format %d", probe.Format)
 	}
 }

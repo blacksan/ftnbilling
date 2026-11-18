@@ -16,7 +16,7 @@ import (
 
 // Tables lists every data table in report order.
 var Tables = []string{"sites", "packages", "customers", "equipment", "accounts", "tenancies", "site_contacts", "orders", "vouchers",
-	"payments", "devices", "tasks", "equipment_events", "notes", "settings", "events"}
+	"payments", "devices", "tasks", "equipment_events", "notes", "settings", "events", "admin_users", "admin_sessions", "api_devices"}
 
 // Counts are row counts per table plus the sum of applied payments.
 type Counts struct {
@@ -24,6 +24,8 @@ type Counts struct {
 	AppliedKES int64          `json:"applied_kes"`
 	// Closed counts closed accounts (they are rows of "accounts").
 	Closed int `json:"closed_accounts"`
+	// MACConflicts counts open accounts flagged mac_conflict (see store.Conflicts).
+	MACConflicts int `json:"mac_conflicts"`
 }
 
 // CountsOf counts what Import would write for d.
@@ -33,7 +35,8 @@ func CountsOf(d *store.Data) Counts {
 		"accounts": len(d.Accounts) + len(d.ClosedAccounts), "tenancies": len(d.Tenancies), "site_contacts": len(d.Contacts),
 		"orders": len(d.Orders), "vouchers": len(d.Vouchers), "payments": len(d.Payments), "devices": len(d.Devices), "tasks": len(d.Tasks),
 		"equipment_events": len(d.EquipmentEvents), "notes": len(d.Notes), "settings": len(d.Settings), "events": len(d.Events),
-	}, Closed: len(d.ClosedAccounts)}
+		"admin_users": len(d.AdminUsers), "admin_sessions": len(d.AdminSessions), "api_devices": len(d.APIDevices),
+	}, Closed: len(d.ClosedAccounts), MACConflicts: len(d.MACConflicts())}
 	for _, p := range d.Payments {
 		if p.Status == store.PayApplied {
 			c.AppliedKES += int64(p.AmountKES)
@@ -56,6 +59,9 @@ func (b *Backend) Counts(ctx context.Context) (Counts, error) {
 		return c, err
 	}
 	if err := b.pool.QueryRow(ctx, "SELECT count(*) FROM accounts WHERE closed_at IS NOT NULL").Scan(&c.Closed); err != nil {
+		return c, err
+	}
+	if err := b.pool.QueryRow(ctx, "SELECT count(*) FROM accounts WHERE mac_conflict AND closed_at IS NULL").Scan(&c.MACConflicts); err != nil {
 		return c, err
 	}
 	return c, nil
@@ -194,6 +200,15 @@ func (b *Backend) Import(ctx context.Context, d *store.Data, opt ImportOptions) 
 		return want, err
 	}
 	if err := copyRows(ctx, tx, settingsC, mapVals(d.Settings)); err != nil {
+		return want, err
+	}
+	if err := copyRows(ctx, tx, adminUsersC, mapVals(d.AdminUsers)); err != nil {
+		return want, err
+	}
+	if err := copyRows(ctx, tx, adminSessionsC, mapVals(d.AdminSessions)); err != nil {
+		return want, err
+	}
+	if err := copyRows(ctx, tx, apiDevicesC, mapVals(d.APIDevices)); err != nil {
 		return want, err
 	}
 	if err := copyRows(ctx, tx, eventsC, d.Events); err != nil {

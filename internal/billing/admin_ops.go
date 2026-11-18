@@ -203,9 +203,6 @@ func (s *Service) MoveAccount(ctx context.Context, id, toSiteID string) error {
 		if !ok || to.Removed {
 			return ErrNoSite
 		}
-		if other, ok := d.AccountByMAC(toSiteID, a.MAC); ok {
-			return fmt.Errorf("%w (%s in %s)", ErrDuplicateMAC, other.Flat, to.Name)
-		}
 		if flatTaken(d, toSiteID, a.Flat, id) {
 			return fmt.Errorf("%s already has an account for %q. Rename the flat first", to.Name, a.Flat)
 		}
@@ -213,6 +210,7 @@ func (s *Service) MoveAccount(ctx context.Context, id, toSiteID string) error {
 		// Clean the old router, then the new one gets the user via its own task.
 		s.enqueueLocked(d, a, true, "account moved away")
 		a.SiteID = toSiteID
+		a.IP = "" // an address belongs to one building; the new one allocates its own
 		a.RouterActive = false
 		d.Accounts[id] = a
 		delete(d.Devices, store.DeviceKey(toSiteID, a.MAC))
