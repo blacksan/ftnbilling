@@ -10,7 +10,9 @@ import (
 
 // RouterSource gives the router client of a building. Unknown, unjoined or
 // paused buildings get a client whose calls fail with routeros.ErrNoRouter.
-type RouterSource interface{ Router(siteID string) routeros.Client }
+type RouterSource interface {
+	Router(siteID string) routeros.Client
+}
 
 type single struct{ rt routeros.Client }
 

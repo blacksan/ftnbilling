@@ -340,7 +340,7 @@ func (m *Mpesa) HandleC2BConfirmation(ctx context.Context, body []byte) C2BRespo
 			unmatched(order.AccountID, "order completion failed: "+err.Error())
 		}
 	case "account":
-		pkg, ok := m.c.PackageForAmount(amount)
+		pkg, ok := m.c.PackageForAmount(acct.SiteID, amount)
 		if !ok {
 			unmatched(acct.ID, "no package costs KES "+strconv.Itoa(amount))
 			return C2BAccept

@@ -25,7 +25,7 @@ type Completer interface {
 	SetCheckoutID(orderID, checkoutID string) error
 	Credit(ctx context.Context, in billing.CreditInput) (store.Payment, bool, error)
 	RecordUnmatched(in billing.UnmatchedInput) (bool, error)
-	PackageForAmount(amount int) (store.Package, bool)
+	PackageForAmount(siteID string, amount int) (store.Package, bool)
 }
 
 // Test marks the order paid after a short delay. Only when TEST_MODE=true.
