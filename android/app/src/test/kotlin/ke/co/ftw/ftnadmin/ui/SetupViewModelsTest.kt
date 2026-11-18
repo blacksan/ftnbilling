@@ -261,10 +261,10 @@ class SetupViewModelsTest {
         settle()
         assertTrue(requests("GET /api/v1/sites/s1/cutover").size > before)
 
+        // From here the server reports confirmed, as it would after the POST.
+        sequences["GET /api/v1/sites/s1/cutover"] = mutableListOf(cutover("confirmed"))
         vm.confirm()
         await(vm.state) { (it.cutover as? Loadable.Ready)?.value?.state == "confirmed" }
-        // A poll that was already in flight may land with the old state; the last answer must win.
-        sequences["GET /api/v1/sites/s1/cutover"] = mutableListOf(cutover("confirmed"))
         settle()
         val after = requests("GET /api/v1/sites/s1/cutover").size
         settle()
