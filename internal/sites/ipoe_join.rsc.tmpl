@@ -7,16 +7,19 @@
 # Every object it creates has a comment that starts with "ftn:".
 :local fails 0
 :local abort ""
+:local report ""
+:local ver ""
+:local result "fail"
 :do {
 
 :put "ftn join 0/5: checking RouterOS"
-:local ver [/system/resource/get version]
+:set ver [/system/resource/get version]
 :put ("   RouterOS " . $ver)
 :local major [:tonum [:pick $ver 0 [:find $ver "."]]]
-:if ($major < 7) do={ :set abort "ftn: RouterOS 7 or newer is required"; :error $abort }
+:if ($major < 7) do={ :set abort "ftn: RouterOS 7 or newer is required"; :set report ($report . $abort . "\n"); :error $abort }
 
 :put "ftn join 1/5: WireGuard tunnel to the billing server"
-:do {
+{{secOpen 1 "WireGuard" true}}
   :if ([:len [/interface/wireguard/find where name="{{.WGIface}}"]] = 0) do={
     /interface/wireguard add name={{.WGIface}} private-key="{{.PrivateKey}}" mtu={{.MTU}} comment="ftn: tunnel to the billing server"
   } else={
@@ -26,24 +29,24 @@
   /ip/address add address={{.TunnelIP}} network={{.ServerIP}} interface={{.WGIface}} comment="ftn: tunnel address"
   /interface/wireguard/peers remove [find where comment="ftn: billing server"]
   /interface/wireguard/peers add interface={{.WGIface}} public-key="{{.ServerPublicKey}}" endpoint-address={{.EndpointHost}} endpoint-port={{.EndpointPort}} allowed-address={{.ServerIP}}/32 persistent-keepalive=25s comment="ftn: billing server"
-} on-error={ :set abort "ftn: section 1 (WireGuard) failed"; :error $abort }
+{{secClose 1 "WireGuard" true}}
 
 :put "ftn join 2/5: firewall (the tunnel can only reach the REST API)"
-:do {
+{{secOpen 2 "firewall" true}}
   /ip/firewall/filter remove [find where comment~"^ftn: wg"]
 {{fw (printf "chain=forward action=drop out-interface=%s" .WGIface) "ftn: wg no forward out"}}
 {{fw (printf "chain=forward action=drop in-interface=%s" .WGIface) "ftn: wg no forward in"}}
 {{fw (printf "chain=input action=drop in-interface=%s" .WGIface) "ftn: wg drop other input"}}
 {{fw (printf "chain=input action=accept protocol=icmp in-interface=%s src-address=%s" .WGIface .ServerIP) "ftn: wg icmp"}}
 {{fw (printf "chain=input action=accept protocol=tcp in-interface=%s src-address=%s dst-port=%d" .WGIface .ServerIP .RESTPort) "ftn: wg rest"}}
-} on-error={ :set abort "ftn: section 2 (firewall) failed"; :error $abort }
+{{secClose 2 "firewall" true}}
 
 :put "ftn join 3/5: REST API for the billing server"
-:do {
+{{secOpen 3 "REST API" true}}
   :if ([:len [/user/group/find where name="{{.RESTUser}}"]] = 0) do={
-    /user/group add name={{.RESTUser}} policy=read,write,test,sensitive,api,rest-api comment="ftn: billing API"
+    /user/group add name={{.RESTUser}} policy=read,write,test,sensitive,api,rest-api,reboot comment="ftn: billing API"
   } else={
-    /user/group set [find where name="{{.RESTUser}}"] policy=read,write,test,sensitive,api,rest-api
+    /user/group set [find where name="{{.RESTUser}}"] policy=read,write,test,sensitive,api,rest-api,reboot
   }
   :if ([:len [/user/find where name="{{.RESTUser}}"]] = 0) do={
     /user/add name={{.RESTUser}} group={{.RESTUser}} password="{{.RESTPass}}" address={{.ServerIP}}/32 comment="ftn: billing API"
@@ -51,31 +54,21 @@
     /user/set [find where name="{{.RESTUser}}"] group={{.RESTUser}} password="{{.RESTPass}}" address={{.ServerIP}}/32
   }
   /ip/service set www port={{.RESTPort}} disabled=no address={{.ServerIP}}/32
-} on-error={ :set abort "ftn: section 3 (REST API) failed"; :error $abort }
+  :put "   WebFig (the www service) now answers only the billing server; WinBox, SSH and the API are not affected"
+{{secClose 3 "REST API" true}}
 
-:put "ftn join 4/5: traffic flow to the billing server"
-:do {
-  :local ifc ""
-  :local hs [/ip/hotspot/find where name="{{.HotspotServer}}"]
-  :if ([:len $hs] = 0) do={ :set hs [/ip/hotspot/find] }
-  :if ([:len $hs] > 0) do={ :set ifc [/ip/hotspot/get ($hs->0) interface] }
-  :if ([:len $ifc] > 0) do={
-    /ip/traffic-flow set enabled=yes interfaces=$ifc
-    /ip/traffic-flow/target remove [find where comment="ftn: netflow"]
-    /ip/traffic-flow/target add dst-address={{.ServerIP}} port={{.NetflowPort}} version=5 comment="ftn: netflow"
-    :put ("   traffic flow on " . $ifc)
-  } else={
-    :put "   no hotspot interface found: set /ip/traffic-flow interfaces by hand if you want the per-service split"
-  }
-  :put "   note: per-flat totals do not depend on traffic flow; they come from the flats' queues"
-} on-error={ :set fails ($fails + 1); :put "ftn: section 4 (traffic flow) failed, continuing" }
+:put "ftn join 4/5: cutover kit (backup and rollback timer for the server-run cutover)"
+{{template "kit" .}}
 
 :put "ftn join 5/5: checking the tunnel"
 :do { /ping {{.ServerIP}} count=3 } on-error={ :put "   no answer from the billing server yet; the tunnel can take a few seconds to come up" }
-:if ($fails > 0) do={ :put ("ftn: finished with " . $fails . " section(s) failed, see the messages above") } else={ :put "ftn: all sections done. The flats were not touched." }
+:if ($fails > 0) do={ :put ("ftn: finished with " . $fails . " section(s) failed, see the messages above") } else={ :put "ftn: all sections done. The flats were not touched."; :set result "ok" }
+:if ([:len $report] > 0) do={ :put "ftn: problems:"; :put $report }
+{{.ReportPost}}
 } on-error={
   :put "ftn: the join script stopped early, see below"
   :if ([:len $abort] > 0) do={ :put $abort }
+  {{.ReportPost}}
   /file remove [find where name="{{.File}}"]
   :error "ftn: join stopped; the script file was removed from the router. Fix the cause, then make a new join command"
 }

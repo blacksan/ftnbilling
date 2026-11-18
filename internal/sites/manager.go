@@ -55,6 +55,8 @@ type Manager struct {
 
 	stray atomic.Uint64 // NetFlow datagrams from unknown sources
 
+	refused refusals // join fetches turned away for their User-Agent (joinreport.go)
+
 	foreignIPs atomic.Pointer[func(string) map[string]bool] // set by billing.NewService
 
 	chk          checksState   // cache of the setup checks (checks.go)
@@ -514,6 +516,9 @@ func (m *Manager) Status(ctx context.Context, siteID string) (SiteStatus, bool) 
 	}
 	now := m.now()
 	st := SiteStatus{Token: TokenStateOf(s.Join, now), TokenExpires: s.Join.ExpiresAt, UsedFrom: s.Join.UsedFrom, Joined: !s.JoinedAt.IsZero()}
+	if rf, ok := m.refused.get(siteID); ok && st.Token == TokenPending {
+		st.RefusedUA, st.RefusedAt = rf.UA, rf.At
+	}
 	if s.Mode == store.SiteModeWG && s.WGPublicKey != "" {
 		if ps, found, known := m.PeerStatus(siteID); known {
 			st.WGKnown = true
