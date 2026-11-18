@@ -128,6 +128,8 @@ func (m *Manager) Start(ctx context.Context) {
 	}
 	m.reloadMu.Unlock()
 	m.resumeProvisioning()
+	m.wg.Add(1)
+	go m.leaseSweeper(ctx)
 	if addr := m.cfg.NetflowAddr; addr != "" && !strings.EqualFold(addr, "off") && !m.cfg.RouterMock {
 		m.wg.Add(1)
 		go func() {

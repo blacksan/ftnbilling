@@ -304,9 +304,15 @@ func (s *Server) rebootRouter(ctx context.Context, st store.Site, confirmName st
 	if !strings.EqualFold(strings.TrimSpace(confirmName), strings.TrimSpace(st.Name)) {
 		return &rebootFail{Kind: "validation", Msg: "type the router's name to confirm", Fields: map[string]string{"confirm_name": "type the router's name to confirm"}}
 	}
-	if s.mgr.Jobs().Running(st.ID) {
+	// the run slot is held until the reboot call is over, so a setup job cannot start between the check and the reboot
+	endReboot, free := s.mgr.BeginReboot(st.ID)
+	if !free || s.mgr.Jobs().Running(st.ID) {
+		if free {
+			endReboot()
+		}
 		return &rebootFail{Kind: "bad_state", Msg: "The router is being set up right now. Wait for that to finish before rebooting."}
 	}
+	defer endReboot()
 	insp, isInsp := s.mgr.Router(st.ID).(routeros.Inspector)
 	if !isInsp || !st.Runnable() {
 		return &rebootFail{Kind: "bad_state", Msg: "The router is not connected."}
@@ -358,9 +364,25 @@ func (s *Server) apiRouterReboot(w http.ResponseWriter, r *http.Request, c *apiC
 	writeJSON(w, http.StatusAccepted, map[string]any{"queued": true})
 }
 
+// notSent: the connection was never made (dial failure, refused, no route, DNS), so the reboot
+// request did not leave. A timeout while connecting is the same; only a timeout after the request
+// was written means the router may be going down.
+func notSent(err error) bool {
+	var oe *net.OpError
+	if errors.As(err, &oe) && oe.Op == "dial" {
+		return true
+	}
+	m := err.Error()
+	return strings.Contains(m, "dial tcp") || strings.Contains(m, "connection refused") || strings.Contains(m, "no route to host") ||
+		strings.Contains(m, "network is unreachable") || strings.Contains(m, "no such host")
+}
+
 // rebootDropped is true when the router cut the connection while it went down:
 // the reboot did start.
 func rebootDropped(err error) bool {
+	if notSent(err) {
+		return false
+	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}

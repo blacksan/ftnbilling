@@ -136,8 +136,18 @@ func TestKeepDecisionIsPersistedBeforeTheMarkersGo(t *testing.T) {
 	if r.nowSet() || r.kit.rolled.Load() != 0 {
 		t.Fatalf("a passing router must not be rolled back: %v", r.armedRows())
 	}
-	if j.State != JobFailed || !strings.Contains(j.LastError, "markers could not be removed") {
+	// the markers outlived the kit's countdown: the router is taken to have rolled itself back, and the server follows it
+	if j.State != JobRolledBack || !strings.Contains(j.LastError, "markers could not be removed") {
 		t.Fatalf("%s %q", j.State, j.LastError)
+	}
+	if got := r.f().AccessMode; got != store.AccessHotspot {
+		t.Fatalf("mode %s", got)
+	}
+	if n := len(r.prov.bypass); n == 0 || !r.prov.bypass[n-1] {
+		t.Fatalf("bypass %v", r.prov.bypass)
+	}
+	if !strings.Contains(r.ann.all(), "own timer") {
+		t.Fatalf("announce %q", r.ann.all())
 	}
 }
 
@@ -491,5 +501,192 @@ func TestConsoleRefusesRebootAndShutdown(t *testing.T) {
 	d := routeros.Classify("/system reboot")
 	if d.Verdict != routeros.Deny || !strings.Contains(d.Reason, "Reboot") {
 		t.Fatalf("%+v", d)
+	}
+}
+
+// ---- fix round d ---------------------------------------------------------------------------------
+
+func TestRollbackNowRestoresLeaseTimesWithoutAJobInterface(t *testing.T) {
+	r := migrateRig(t)
+	old := r.oldServer()
+	_ = r.mock.SetRow(context.Background(), "/ip/dhcp-server", old[routeros.RowID], map[string]string{"lease-time": "1s"})
+	r.m.saveLeaseOrig(r.sd.ID, map[string]leaseRec{"dhcp-hotspot": {Lease: "2s", Iface: "br-hotspot"}})
+	r.mock.SeedRow(pathAddrList, R{"list": KitListArmed, "address": KitArmedAddress, "comment": "3"})
+	r.mock.SeedRow(pathAddrList, R{"list": KitListUndo, "address": KitUndoAddress(1), "comment": KitUndoHotspot("hotspot1")})
+	if err := r.m.RollbackNow(r.sd.ID, "olga"); err != nil {
+		t.Fatal(err)
+	}
+	r.m.WaitProvision(r.sd.ID)
+	if got := r.oldServer()["lease-time"]; got != "2s" {
+		t.Fatalf("lease time %q", got)
+	}
+	if len(r.m.loadLeaseOrig(r.sd.ID)) != 0 {
+		t.Fatal("the saved lease times must be cleared")
+	}
+}
+
+func TestLeaseSweepPutsLeaseTimesBackWhenNoJobRunsAndRetriesWithBackoff(t *testing.T) {
+	r := migrateRig(t)
+	old := r.oldServer()
+	_ = r.mock.SetRow(context.Background(), "/ip/dhcp-server", old[routeros.RowID], map[string]string{"lease-time": "1s"})
+	r.m.saveLeaseOrig(r.sd.ID, map[string]leaseRec{"dhcp-hotspot": {Lease: "2s", Iface: "br-hotspot"}})
+	r.mock.SetWriteFail("/ip/dhcp-server", &routeros.APIError{Status: 500, Message: "boom"})
+	r.m.SweepLeases(context.Background())
+	if len(r.m.loadLeaseOrig(r.sd.ID)) == 0 || r.oldServer()["lease-time"] != "1s" {
+		t.Fatal("a failed restore must keep the saved lease times")
+	}
+	// backed off: the next pass skips the building until the time is up
+	r.mock.SetWriteFail("/ip/dhcp-server", nil)
+	r.m.SweepLeases(context.Background())
+	if r.oldServer()["lease-time"] != "1s" {
+		t.Fatal("the backoff was ignored")
+	}
+	r.m.prov.mu.Lock()
+	r.m.prov.leaseNext[r.sd.ID] = time.Time{}
+	r.m.prov.mu.Unlock()
+	r.m.SweepLeases(context.Background())
+	if got := r.oldServer()["lease-time"]; got != "2s" || len(r.m.loadLeaseOrig(r.sd.ID)) != 0 {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestLeaseSweepLeavesARunningJobAlone(t *testing.T) {
+	r := migrateRig(t)
+	old := r.oldServer()
+	_ = r.mock.SetRow(context.Background(), "/ip/dhcp-server", old[routeros.RowID], map[string]string{"lease-time": "1s"})
+	r.m.saveLeaseOrig(r.sd.ID, map[string]leaseRec{"dhcp-hotspot": {Lease: "2s", Iface: "br-hotspot"}})
+	end, ok := r.m.BeginReboot(r.sd.ID)
+	if !ok {
+		t.Fatal("no slot")
+	}
+	r.m.SweepLeases(context.Background())
+	if r.oldServer()["lease-time"] != "1s" {
+		t.Fatal("swept while the router was busy")
+	}
+	if _, ok2 := r.m.BeginReboot(r.sd.ID); ok2 {
+		t.Fatal("two holders")
+	}
+	if err := r.m.StartProvision(r.sd.ID, ProvOptions{Trigger: "run"}); !errors.Is(err, ErrJobRunning) {
+		t.Fatalf("a job started during a reboot: %v", err)
+	}
+	end()
+	end()
+	r.m.SweepLeases(context.Background())
+	if r.oldServer()["lease-time"] != "2s" {
+		t.Fatal("not restored once free")
+	}
+}
+
+func TestLeaseSweeperLoopRestoresAtStartup(t *testing.T) {
+	r := migrateRig(t)
+	old := r.oldServer()
+	_ = r.mock.SetRow(context.Background(), "/ip/dhcp-server", old[routeros.RowID], map[string]string{"lease-time": "1s"})
+	r.m.saveLeaseOrig(r.sd.ID, map[string]leaseRec{"dhcp-hotspot": {Lease: "2s", Iface: "br-hotspot"}})
+	ctx, cancel := context.WithCancel(context.Background())
+	r.m.wg.Add(1)
+	go r.m.leaseSweeper(ctx)
+	defer cancel()
+	deadline := time.Now().Add(2 * time.Second)
+	for r.oldServer()["lease-time"] != "2s" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if r.oldServer()["lease-time"] != "2s" {
+		t.Fatal("the sweeper did not restore")
+	}
+}
+
+func TestEvidenceReadTimeoutsAreUnknownNotAFailure(t *testing.T) {
+	t.Run("a slow table that recovers", func(t *testing.T) {
+		r := migrateRig(t)
+		r.mock.SetReadFail("/ip/firewall/connection", context.DeadlineExceeded)
+		go func() {
+			time.Sleep(300 * time.Millisecond)
+			r.mock.SetReadFail("/ip/firewall/connection", nil)
+		}()
+		j := r.migrate()
+		if j.State != JobLive {
+			t.Fatalf("%s %q ev=%+v", j.State, j.LastError, j.Evidence)
+		}
+		q := r.mock.LastQuery("/ip/firewall/connection")
+		if q[".proplist"] == "" || !strings.Contains(q[".proplist"], "src-address") {
+			t.Fatalf("the connection table must be read with a proplist: %v", q)
+		}
+	})
+	t.Run("a table that never answers is reported as unread", func(t *testing.T) {
+		r := migrateRig(t)
+		r.mock.SetReadFail("/ip/firewall/connection", context.DeadlineExceeded)
+		j := r.migrate()
+		if j.State != JobRolledBack || !strings.Contains(r.ann.all(), "could not be read in time: the connection table") {
+			t.Fatalf("%s %q announce=%q", j.State, j.LastError, r.ann.all())
+		}
+	})
+}
+
+func TestRollbackNowWhileTheJobIsVerifying(t *testing.T) {
+	r := migrateRig(t)
+	r.kit.set(func(k *kitSim) { k.lateRenew = true }) // the clients come back late: the job sits in verifying
+	old := r.oldServer()
+	_ = r.mock.SetRow(context.Background(), "/ip/dhcp-server", old[routeros.RowID], map[string]string{"lease-time": "6s"})
+	if err := r.m.StartProvision(r.sd.ID, ProvOptions{Trigger: "migrate", StartNow: true, Actor: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if j, _ := r.m.ProvJobOf(r.sd.ID); j.State == JobVerifying && j.Armed {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if j, _ := r.m.ProvJobOf(r.sd.ID); j.State != JobVerifying {
+		t.Fatalf("never got to verifying: %s", j.State)
+	}
+	if err := r.m.RollbackNow(r.sd.ID, "olga"); err != nil {
+		t.Fatal(err)
+	}
+	r.m.WaitProvision(r.sd.ID)
+	j, _ := r.m.ProvJobOf(r.sd.ID)
+	if j.State != JobRolledBack || r.kit.rolled.Load() != 1 {
+		t.Fatalf("%s %q rolled=%d", j.State, j.LastError, r.kit.rolled.Load())
+	}
+	if got := r.f().AccessMode; got != store.AccessHotspot {
+		t.Fatalf("mode %s", got)
+	}
+	if got := r.oldServer()["lease-time"]; got != "6s" {
+		t.Fatalf("lease time %q", got)
+	}
+}
+
+func TestRollbackNowAfterTheEvidenceHeldDoesNotSetNow(t *testing.T) {
+	r := migrateRig(t)
+	r.kit.Stop()
+	// the job decided to keep the change and was stopped while it removed the markers
+	r.m.saveJob(r.sd.ID, ProvJob{State: JobVerifying, Kind: KindMigrate, Armed: false, StartedAt: r.now})
+	r.mock.SeedRow(pathAddrList, R{"list": KitListArmed, "address": KitArmedAddress, "comment": "5"})
+	r.mock.SeedRow(pathAddrList, R{"list": KitListUndo, "address": KitUndoAddress(1), "comment": KitUndoHotspot("hotspot1")})
+	if err := r.m.RollbackNow(r.sd.ID, "olga"); !errors.Is(err, ErrNothingToRollBack) {
+		t.Fatalf("%v", err)
+	}
+	if r.nowSet() {
+		t.Fatal("a kept change was set to roll back")
+	}
+	if len(r.armedRows()) != 0 {
+		t.Fatalf("the keep decision must be finished: %v", r.armedRows())
+	}
+	if r.m.SetupBusy(r.sd.ID) {
+		t.Fatal("the run slot leaked")
+	}
+}
+
+func TestAnOldLeaseLongerThanTheCapNeedsTheOperator(t *testing.T) {
+	r := migrateRig(t)
+	old := r.oldServer()
+	_ = r.mock.SetRow(context.Background(), "/ip/dhcp-server", old[routeros.RowID], map[string]string{"lease-time": "30s"}) // the cap is 20s in tests
+	r.mock.ResetWrites()
+	j := r.migrate()
+	if j.State != JobNeedsAction || !strings.Contains(j.LastError, "Shorten the old DHCP lease time") {
+		t.Fatalf("%s %q", j.State, j.LastError)
+	}
+	if r.mock.Writes() != 0 || r.oldServer()["lease-time"] != "30s" || len(r.m.loadLeaseOrig(r.sd.ID)) != 0 {
+		t.Fatal("nothing may be changed or saved")
 	}
 }

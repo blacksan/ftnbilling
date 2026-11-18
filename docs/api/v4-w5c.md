@@ -64,6 +64,11 @@ step shows the countdown and the reconcile lock is not held meanwhile. The origi
 evidence window is `max(5 min, longest original lease / 2 + 2 min)`, never more than 12 minutes, and the switch restarts
 the kit's 15 minute countdown.
 
+Lease times are also put back by a sweep (at start-up and every minute, with a backoff, only when no job runs) so a
+rollback request, a restart, a shutdown or an unreachable router cannot leave a 1 minute lease behind. A old lease
+time above 65 minutes (the cap) stops the job in `needs_action` before anything is changed: shorten it to 60 minutes or
+less, wait, run again.
+
 ## A1 evidence rule (as implemented)
 
 After the switch the job polls (every 3 s, up to 5 minutes for a migration, 30 s for a fresh router) until all hold:
@@ -77,6 +82,11 @@ After the switch the job polls (every 3 s, up to 5 minutes for a migration, 30 s
    lease on `ftn-dhcp` at its fixed IP, and at least one of them has a replied connection to a public address in
    `/ip/firewall/connection` (read only). Flats not seen online are not required; with none required the ping and DNS
    parts still apply.
+
+Every read of the evidence has its own 6 s limit; a read that times out is *unknown* (`evidence.unknown`), the job keeps
+polling until the window ends. If the markers cannot be removed before the kit's own countdown ends, the router is taken
+to have rolled itself back: hotspot mode, bypass rows and a notice. `Roll back now` after the evidence held answers 409
+and finishes removing the markers.
 
 Pass: the job is saved as no longer armed first, then the `ftn-armed`, `ftn-undo` and `ftn-cmd` rows are removed (3 tries) (a restart never rolls back a router whose confirmed mark is set), the cutover marks are set, the hotspot bypass
 flag is cleared, `Announce` says it is live. Fail at the deadline: `ftn-armed` is set to `now`, the job follows the
