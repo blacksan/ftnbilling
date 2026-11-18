@@ -267,7 +267,7 @@ func TestUnknownMACRefusedAndListedAsUnregistered(t *testing.T) {
 		t.Error("no mac")
 	}
 	list := a.adminGet(t, "/admin/devices")
-	if !strings.Contains(list, "AA:BB:CC:DD:EE:77") || !strings.Contains(list, "10.5.50.9") || !strings.Contains(list, "Create account for this MAC") || !strings.Contains(list, "Attach") {
+	if !strings.Contains(list, "AA:BB:CC:DD:EE:77") || !strings.Contains(list, "10.5.50.9") || !strings.Contains(list, "/admin/devices/create") || !strings.Contains(list, "Attach") {
 		t.Fatalf("unregistered list: %s", list)
 	}
 	// Hotspot hosts that are not authorised show up too.

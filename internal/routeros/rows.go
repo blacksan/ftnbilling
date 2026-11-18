@@ -9,9 +9,8 @@ import (
 	"strings"
 )
 
-// The generic row API on the REST client. It is the thin W0 version: a plain
-// GET / PUT / PATCH / DELETE per call. W2 extends it (PATCH-then-/set fallback,
-// batching) behind the same signatures.
+// The generic row API on the REST client: GET / PUT / PATCH / DELETE per call,
+// with the same PATCH-then-/set fallback the hotspot upsert uses.
 
 func rowsPath(path string) string { return "/" + strings.Trim(strings.TrimSpace(path), "/") }
 
@@ -45,9 +44,44 @@ func (c *REST) AddRow(ctx context.Context, path string, body map[string]string) 
 	return fmt.Sprint(out[RowID]), nil
 }
 
-// SetRow changes properties of one row (PATCH).
+// SetRow changes properties of one row. RouterOS 7.20 answers some PATCH
+// bodies with a bare HTTP 500, so a failed PATCH is retried once with the
+// console-style POST <path>/set. A 404 (the row is gone) is returned as is: a
+// retry cannot help and the caller should list the table again.
 func (c *REST) SetRow(ctx context.Context, path, id string, diff map[string]string) error {
-	return c.do(ctx, http.MethodPatch, rowsPath(path)+"/"+url.PathEscape(id), nil, diff, nil)
+	if len(diff) == 0 {
+		return nil
+	}
+	p := rowsPath(path)
+	err := c.do(ctx, http.MethodPatch, p+"/"+url.PathEscape(id), nil, diff, nil)
+	if err == nil {
+		return nil
+	}
+	var ae *APIError
+	if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
+		return err
+	}
+	set := map[string]string{RowID: id}
+	for k, v := range diff {
+		set[k] = v
+	}
+	if err2 := c.do(ctx, http.MethodPost, p+"/set", nil, set, nil); err2 != nil {
+		return fmt.Errorf("%v; fallback set: %w", err, err2)
+	}
+	return nil
+}
+
+// SameValue compares a router's value for a property with the wanted one,
+// tolerating RouterOS's normalisation of MACs (upper case) and rate limits
+// (20M -> 20000k, "20M/20M" pairs).
+func SameValue(key, cur, want string) bool {
+	if sameValue(key, cur, want) {
+		return true
+	}
+	if key == "max-limit" || key == "rate-limit" {
+		return normRate(cur) == normRate(want)
+	}
+	return false
 }
 
 // RemoveRow deletes one row (DELETE); a row that is already gone is fine.

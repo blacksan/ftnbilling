@@ -89,3 +89,40 @@ func TestRESTRows(t *testing.T) {
 		}
 	}
 }
+
+func TestRESTSetRowFallsBackToSet(t *testing.T) {
+	var seen []string
+	var setBody map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodPatch && r.URL.Path == "/rest/queue/simple/*9":
+			w.WriteHeader(500) // the bare 500 RouterOS 7.20 answers some PATCH bodies with
+		case r.Method == http.MethodPatch:
+			w.WriteHeader(404)
+			w.Write([]byte(`{"error":404,"message":"Not Found"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/rest/queue/simple/set":
+			json.NewDecoder(r.Body).Decode(&setBody)
+		}
+	}))
+	defer srv.Close()
+	c := NewREST(srv.URL, "u", "p")
+	ctx := context.Background()
+	if err := c.SetRow(ctx, "/queue/simple", "*9", map[string]string{"max-limit": "5M/5M"}); err != nil {
+		t.Fatal(err)
+	}
+	if setBody[RowID] != "*9" || setBody["max-limit"] != "5M/5M" {
+		t.Fatalf("set body %v", setBody)
+	}
+	// A vanished row is a 404, not a reason to try /set.
+	var ae *APIError
+	if err := c.SetRow(ctx, "/queue/simple", "*1", map[string]string{"a": "b"}); !errors.As(err, &ae) || ae.Status != 404 {
+		t.Fatalf("%v", err)
+	}
+	if got := seen[len(seen)-1]; got != "PATCH /rest/queue/simple/*1" {
+		t.Fatalf("no fallback expected after 404: %v", seen)
+	}
+	if !SameValue("max-limit", "10M/10M", "10000k/10000k") || !SameValue("mac-address", "AA:BB", "aa:bb") || SameValue("address", "10.0.0.1", "10.0.0.2") {
+		t.Fatal("SameValue")
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"ispbill/internal/config"
+	"ispbill/internal/netplan"
 	"ispbill/internal/store"
 )
 
@@ -29,43 +30,13 @@ var ifaceRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$`)
 // ValidIface accepts RouterOS interface names that are safe to put in a script.
 func ValidIface(s string) bool { return ifaceRe.MatchString(s) }
 
-// SubnetPlan is the addressing Go computes for a customer subnet.
-type SubnetPlan struct {
-	Network   string // 10.5.50.0/24
-	Gateway   string // 10.5.50.1
-	GatewayIP string // 10.5.50.1/24
-	PoolFrom  string // 10.5.50.10
-	PoolTo    string // last address minus one
-}
+// SubnetPlan is the addressing Go computes for a customer subnet (see
+// package netplan: gateway, unregistered pool, static range).
+type SubnetPlan = netplan.Plan
 
-// PlanSubnet accepts /20 to /24 IPv4 subnets. The gateway is the first host and
-// the DHCP pool runs from .10 to the last address minus one.
-func PlanSubnet(cidr string) (SubnetPlan, error) {
-	p, err := netip.ParsePrefix(strings.TrimSpace(cidr))
-	if err != nil || !p.Addr().Is4() {
-		return SubnetPlan{}, fmt.Errorf("customer subnet %q is not an IPv4 network like 10.5.50.0/24", cidr)
-	}
-	if p.Bits() < 20 || p.Bits() > 24 {
-		return SubnetPlan{}, errors.New("customer subnet must be between /20 and /24")
-	}
-	p = p.Masked()
-	base := p.Addr()
-	gw := base.Next()
-	from := base
-	for i := 0; i < 10; i++ {
-		from = from.Next()
-	}
-	// Last address of the prefix.
-	b := base.As4()
-	hostBits := 32 - p.Bits()
-	n := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
-	last := n | (1<<hostBits - 1)
-	toAddr := netip.AddrFrom4([4]byte{byte(last >> 24), byte(last >> 16), byte(last >> 8), byte(last)}).Prev() // minus one: .254 for a /24
-	return SubnetPlan{
-		Network: p.String(), Gateway: gw.String(), GatewayIP: fmt.Sprintf("%s/%d", gw, p.Bits()),
-		PoolFrom: from.String(), PoolTo: toAddr.String(),
-	}, nil
-}
+// PlanSubnet accepts /20 to /24 IPv4 subnets. The gateway is the first host,
+// the unregistered pool is .10-.59 and the flats' static range starts at .60.
+func PlanSubnet(cidr string) (SubnetPlan, error) { return netplan.PlanSubnet(cidr) }
 
 // ApplyDefaults fills the blank layout fields of a site. For an env-mode site
 // the router layout comes from the environment (the legacy settings), not from

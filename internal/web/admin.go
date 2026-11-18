@@ -31,10 +31,6 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	post("/admin/accounts/package", s.adminAccountPackage)
 	post("/admin/accounts/endplan", s.adminAccountEndPlan)
 	post("/admin/accounts/delete", s.adminAccountDelete)
-	get("/admin/devices", s.adminDevices)
-	post("/admin/devices/create", s.adminDeviceCreate)
-	post("/admin/devices/attach", s.adminDeviceAttach)
-	post("/admin/devices/dismiss", s.adminDeviceDismiss)
 	get("/admin/payments", s.adminPayments)
 	get("/admin/payments.csv", s.adminPaymentsCSV)
 	get("/admin/payments/record", s.adminRecordForm)
@@ -99,12 +95,8 @@ func (s *Server) page(r *http.Request, active string) adminPage {
 	if s.ops.Box != nil {
 		p.FailedMsgs = s.ops.Box.Counts()["failed"]
 	}
+	p.UnregCount = s.svc.UnregisteredOnline(sc.Has) // online, unregistered devices only
 	s.st.View(func(d *store.Data) {
-		for _, dv := range d.Devices {
-			if sc.Has(dv.SiteID) {
-				p.UnregCount++
-			}
-		}
 		for _, pay := range d.Payments {
 			if pay.Status == store.PayUnmatched && (pay.SiteID == "" || sc.Has(pay.SiteID)) {
 				p.UnmatchedCount++
@@ -421,60 +413,6 @@ func (s *Server) adminAccountKick(w http.ResponseWriter, r *http.Request) {
 	id := r.PostFormValue("id")
 	a, _ := s.svc.GetAccount(id)
 	s.back(w, r, s.accountURL(id), msgOr(s.svc.Kick(r.Context(), a.SiteID, a.Code), "Session ended (the flat logs in again by itself if still active)"))
-}
-
-// ---- unregistered devices ---------------------------------------------------------
-
-func (s *Server) adminDevices(w http.ResponseWriter, r *http.Request) {
-	p := s.page(r, "devices")
-	sc := s.scopeOf(r)
-	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
-	defer cancel()
-	if !sc.All { // refreshing asks one router; "all buildings" shows what is already known
-		if err := s.svc.RefreshHosts(ctx, sc.ID); err != nil {
-			p.Data["HostErr"] = err.Error()
-		}
-	}
-	var devs []store.Device
-	var accts []store.Account
-	s.st.View(func(d *store.Data) {
-		for _, dv := range d.DeviceList() {
-			if sc.Has(dv.SiteID) {
-				devs = append(devs, dv)
-			}
-		}
-		for _, a := range d.AccountList() {
-			if sc.Has(a.SiteID) {
-				accts = append(accts, a)
-			}
-		}
-	})
-	p.UnregCount = len(devs)
-	p.Data["Devices"], p.Data["Accounts"] = devs, accts
-	s.render(w, "admin_devices", p)
-}
-
-func (s *Server) adminDeviceCreate(w http.ResponseWriter, r *http.Request) {
-	a, err := s.svc.CreateAccount(billing.AccountInput{Flat: r.PostFormValue("flat"), MAC: r.PostFormValue("mac"), Tenant: r.PostFormValue("tenant"), SiteID: s.siteFor(r)})
-	if err != nil {
-		s.back(w, r, "/admin/devices", "Error: "+err.Error())
-		return
-	}
-	s.back(w, r, "/admin/accounts/view?code="+a.Code, "Account created: "+a.Flat+" ("+a.Code+")")
-}
-
-func (s *Server) adminDeviceAttach(w http.ResponseWriter, r *http.Request) {
-	id := r.PostFormValue("account")
-	err := s.svc.ChangeMAC(r.Context(), id, r.PostFormValue("mac"))
-	if err != nil {
-		s.back(w, r, "/admin/devices", "Error: "+err.Error())
-		return
-	}
-	s.back(w, r, s.accountURL(id), "Device attached: the account now uses this MAC")
-}
-
-func (s *Server) adminDeviceDismiss(w http.ResponseWriter, r *http.Request) {
-	s.back(w, r, "/admin/devices", msgOr(s.svc.DismissDevice(s.siteFor(r), r.PostFormValue("mac")), "Dismissed (it comes back if it opens the portal again)"))
 }
 
 // ---- payments ledger ----------------------------------------------------------------

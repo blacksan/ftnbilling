@@ -53,6 +53,7 @@ type portalPage struct {
 
 func (s *Server) portalRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /portal", s.portalHome)
+	s.payRoutes(mux)
 	mux.HandleFunc("GET /brand.woff2", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "font/woff2")
 		w.Header().Set("Cache-Control", "public, max-age=604800")
@@ -121,6 +122,11 @@ func (s *Server) pctx(r *http.Request) PortalCtx {
 		return PortalCtx{Dst: pc.Dst}
 	}
 	pc.Site = site.ID
+	if billing.IPoE(site) {
+		// Hotspot login parameters mean nothing in an IPoE building: the flat
+		// is identified by its router lease, and pays on /pay.
+		return PortalCtx{Site: site.ID, Dst: pc.Dst}
+	}
 	if pc.MAC != "" && !s.mgr.VerifyHost(r.Context(), site.ID, pc.MAC, pc.IP) {
 		s.log.Warn("portal: mac/ip not on the hotspot, ignored", "site", site.ID, "mac", pc.MAC, "ip", pc.IP, "remote", r.RemoteAddr)
 		return PortalCtx{Site: site.ID, Dst: pc.Dst}
@@ -187,6 +193,10 @@ func (s *Server) view(r *http.Request, errMsg, phone, selected string) portalPag
 }
 
 func (s *Server) portalHome(w http.ResponseWriter, r *http.Request) {
+	if site, ok := s.portalSite(r.FormValue("site")); ok && billing.IPoE(site) {
+		http.Redirect(w, r, "/pay", http.StatusSeeOther)
+		return
+	}
 	p := s.view(r, "", "", "")
 	if p.Known && p.Active {
 		if !s.svc.AutoLogin(r.Context(), p.Acct, p.Ctx.IP) && p.Ctx.IP != "" {
@@ -359,9 +369,14 @@ func (s *Server) portalSuccess(w http.ResponseWriter, r *http.Request) {
 	if !logged && o.IP != "" && strings.EqualFold(o.MAC, a.MAC) {
 		logged = s.svc.AutoLogin(r.Context(), a, o.IP)
 	}
+	var ipoe bool
+	s.st.View(func(d *store.Data) { ipoe = billing.IPoE(d.Sites[o.SiteID]) })
+	if ipoe { // paid on /pay: the router un-walls the flat by itself
+		logged = false
+	}
 	s.render(w, "success", map[string]any{
 		"Brand": s.cfg.BrandName, "SiteName": s.siteName(o.SiteID), "Site": o.SiteID, "Acct": a, "Pkg": pkg, "LoggedIn": logged, "Dst": o.Dst,
-		"Support": support, "MAC": o.MAC, "IP": o.IP, "Expires": a.ExpiresAt,
+		"Support": support, "IPoE": ipoe, "MAC": o.MAC, "IP": o.IP, "Expires": a.ExpiresAt,
 	})
 }
 

@@ -54,6 +54,19 @@ type Manager struct {
 	reloadMu sync.Mutex
 
 	stray atomic.Uint64 // NetFlow datagrams from unknown sources
+
+	foreignIPs atomic.Pointer[func(string) map[string]bool] // set by billing.NewService
+}
+
+// SetForeignIPs lets the billing service tell the cutover which addresses the
+// router's own static leases hold, so no flat is given one of them.
+func (m *Manager) SetForeignIPs(f func(siteID string) map[string]bool) { m.foreignIPs.Store(&f) }
+
+func (m *Manager) foreignIPsOf(siteID string) map[string]bool {
+	if f := m.foreignIPs.Load(); f != nil {
+		return (*f)(siteID)
+	}
+	return nil
 }
 
 // New builds a Manager. Nothing runs until Start.
@@ -149,7 +162,7 @@ func (m *Manager) collectorConfig(s store.Site) metrics.Config {
 		WAN: s.WANInterface, OLT: s.OLTInterface, WANCapMbps: s.WANCapMbps, OLTCapMbps: s.OLTCapMbps, FUPTB: s.FUPTB,
 		PingTargets: m.cfg.PingTargets, Subnet: subnet.Masked(),
 		FlowEvery: m.cfg.FlowEvery, PortEvery: m.cfg.PortEvery, PingEvery: m.cfg.PingEvery, DNSEvery: m.cfg.DNSEvery, SaveEvery: m.cfg.SaveEvery,
-		NetflowAddr: m.cfg.NetflowAddr, SiteID: s.ID,
+		NetflowAddr: m.cfg.NetflowAddr, SiteID: s.ID, IPoE: billing.IPoE(s),
 	}
 	if m.cfg.RouterMock {
 		c.NetflowAddr = "off" // the fake router sends no traffic-flow
