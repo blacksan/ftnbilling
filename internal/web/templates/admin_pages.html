@@ -74,15 +74,22 @@
 {{template "afoot"}}{{end}}
 
 {{define "admin_devices"}}{{template "ahead" .}}
-<p class="muted">MACs that opened the portal, or that the hotspot has seen, without a matching account. Each flat's ONT shows up as one MAC. Create an account for it, or attach it to an existing account (an ONT swap).</p>
-{{if .Data.HostErr}}<p class="bad">Could not read hotspot hosts from the router: {{.Data.HostErr}}</p>{{end}}
-<div class="tw"><table><tr>{{if .Data.ShowSite}}<th>Building</th>{{end}}<th>MAC</th><th>Last IP</th><th>Last seen (EAT)</th><th>Seen</th><th>Source</th><th>Create account</th><th>Attach to existing</th><th></th></tr>
-{{$d := .}}{{range .Data.Devices}}{{$mac := .MAC}}{{$dsite := .SiteID}}<tr>{{if $d.Data.ShowSite}}<td>{{index $d.Data.SiteNames .SiteID}}</td>{{end}}<td><b>{{.MAC}}</b></td><td>{{.IP}}</td><td>{{eat .LastSeen}}</td><td>{{.Hits}}x</td><td>{{.Source}}</td>
-<td><form class="row" method="post" action="/admin/devices/create"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$dsite}}"><input type="hidden" name="mac" value="{{$mac}}"><input name="flat" placeholder="Flat 3B" required size="9"><button>Create account for this MAC</button></form></td>
-<td><form class="row" method="post" action="/admin/devices/attach"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="mac" value="{{$mac}}"><select name="account">{{range $d.Data.Accounts}}{{if eq .SiteID $dsite}}<option value="{{.ID}}">{{.Flat}} ({{.Code}})</option>{{end}}{{end}}</select><button>Attach</button></form></td>
+<p class="muted">Devices on the building network that have no account: online ones first. Each flat's ONT shows as one MAC. <b>Attach</b> gives a device to an existing flat (an ONT swap), <b>Create account</b> makes a new flat, <b>Dismiss</b> hides a device that is not a customer (it comes back if it opens the portal).</p>
+{{if .Data.HostErr}}<p class="bad">Could not read the router: {{.Data.HostErr}}</p>{{end}}
+<p>{{if .Data.OnlineOnly}}Showing online devices only. <a href="/admin/devices">Show all</a>{{else}}Showing all devices, online first. <a href="/admin/devices?online=1">Show online only</a>{{end}} &middot; <a href="/admin/devices{{if .Data.OnlineOnly}}?online=1{{end}}">Refresh</a></p>
+<div class="tw"><table><tr>{{if .Data.ShowSite}}<th>Building</th>{{end}}<th>Device</th><th>Seen</th><th>Attach to account</th><th>Create account</th><th></th></tr>
+{{$d := .}}{{range $i, $r := .Data.Rows}}{{$mac := $r.MAC}}{{$dsite := $r.SiteID}}<tr>{{if $d.Data.ShowSite}}<td>{{$r.SiteName}}</td>{{end}}
+<td><span class="pill {{if $r.Online}}active{{else}}expired{{end}}">{{if $r.Online}}online{{else}}offline{{end}}</span> <b>{{$r.MAC}}</b><br><span class="muted">{{if $r.Vendor}}{{$r.Vendor}}{{else}}unknown vendor{{end}}{{if $r.HostName}} &middot; {{$r.HostName}}{{end}}{{if $r.IP}} &middot; {{$r.IP}}{{end}}</span></td>
+<td>{{eat $r.LastSeen}}<br><span class="muted">{{$r.Hits}}x via {{$r.Source}}</span></td>
+<td>{{if $r.Suggested}}<form method="post" action="/admin/devices/attach" style="margin-bottom:6px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$dsite}}"><input type="hidden" name="mac" value="{{$mac}}"><input type="hidden" name="acct" value="{{$r.Suggested.Code}}">
+<span class="bad">Possible ONT swap: {{$r.Suggested.Flat}}</span> <span class="muted">{{$r.Suggested.Reason}}</span> <button>Replace MAC of {{$r.Suggested.Flat}}</button></form>{{end}}
+<form class="row" method="post" action="/admin/devices/attach"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$dsite}}"><input type="hidden" name="mac" value="{{$mac}}">
+<input name="acct" list="pk{{$i}}" placeholder="search flat or code" required size="16" autocomplete="off"><datalist id="pk{{$i}}">{{range $r.Pick}}<option value="{{.Code}}">{{.Flat}}{{if .Stale}} (MAC not seen lately){{end}}</option>{{end}}</datalist><button>Attach</button></form></td>
+<td><form class="row" method="post" action="/admin/devices/create"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$dsite}}"><input type="hidden" name="mac" value="{{$mac}}">
+<input name="flat" placeholder="Flat 3B" required size="8"><input name="tenant" placeholder="tenant (optional)" size="12"><select name="package"><option value="">no plan yet</option>{{range $d.Data.Pkgs}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select><button>Create</button></form></td>
 <td><form class="i" method="post" action="/admin/devices/dismiss"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$dsite}}"><input type="hidden" name="mac" value="{{$mac}}"><button>Dismiss</button></form></td></tr>
-{{else}}<tr><td colspan="9">None. Every device that opened the portal has an account.</td></tr>{{end}}</table></div>
-<p class="muted">Attaching changes that account's ONT MAC to this device and ends the old session.</p>
+{{else}}<tr><td colspan="6">None. Every device on the network has an account.</td></tr>{{end}}</table></div>
+<p class="muted">Attaching changes that flat's MAC to this device; the router lease follows within seconds. A MAC that already belongs to another flat is refused and the error names it.</p>
 {{template "afoot"}}{{end}}
 
 {{define "admin_payments"}}{{template "ahead" .}}{{$F := .Data.F}}

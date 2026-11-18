@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -28,6 +29,11 @@ func (s *Server) siteRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/sites/sync", s.adminSiteSync)
 	post("/admin/sites/disable", s.adminSiteDisable)
 	post("/admin/sites/remove", s.adminSiteRemove)
+	post("/admin/sites/mode", s.adminSiteMode)
+	post("/admin/sites/adopt", s.adminSiteAdopt)
+	post("/admin/sites/confirm", s.adminSiteConfirm)
+	post("/admin/sites/script", s.adminSiteScript)
+	s.deviceRoutes(get, post)
 }
 
 // joinScript serves GET /j/{token}: the one-time router script. Every kind of
@@ -38,10 +44,14 @@ func (s *Server) joinScript(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
-	script, siteID, err := s.mgr.ConsumeJoinOpts(r.PathValue("token"), r.UserAgent(), realIP(r), r.URL.Query().Get("nocheck") == "1")
+	script, siteID, err := s.mgr.ConsumeJoinStage(r.PathValue("token"), r.UserAgent(), realIP(r), r.URL.Query().Get("nocheck") == "1", r.URL.Query().Get("stage"))
 	switch {
 	case errors.Is(err, sites.ErrJoinInvalid):
 		http.NotFound(w, r)
+		return
+	case errors.Is(err, sites.ErrCannotRender):
+		// The token is still valid: say why, so the admin can fix it and run the command again.
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	case err != nil:
 		s.log.Error("join script", "err", err)
@@ -151,7 +161,7 @@ func (s *Server) siteID(r *http.Request) (store.Site, bool) {
 
 // siteView builds the building page; cmd and fallback are set only in the
 // response to a join request, which is the one time the command is shown.
-func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site, cmd, cmdNoCheck string, exp time.Time) {
+func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site, cmd, cmdNoCheck string, exp time.Time, stage string) {
 	p := s.page(r, "sites")
 	eff := s.mgr.Effective(st)
 	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
@@ -159,7 +169,18 @@ func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site,
 	status, _ := s.mgr.Status(ctx, st.ID)
 	p.Data["Site"], p.Data["Eff"], p.Data["Status"] = st, eff, status
 	p.Data["Env"] = st.Mode == store.SiteModeEnv
-	p.Data["Cmd"], p.Data["CmdNoCheck"], p.Data["CmdExpires"] = cmd, cmdNoCheck, exp
+	p.Data["Cmd"], p.Data["CmdNoCheck"], p.Data["CmdExpires"], p.Data["CmdStage"] = cmd, cmdNoCheck, exp, stage
+	mode := st.AccessMode
+	if mode == "" {
+		mode = store.AccessHotspot
+	}
+	p.Data["Mode"], p.Data["IPoE"] = mode, billing.IPoE(st)
+	if billing.IPoE(st) {
+		p.Data["Prov"] = s.svc.ProvisionStatus(st.ID)
+		if pend, ok := s.mgr.CutoverPending(ctx, st.ID); ok {
+			p.Data["CutoverPending"] = pend
+		}
+	}
 	p.Data["Insecure"] = !strings.HasPrefix(s.cfg.PublicBaseURL, "https://")
 	p.Data["AllowInsecure"] = s.cfg.AllowInsecureJoin
 	p.Data["TTL"] = int(s.cfg.JoinTokenTTL.Minutes())
@@ -191,7 +212,7 @@ func (s *Server) adminSiteView(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.siteView(w, r, st, "", "", time.Time{})
+	s.siteView(w, r, st, "", "", time.Time{}, "")
 }
 
 func (s *Server) adminSiteStatus(w http.ResponseWriter, r *http.Request) {
@@ -229,7 +250,7 @@ func (s *Server) adminSiteJoin(w http.ResponseWriter, r *http.Request) {
 	}
 	base := s.cfg.PublicBaseURL
 	// The command is rendered here and never put in a URL or the log.
-	s.siteView(w, r, st, sites.JoinCommand(base, tok, true), sites.JoinCommand(base, tok, false), exp)
+	s.siteView(w, r, st, sites.JoinCommand(base, tok, true), sites.JoinCommand(base, tok, false), exp, "")
 }
 
 func (s *Server) adminSiteJoinRevoke(w http.ResponseWriter, r *http.Request) {
@@ -273,6 +294,11 @@ func (s *Server) adminSiteSync(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+	if billing.IPoE(st) {
+		_, err := s.svc.ReconcileSite(ctx, st.ID)
+		s.back(w, r, "/admin/sites/view?id="+st.ID, msgOr(err, "Router reconciled with the accounts"))
+		return
+	}
 	err := s.svc.SyncProfiles(ctx, st.ID)
 	s.back(w, r, "/admin/sites/view?id="+st.ID, msgOr(err, "Speed profiles pushed to the router"))
 }
@@ -302,4 +328,93 @@ func (s *Server) adminSiteRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.back(w, r, "/admin/sites", "Building removed: "+st.Name)
+}
+
+// adminSiteScript mints a one-time command for one stage of the IPoE move:
+// join (tunnel and API only), cutover (switch the building to server-driven
+// IPoE with a 15 minute automatic rollback) or cleanup (remove the old hotspot
+// objects). The command is shown once, like the join command.
+func (s *Server) adminSiteScript(w http.ResponseWriter, r *http.Request) {
+	st, ok := s.siteID(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	stage := r.PostFormValue("stage")
+	switch stage {
+	case sites.StageJoin, sites.StageCutover, sites.StageCleanup:
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	if stage != sites.StageJoin && !billing.IPoE(st) {
+		s.back(w, r, "/admin/sites/view?id="+st.ID, "Error: set the access mode to IPoE observe or IPoE first")
+		return
+	}
+	tok, exp, err := s.mgr.MintJoin(st.ID)
+	if err != nil {
+		s.back(w, r, "/admin/sites/view?id="+st.ID, "Error: "+err.Error())
+		return
+	}
+	base := s.cfg.PublicBaseURL
+	s.siteView(w, r, st, sites.JoinCommandStage(base, tok, true, stage), sites.JoinCommandStage(base, tok, false, stage), exp, stage)
+}
+
+func (s *Server) adminSiteMode(w http.ResponseWriter, r *http.Request) {
+	st, ok := s.siteID(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	mode := r.PostFormValue("mode")
+	if err := s.mgr.SetAccessMode(st.ID, mode); err != nil {
+		s.back(w, r, "/admin/sites/view?id="+st.ID, "Error: "+err.Error())
+		return
+	}
+	msg := "Access mode set to " + mode
+	if mode != store.AccessHotspot {
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		if _, err := s.svc.ReconcileSite(ctx, st.ID); err != nil {
+			msg += ". First router pass failed: " + err.Error()
+		}
+	}
+	s.back(w, r, "/admin/sites/view?id="+st.ID, msg)
+}
+
+func (s *Server) adminSiteAdopt(w http.ResponseWriter, r *http.Request) {
+	st, ok := s.siteID(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	res, err := s.svc.AdoptLeases(ctx, st.ID)
+	if err != nil {
+		s.back(w, r, "/admin/sites/view?id="+st.ID, "Error: "+err.Error())
+		return
+	}
+	s.back(w, r, "/admin/sites/view?id="+st.ID, fmt.Sprintf("Adopted %d leases (%d already matched, %d skipped)", len(res.Adopted), res.Unchanged, len(res.Skipped))+skippedNote(res.Skipped))
+}
+
+func (s *Server) adminSiteConfirm(w http.ResponseWriter, r *http.Request) {
+	st, ok := s.siteID(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	s.back(w, r, "/admin/sites/view?id="+st.ID, msgOr(s.mgr.ConfirmCutover(ctx, st.ID), "Cutover confirmed: the automatic rollback is cancelled"))
+}
+
+func skippedNote(skipped []string) string {
+	if len(skipped) == 0 {
+		return ""
+	}
+	if len(skipped) > 5 {
+		skipped = append(skipped[:5:5], "...")
+	}
+	return ". Skipped: " + strings.Join(skipped, "; ")
 }

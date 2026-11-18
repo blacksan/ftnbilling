@@ -82,7 +82,7 @@
 <li>Hotspot and fetch are enabled: <code>/system/device-mode/update hotspot=yes fetch=yes</code>, then confirm as the router asks (power button or a reboot).</li>
 <li>WebFig on port 80 is moved: the script turns the router's web admin off port 80, because the hotspot uses it.</li>
 </ol>
-{{if .Data.Cmd}}<p><b>Paste this once in the router's terminal</b> (WinBox &rarr; New Terminal). It works once, for {{.Data.TTL}} minutes, then is gone.</p>
+{{if .Data.Cmd}}{{if .Data.CmdStage}}<p><span class="pill active">stage: {{.Data.CmdStage}}</span></p>{{end}}<p><b>Paste this once in the router's terminal</b> (WinBox &rarr; New Terminal). It works once, for {{.Data.TTL}} minutes, then is gone.</p>
 <textarea readonly rows="3" style="width:100%;font:13px monospace" onclick="this.select()">{{.Data.Cmd}}</textarea>
 <details><summary>If the router's clock is wrong, or it has no certificate store</summary><p class="muted">This skips the certificate check. Use it only if the line above fails with a certificate error.</p>
 <textarea readonly rows="3" style="width:100%;font:13px monospace" onclick="this.select()">{{.Data.CmdNoCheck}}</textarea></details>
@@ -91,6 +91,25 @@
 {{else}}{{if and .Data.Insecure (not .Data.AllowInsecure)}}<p class="bad">PUBLIC_BASE_URL must start with https:// before a join command can be made.</p>{{end}}
 <form method="post" action="/admin/sites/join"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button>{{if .Data.Status.Joined}}Make a new join command (rebuilds the tunnel){{else}}Make the join command{{end}}</button></form>{{end}}
 <p id="jst" class="muted" style="margin-top:8px">Status: {{.Data.Status.Token}}</p></div>{{end}}</div>
+
+{{if not .Data.Env}}<div class="card"><b>Access mode: server-driven IPoE</b>
+<p class="muted" style="margin:4px 0">Mode is <b>{{.Data.Mode}}</b>. <i>hotspot</i>: tenants log in on the router's hotspot (the old way). <i>ipoe_observe</i>: the server gives each flat a fixed address and speed queue, but suspends nobody. <i>ipoe</i>: unpaid flats are walled to the payment page.</p>
+<form method="post" action="/admin/sites/mode" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
+<label>Mode<select name="mode">{{range seq "hotspot" "ipoe_observe" "ipoe"}}<option{{if eq . $.Data.Mode}} selected{{end}}>{{.}}</option>{{end}}</select></label><button>Switch mode</button></form>
+{{if .Data.IPoE}}
+{{with .Data.Prov}}<p style="margin-top:8px"><span class="pill {{if .InSync}}active{{else}}expired{{end}}">{{if .InSync}}router in sync{{else}}router not in sync{{end}}</span>
+<span class="muted">last pass {{if .LastRunAt.IsZero}}never{{else}}{{eat .LastRunAt}}{{end}} &middot; {{.Drift}} differences &middot; {{.PendingOps}} writes pending{{if .Repaired}} &middot; {{.Repaired}} rows repaired last pass{{end}}{{if .WouldSuspend}} &middot; {{.WouldSuspend}} flats would be suspended in ipoe mode{{end}}</span></p>
+{{if .Note}}<p class="muted">{{.Note}}</p>{{end}}{{if .LastError}}<p class="bad">Last error: {{.LastError}}</p>{{end}}
+{{if .ForeignConflicts}}<p class="bad">Rows on the router that the server does not own and will not touch:</p><ul>{{range .ForeignConflicts}}<li>{{.}}</li>{{end}}</ul>{{end}}{{end}}
+{{if .Data.CutoverPending}}<div class="card danger"><b class="bad">Cutover not confirmed</b><p class="muted" style="margin:4px 0">The router rolls back by itself 15 minutes after the cutover command unless you confirm. Check that a flat can browse, then confirm.</p>
+<form method="post" action="/admin/sites/confirm"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button>Confirm cutover</button></form></div>{{end}}
+<div class="row" style="margin-top:8px">
+<form method="post" action="/admin/sites/adopt" onsubmit="return confirm('Give every current dynamic lease to the flat whose MAC it has, as that flat\'s fixed address?')"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button>Adopt leases</button></form>
+<form method="post" action="/admin/sites/script"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="stage" value="join"><button>Join only command</button></form>
+<form method="post" action="/admin/sites/script"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="stage" value="cutover"><button>Cut over command</button></form>
+<form method="post" action="/admin/sites/script"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="stage" value="cleanup"><button>Cleanup command</button></form></div>
+<p class="muted">Order: join only (tunnel and API, nothing else changes), adopt leases, observe for a few days, then the cut over command at a quiet hour with someone on site. Cleanup removes the old hotspot objects once the cutover is confirmed.</p>
+{{else}}<form method="post" action="/admin/sites/script" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="stage" value="join"><button>Join only command</button> <span class="muted">connects the router to the server without changing how tenants connect</span></form>{{end}}</div>{{end}}
 
 <div class="card"><b>Plans at this building</b><p class="muted" style="margin:4px 0">Hide a plan here, or give it a different price. Prices must stay unique inside the building.</p>
 <form method="post" action="/admin/sites/packages"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
@@ -101,7 +120,7 @@
 
 <div class="grid2">
 <div class="card"><b>Router actions</b>
-<form method="post" action="/admin/sites/sync" style="margin-top:6px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button>Push speed profiles now</button> <span class="muted">normally automatic</span></form>
+<form method="post" action="/admin/sites/sync" style="margin-top:6px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button>{{if .Data.IPoE}}Reconcile now{{else}}Push speed profiles now{{end}}</button> <span class="muted">normally automatic</span></form>
 <form method="post" action="/admin/sites/disable" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="disable" value="{{if $s.Disabled}}0{{else}}1{{end}}"><button>{{if $s.Disabled}}Resume this building{{else}}Pause this building{{end}}</button> <span class="muted">paused: no collection, no router changes; tenants cannot buy</span></form></div>
 <div class="card danger"><b class="bad">Remove building</b><p class="muted" style="margin:4px 0">Only possible when it has no flats. Its payments stay in the ledger. Type the building name to confirm.</p>
 <form method="post" action="/admin/sites/remove" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input name="confirm" placeholder="{{$s.Name}}" required autocomplete="off"><button>Remove</button></form></div></div>
