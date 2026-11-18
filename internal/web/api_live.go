@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -361,6 +362,15 @@ func (s *Server) apiRouterReboot(w http.ResponseWriter, r *http.Request, c *apiC
 // the reboot did start.
 func rebootDropped(err error) bool {
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	// A timeout after the request was sent usually means the router is already
+	// going down; keep the 10-minute slot rather than allow a second reboot.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
 		return true
 	}
 	m := err.Error()
