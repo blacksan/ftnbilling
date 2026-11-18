@@ -80,7 +80,7 @@ class ViewModelsTest {
 
     // ---- customer detail ----
 
-    @Test fun macEditShowsOwningFlatAndBuildingOn409() = runTest(main.dispatcher) {
+    @Test fun macEditShowsOwningFlatAndRouterOn409() = runTest(main.dispatcher) {
         routes["GET /api/v1/accounts/a1"] = ok(account)
         routes["GET /api/v1/packages"] = ok("""{"items":[]}""")
         routes["PUT /api/v1/accounts/a1/mac"] = err(
@@ -187,17 +187,17 @@ class ViewModelsTest {
     @Test fun pullToRefreshAsksEachRouterThenReloads() = runTest(main.dispatcher) {
         routes["GET /api/v1/unregistered"] = ok("""{"items":[]}""")
         routes["GET /api/v1/packages"] = ok("""{"items":[]}""")
-        routes["GET /api/v1/sites"] = ok("""{"items":[{"id":"s1","name":"A"},{"id":"s2","name":"B"}]}""")
-        routes["POST /api/v1/sites/s1/unregistered/refresh"] = MockResponse().setResponseCode(202)
-        routes["POST /api/v1/sites/s2/unregistered/refresh"] = err(503, "db_unavailable")
+        routes["GET /api/v1/routers"] = ok("""{"items":[{"id":"s1","name":"A"},{"id":"s2","name":"B"}]}""")
+        routes["POST /api/v1/routers/s1/unregistered/refresh"] = MockResponse().setResponseCode(202)
+        routes["POST /api/v1/routers/s2/unregistered/refresh"] = err(503, "db_unavailable")
         val vm = NewDevicesViewModel(null, NewDevicesRepository(api), SitesRepository(api), AccountsRepository(api))
         await(vm.state) { it.devices is Loadable.Ready }
         synchronized(seen) { seen.clear() }
         vm.refresh()
         await(vm.state) { !it.refreshing }
         val calls = synchronized(seen) { seen.toList() }
-        assertTrue(calls.toString(), calls.contains("POST /api/v1/sites/s1/unregistered/refresh"))
-        assertTrue(calls.toString(), calls.contains("POST /api/v1/sites/s2/unregistered/refresh"))
+        assertTrue(calls.toString(), calls.contains("POST /api/v1/routers/s1/unregistered/refresh"))
+        assertTrue(calls.toString(), calls.contains("POST /api/v1/routers/s2/unregistered/refresh"))
         assertEquals("reload happens after the refreshes", "GET /api/v1/unregistered", calls.last())
     }
 

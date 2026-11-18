@@ -154,7 +154,7 @@ private fun SummaryCard(a: Account) {
             StatusChip(accountStateLabel(a), accountTone(a))
             if (a.macConflict) StatusChip("Not provisioned", Tone.Bad)
         }
-        LabeledValue("Building", a.siteName)
+        LabeledValue("Router", a.routerLabel)
         LabeledValue("Tenant", a.tenant)
         LabeledValue("Phone", a.phone)
         LabeledValue("Account code", a.code)
@@ -331,7 +331,7 @@ fun macConflictText(o: MacOwner): String {
     val where = buildString {
         append("flat ").append(o.flat.ifBlank { "?" })
         if (o.code.isNotBlank()) append(" (").append(o.code).append(")")
-        if (o.siteName.isNotBlank()) append(" in ").append(o.siteName)
+        if (o.siteName.isNotBlank()) append(" on router ").append(o.siteName)
     }
     return "${o.mac.ifBlank { "This MAC" }} is already used by $where. A MAC can belong to one account only. " +
         "Move it off that account first, or check you typed the right address."

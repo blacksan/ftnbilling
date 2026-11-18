@@ -21,7 +21,6 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -32,7 +31,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
+import ke.co.ftw.ftnadmin.domain.Dashboard
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -40,7 +45,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import ke.co.ftw.ftnadmin.core.network.UserInfo
 import ke.co.ftw.ftnadmin.domain.Payment
 import ke.co.ftw.ftnadmin.ui.common.AccountPicker
-import ke.co.ftw.ftnadmin.ui.common.AppTopBar
+import ke.co.ftw.ftnadmin.ui.common.CardTone
+import ke.co.ftw.ftnadmin.ui.common.StatCard
+import ke.co.ftw.ftnadmin.ui.common.TabScaffold
 import ke.co.ftw.ftnadmin.ui.common.CenteredLoading
 import ke.co.ftw.ftnadmin.ui.common.ChipLabel
 import ke.co.ftw.ftnadmin.ui.common.ChipRow
@@ -57,11 +64,13 @@ import ke.co.ftw.ftnadmin.ui.common.vmFactory
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PaymentsScreen(user: UserInfo, onSettings: () -> Unit, initialFilter: PaymentFilter = PaymentFilter.All) {
+fun PaymentsScreen(user: UserInfo, onAlerts: () -> Unit, initialFilter: PaymentFilter = PaymentFilter.All) {
     val container = LocalContainer.current
     val vm: PaymentsViewModel = viewModel(
         key = "payments-${initialFilter.name}",
-        factory = vmFactory { PaymentsViewModel(container.payments, container.accounts, initialFilter) },
+        factory = vmFactory {
+            PaymentsViewModel(container.payments, container.accounts, initialFilter, container.dashboard, container.routerContext.selection)
+        },
     )
     val ui by vm.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
@@ -76,17 +85,22 @@ fun PaymentsScreen(user: UserInfo, onSettings: () -> Unit, initialFilter: Paymen
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }.collect { if (it >= ui.items.size - 5) vm.loadMore() }
     }
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = { AppTopBar("Payments", onSettings = onSettings) },
+    TabScaffold(
+        title = "Payments",
+        onAlerts = onAlerts,
         snackbarHost = { SnackbarHost(snack) },
         floatingActionButton = {
             if (user.canWrite) {
-                FloatingActionButton(onClick = vm::openRecord) { Icon(Icons.Default.Add, contentDescription = "Record payment") }
+                FloatingActionButton(
+                    onClick = vm::openRecord,
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                ) { Icon(Icons.Default.Add, contentDescription = "Record payment") }
             }
         },
     ) { inner ->
         Column(Modifier.padding(inner).fillMaxSize()) {
+            SummaryCards(ui.summary, onUnmatched = { vm.setFilter(PaymentFilter.Unmatched) })
             ChipRow(Modifier.padding(vertical = 8.dp)) {
                 PaymentFilter.entries.forEach { f ->
                     FilterChip(selected = ui.filter == f, onClick = { vm.setFilter(f) }, label = { ChipLabel(f.label) })
@@ -110,7 +124,7 @@ fun PaymentsScreen(user: UserInfo, onSettings: () -> Unit, initialFilter: Paymen
                         LazyColumn(
                             state = listState,
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             items(ui.items, key = { it.key }) { p -> PaymentRow(p, canAssign = user.canWrite && p.isUnmatched) { vm.openAssign(p) } }
@@ -125,12 +139,44 @@ fun PaymentsScreen(user: UserInfo, onSettings: () -> Unit, initialFilter: Paymen
     PaymentDialogs(ui, vm)
 }
 
+/** Today / Month / Unmatched as bold tonal cards. Three in a row, one per row when text is scaled up. */
+@Composable
+private fun SummaryCards(d: Dashboard?, onUnmatched: () -> Unit) {
+    if (d == null) return
+    val today = d.revenue.todayKes
+    val month = d.revenue.monthKes
+    val unmatched = d.unmatchedPayments
+    val cards: List<@Composable (Modifier) -> Unit> = listOf(
+        { m -> StatCard("Today", formatKes(today).removePrefix("KES "), m, unit = "KES", tone = CardTone.Feature) },
+        { m -> StatCard("This month", formatKes(month).removePrefix("KES "), m, unit = "KES", tone = CardTone.Good) },
+        { m ->
+            StatCard(
+                "Unmatched", unmatched.toString(), m,
+                tone = if (unmatched > 0) CardTone.Warn else CardTone.Neutral,
+                onClick = onUnmatched,
+            )
+        },
+    )
+    if (LocalDensity.current.fontScale >= 1.3f) {
+        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            cards.forEach { it(Modifier.fillMaxWidth()) }
+        }
+    } else {
+        Row(
+            Modifier.padding(horizontal = 16.dp).height(IntrinsicSize.Min),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            cards.forEach { it(Modifier.weight(1f).fillMaxHeight()) }
+        }
+    }
+}
+
 @Composable
 private fun PaymentRow(p: Payment, canAssign: Boolean, onAssign: () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(formatKes(p.amountKes), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, modifier = Modifier.weight(1f).padding(end = 8.dp))
+                Text(formatKes(p.amountKes), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, modifier = Modifier.weight(1f).padding(end = 8.dp))
                 StatusChip(
                     p.status.replaceFirstChar { it.uppercase() }.ifBlank { "Unknown" },
                     when (p.status) {

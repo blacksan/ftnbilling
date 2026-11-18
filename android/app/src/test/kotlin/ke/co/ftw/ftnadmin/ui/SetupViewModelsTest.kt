@@ -8,9 +8,9 @@ import ke.co.ftw.ftnadmin.core.network.UserInfo
 import ke.co.ftw.ftnadmin.data.sites.CheckStatus
 import ke.co.ftw.ftnadmin.data.sites.SiteSetupRepository
 import ke.co.ftw.ftnadmin.data.sites.SitesRepository
-import ke.co.ftw.ftnadmin.ui.buildings.setup.CutoverViewModel
-import ke.co.ftw.ftnadmin.ui.buildings.setup.SetupViewModel
-import ke.co.ftw.ftnadmin.ui.buildings.setup.canRunFix
+import ke.co.ftw.ftnadmin.ui.routers.setup.SetupJobViewModel
+import ke.co.ftw.ftnadmin.ui.routers.setup.SetupViewModel
+import ke.co.ftw.ftnadmin.ui.routers.setup.canRunFix
 import ke.co.ftw.ftnadmin.data.sites.CheckFix
 import ke.co.ftw.ftnadmin.ui.common.Loadable
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -57,7 +57,7 @@ class SetupViewModelsTest {
         val sessions = SessionManager(MemoryTokenStore(Session("a", "", "r", "", "d", owner)))
         sessions.restore()
         api = ApiClient.create(server.url("/").toString(), sessions)
-        routes["GET /api/v1/sites/s1"] = ok("""{"id":"s1","name":"Kilimani","access_mode":"hotspot"}""")
+        routes["GET /api/v1/routers/s1"] = ok("""{"id":"s1","name":"Kilimani","access_mode":"hotspot"}""")
     }
 
     @After fun tearDown() = server.shutdown()
@@ -91,69 +91,64 @@ class SetupViewModelsTest {
     // ---- checks ----
 
     @Test fun checksLoadThenPullToRefreshUsesFresh() = runTest(main.dispatcher) {
-        routes["GET /api/v1/sites/s1/checks"] = ok(checks(item("dns.remote_requests", "fail")))
+        routes["GET /api/v1/routers/s1/checks"] = ok(checks(item("dns.remote_requests", "fail")))
         val vm = setupVm()
         await(vm.state) { it.checks is Loadable.Ready && it.mode == "hotspot" }
-        val first = requests("GET /api/v1/sites/s1/checks").single()
+        val first = requests("GET /api/v1/routers/s1/checks").single()
         assertNull("first load may use the server cache", first.requestUrl!!.queryParameter("fresh"))
 
         vm.refresh()
-        await(vm.state) { !it.refreshing && requests("GET /api/v1/sites/s1/checks").size == 2 }
-        assertEquals("1", requests("GET /api/v1/sites/s1/checks")[1].requestUrl!!.queryParameter("fresh"))
+        await(vm.state) { !it.refreshing && requests("GET /api/v1/routers/s1/checks").size == 2 }
+        assertEquals("1", requests("GET /api/v1/routers/s1/checks")[1].requestUrl!!.queryParameter("fresh"))
         val c = (vm.state.value.checks as Loadable.Ready).value
         assertEquals(CheckStatus.FAIL, c.items.single().status)
         assertTrue(c.items.single().blocksCutover)
     }
 
     @Test fun routerUnreachableIsExplained() = runTest(main.dispatcher) {
-        routes["GET /api/v1/sites/s1/checks"] = err(503, "router_unreachable", msg = "dial tcp timeout")
+        routes["GET /api/v1/routers/s1/checks"] = err(503, "router_unreachable", msg = "dial tcp timeout")
         val vm = setupVm()
         await(vm.state) { it.checks is Loadable.Failed }
         val msg = (vm.state.value.checks as Loadable.Failed).message
-        assertTrue(msg, msg.contains("cannot reach this building's router"))
+        assertTrue(msg, msg.contains("cannot reach this router"))
     }
 
     // ---- fixes ----
 
     @Test fun autoFixSuccessReplacesItemAndRereadsFresh() = runTest(main.dispatcher) {
         val fixJson = ""","fix":{"kind":"auto","label":"Fix traffic flow","role":"operator"}"""
-        routes["GET /api/v1/sites/s1/checks"] = ok(checks(item("traffic_flow", "warn", fixJson)))
-        routes["POST /api/v1/sites/s1/checks/traffic_flow/fix"] = ok("""{"item":${item("traffic_flow", "ok")},"applied":["set interface"]}""")
+        routes["GET /api/v1/routers/s1/checks"] = ok(checks(item("traffic_flow", "warn", fixJson)))
+        routes["POST /api/v1/routers/s1/checks/traffic_flow/fix"] = ok("""{"item":${item("traffic_flow", "ok")},"applied":["set interface"]}""")
         val vm = setupVm()
         await(vm.state) { it.checks is Loadable.Ready }
         val it0 = (vm.state.value.checks as Loadable.Ready).value.items.single()
 
         vm.requestFix(it0)
         await(vm.state) { s -> s.fixing.isEmpty() && s.message?.contains("set interface") == true }
-        val posted = requests("POST /api/v1/sites/s1/checks/traffic_flow/fix").single()
+        val posted = requests("POST /api/v1/routers/s1/checks/traffic_flow/fix").single()
         assertFalse("auto fixes carry no confirm flag", posted.body.readUtf8().contains("confirm"))
         val c = (vm.state.value.checks as Loadable.Ready).value
         assertEquals(CheckStatus.OK, c.items.single().status)
-        await(vm.state) { requests("GET /api/v1/sites/s1/checks").any { r -> r.requestUrl!!.queryParameter("fresh") == "1" } }
+        await(vm.state) { requests("GET /api/v1/routers/s1/checks").any { r -> r.requestUrl!!.queryParameter("fresh") == "1" } }
     }
 
-    @Test fun confirmFixWaitsForDialogThenSendsConfirm() = runTest(main.dispatcher) {
+    @Test fun confirmFixIsSentDirectlyWithoutASecondConfirmStep() = runTest(main.dispatcher) {
         val fixJson = ""","fix":{"kind":"confirm","label":"Remove OLT port","confirm_text":"Learned MACs: AA","role":"owner"}"""
-        routes["GET /api/v1/sites/s1/checks"] = ok(checks(item("olt.bridge_conflict", "fail", fixJson)))
-        routes["POST /api/v1/sites/s1/checks/olt.bridge_conflict/fix"] = ok("""{"item":${item("olt.bridge_conflict", "ok")},"applied":[]}""")
+        routes["GET /api/v1/routers/s1/checks"] = ok(checks(item("olt.bridge_conflict", "fail", fixJson)))
+        routes["POST /api/v1/routers/s1/checks/olt.bridge_conflict/fix"] = ok("""{"item":${item("olt.bridge_conflict", "ok")},"applied":[]}""")
         val vm = setupVm()
         await(vm.state) { it.checks is Loadable.Ready }
         val i = (vm.state.value.checks as Loadable.Ready).value.items.single()
 
         vm.requestFix(i)
-        advanceUntilIdle()
-        assertEquals(i.id, vm.state.value.confirmFix?.id)
-        assertTrue("nothing is sent before the person confirms", requests("POST").isEmpty())
-
-        vm.confirmFix()
-        await(vm.state) { it.fixing.isEmpty() && it.confirmFix == null && requests("POST").isNotEmpty() }
+        await(vm.state) { it.fixing.isEmpty() && requests("POST").isNotEmpty() }
         assertTrue(requests("POST").single().body.readUtf8().contains("\"confirm\":true"))
     }
 
     @Test fun routerRefusedShowsRouterError() = runTest(main.dispatcher) {
         val fixJson = ""","fix":{"kind":"auto","label":"Fix DNS","role":"operator"}"""
-        routes["GET /api/v1/sites/s1/checks"] = ok(checks(item("dns.remote_requests", "fail", fixJson)))
-        routes["POST /api/v1/sites/s1/checks/dns.remote_requests/fix"] =
+        routes["GET /api/v1/routers/s1/checks"] = ok(checks(item("dns.remote_requests", "fail", fixJson)))
+        routes["POST /api/v1/routers/s1/checks/dns.remote_requests/fix"] =
             err(409, "router_refused", """{"router_error":"not enough permissions (9)"}""", msg = "refused")
         val vm = setupVm()
         await(vm.state) { it.checks is Loadable.Ready }
@@ -178,8 +173,8 @@ class SetupViewModelsTest {
     // ---- mode ----
 
     @Test fun mode409AsksThenOverrides() = runTest(main.dispatcher) {
-        routes["GET /api/v1/sites/s1/checks"] = ok(checks())
-        sequences["PUT /api/v1/sites/s1/mode"] = mutableListOf(
+        routes["GET /api/v1/routers/s1/checks"] = ok(checks())
+        sequences["PUT /api/v1/routers/s1/mode"] = mutableListOf(
             err(409, "bad_state", msg = "The router already looks like IPoE."),
             ok("""{"id":"s1","name":"Kilimani","access_mode":"hotspot"}"""),
         )
@@ -200,8 +195,8 @@ class SetupViewModelsTest {
     // ---- join command ----
 
     @Test fun joinCommandIsNeverCachedOrReplayed() = runTest(main.dispatcher) {
-        routes["GET /api/v1/sites/s1/checks"] = ok(checks())
-        sequences["POST /api/v1/sites/s1/join-command"] = mutableListOf(
+        routes["GET /api/v1/routers/s1/checks"] = ok(checks())
+        sequences["POST /api/v1/routers/s1/join-command"] = mutableListOf(
             ok("""{"command":"/tool fetch one","command_nocheck":"/tool fetch one-nocheck","expires_at":"2099-01-01T00:00:00Z"}"""),
             ok("""{"command":"/tool fetch two","command_nocheck":"","expires_at":"2099-01-01T00:00:00Z"}"""),
         )
@@ -217,14 +212,14 @@ class SetupViewModelsTest {
 
         vm.getJoinCommand()
         await(vm.state) { it.join.command?.command == "/tool fetch two" }
-        val posts = requests("POST /api/v1/sites/s1/join-command")
+        val posts = requests("POST /api/v1/routers/s1/join-command")
         assertEquals("every show is a fresh request", 2, posts.size)
         posts.forEach { assertNull("no idempotency key so the server cannot replay it", it.getHeader("Idempotency-Key")) }
     }
 
     @Test fun otherMutationsStillCarryAnIdempotencyKey() = runTest(main.dispatcher) {
-        routes["GET /api/v1/sites/s1/checks"] = ok(checks())
-        routes["PUT /api/v1/sites/s1/mode"] = ok("""{"id":"s1","name":"Kilimani","access_mode":"ipoe"}""")
+        routes["GET /api/v1/routers/s1/checks"] = ok(checks())
+        routes["PUT /api/v1/routers/s1/mode"] = ok("""{"id":"s1","name":"Kilimani","access_mode":"ipoe"}""")
         val vm = setupVm()
         await(vm.state) { it.checks is Loadable.Ready && it.mode == "hotspot" }
         vm.setMode("ipoe")
@@ -232,13 +227,14 @@ class SetupViewModelsTest {
         assertNotNull(requests("PUT").single().getHeader("Idempotency-Key"))
     }
 
-    // ---- cutover ----
+    // ---- automatic setup job ----
 
-    private fun cutover(state: String, canConfirm: Boolean = false, error: String = "") =
-        ok("""{"state":"$state","method":"server","seconds_left":600,"steps":[{"n":1,"key":"preflight","title":"Preflight","status":"ok"}],""" +
-            """"evidence":{"tunnel_up":true,"flats_bound":3,"flats_entitled":3,"internet_ok":true},"can_confirm":$canConfirm,"blockers":[],"last_error":"$error"}""")
+    private fun job(state: String, error: String = "", kind: String = "migrate") =
+        ok("""{"router_id":"s1","state":"$state","kind":"$kind","seconds_left":600,"next_action":{"kind":"none"},""" +
+            """"steps":[{"n":1,"key":"preflight","title":"Preflight","status":"ok"}],""" +
+            """"evidence":{"tunnel_up":true,"internet_ok":true,"flats_required":3,"flats_bound":3},"blockers":[],"last_error":"$error"}""")
 
-    private fun cutoverVm() = CutoverViewModel("s1", SiteSetupRepository(api), SitesRepository(api), pollMs = 10, clock = { 0L })
+    private fun jobVm() = SetupJobViewModel("s1", SiteSetupRepository(api), SitesRepository(api), pollMs = 10, clock = { 0L })
 
     private fun TestScope.settle() {
         advanceUntilIdle()
@@ -246,100 +242,69 @@ class SetupViewModelsTest {
         advanceUntilIdle()
     }
 
-    @Test fun cutoverPollsUntilConfirmedThenStops() = runTest(main.dispatcher) {
-        sequences["GET /api/v1/sites/s1/cutover"] = mutableListOf(
-            cutover("running"), cutover("running"), cutover("awaiting_confirm", canConfirm = true),
-        )
-        routes["POST /api/v1/sites/s1/cutover/confirm"] = cutover("confirmed")
-        val vm = cutoverVm()
-        await(vm.state) { (it.cutover as? Loadable.Ready)?.value?.state == "awaiting_confirm" }
-        assertTrue((vm.state.value.cutover as Loadable.Ready).value.canConfirm)
-        assertTrue("polled while running", requests("GET /api/v1/sites/s1/cutover").size >= 3)
+    private fun stateOf(vm: SetupJobViewModel) = (vm.state.value.setup as? Loadable.Ready)?.value?.state
 
-        // Still awaiting_confirm: polling continues.
-        val before = requests("GET /api/v1/sites/s1/cutover").size
+    @Test fun setupPollsWhileWorkingThenStopsWhenLiveWithoutAnyConfirmCall() = runTest(main.dispatcher) {
+        sequences["GET /api/v1/routers/s1/setup"] = mutableListOf(job("switching"), job("verifying"), job("live"))
+        val vm = jobVm()
+        await(vm.state) { (it.setup as? Loadable.Ready)?.value?.state == "live" }
+        assertTrue("polled while working", requests("GET /api/v1/routers/s1/setup").size >= 3)
         settle()
-        assertTrue(requests("GET /api/v1/sites/s1/cutover").size > before)
-
-        // From here the server reports confirmed, as it would after the POST.
-        sequences["GET /api/v1/sites/s1/cutover"] = mutableListOf(cutover("confirmed"))
-        vm.confirm()
-        await(vm.state) { (it.cutover as? Loadable.Ready)?.value?.state == "confirmed" }
+        val after = requests("GET /api/v1/routers/s1/setup").size
         settle()
-        val after = requests("GET /api/v1/sites/s1/cutover").size
-        settle()
-        assertEquals("polling stopped once confirmed", after, requests("GET /api/v1/sites/s1/cutover").size)
-        assertEquals("confirmed", (vm.state.value.cutover as Loadable.Ready).value.state)
-        assertTrue(requests("POST").single().body.readUtf8().contains("\"force\":false"))
+        assertEquals("polling stopped once live", after, requests("GET /api/v1/routers/s1/setup").size)
+        assertTrue("nothing is ever posted", requests("POST").isEmpty())
+        assertEquals(3, (vm.state.value.setup as Loadable.Ready).value.evidence.flatsBound)
     }
 
-    @Test fun cutoverStopsPollingWhenFailedAndShowsLastError() = runTest(main.dispatcher) {
-        sequences["GET /api/v1/sites/s1/cutover"] = mutableListOf(cutover("running"), cutover("failed", error = "step 5: router refused"))
-        val vm = cutoverVm()
-        await(vm.state) { (it.cutover as? Loadable.Ready)?.value?.state == "failed" }
+    @Test fun setupStopsPollingWhenFailedAndShowsLastError() = runTest(main.dispatcher) {
+        sequences["GET /api/v1/routers/s1/setup"] = mutableListOf(job("staging"), job("failed", error = "step 5: router refused"))
+        val vm = jobVm()
+        await(vm.state) { stateOf(vm) == "failed" }
         settle()
-        val n = requests("GET /api/v1/sites/s1/cutover").size
+        val n = requests("GET /api/v1/routers/s1/setup").size
         settle()
-        assertEquals(n, requests("GET /api/v1/sites/s1/cutover").size)
-        assertEquals("step 5: router refused", (vm.state.value.cutover as Loadable.Ready).value.lastError)
+        assertEquals(n, requests("GET /api/v1/routers/s1/setup").size)
+        assertEquals("step 5: router refused", (vm.state.value.setup as Loadable.Ready).value.lastError)
     }
 
-    @Test fun idleCutoverDoesNotPoll() = runTest(main.dispatcher) {
-        routes["GET /api/v1/sites/s1/cutover"] = cutover("idle")
-        val vm = cutoverVm()
-        await(vm.state) { it.cutover is Loadable.Ready }
+    @Test fun readyJobDoesNotPoll() = runTest(main.dispatcher) {
+        routes["GET /api/v1/routers/s1/setup"] = job("ready")
+        val vm = jobVm()
+        await(vm.state) { it.setup is Loadable.Ready }
         settle()
-        assertEquals(1, requests("GET /api/v1/sites/s1/cutover").size)
+        assertEquals(1, requests("GET /api/v1/routers/s1/setup").size)
     }
 
-    @Test fun startNeedsTheTypedBuildingName() = runTest(main.dispatcher) {
-        routes["GET /api/v1/sites/s1/cutover"] = cutover("idle")
-        routes["POST /api/v1/sites/s1/cutover/start"] = cutover("running")
-        val vm = cutoverVm()
-        await(vm.state) { it.cutover is Loadable.Ready && it.siteName == "Kilimani" }
+    @Test fun startMigrationNeedsTheTypedRouterName() = runTest(main.dispatcher) {
+        routes["GET /api/v1/routers/s1/setup"] = job("ready")
+        routes["POST /api/v1/routers/s1/setup/migrate"] = job("arming")
+        val vm = jobVm()
+        await(vm.state) { it.setup is Loadable.Ready && it.routerName == "Kilimani" }
 
         vm.setTypedName("kilimani")
         assertFalse(vm.canStart())
-        vm.start()
+        vm.startMigration()
         advanceUntilIdle()
         assertTrue(requests("POST").isEmpty())
 
         vm.setTypedName("Kilimani")
         vm.setKeepUnknown(true)
         assertTrue(vm.canStart())
-        vm.start()
-        await(vm.state) { (it.cutover as? Loadable.Ready)?.value?.state == "running" }
-        val body = requests("POST").single().body.readUtf8()
+        vm.startMigration()
+        await(vm.state) { stateOf(vm) == "arming" }
+        val body = requests("POST").first().body.readUtf8()
         assertTrue(body, body.contains("\"confirm_name\":\"Kilimani\"") && body.contains("\"keep_unknown\":true"))
     }
 
-    @Test fun confirmAnywayNeedsOwnerAndTypedName() = runTest(main.dispatcher) {
-        routes["GET /api/v1/sites/s1/cutover"] = cutover("awaiting_confirm", canConfirm = false)
-        routes["POST /api/v1/sites/s1/cutover/confirm"] = cutover("confirmed")
-        val vm = cutoverVm()
-        await(vm.state) { it.cutover is Loadable.Ready && it.siteName == "Kilimani" }
-
-        vm.setForceName("Kilimani")
-        vm.confirmAnyway(viewer)
-        vm.setForceName("wrong")
-        vm.confirmAnyway(owner)
-        advanceUntilIdle()
-        assertTrue("no request for a non-owner or a wrong name", requests("POST").isEmpty())
-
-        vm.setForceName("Kilimani")
-        vm.confirmAnyway(owner)
-        await(vm.state) { (it.cutover as? Loadable.Ready)?.value?.state == "confirmed" }
-        val body = requests("POST").single().body.readUtf8()
-        assertTrue(body, body.contains("\"force\":true") && body.contains("\"confirm_name\":\"Kilimani\""))
-    }
-
-    @Test fun rollbackAndRouterRefusedMessage() = runTest(main.dispatcher) {
-        routes["GET /api/v1/sites/s1/cutover"] = cutover("awaiting_confirm")
-        routes["POST /api/v1/sites/s1/cutover/rollback"] = err(409, "router_refused", """{"router_error":"failure: no such item"}""")
-        val vm = cutoverVm()
-        await(vm.state) { it.cutover is Loadable.Ready }
-        vm.rollback()
+    @Test fun rollbackNowPostsAndRouterRefusedMessageIsShown() = runTest(main.dispatcher) {
+        routes["GET /api/v1/routers/s1/setup"] = job("verifying")
+        routes["POST /api/v1/routers/s1/setup/rollback"] = err(409, "router_refused", """{"router_error":"failure: no such item"}""")
+        val vm = jobVm()
+        await(vm.state) { it.setup is Loadable.Ready }
+        vm.rollbackNow()
         await(vm.state) { it.message != null }
         assertTrue(vm.state.value.message!!.contains("failure: no such item"))
+        assertEquals(1, requests("POST /api/v1/routers/s1/setup/rollback").size)
     }
 }

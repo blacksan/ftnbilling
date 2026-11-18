@@ -71,7 +71,7 @@ class NewDevicesViewModel(
     fun refresh() {
         _state.update { it.copy(refreshing = true) }
         viewModelScope.launch {
-            val ids = siteId?.let { listOf(it) } ?: apiResult { sites.sites() }.getOrNull()?.map { it.id }.orEmpty()
+            val ids = siteId?.let { listOf(it) } ?: apiResult { sites.sites() }.getOrNull()?.map { it.key }.orEmpty()
             // Best effort: one unreachable router must not stop the others or the reload.
             ids.forEach { apiResult { repo.refresh(it) } }
             fetch()
@@ -102,7 +102,7 @@ class NewDevicesViewModel(
         it.copy(
             sheet = DeviceSheet(
                 device = d,
-                selected = d.suggestedAccount?.let { s -> Account(id = s.id, code = s.code, flat = s.flat, siteId = d.siteId) },
+                selected = d.suggestedAccount?.let { s -> Account(id = s.id, code = s.code, flat = s.flat, siteId = d.routerKey) },
             ),
         )
     }
@@ -127,9 +127,9 @@ class NewDevicesViewModel(
 
     fun cancelDismiss() = _state.update { s -> s.sheet?.let { s.copy(sheet = it.copy(confirmDismiss = false)) } ?: s }
 
-    /** Accounts of the device's building, those without a MAC first (the likeliest targets). */
+    /** Accounts of the device's router, those without a MAC first (the likeliest targets). */
     suspend fun searchAccounts(q: String): List<Account> {
-        val site = _state.value.sheet?.device?.siteId ?: siteId
+        val site = _state.value.sheet?.device?.routerKey ?: siteId
         return accounts.list(siteId = site, query = q.ifBlank { null }, limit = 50).items
             .sortedWith(compareBy<Account> { it.mac.isNotBlank() }.thenBy { it.flat })
     }
@@ -137,14 +137,14 @@ class NewDevicesViewModel(
     fun attach() {
         val sh = _state.value.sheet ?: return
         val acc = sh.selected ?: return
-        run(sh, "MAC attached to flat ${acc.flat}") { repo.attach(sh.device.siteId, sh.device.mac, acc.id) }
+        run(sh, "MAC attached to flat ${acc.flat}") { repo.attach(sh.device.routerKey, sh.device.mac, acc.id) }
     }
 
     fun create() {
         val sh = _state.value.sheet ?: return
         if (sh.flat.isBlank()) return
         run(sh, "Flat ${sh.flat.trim()} created") {
-            repo.create(sh.device.siteId, sh.device.mac, sh.flat.trim(), sh.tenant.trim(), sh.phone.trim(), sh.packageId)
+            repo.create(sh.device.routerKey, sh.device.mac, sh.flat.trim(), sh.tenant.trim(), sh.phone.trim(), sh.packageId)
         }
     }
 
@@ -152,7 +152,7 @@ class NewDevicesViewModel(
         val sh = _state.value.sheet ?: return
         _state.update { it.copy(sheet = sh.copy(busy = true, error = null)) }
         viewModelScope.launch {
-            val r = apiResult { repo.dismiss(sh.device.siteId, sh.device.mac) }
+            val r = apiResult { repo.dismiss(sh.device.routerKey, sh.device.mac) }
             r.fold(
                 {
                     _state.update { it.copy(sheet = null, message = "Device dismissed") }
@@ -181,7 +181,7 @@ class NewDevicesViewModel(
                                 macOwner = if (api?.code == ErrorCode.MAC_IN_USE) api.macOwner else null,
                                 error = when {
                                     api?.code == ErrorCode.MAC_IN_USE && api.macOwner != null -> null
-                                    api?.code == ErrorCode.FLAT_IN_USE -> "Flat ${sh.flat.trim()} already exists in this building. Use Attach instead."
+                                    api?.code == ErrorCode.FLAT_IN_USE -> "Flat ${sh.flat.trim()} already exists on this router. Use Attach instead."
                                     else -> e.userMessage()
                                 },
                             ),

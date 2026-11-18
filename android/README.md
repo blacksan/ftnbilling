@@ -88,7 +88,7 @@ the tunnel (it fails closed). Connecting only works while the app is in the fore
 - [ ] VPN consent appears once; Connect reaches "Connected"; Admin loads and shows the dashboard.
 - [ ] Submit a POST form (CSRF token accepted).
 - [ ] A `confirm()` dialog (for example a delete) shows a native dialog and obeys Cancel/OK.
-- [ ] CSV export asks where to save and the file opens with the right rows (building cookie respected).
+- [ ] CSV export asks where to save and the file opens with the right rows (router selection respected).
 - [ ] Printing vouchers opens the system print dialog (top bar menu, Print).
 - [ ] Change the admin password in the web UI: the app asks to sign in; it does not lock you out.
 - [ ] Web logout: the app disconnects and locks (if app lock is on).
@@ -96,7 +96,7 @@ the tunnel (it fails closed). Connecting only works while the app is in the fore
 - [ ] Start another VPN app: the tunnel drops and the admin screen shows the reconnect panel.
 - [ ] App lock: biometric and device PIN; relock after the timeout; wipe offered after repeated failures.
 - [ ] Home screen: public and in-tunnel health; fleet card shows "server too old" until the summary
-      endpoint exists on the server, then the buildings list.
+      endpoint exists on the server, then the routers list.
 - [ ] Wipe app data returns to onboarding with the reminder to revoke the device on the server.
 
 ## Theme

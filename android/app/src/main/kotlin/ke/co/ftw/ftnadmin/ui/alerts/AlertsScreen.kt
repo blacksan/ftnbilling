@@ -43,7 +43,7 @@ import ke.co.ftw.ftnadmin.ui.common.vmFactory
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AlertsScreen(user: UserInfo, onSettings: () -> Unit) {
+fun AlertsScreen(user: UserInfo, onBack: () -> Unit) {
     val container = LocalContainer.current
     val vm: AlertsViewModel = viewModel(factory = vmFactory { AlertsViewModel(container.alerts) })
     val ui by vm.state.collectAsStateWithLifecycle()
@@ -56,7 +56,7 @@ fun AlertsScreen(user: UserInfo, onSettings: () -> Unit) {
     }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        topBar = { AppTopBar("Alerts", onSettings = onSettings) },
+        topBar = { AppTopBar("Alerts", onBack = onBack) },
         snackbarHost = { SnackbarHost(snack) },
     ) { inner ->
         when (val a = ui.alerts) {
@@ -73,13 +73,13 @@ fun AlertsScreen(user: UserInfo, onSettings: () -> Unit) {
                         item { Text("Nothing is wrong right now.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     }
                     items(a.value.active, key = { "a-" + it.key }) { al ->
-                        AlertCard(al, muted = a.value.mutes.any { it.siteId == al.siteId }, canMute = user.canWrite) { vm.openMute(al.siteId, al.siteName) }
+                        AlertCard(al, muted = a.value.mutes.any { it.routerKey == al.routerKey }, canMute = user.canWrite) { vm.openMute(al.routerKey, al.routerLabel) }
                     }
                     if (a.value.mutes.isNotEmpty()) {
-                        item { Text("Muted buildings", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground) }
-                        val names = (a.value.active + a.value.history).associate { it.siteId to it.siteName }
-                        items(a.value.mutes, key = { "m-" + it.siteId }) { m ->
-                            MuteRow(m, names[m.siteId]?.ifBlank { null } ?: m.siteId, user.canWrite) { vm.mute(m.siteId, 0) }
+                        item { Text("Muted routers", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground) }
+                        val names = (a.value.active + a.value.history).associate { it.routerKey to it.routerLabel }
+                        items(a.value.mutes, key = { "m-" + it.routerKey }) { m ->
+                            MuteRow(m, names[m.routerKey]?.ifBlank { null } ?: m.routerKey, user.canWrite) { vm.mute(m.routerKey, 0) }
                         }
                     }
                     if (a.value.history.isNotEmpty()) {
@@ -94,7 +94,7 @@ fun AlertsScreen(user: UserInfo, onSettings: () -> Unit) {
     ui.muteSite?.let { (siteId, name) ->
         AlertDialog(
             onDismissRequest = vm::dismissMute,
-            title = { Text("Mute alerts for ${name.ifBlank { "this building" }}") },
+            title = { Text("Mute alerts for ${name.ifBlank { "this router" }}") },
             text = {
                 Column {
                     MUTE_CHOICES.forEach { (min, label) ->
@@ -116,10 +116,10 @@ private fun AlertCard(a: Alert, muted: Boolean, canMute: Boolean, onMute: () -> 
                 Text(a.label.ifBlank { a.rule }, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f).padding(end = 8.dp))
                 if (muted) StatusChip("Muted", Tone.Neutral) else StatusChip(a.state.ifBlank { "open" }, Tone.Warn)
             }
-            if (a.siteName.isNotBlank()) Text(a.siteName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+            if (a.routerLabel.isNotBlank()) Text(a.routerLabel, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
             if (a.detail.isNotBlank()) Text(a.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("Since ${formatDateTime(a.since)} (${formatAge(a.since)})", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (canMute && a.siteId.isNotBlank() && !muted) TextButton(onClick = onMute) { Text("Mute this building") }
+            if (canMute && a.routerKey.isNotBlank() && !muted) TextButton(onClick = onMute) { Text("Mute this router") }
         }
     }
 }

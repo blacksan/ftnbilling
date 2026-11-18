@@ -1,4 +1,4 @@
-package ke.co.ftw.ftnadmin.ui.buildings
+package ke.co.ftw.ftnadmin.ui.routers
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -15,14 +15,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-data class BuildingsUiState(
+data class RoutersUiState(
     val sites: Loadable<List<Site>> = Loadable.Loading,
     val refreshing: Boolean = false,
 )
 
-class BuildingsViewModel(private val repo: SitesRepository) : ViewModel() {
-    private val _state = MutableStateFlow(BuildingsUiState())
-    val state: StateFlow<BuildingsUiState> = _state.asStateFlow()
+class RoutersViewModel(private val repo: SitesRepository) : ViewModel() {
+    private val _state = MutableStateFlow(RoutersUiState())
+    val state: StateFlow<RoutersUiState> = _state.asStateFlow()
 
     init {
         load(initial = true)
@@ -38,8 +38,8 @@ class BuildingsViewModel(private val repo: SitesRepository) : ViewModel() {
             val r = apiResult { repo.sites() }
             _state.update { cur ->
                 r.fold(
-                    { l -> BuildingsUiState(Loadable.Ready(l.sortedWith(compareBy<Site> { it.online }.thenBy { it.name }))) },
-                    { e -> if (cur.sites is Loadable.Ready) cur.copy(refreshing = false) else BuildingsUiState(Loadable.Failed(e.userMessage())) },
+                    { l -> RoutersUiState(Loadable.Ready(l.sortedWith(compareBy<Site> { it.online }.thenBy { it.label.lowercase() }))) },
+                    { e -> if (cur.sites is Loadable.Ready) cur.copy(refreshing = false) else RoutersUiState(Loadable.Failed(e.userMessage())) },
                 )
             }
         }
@@ -48,7 +48,7 @@ class BuildingsViewModel(private val repo: SitesRepository) : ViewModel() {
 
 val QOE_PERIODS = listOf("24h", "7d", "30d")
 
-data class BuildingDetailUiState(
+data class RouterDetailUiState(
     val site: Loadable<Site> = Loadable.Loading,
     val onts: Loadable<List<Ont>> = Loadable.Loading,
     val qoe: Loadable<Qoe> = Loadable.Loading,
@@ -56,9 +56,9 @@ data class BuildingDetailUiState(
     val refreshing: Boolean = false,
 )
 
-class BuildingDetailViewModel(private val id: String, private val repo: SitesRepository) : ViewModel() {
-    private val _state = MutableStateFlow(BuildingDetailUiState())
-    val state: StateFlow<BuildingDetailUiState> = _state.asStateFlow()
+class RouterDetailViewModel(private val id: String, private val repo: SitesRepository) : ViewModel() {
+    private val _state = MutableStateFlow(RouterDetailUiState())
+    val state: StateFlow<RouterDetailUiState> = _state.asStateFlow()
 
     init {
         loadAll(initial = true)

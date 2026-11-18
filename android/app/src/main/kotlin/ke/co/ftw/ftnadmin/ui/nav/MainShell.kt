@@ -1,27 +1,26 @@
 package ke.co.ftw.ftnadmin.ui.nav
 
-import android.net.Uri
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBox
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.font.FontWeight
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -29,63 +28,53 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.toRoute
 import ke.co.ftw.ftnadmin.core.network.UserInfo
-import androidx.navigation.NavType
-import androidx.navigation.navArgument
 import ke.co.ftw.ftnadmin.ui.alerts.AlertsScreen
-import ke.co.ftw.ftnadmin.ui.buildings.BuildingDetailScreen
-import ke.co.ftw.ftnadmin.ui.buildings.BuildingsScreen
-import ke.co.ftw.ftnadmin.ui.buildings.setup.CutoverScreen
-import ke.co.ftw.ftnadmin.ui.buildings.setup.SetupScreen
+import ke.co.ftw.ftnadmin.ui.common.LocalContainer
 import ke.co.ftw.ftnadmin.ui.customers.CustomerDetailScreen
 import ke.co.ftw.ftnadmin.ui.customers.CustomersScreen
-import ke.co.ftw.ftnadmin.ui.dashboard.DashboardScreen
+import ke.co.ftw.ftnadmin.ui.customers.add.AddCustomerScreen
+import ke.co.ftw.ftnadmin.ui.home.HomeScreen
+import ke.co.ftw.ftnadmin.ui.more.AddRouterScreen
+import ke.co.ftw.ftnadmin.ui.more.JoinCommandScreen
+import ke.co.ftw.ftnadmin.ui.more.MoreScreen
+import ke.co.ftw.ftnadmin.ui.network.NetworkScreen
 import ke.co.ftw.ftnadmin.ui.newdevices.NewDevicesScreen
 import ke.co.ftw.ftnadmin.ui.payments.PaymentFilter
 import ke.co.ftw.ftnadmin.ui.payments.PaymentsScreen
+import ke.co.ftw.ftnadmin.ui.routers.RouterDetailScreen
+import ke.co.ftw.ftnadmin.ui.routers.RoutersScreen
+import ke.co.ftw.ftnadmin.ui.routers.setup.SetupJobScreen
+import ke.co.ftw.ftnadmin.ui.routers.setup.SetupScreen
 import ke.co.ftw.ftnadmin.ui.settings.SettingsScreen
+import kotlin.reflect.KClass
 
-object Routes {
-    const val DASHBOARD = "dashboard"
-    const val CUSTOMERS = "customers"
-    const val PAYMENTS = "payments"
-    const val BUILDINGS = "buildings"
-    const val ALERTS = "alerts"
-    const val SETTINGS = "settings"
-    const val PAYMENTS_UNMATCHED = "payments/unmatched"
-    const val CUSTOMER_PATTERN = "customer/{id}"
-    const val BUILDING_PATTERN = "building/{id}"
-    const val SETUP_PATTERN = "building/{id}/setup"
-    const val CUTOVER_PATTERN = "building/{id}/cutover"
-    const val NEW_DEVICES_PATTERN = "newdevices?site={site}"
-
-    fun customer(id: String) = "customer/${Uri.encode(id)}"
-
-    fun building(id: String) = "building/${Uri.encode(id)}"
-
-    fun setup(id: String) = "building/${Uri.encode(id)}/setup"
-
-    fun cutover(id: String) = "building/${Uri.encode(id)}/cutover"
-
-    fun newDevices(siteId: String?) = if (siteId == null) "newdevices" else "newdevices?site=${Uri.encode(siteId)}"
+private enum class Tab(val route: Any, val type: KClass<*>, val label: String, val icon: ImageVector) {
+    Home(HomeRoute, HomeRoute::class, "Home", Icons.Default.Home),
+    Network(NetworkRoute, NetworkRoute::class, "Network", Icons.Default.Share),
+    Customers(CustomersRoute, CustomersRoute::class, "Customers", Icons.Default.Person),
+    Payments(PaymentsRoute(), PaymentsRoute::class, "Payments", Icons.Default.AccountBox),
+    More(MoreRoute, MoreRoute::class, "More", Icons.Default.Menu),
 }
 
-private enum class Tab(val route: String, val label: String, val icon: ImageVector) {
-    Dashboard(Routes.DASHBOARD, "Home", Icons.Default.Home),
-    Customers(Routes.CUSTOMERS, "Customers", Icons.Default.Person),
-    Payments(Routes.PAYMENTS, "Payments", Icons.Default.AccountBox),
-    Buildings(Routes.BUILDINGS, "Buildings", Icons.Default.Place),
-    Alerts(Routes.ALERTS, "Alerts", Icons.Default.Notifications),
-}
-
-/** Adaptive shell: bottom bar on phones, rail from 600 dp wide. */
+/** Adaptive shell: NavigationSuiteScaffold gives a bottom bar on phones and a rail from 600 dp wide. */
 @Composable
 fun MainShell(user: UserInfo) {
+    val container = LocalContainer.current
+    LaunchedEffect(Unit) { container.routerContext.refresh() }
+
     val nav = rememberNavController()
     val entry by nav.currentBackStackEntryAsState()
-    val current = entry?.destination
-    val showBars = Tab.entries.any { t -> current?.hierarchy?.any { it.route == t.route } == true }
+    val destination = entry?.destination
+    fun isSelected(t: Tab) = destination?.hierarchy?.any { it.hasRoute(t.type) } == true
+    val showBars = Tab.entries.any(::isSelected)
     val wide = LocalConfiguration.current.screenWidthDp >= 600
+    val layout = when {
+        !showBars -> NavigationSuiteType.None
+        wide -> NavigationSuiteType.NavigationRail
+        else -> NavigationSuiteType.NavigationBar
+    }
 
     fun go(tab: Tab) = nav.navigate(tab.route) {
         popUpTo(nav.graph.findStartDestination().id) { saveState = true }
@@ -93,109 +82,132 @@ fun MainShell(user: UserInfo) {
         restoreState = true
     }
 
-    Row(Modifier.fillMaxSize()) {
-        if (wide && showBars) {
-            NavigationRail {
-                Tab.entries.forEach { t ->
-                    NavigationRailItem(
-                        selected = current?.hierarchy?.any { it.route == t.route } == true,
-                        onClick = { go(t) },
-                        icon = { Icon(t.icon, contentDescription = null) },
-                        label = { Text(t.label) },
-                    )
-                }
+    NavigationSuiteScaffold(
+        navigationSuiteItems = {
+            Tab.entries.forEach { t ->
+                val selected = isSelected(t)
+                item(
+                    selected = selected,
+                    onClick = { go(t) },
+                    icon = { Icon(t.icon, contentDescription = null) },
+                    label = { Text(t.label, fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium, maxLines = 1) },
+                )
             }
-        }
-        Column(Modifier.weight(1f)) {
-            Box(Modifier.weight(1f)) { Destinations(nav, user) }
-            if (!wide && showBars) {
-                NavigationBar {
-                    Tab.entries.forEach { t ->
-                        NavigationBarItem(
-                            selected = current?.hierarchy?.any { it.route == t.route } == true,
-                            onClick = { go(t) },
-                            icon = { Icon(t.icon, contentDescription = null) },
-                            label = { Text(t.label) },
-                        )
-                    }
-                }
-            }
-        }
+        },
+        layoutType = layout,
+        containerColor = MaterialTheme.colorScheme.background,
+    ) {
+        Box(Modifier.fillMaxSize()) { Destinations(nav, user) }
     }
 }
 
 @Composable
 private fun Destinations(nav: NavHostController, user: UserInfo) {
-    val openSettings = { nav.navigate(Routes.SETTINGS) }
-    val openAccount = { id: String -> nav.navigate(Routes.customer(id)) }
-    NavHost(nav, startDestination = Routes.DASHBOARD) {
-        composable(Routes.DASHBOARD) {
-            DashboardScreen(
-                onSettings = openSettings,
-                onNewDevices = { nav.navigate(Routes.newDevices(null)) },
-                onUnmatchedPayments = { nav.navigate(Routes.PAYMENTS_UNMATCHED) },
-                onAlerts = { nav.navigate(Routes.ALERTS) { launchSingleTop = true } },
+    val openAlerts = { nav.navigate(AlertsRoute) { launchSingleTop = true } }
+    val openAccount = { id: String -> nav.navigate(CustomerRoute(id)) }
+    NavHost(nav, startDestination = HomeRoute) {
+        composable<HomeRoute> {
+            HomeScreen(
+                user = user,
+                onAlerts = openAlerts,
+                onSetup = { nav.navigate(SetupJobRoute(it)) },
+                onRouter = { nav.navigate(RouterRoute(it)) },
+                onExpiring = { nav.navigate(CustomersRoute) { launchSingleTop = true } },
+                onNewDevices = { nav.navigate(NewDevicesRoute()) },
+                onUnmatchedPayments = { nav.navigate(PaymentsRoute(unmatched = true)) },
             )
         }
-        composable(Routes.CUSTOMERS) { CustomersScreen(onSettings = openSettings, onOpen = openAccount) }
-        composable(Routes.PAYMENTS) { PaymentsScreen(user, onSettings = openSettings) }
-        composable(Routes.PAYMENTS_UNMATCHED) { PaymentsScreen(user, onSettings = openSettings, initialFilter = PaymentFilter.Unmatched) }
-        composable(Routes.BUILDINGS) { BuildingsScreen(onSettings = openSettings, onOpen = { nav.navigate(Routes.building(it)) }) }
-        composable(Routes.ALERTS) { AlertsScreen(user, onSettings = openSettings) }
-        composable(Routes.SETTINGS) { SettingsScreen(onBack = { nav.popBackStack() }) }
-        composable(
-            Routes.CUSTOMER_PATTERN,
-            arguments = listOf(navArgument("id") { type = NavType.StringType }),
-        ) { e ->
+        composable<NetworkRoute> {
+            NetworkScreen(
+                user = user,
+                onAlerts = openAlerts,
+                onOpenCustomer = openAccount,
+                onCreateCustomer = { routerId, mac -> nav.navigate(AddCustomerRoute(routerId, mac)) },
+            )
+        }
+        composable<CustomersRoute> {
+            CustomersScreen(
+                user = user,
+                onAlerts = openAlerts,
+                onOpen = openAccount,
+                onAdd = { nav.navigate(AddCustomerRoute()) },
+            )
+        }
+        composable<PaymentsRoute> { e ->
+            val r = e.toRoute<PaymentsRoute>()
+            PaymentsScreen(user, onAlerts = openAlerts, initialFilter = if (r.unmatched) PaymentFilter.Unmatched else PaymentFilter.All)
+        }
+        composable<MoreRoute> {
+            MoreScreen(
+                user = user,
+                onAlerts = openAlerts,
+                onSetupChecks = { nav.navigate(SetupRoute(it)) },
+                onSetupJob = { nav.navigate(SetupJobRoute(it)) },
+                onJoin = { nav.navigate(JoinCommandRoute(it)) },
+                onRouters = { nav.navigate(RoutersRoute) },
+                onAlertList = { nav.navigate(AlertsRoute) },
+                onSettings = { nav.navigate(SettingsRoute) },
+            )
+        }
+        composable<CustomerRoute> { e ->
             CustomerDetailScreen(
-                id = e.arguments?.getString("id").orEmpty(),
+                id = e.toRoute<CustomerRoute>().id,
                 user = user,
                 onBack = { nav.popBackStack() },
                 onOpenOther = openAccount,
             )
         }
-        composable(
-            Routes.BUILDING_PATTERN,
-            arguments = listOf(navArgument("id") { type = NavType.StringType }),
-        ) { e ->
-            BuildingDetailScreen(
-                id = e.arguments?.getString("id").orEmpty(),
+        composable<AddCustomerRoute> { e ->
+            val r = e.toRoute<AddCustomerRoute>()
+            AddCustomerScreen(
+                routerId = r.routerId,
+                mac = r.mac,
                 onBack = { nav.popBackStack() },
-                onNewDevices = { nav.navigate(Routes.newDevices(it)) },
                 onOpenAccount = openAccount,
-                onSetup = { nav.navigate(Routes.setup(it)) },
-                onCutover = { nav.navigate(Routes.cutover(it)) },
             )
         }
-        composable(
-            Routes.SETUP_PATTERN,
-            arguments = listOf(navArgument("id") { type = NavType.StringType }),
-        ) { e ->
-            val id = e.arguments?.getString("id").orEmpty()
-            SetupScreen(id, user, onBack = { nav.popBackStack() }, onCutover = { nav.navigate(Routes.cutover(id)) })
+        composable<RoutersRoute> {
+            RoutersScreen(
+                user = user,
+                onBack = { nav.popBackStack() },
+                onOpen = { nav.navigate(RouterRoute(it)) },
+                onAdd = { nav.navigate(AddRouterRoute) },
+            )
         }
-        composable(
-            Routes.CUTOVER_PATTERN,
-            arguments = listOf(navArgument("id") { type = NavType.StringType }),
-        ) { e ->
-            CutoverScreen(e.arguments?.getString("id").orEmpty(), user, onBack = { nav.popBackStack() })
+        composable<RouterRoute> { e ->
+            val id = e.toRoute<RouterRoute>().id
+            RouterDetailScreen(
+                id = id,
+                onBack = { nav.popBackStack() },
+                onNewDevices = { nav.navigate(NewDevicesRoute(it)) },
+                onOpenAccount = openAccount,
+                onSetup = { nav.navigate(SetupRoute(it)) },
+                onSetupJob = { nav.navigate(SetupJobRoute(it)) },
+            )
         }
-        composable(
-            Routes.NEW_DEVICES_PATTERN,
-            arguments = listOf(
-                navArgument("site") {
-                    type = NavType.StringType
-                    nullable = true
-                    defaultValue = null
-                },
-            ),
-        ) { e ->
+        composable<AddRouterRoute> {
+            AddRouterScreen(onBack = { nav.popBackStack() }, onOpenSetup = { nav.navigate(SetupJobRoute(it)) })
+        }
+        composable<SetupRoute> { e ->
+            val id = e.toRoute<SetupRoute>().id
+            SetupScreen(id, user, onBack = { nav.popBackStack() }, onStatus = { nav.navigate(SetupJobRoute(id)) })
+        }
+        composable<SetupJobRoute> { e ->
+            val id = e.toRoute<SetupJobRoute>().id
+            SetupJobScreen(id, user, onBack = { nav.popBackStack() }, onJoin = { nav.navigate(JoinCommandRoute(id)) })
+        }
+        composable<JoinCommandRoute> { e ->
+            JoinCommandScreen(e.toRoute<JoinCommandRoute>().id, user, onBack = { nav.popBackStack() })
+        }
+        composable<NewDevicesRoute> { e ->
             NewDevicesScreen(
-                siteId = e.arguments?.getString("site"),
+                siteId = e.toRoute<NewDevicesRoute>().routerId,
                 user = user,
                 onBack = { nav.popBackStack() },
                 onOpenAccount = openAccount,
             )
         }
+        composable<AlertsRoute> { AlertsScreen(user, onBack = { nav.popBackStack() }) }
+        composable<SettingsRoute> { SettingsScreen(onBack = { nav.popBackStack() }) }
     }
 }

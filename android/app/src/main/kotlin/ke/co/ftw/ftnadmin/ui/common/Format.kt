@@ -77,3 +77,31 @@ fun formatExpiry(s: String?, now: Instant = Instant.now()): String {
         "${formatDateTime(s)} (${formatAge(s, now)})"
     }
 }
+
+/** Number and unit apart, for big-number cards: 1_234_000 -> ("1.2", "Mbps"). */
+fun splitBps(bps: Long): Pair<String, String> {
+    if (bps < 1000) return bps.toString() to "bps"
+    val units = arrayOf("kbps", "Mbps", "Gbps")
+    var v = bps / 1000.0
+    var i = 0
+    while (v >= 1000 && i < units.lastIndex) {
+        v /= 1000
+        i++
+    }
+    return String.format(Locale.US, if (v >= 100) "%.0f" else "%.1f", v) to units[i]
+}
+
+/** "3d 4h", "5h 12m" or "42m". */
+fun formatUptime(seconds: Long): String {
+    val s = seconds.coerceAtLeast(0)
+    val d = s / 86_400
+    val h = (s % 86_400) / 3600
+    val m = (s % 3600) / 60
+    return when {
+        d > 0 -> "${d}d ${h}h"
+        h > 0 -> "${h}h ${m}m"
+        else -> "${m}m"
+    }
+}
+
+fun formatPct(pct: Double): String = String.format(Locale.US, if (pct >= 10) "%.0f" else "%.1f", pct)

@@ -1,11 +1,15 @@
 package ke.co.ftw.ftnadmin.ui.common
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.FilterChip
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
-import ke.co.ftw.ftnadmin.ui.dashboard.AttentionItem
-import ke.co.ftw.ftnadmin.ui.dashboard.AttentionTiles
 import ke.co.ftw.ftnadmin.ui.theme.AppTheme
 
 // Check these at font scale 1.0 and 1.3 in Android Studio: nothing may wrap letter by letter.
@@ -32,24 +36,21 @@ private fun ChipsNormal() = ChipsSample()
 private fun ChipsLarge() = ChipsSample()
 
 @Composable
-private fun TilesSample() {
+private fun CardsSample() {
     AppTheme {
         Surface {
-            AttentionTiles(
-                listOf(
-                    AttentionItem("New devices", "New devices", 3, {}),
-                    AttentionItem("Unmatched", "Unmatched payments", 0, {}),
-                    AttentionItem("Alerts", "Open alerts", 12, {}),
-                ),
-            )
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                StatCard("Throughput", "123.4", Modifier.fillMaxWidth(), unit = "Mbps", sub = "Up 22.1 Mbps", tone = CardTone.Brand, spark = listOf(1.0, 3.0, 2.0, 5.0, 4.0))
+                StatCard("Online flats", "27", Modifier.fillMaxWidth(), unit = "of 40", tone = CardTone.Feature)
+            }
         }
     }
 }
 
 @Preview(widthDp = 360, fontScale = 1.0f, showBackground = true)
 @Composable
-private fun TilesNormal() = TilesSample()
+private fun CardsNormal() = CardsSample()
 
 @Preview(widthDp = 360, fontScale = 1.5f, showBackground = true)
 @Composable
-private fun TilesLarge() = TilesSample()
+private fun CardsLarge() = CardsSample()

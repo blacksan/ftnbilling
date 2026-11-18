@@ -26,7 +26,7 @@ object ErrorCode {
     const val RATE_LIMITED = "rate_limited"
     const val DB_UNAVAILABLE = "db_unavailable"
 
-    /** 503: the server cannot reach the building's router (tunnel down, router off). */
+    /** 503: the server cannot reach the router (tunnel down, router off). */
     const val ROUTER_UNREACHABLE = "router_unreachable"
 
     /** 409: the router answered but refused the change; `details.router_error` says why. */
@@ -88,8 +88,8 @@ class ApiError(
                 accountId = s(acc, "id"),
                 code = s(acc, "code"),
                 flat = s(acc, "flat"),
-                siteId = s(acc, "site_id"),
-                siteName = s(acc, "site_name"),
+                siteId = s(acc, "router_id").ifBlank { s(acc, "site_id") },
+                siteName = s(acc, "router_name").ifBlank { s(acc, "site_name") },
             )
         }
 

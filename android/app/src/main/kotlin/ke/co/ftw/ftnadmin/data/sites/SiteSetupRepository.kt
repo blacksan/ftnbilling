@@ -15,46 +15,56 @@ import kotlinx.serialization.json.put
 class SiteSetupRepository(private val api: ApiClient) {
     /** [fresh] bypasses the server's 15 s cache (`?fresh=1`). */
     suspend fun checks(siteId: String, fresh: Boolean = false): Checks =
-        api.get("sites", siteId, "checks", query = mapOf("fresh" to if (fresh) "1" else null))
+        api.get("routers", siteId, "checks", query = mapOf("fresh" to if (fresh) "1" else null))
 
     suspend fun fix(siteId: String, checkId: String, confirm: Boolean): FixResult = api.post(
-        "sites", siteId, "checks", checkId, "fix",
+        "routers", siteId, "checks", checkId, "fix",
         body = buildJsonObject { if (confirm) put("confirm", true) },
     )
 
     /** 409 `bad_state` when the router looks like it is in another mode and [override] is false. */
     suspend fun setMode(siteId: String, mode: String, override: Boolean = false): Site = api.put(
-        "sites", siteId, "mode",
+        "routers", siteId, "mode",
         body = buildJsonObject {
             put("mode", mode)
             put("override", override)
         },
     )
 
-    suspend fun joinCommand(siteId: String): JoinCommand = api.post("sites", siteId, "join-command")
+    suspend fun joinCommand(siteId: String): JoinCommand = api.post("routers", siteId, "join-command")
 
-    suspend fun cutover(siteId: String): Cutover = api.get("sites", siteId, "cutover")
+    /** The automatic provisioning job for this router (poll while [SetupState.isLive]). */
+    suspend fun setup(routerId: String): RouterSetup = api.get("routers", routerId, "setup")
 
-    suspend fun startCutover(siteId: String, confirmName: String, keepUnknown: Boolean): Cutover = api.post(
-        "sites", siteId, "cutover", "start",
+    /** Retry or kick the automatic job. */
+    suspend fun runSetup(routerId: String): RouterSetup = api.post("routers", routerId, "setup", "run")
+
+    /** The single "Start migration" button for a router that is already serving customers. */
+    suspend fun migrate(routerId: String, confirmName: String, keepUnknown: Boolean): RouterSetup = api.post(
+        "routers", routerId, "setup", "migrate",
         body = buildJsonObject {
             put("confirm_name", confirmName)
             put("keep_unknown", keepUnknown)
         },
     )
 
-    suspend fun confirmCutover(siteId: String, force: Boolean, confirmName: String?): Cutover = api.post(
-        "sites", siteId, "cutover", "confirm",
-        body = buildJsonObject {
-            put("force", force)
-            if (force && confirmName != null) put("confirm_name", confirmName)
-        },
+    /** Emergency only: the router returns to hotspot mode within about 30 s. */
+    suspend fun rollback(routerId: String): RouterSetup = api.post("routers", routerId, "setup", "rollback")
+
+    /** Fresh read of every check (operator). */
+    suspend fun recheck(routerId: String): Checks = api.post("routers", routerId, "actions", "recheck")
+
+    /** Re-applies every account to the router (202, runs in the background). */
+    suspend fun resync(routerId: String) = api.send("POST", "routers", routerId, "actions", "resync")
+
+    /** Owner only. 409 `bad_state` while a job runs; the server also limits this to 1 per 10 minutes per router. */
+    suspend fun reboot(routerId: String, confirmName: String) = api.send(
+        "POST", "routers", routerId, "actions", "reboot",
+        body = buildJsonObject { put("confirm_name", confirmName) },
     )
 
-    suspend fun rollbackCutover(siteId: String): Cutover = api.post("sites", siteId, "cutover", "rollback")
-
     suspend fun testFlat(siteId: String, mac: String, packageId: String): Account = api.post(
-        "sites", siteId, "bench", "test-flat",
+        "routers", siteId, "bench", "test-flat",
         body = buildJsonObject {
             put("mac", mac)
             put("package_id", packageId)
@@ -62,7 +72,7 @@ class SiteSetupRepository(private val api: ApiClient) {
     )
 
     suspend fun suspendTest(siteId: String, accountId: String): SuspendTest = api.post(
-        "sites", siteId, "bench", "suspend-test",
+        "routers", siteId, "bench", "suspend-test",
         body = buildJsonObject { put("account_id", accountId) },
     )
 }

@@ -104,17 +104,49 @@ data class JoinCommand(
     @SerialName("expires_at") val expiresAt: String = "",
 )
 
-object CutoverState {
-    const val IDLE = "idle"
-    const val RUNNING = "running"
-    const val AWAITING_CONFIRM = "awaiting_confirm"
-    const val CONFIRMED = "confirmed"
+/** Job states of the router provisioning job (release plan section 2.2). Unknown states are treated as "working". */
+object SetupState {
+    const val WAITING_ROUTER = "waiting_router"
+    const val CHECKING = "checking"
+    const val FIXING = "fixing"
+    const val NEEDS_ACTION = "needs_action"
+    const val STAGING = "staging"
+    const val BUILDING = "building"
+    const val READY = "ready"
+    const val ARMING = "arming"
+    const val SWITCHING = "switching"
+    const val VERIFYING = "verifying"
+    const val LIVE = "live"
     const val ROLLING_BACK = "rolling_back"
     const val ROLLED_BACK = "rolled_back"
     const val FAILED = "failed"
 
-    /** States in which the server is still working or waiting on a person: the app polls. */
-    fun isLive(state: String) = state == RUNNING || state == AWAITING_CONFIRM || state == ROLLING_BACK
+    private val settled = setOf("", "idle", NEEDS_ACTION, READY, LIVE, ROLLED_BACK, FAILED, "confirmed")
+
+    /** States in which the server is still working on its own: the app polls. */
+    fun isLive(state: String) = state !in settled
+
+    /** States after the old setup has been touched, where an emergency rollback makes sense. */
+    fun canRollBack(state: String) = state == ARMING || state == SWITCHING || state == VERIFYING
+
+    fun label(state: String) = when (state) {
+        WAITING_ROUTER -> "Waiting for the router"
+        CHECKING -> "Checking"
+        FIXING -> "Fixing"
+        NEEDS_ACTION -> "Needs your action"
+        STAGING -> "Preparing"
+        BUILDING -> "Building the network"
+        READY -> "Ready to migrate"
+        ARMING -> "Arming the safety net"
+        SWITCHING -> "Switching over"
+        VERIFYING -> "Verifying"
+        LIVE -> "Live"
+        ROLLING_BACK -> "Rolling back"
+        ROLLED_BACK -> "Rolled back"
+        FAILED -> "Failed"
+        "", "idle" -> "Not started"
+        else -> state.replace('_', ' ').replaceFirstChar { it.uppercase() }
+    }
 }
 
 @Serializable
@@ -128,24 +160,46 @@ data class Step(
 )
 
 @Serializable
-data class CutoverEvidence(
+data class SetupEvidence(
     @SerialName("tunnel_up") val tunnelUp: Boolean = false,
-    @SerialName("flats_bound") val flatsBound: Int = 0,
-    @SerialName("flats_entitled") val flatsEntitled: Int = 0,
     @SerialName("internet_ok") val internetOk: Boolean = false,
+    @SerialName("flats_required") val flatsRequired: Int = 0,
+    @SerialName("flats_bound") val flatsBound: Int = 0,
 )
 
 @Serializable
-data class Cutover(
-    val state: String = CutoverState.IDLE,
-    val method: String = "server",
-    @SerialName("started_at") val startedAt: String? = null,
+data class NextAction(
+    /** paste_join, press_button, fix, migrate, retry or none. */
+    val kind: String = "none",
+    val text: String = "",
+    @SerialName("check_id") val checkId: String = "",
+)
+
+@Serializable
+data class SetupJoin(
+    val state: String = "none",
+    @SerialName("expires_at") val expiresAt: String? = null,
+    val report: JoinReport? = null,
+)
+
+/** `GET /routers/{id}/setup`: the whole automatic job in one view. No manual confirm exists (amendment A1). */
+@Serializable
+data class RouterSetup(
+    @SerialName("router_id") val routerId: String = "",
+    val state: String = "",
+    /** fresh, migrate or empty. */
+    val kind: String = "",
+    @SerialName("serving_customers") val servingCustomers: Boolean = false,
+    @SerialName("auto_start") val autoStart: Boolean = false,
+    val join: SetupJoin = SetupJoin(),
+    @SerialName("next_action") val nextAction: NextAction = NextAction(),
+    val steps: List<Step> = emptyList(),
+    val checks: ChecksSummary = ChecksSummary(),
+    val blockers: List<String> = emptyList(),
+    @SerialName("live_devices") val liveDevices: Int = 0,
+    val evidence: SetupEvidence = SetupEvidence(),
     @SerialName("deadline_at") val deadlineAt: String? = null,
     @SerialName("seconds_left") val secondsLeft: Int = 0,
-    val steps: List<Step> = emptyList(),
-    val evidence: CutoverEvidence = CutoverEvidence(),
-    @SerialName("can_confirm") val canConfirm: Boolean = false,
-    val blockers: List<String> = emptyList(),
     @SerialName("last_error") val lastError: String = "",
 )
 

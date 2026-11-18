@@ -58,6 +58,8 @@ data class Account(
     val code: String = "",
     @SerialName("site_id") val siteId: String = "",
     @SerialName("site_name") val siteName: String = "",
+    @SerialName("router_id") val routerId: String = "",
+    @SerialName("router_name") val routerName: String = "",
     val flat: String = "",
     val floor: String = "",
     val mac: String = "",
@@ -78,6 +80,9 @@ data class Account(
     val events: List<AccountEvent> = emptyList(),
     val usage: Usage? = null,
 ) {
+    /** v4 servers send router_id; older ones only site_id. */
+    val routerKey: String get() = routerId.ifBlank { siteId }
+    val routerLabel: String get() = routerName.ifBlank { siteName }
     val title: String get() = listOf(flat, tenant).filter { it.isNotBlank() }.joinToString(" - ").ifBlank { code }
 }
 
@@ -95,6 +100,8 @@ data class ServicePackage(
 data class Payment(
     val key: String = "",
     @SerialName("site_id") val siteId: String = "",
+    @SerialName("router_id") val routerId: String = "",
+    @SerialName("router_name") val routerName: String = "",
     val method: String = "",
     val status: String = "",
     @SerialName("amount_kes") val amountKes: Long = 0,
@@ -109,6 +116,9 @@ data class Payment(
     @SerialName("paid_at") val paidAt: String? = null,
     @SerialName("created_at") val createdAt: String = "",
 ) {
+    val routerKey: String get() = routerId.ifBlank { siteId }
+    val routerLabel: String get() = routerName
+
     /** Server statuses: matched, unmatched, refunded, ignored. */
     val isUnmatched: Boolean get() = status == "unmatched"
 }
@@ -180,6 +190,9 @@ data class Provision(
 data class Site(
     val id: String = "",
     val name: String = "",
+    @SerialName("router_id") val routerId: String = "",
+    @SerialName("router_name") val routerName: String = "",
+    @SerialName("setup_state") val setupState: String = "",
     @SerialName("access_mode") val accessMode: String = "hotspot",
     val online: Boolean = false,
     val cause: String = "",
@@ -188,7 +201,11 @@ data class Site(
     @SerialName("open_alerts") val openAlerts: Int = 0,
     val provision: Provision? = null,
     @SerialName("uptime_30d_pct") val uptime30dPct: Double? = null,
-)
+) {
+    /** The router's id: `router_id` when the server sends it, else the older `id`. */
+    val key: String get() = routerId.ifBlank { id }
+    val label: String get() = routerName.ifBlank { name }
+}
 
 @Serializable
 data class WanStats(
@@ -240,16 +257,24 @@ data class Alert(
     val label: String = "",
     @SerialName("site_id") val siteId: String = "",
     @SerialName("site_name") val siteName: String = "",
+    @SerialName("router_id") val routerId: String = "",
+    @SerialName("router_name") val routerName: String = "",
     val state: String = "",
     val since: String = "",
     val detail: String = "",
-)
+) {
+    val routerKey: String get() = routerId.ifBlank { siteId }
+    val routerLabel: String get() = routerName.ifBlank { siteName }
+}
 
 @Serializable
 data class AlertMute(
     @SerialName("site_id") val siteId: String = "",
+    @SerialName("router_id") val routerId: String = "",
     val until: String = "",
-)
+) {
+    val routerKey: String get() = routerId.ifBlank { siteId }
+}
 
 @Serializable
 data class Alerts(
@@ -278,11 +303,13 @@ data class SuggestedAccount(
     val flat: String = "",
 )
 
-/** A MAC that is connected to a building's network but not configured on any account. */
+/** A MAC that is connected to a router's network but not configured on any account. */
 @Serializable
 data class NewDevice(
     @SerialName("site_id") val siteId: String = "",
     @SerialName("site_name") val siteName: String = "",
+    @SerialName("router_id") val routerId: String = "",
+    @SerialName("router_name") val routerName: String = "",
     val mac: String = "",
     val vendor: String = "",
     @SerialName("host_name") val hostName: String = "",
@@ -295,4 +322,7 @@ data class NewDevice(
     @SerialName("suggested_account") val suggestedAccount: SuggestedAccount? = null,
     /** Name of the router hotspot user holding this MAC when the server has no account for it. */
     @SerialName("router_user") val routerUser: String = "",
-)
+) {
+    val routerKey: String get() = routerId.ifBlank { siteId }
+    val routerLabel: String get() = routerName.ifBlank { siteName }
+}

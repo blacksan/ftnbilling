@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
@@ -20,7 +21,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -28,11 +29,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ke.co.ftw.ftnadmin.domain.Account
-import ke.co.ftw.ftnadmin.ui.common.AppTopBar
+import ke.co.ftw.ftnadmin.core.network.UserInfo
+import ke.co.ftw.ftnadmin.ui.common.TabScaffold
 import ke.co.ftw.ftnadmin.ui.common.CenteredLoading
 import ke.co.ftw.ftnadmin.ui.common.ChipLabel
 import ke.co.ftw.ftnadmin.ui.common.ChipRow
@@ -61,9 +64,11 @@ fun accountStateLabel(a: Account): String = when {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CustomersScreen(onSettings: () -> Unit, onOpen: (String) -> Unit) {
+fun CustomersScreen(user: UserInfo, onAlerts: () -> Unit, onOpen: (String) -> Unit, onAdd: () -> Unit) {
     val container = LocalContainer.current
-    val vm: CustomersViewModel = viewModel(factory = vmFactory { CustomersViewModel(container.accounts) })
+    val vm: CustomersViewModel = viewModel(
+        factory = vmFactory { CustomersViewModel(container.accounts, selection = container.routerContext.selection) },
+    )
     val ui by vm.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
 
@@ -73,9 +78,20 @@ fun CustomersScreen(onSettings: () -> Unit, onOpen: (String) -> Unit) {
         }
     }
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = { AppTopBar("Customers", onSettings = onSettings) },
+    TabScaffold(
+        title = "Customers",
+        onAlerts = onAlerts,
+        floatingActionButton = {
+            if (user.canWrite) {
+                ExtendedFloatingActionButton(
+                    onClick = onAdd,
+                    icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                    text = { Text("Add customer", fontWeight = FontWeight.ExtraBold, maxLines = 1, softWrap = false) },
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
+        },
     ) { inner ->
         Column(Modifier.padding(inner).fillMaxSize()) {
             OutlinedTextField(
@@ -111,7 +127,7 @@ fun CustomersScreen(onSettings: () -> Unit, onOpen: (String) -> Unit) {
                         LazyColumn(
                             state = listState,
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             items(ui.items, key = { it.id }) { a -> AccountRow(a) { onOpen(a.id) } }
@@ -136,13 +152,13 @@ fun AccountRow(a: Account, onClick: () -> Unit) {
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Flat ${a.flat}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(end = 8.dp))
+                Text("Flat ${a.flat}", style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(end = 8.dp))
                 StatusChip(accountStateLabel(a), accountTone(a))
             }
             val who = listOf(a.tenant, a.phone).filter { it.isNotBlank() }.joinToString(" - ")
             if (who.isNotBlank()) Text(who, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
             Text(
-                listOfNotNull(a.siteName.takeIf { it.isNotBlank() }, a.pkg?.name, if (a.expiresAt != null) formatExpiry(a.expiresAt) else null).joinToString("  |  "),
+                listOfNotNull(a.routerLabel.takeIf { it.isNotBlank() }, a.pkg?.name, if (a.expiresAt != null) formatExpiry(a.expiresAt) else null).joinToString("  |  "),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

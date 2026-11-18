@@ -6,7 +6,9 @@ import ke.co.ftw.ftnadmin.core.network.ApiError
 import ke.co.ftw.ftnadmin.core.network.ErrorCode
 import ke.co.ftw.ftnadmin.data.accounts.AccountsRepository
 import ke.co.ftw.ftnadmin.data.payments.PaymentsRepository
+import ke.co.ftw.ftnadmin.data.dashboard.DashboardRepository
 import ke.co.ftw.ftnadmin.domain.Account
+import ke.co.ftw.ftnadmin.domain.Dashboard
 import ke.co.ftw.ftnadmin.domain.Payment
 import ke.co.ftw.ftnadmin.domain.PaymentTotals
 import ke.co.ftw.ftnadmin.domain.ServicePackage
@@ -16,6 +18,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -62,19 +66,30 @@ data class PaymentsUiState(
     /** Set after a 409 duplicate_payment so the operator can confirm recording it anyway. */
     val duplicatePrompt: String? = null,
     val info: String? = null,
+    /** Summary cards (today, month, unmatched); null until the dashboard answers. */
+    val summary: Dashboard? = null,
+    val routerId: String? = null,
 )
 
 class PaymentsViewModel(
     private val payments: PaymentsRepository,
     private val accounts: AccountsRepository,
     initialFilter: PaymentFilter = PaymentFilter.All,
+    private val dashboard: DashboardRepository? = null,
+    selection: StateFlow<String?> = MutableStateFlow(null),
 ) : ViewModel() {
-    private val _state = MutableStateFlow(PaymentsUiState(filter = initialFilter))
+    private val _state = MutableStateFlow(PaymentsUiState(filter = initialFilter, routerId = selection.value))
     val state: StateFlow<PaymentsUiState> = _state.asStateFlow()
     private var job: Job? = null
 
     init {
         reload(initial = true)
+        viewModelScope.launch {
+            selection.drop(1).distinctUntilChanged().collect { id ->
+                _state.update { it.copy(routerId = id) }
+                reload(initial = true)
+            }
+        }
         viewModelScope.launch {
             apiResult { accounts.packages() }.getOrNull()?.let { l -> _state.update { it.copy(packages = l.filterNot { p -> p.disabled }) } }
         }
@@ -97,8 +112,10 @@ class PaymentsViewModel(
         job?.cancel()
         if (initial) _state.update { it.copy(loading = true, error = null, items = emptyList(), nextCursor = null) }
         val f = _state.value.filter
+        val router = _state.value.routerId
+        loadSummary(router)
         job = viewModelScope.launch {
-            val r = apiResult { payments.list(status = f.status) }
+            val r = apiResult { payments.list(siteId = router, status = f.status) }
             _state.update { cur ->
                 r.fold(
                     { p -> cur.copy(items = p.items, totals = p.totals, nextCursor = p.nextCursor, loading = false, refreshing = false, error = null) },
@@ -108,13 +125,20 @@ class PaymentsViewModel(
         }
     }
 
+    private fun loadSummary(router: String?) {
+        val d = dashboard ?: return
+        viewModelScope.launch {
+            apiResult { d.dashboard(router) }.getOrNull()?.let { sum -> _state.update { it.copy(summary = sum) } }
+        }
+    }
+
     fun loadMore() {
         val s = _state.value
         val cursor = s.nextCursor ?: return
         if (s.loading || s.loadingMore) return
         _state.update { it.copy(loadingMore = true) }
         job = viewModelScope.launch {
-            val r = apiResult { payments.list(status = s.filter.status, cursor = cursor) }
+            val r = apiResult { payments.list(siteId = s.routerId, status = s.filter.status, cursor = cursor) }
             _state.update { cur ->
                 r.fold(
                     { p -> cur.copy(items = cur.items + p.items, nextCursor = p.nextCursor, loadingMore = false) },

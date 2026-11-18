@@ -66,7 +66,7 @@ class CustomerDetailViewModel(private val id: String, private val repo: Accounts
                     { e -> cur.copy(account = Loadable.Failed(e.userMessage())) },
                 )
             }
-            r.getOrNull()?.let { loadPackages(it.siteId) }
+            r.getOrNull()?.let { loadPackages(it.routerKey) }
         }
     }
 

@@ -101,7 +101,7 @@ fun NewDevicesScreen(siteId: String?, user: UserInfo, onBack: () -> Unit, onOpen
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        items(d.value, key = { it.siteId + it.mac }) { dev -> DeviceRow(dev, onClick = { if (user.canWrite) vm.open(dev) }) }
+                        items(d.value, key = { it.routerKey + it.mac }) { dev -> DeviceRow(dev, onClick = { if (user.canWrite) vm.open(dev) }) }
                     }
                 }
             }
@@ -127,7 +127,7 @@ private fun DeviceRow(d: NewDevice, onClick: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                    listOf(d.siteName, if (d.online) "online" else "seen ${formatAge(d.lastSeen)}", d.suggestedAccount?.let { "looks like flat ${it.flat}" }).filterNotNull().filter { it.isNotBlank() }.joinToString("  |  "),
+                    listOf(d.routerLabel, if (d.online) "online" else "seen ${formatAge(d.lastSeen)}", d.suggestedAccount?.let { "looks like flat ${it.flat}" }).filterNotNull().filter { it.isNotBlank() }.joinToString("  |  "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -160,7 +160,7 @@ private fun DeviceSheetContent(
         ) {
             Text(d.mac, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
             Text(
-                listOf(d.vendor, d.hostName, d.ip, d.siteName).filter { it.isNotBlank() }.joinToString("  |  "),
+                listOf(d.vendor, d.hostName, d.ip, d.routerLabel).filter { it.isNotBlank() }.joinToString("  |  "),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -174,7 +174,7 @@ private fun DeviceSheetContent(
                         selectedId = sheet.selected?.id,
                         onSelect = vm::select,
                         search = vm::searchAccounts,
-                        suggested = d.suggestedAccount?.let { ke.co.ftw.ftnadmin.domain.Account(id = it.id, code = it.code, flat = it.flat, siteId = d.siteId) },
+                        suggested = d.suggestedAccount?.let { ke.co.ftw.ftnadmin.domain.Account(id = it.id, code = it.code, flat = it.flat, siteId = d.routerKey) },
                     )
                     Button(onClick = vm::attach, enabled = sheet.selected != null && !sheet.busy, modifier = Modifier.fillMaxWidth()) {
                         Text(if (sheet.busy) "Attaching..." else "Attach to flat ${sheet.selected?.flat.orEmpty()}".trim())

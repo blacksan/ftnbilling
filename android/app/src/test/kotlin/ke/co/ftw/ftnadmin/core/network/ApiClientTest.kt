@@ -211,7 +211,7 @@ class ApiClientTest {
 
     // ---- 409 mapping and request shape ----
 
-    @Test fun macInUseNamesOwningFlatAndBuilding() = runBlocking {
+    @Test fun macInUseNamesOwningFlatAndRouter() = runBlocking {
         signedIn()
         server.enqueue(
             error(
@@ -257,7 +257,7 @@ class ApiClientTest {
         val req = server.takeRequest()
         assertNull(req.getHeader("Idempotency-Key"))
         assertTrue(req.path!!, req.path!!.startsWith("/api/v1/accounts?"))
-        assertEquals("s1", req.requestUrl!!.queryParameter("site"))
+        assertEquals("s1", req.requestUrl!!.queryParameter("router"))
         assertEquals("active", req.requestUrl!!.queryParameter("state"))
         assertEquals("b 4", req.requestUrl!!.queryParameter("q"))
     }

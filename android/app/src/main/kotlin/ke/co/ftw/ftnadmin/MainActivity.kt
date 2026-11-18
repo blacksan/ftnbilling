@@ -2,14 +2,19 @@ package ke.co.ftw.ftnadmin
 
 import android.os.Bundle
 import android.view.WindowManager
+import android.graphics.Color
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.DisposableEffect
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
+import ke.co.ftw.ftnadmin.core.prefs.ThemeMode
 import ke.co.ftw.ftnadmin.ui.common.LocalContainer
 import ke.co.ftw.ftnadmin.ui.nav.AppNav
 import ke.co.ftw.ftnadmin.ui.theme.AppTheme
@@ -43,8 +48,22 @@ class MainActivity : AppCompatActivity() {
         setContent {
             CompositionLocalProvider(LocalContainer provides container) {
                 val settings by container.settings.state.collectAsState()
-                AppTheme(dynamicColor = (settings?.dynamicColor ?: false) && supportsDynamicTheming()) { AppNav() }
+                // The chosen mode wins over the phone's setting, and the system bars follow it at runtime.
+                val dark = (settings?.themeMode ?: ThemeMode.System).isDark(isSystemInDarkTheme())
+                DisposableEffect(dark) {
+                    enableEdgeToEdge(
+                        statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark },
+                        navigationBarStyle = SystemBarStyle.auto(LIGHT_SCRIM, DARK_SCRIM) { dark },
+                    )
+                    onDispose {}
+                }
+                AppTheme(darkTheme = dark, dynamicColor = (settings?.dynamicColor ?: false) && supportsDynamicTheming()) { AppNav() }
             }
         }
+    }
+
+    private companion object {
+        val LIGHT_SCRIM = Color.argb(0xe6, 0xFF, 0xFF, 0xFF)
+        val DARK_SCRIM = Color.argb(0x80, 0x1b, 0x1b, 0x1b)
     }
 }

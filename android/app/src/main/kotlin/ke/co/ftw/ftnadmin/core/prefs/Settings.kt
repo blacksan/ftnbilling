@@ -1,6 +1,7 @@
 package ke.co.ftw.ftnadmin.core.prefs
 
 import android.content.Context
+import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -19,6 +20,25 @@ import kotlinx.coroutines.flow.stateIn
 
 const val DEFAULT_PUBLIC_URL = "https://isp.ftw.co.ke"
 
+/** How the app picks light or dark: follow the phone, or force one. */
+enum class ThemeMode(val key: String, val label: String) {
+    System("system", "System"),
+    Light("light", "Light"),
+    Dark("dark", "Dark"),
+    ;
+
+    /** True when the UI must be dark, given what the phone is currently set to. */
+    fun isDark(systemDark: Boolean): Boolean = when (this) {
+        System -> systemDark
+        Light -> false
+        Dark -> true
+    }
+
+    companion object {
+        fun fromKey(key: String?): ThemeMode = entries.firstOrNull { it.key == key } ?: System
+    }
+}
+
 /** Non-secret settings. Secrets live in [ke.co.ftw.ftnadmin.core.crypto.SecretStore]. */
 data class AppSettings(
     val biometricEnabled: Boolean = false,
@@ -29,12 +49,15 @@ data class AppSettings(
     val autoConnect: Boolean = false,
     val onboardingDone: Boolean = false,
     val dynamicColor: Boolean = false,
+    val themeMode: ThemeMode = ThemeMode.System,
+    /** Router chosen in the top-bar switcher; blank means "All routers". */
+    val selectedRouterId: String = "",
 )
 
 private val Context.dataStore by preferencesDataStore(name = "ftn_settings")
 
-class Settings(context: Context, scope: CoroutineScope) {
-    private val store = context.applicationContext.dataStore
+class Settings(private val store: DataStore<Preferences>, scope: CoroutineScope) {
+    constructor(context: Context, scope: CoroutineScope) : this(context.applicationContext.dataStore, scope)
 
     val flow: Flow<AppSettings> = store.data
         .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
@@ -54,6 +77,8 @@ class Settings(context: Context, scope: CoroutineScope) {
             p[AUTO_CONNECT] = n.autoConnect
             p[ONBOARDING_DONE] = n.onboardingDone
             p[DYNAMIC_COLOR] = n.dynamicColor
+            p[THEME_MODE] = n.themeMode.key
+            p[SELECTED_ROUTER] = n.selectedRouterId
         }
     }
 
@@ -72,6 +97,8 @@ class Settings(context: Context, scope: CoroutineScope) {
             autoConnect = this[AUTO_CONNECT] ?: d.autoConnect,
             onboardingDone = this[ONBOARDING_DONE] ?: d.onboardingDone,
             dynamicColor = this[DYNAMIC_COLOR] ?: d.dynamicColor,
+            themeMode = ThemeMode.fromKey(this[THEME_MODE]),
+            selectedRouterId = this[SELECTED_ROUTER] ?: d.selectedRouterId,
         )
     }
 
@@ -84,5 +111,7 @@ class Settings(context: Context, scope: CoroutineScope) {
         val AUTO_CONNECT = booleanPreferencesKey("auto_connect")
         val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
+        val THEME_MODE = stringPreferencesKey("theme_mode")
+        val SELECTED_ROUTER = stringPreferencesKey("selected_router")
     }
 }

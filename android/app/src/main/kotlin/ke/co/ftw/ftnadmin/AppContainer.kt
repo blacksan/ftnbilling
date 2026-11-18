@@ -17,6 +17,8 @@ import ke.co.ftw.ftnadmin.data.auth.AuthRepository
 import ke.co.ftw.ftnadmin.data.auth.DeviceInfo
 import ke.co.ftw.ftnadmin.data.dashboard.DashboardRepository
 import ke.co.ftw.ftnadmin.data.payments.PaymentsRepository
+import ke.co.ftw.ftnadmin.data.routers.RouterContext
+import ke.co.ftw.ftnadmin.data.routers.RouterLiveRepository
 import ke.co.ftw.ftnadmin.data.sites.NewDevicesRepository
 import ke.co.ftw.ftnadmin.data.sites.SiteSetupRepository
 import ke.co.ftw.ftnadmin.data.sites.SitesRepository
@@ -53,6 +55,8 @@ class AppContainer(app: Application) {
     val siteSetup = SiteSetupRepository(api)
     val newDevices = NewDevicesRepository(api)
     val alerts = AlertsRepository(api)
+    val routerLive = RouterLiveRepository(api)
+    val routerContext = RouterContext(sites, settings, appScope)
 
     init {
         appScope.launch(Dispatchers.IO) { sessions.restore() }

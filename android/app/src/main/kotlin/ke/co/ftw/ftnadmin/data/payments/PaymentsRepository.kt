@@ -16,7 +16,7 @@ class PaymentsRepository(private val api: ApiClient) {
         limit: Int = 50,
     ): PaymentPage = api.get(
         "payments",
-        query = mapOf("site" to siteId, "status" to status, "q" to query, "cursor" to cursor, "limit" to limit.toString()),
+        query = mapOf("router" to siteId, "status" to status, "q" to query, "cursor" to cursor, "limit" to limit.toString()),
     )
 
     suspend fun record(

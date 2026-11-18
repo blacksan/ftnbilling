@@ -1,13 +1,13 @@
 package ke.co.ftw.ftnadmin.ui
 
 import ke.co.ftw.ftnadmin.ui.common.Tone
-import ke.co.ftw.ftnadmin.ui.dashboard.networkStatus
+import ke.co.ftw.ftnadmin.ui.home.networkStatus
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class NetworkStatusTest {
-    @Test fun noBuildingsIsNeutralNotGreen() {
-        assertEquals("No buildings yet" to Tone.Neutral, networkStatus(0, 0))
+    @Test fun noRoutersIsNeutralNotGreen() {
+        assertEquals("No routers yet" to Tone.Neutral, networkStatus(0, 0))
     }
 
     @Test fun greenOnlyWhenAllOnline() {

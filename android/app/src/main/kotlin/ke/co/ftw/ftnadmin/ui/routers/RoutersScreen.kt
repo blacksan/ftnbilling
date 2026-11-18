@@ -1,16 +1,18 @@
-package ke.co.ftw.ftnadmin.ui.buildings
+package ke.co.ftw.ftnadmin.ui.routers
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -22,14 +24,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import ke.co.ftw.ftnadmin.data.sites.SetupState
 import ke.co.ftw.ftnadmin.domain.Ont
 import ke.co.ftw.ftnadmin.domain.Qoe
 import ke.co.ftw.ftnadmin.domain.Site
@@ -44,6 +46,9 @@ import ke.co.ftw.ftnadmin.ui.common.Loadable
 import ke.co.ftw.ftnadmin.ui.common.LoadingSpinner
 import ke.co.ftw.ftnadmin.ui.common.LocalContainer
 import ke.co.ftw.ftnadmin.ui.common.SectionCard
+import ke.co.ftw.ftnadmin.ui.common.Sparkline
+import ke.co.ftw.ftnadmin.ui.common.StatusDot
+import ke.co.ftw.ftnadmin.core.network.UserInfo
 import ke.co.ftw.ftnadmin.ui.common.StatusChip
 import ke.co.ftw.ftnadmin.ui.common.Tone
 import ke.co.ftw.ftnadmin.ui.common.formatAge
@@ -53,24 +58,38 @@ import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BuildingsScreen(onSettings: () -> Unit, onOpen: (String) -> Unit) {
+fun RoutersScreen(user: UserInfo, onBack: () -> Unit, onOpen: (String) -> Unit, onAdd: () -> Unit) {
     val container = LocalContainer.current
-    val vm: BuildingsViewModel = viewModel(factory = vmFactory { BuildingsViewModel(container.sites) })
+    val vm: RoutersViewModel = viewModel(factory = vmFactory { RoutersViewModel(container.sites) })
     val ui by vm.state.collectAsStateWithLifecycle()
-    Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = { AppTopBar("Buildings", onSettings = onSettings) }) { inner ->
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = { AppTopBar("Routers", onBack = onBack) },
+        floatingActionButton = {
+            if (user.isOwner) {
+                ExtendedFloatingActionButton(
+                    onClick = onAdd,
+                    icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                    text = { Text("Add router", fontWeight = FontWeight.ExtraBold, maxLines = 1, softWrap = false) },
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
+        },
+    ) { inner ->
         when (val s = ui.sites) {
             Loadable.Loading -> CenteredLoading(Modifier.padding(inner))
             is Loadable.Failed -> ErrorState(s.message, vm::retry, Modifier.padding(inner))
             is Loadable.Ready -> PullToRefreshBox(ui.refreshing, vm::refresh, Modifier.padding(inner).fillMaxSize()) {
                 if (s.value.isEmpty()) {
-                    EmptyState("No buildings yet.")
+                    EmptyState("No routers linked yet.")
                 } else {
                     LazyColumn(
                         Modifier.fillMaxSize(),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        items(s.value, key = { it.id }) { site -> SiteRow(site) { onOpen(site.id) } }
+                        items(s.value, key = { it.key }) { site -> RouterRow(site) { onOpen(site.key) } }
                     }
                 }
             }
@@ -79,11 +98,12 @@ fun BuildingsScreen(onSettings: () -> Unit, onOpen: (String) -> Unit) {
 }
 
 @Composable
-private fun SiteRow(s: Site, onClick: () -> Unit) {
-    Card(onClick = onClick, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(s.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f).padding(end = 8.dp))
+private fun RouterRow(s: Site, onClick: () -> Unit) {
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                StatusDot(s.online, size = 12.dp)
+                Text(s.label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 StatusChip(if (s.online) "Online" else "Offline", if (s.online) Tone.Good else Tone.Bad)
             }
             Text(
@@ -92,25 +112,30 @@ private fun SiteRow(s: Site, onClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (!s.online && s.cause.isNotBlank()) Text(s.cause, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-            if (s.openAlerts > 0) StatusChip("${s.openAlerts} open alerts", Tone.Warn)
+            if (s.openAlerts > 0 || s.setupState.isNotBlank()) {
+                ChipRow(horizontalPadding = 0.dp) {
+                    if (s.openAlerts > 0) StatusChip("${s.openAlerts} open alerts", Tone.Warn)
+                    if (s.setupState.isNotBlank() && s.setupState != "live") StatusChip("Setup: ${SetupState.label(s.setupState)}", Tone.Neutral)
+                }
+            }
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BuildingDetailScreen(
+fun RouterDetailScreen(
     id: String,
     onBack: () -> Unit,
     onNewDevices: (String) -> Unit,
     onOpenAccount: (String) -> Unit,
     onSetup: (String) -> Unit,
-    onCutover: (String) -> Unit,
+    onSetupJob: (String) -> Unit,
 ) {
     val container = LocalContainer.current
-    val vm: BuildingDetailViewModel = viewModel(key = "building-$id", factory = vmFactory { BuildingDetailViewModel(id, container.sites) })
+    val vm: RouterDetailViewModel = viewModel(key = "router-$id", factory = vmFactory { RouterDetailViewModel(id, container.sites) })
     val ui by vm.state.collectAsStateWithLifecycle()
-    val title = (ui.site as? Loadable.Ready)?.value?.name ?: "Building"
+    val title = (ui.site as? Loadable.Ready)?.value?.label ?: "Router"
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = { AppTopBar(title, onBack = onBack) }) { inner ->
         when (val s = ui.site) {
@@ -123,9 +148,9 @@ fun BuildingDetailScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     item { SiteSummary(s.value) }
-                    item { Button(onClick = { onNewDevices(id) }, modifier = Modifier.fillMaxWidth()) { Text("New devices in this building") } }
-                    item { Button(onClick = { onSetup(id) }, modifier = Modifier.fillMaxWidth()) { Text("Router setup checklist") } }
-                    item { OutlinedButton(onClick = { onCutover(id) }, modifier = Modifier.fillMaxWidth()) { Text("Cutover to IPoE") } }
+                    item { Button(onClick = { onNewDevices(id) }, modifier = Modifier.fillMaxWidth()) { Text("New devices on this router") } }
+                    item { Button(onClick = { onSetup(id) }, modifier = Modifier.fillMaxWidth()) { Text("Setup and checks") } }
+                    item { OutlinedButton(onClick = { onSetupJob(id) }, modifier = Modifier.fillMaxWidth()) { Text("Automatic setup status") } }
                     item { QoeSection(ui.qoe, ui.period, vm::setPeriod) }
                     item { Text("ONTs", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground) }
                     when (val o = ui.onts) {
@@ -145,7 +170,7 @@ fun BuildingDetailScreen(
 
 @Composable
 private fun SiteSummary(s: Site) {
-    SectionCard(s.name) {
+    SectionCard(s.label) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatusChip(if (s.online) "Online" else "Offline", if (s.online) Tone.Good else Tone.Bad)
             StatusChip(
@@ -204,25 +229,6 @@ private fun QoeSection(qoe: Loadable<Qoe>, period: String, onPeriod: (String) ->
                 }
             }
         }
-    }
-}
-
-@Composable
-fun Sparkline(values: List<Double>, modifier: Modifier = Modifier) {
-    val color = MaterialTheme.colorScheme.primary
-    Canvas(modifier.fillMaxWidth().height(48.dp)) {
-        if (values.size < 2) return@Canvas
-        val max = values.max()
-        val min = values.min()
-        val span = (max - min).takeIf { it > 0 } ?: 1.0
-        val path = Path()
-        values.forEachIndexed { i, v ->
-            val x = size.width * i / (values.size - 1)
-            val y = size.height - (((v - min) / span).toFloat() * size.height)
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-        }
-        drawPath(path, color, style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round))
-        drawLine(color.copy(alpha = 0.3f), Offset(0f, size.height), Offset(size.width, size.height), strokeWidth = 1.dp.toPx())
     }
 }
 

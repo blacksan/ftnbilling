@@ -1,4 +1,4 @@
-package ke.co.ftw.ftnadmin.ui.buildings.setup
+package ke.co.ftw.ftnadmin.ui.routers.setup
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -73,7 +73,7 @@ private val GROUPS = listOf("router" to "Router", "network" to "Network", "devic
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SetupScreen(siteId: String, user: UserInfo, onBack: () -> Unit, onCutover: () -> Unit) {
+fun SetupScreen(siteId: String, user: UserInfo, onBack: () -> Unit, onStatus: () -> Unit) {
     val container = LocalContainer.current
     val vm: SetupViewModel = viewModel(
         key = "setup-$siteId",
@@ -101,7 +101,7 @@ fun SetupScreen(siteId: String, user: UserInfo, onBack: () -> Unit, onCutover: (
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        topBar = { AppTopBar("Router setup", onBack = onBack) },
+        topBar = { AppTopBar("Setup and checks", onBack = onBack) },
         snackbarHost = { SnackbarHost(snack) },
     ) { inner ->
         when (val c = ui.checks) {
@@ -113,7 +113,7 @@ fun SetupScreen(siteId: String, user: UserInfo, onBack: () -> Unit, onCutover: (
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    item { RouterSummary(c.value, onCutover) }
+                    item { RouterSummary(c.value, onStatus) }
                     item { ModeCard(ui, user, vm) }
                     if (user.isOwner) item { JoinCommandCard(ui.join, vm) }
                     c.value.joinReport?.let { r -> item { JoinReportCard(r) } }
@@ -136,15 +136,6 @@ fun SetupScreen(siteId: String, user: UserInfo, onBack: () -> Unit, onCutover: (
         }
     }
 
-    ui.confirmFix?.let { item ->
-        AlertDialog(
-            onDismissRequest = vm::cancelFix,
-            title = { Text(item.fix?.label.orEmpty().ifBlank { item.title }) },
-            text = { Text(item.fix?.confirmText.orEmpty().ifBlank { "Apply this change on the router?" }) },
-            confirmButton = { TextButton(onClick = vm::confirmFix) { Text("Apply") } },
-            dismissButton = { TextButton(onClick = vm::cancelFix) { Text("Cancel") } },
-        )
-    }
     ui.modeConflict?.let { conflict ->
         AlertDialog(
             onDismissRequest = vm::dismissModeConflict,
@@ -181,12 +172,12 @@ internal fun statusLabel(status: String) = when (status) {
 }
 
 @Composable
-private fun RouterSummary(c: Checks, onCutover: () -> Unit) {
+private fun RouterSummary(c: Checks, onStatus: () -> Unit) {
     SectionCard("Router") {
         ChipRow(horizontalPadding = 0.dp) {
             StatusChip(if (c.router.reachable) "Reachable" else "Unreachable", if (c.router.reachable) Tone.Good else Tone.Bad)
             if (c.router.version.isNotBlank()) StatusChip("RouterOS ${c.router.version}", Tone.Neutral)
-            StatusChip(if (c.summary.cutoverReady) "Ready for cutover" else "Not ready for cutover", if (c.summary.cutoverReady) Tone.Good else Tone.Warn)
+            StatusChip(if (c.summary.cutoverReady) "Ready to migrate" else "Not ready to migrate", if (c.summary.cutoverReady) Tone.Good else Tone.Warn)
         }
         ChipRow(horizontalPadding = 0.dp) {
             StatusChip("${c.summary.ok} ok", Tone.Good)
@@ -201,7 +192,7 @@ private fun RouterSummary(c: Checks, onCutover: () -> Unit) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Button(onClick = onCutover, modifier = Modifier.fillMaxWidth()) { Text("Cutover to IPoE") }
+        Button(onClick = onStatus, modifier = Modifier.fillMaxWidth()) { Text("Automatic setup status") }
     }
 }
 
@@ -228,7 +219,7 @@ private fun ModeCard(ui: SetupUiState, user: UserInfo, vm: SetupViewModel) {
 }
 
 @Composable
-private fun CommandBox(text: String, modifier: Modifier = Modifier) {
+internal fun CommandBox(text: String, modifier: Modifier = Modifier) {
     Surface(modifier.fillMaxWidth(), shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceContainerHighest) {
         Text(
             text,
@@ -240,7 +231,7 @@ private fun CommandBox(text: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun CopyButton(label: String, text: String, modifier: Modifier = Modifier) {
+internal fun CopyButton(label: String, text: String, modifier: Modifier = Modifier) {
     val clipboard = LocalClipboardManager.current
     OutlinedButton(onClick = { clipboard.setText(AnnotatedString(text)) }, modifier = modifier.fillMaxWidth()) { Text(label) }
 }
@@ -308,7 +299,7 @@ private fun CheckCard(item: CheckItem, user: UserInfo, busy: Boolean, onFix: () 
             }
             ChipRow(horizontalPadding = 0.dp) {
                 StatusChip(statusLabel(item.status), statusTone(item.status))
-                if (item.blocksCutover && item.status != CheckStatus.OK) StatusChip("Blocks cutover", Tone.Bad)
+                if (item.blocksCutover && item.status != CheckStatus.OK) StatusChip("Blocks migration", Tone.Bad)
             }
             if (item.detail.isNotBlank()) {
                 Text(item.detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
@@ -333,6 +324,13 @@ private fun FixArea(item: CheckItem, user: UserInfo, busy: Boolean, onFix: () ->
         FixKind.AUTO, FixKind.CONFIRM -> {
             Button(onClick = onFix, enabled = canRunFix(user, fix) && !busy, modifier = Modifier.fillMaxWidth()) {
                 Text(if (busy) "Working..." else fix.label.ifBlank { "Fix" })
+            }
+            if (fix.kind == FixKind.CONFIRM && fix.confirmText.isNotBlank() && canRunFix(user, fix)) {
+                Text(
+                    fix.confirmText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppTheme.extended.warning,
+                )
             }
             if (!canRunFix(user, fix)) {
                 Text(

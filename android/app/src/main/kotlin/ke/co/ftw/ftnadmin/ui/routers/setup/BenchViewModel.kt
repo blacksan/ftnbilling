@@ -1,4 +1,4 @@
-package ke.co.ftw.ftnadmin.ui.buildings.setup
+package ke.co.ftw.ftnadmin.ui.routers.setup
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope

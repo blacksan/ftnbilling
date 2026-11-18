@@ -1,4 +1,4 @@
-package ke.co.ftw.ftnadmin.ui.buildings.setup
+package ke.co.ftw.ftnadmin.ui.routers.setup
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -46,8 +46,6 @@ data class SetupUiState(
     val modeBusy: Boolean = false,
     val modeConflict: ModeConflict? = null,
     val fixing: Set<String> = emptySet(),
-    /** Check whose confirm dialog is open. */
-    val confirmFix: CheckItem? = null,
     val join: JoinCommandState = JoinCommandState(),
     val message: String? = null,
 )
@@ -90,19 +88,15 @@ class SetupViewModel(
 
     // ---- fixes ----
 
+    /**
+     * Runs the fix. There is no second confirm step: pressing the fix button is the decision, and
+     * fixes the server marks `confirm` are sent with `confirm: true` (their warning is shown under the button).
+     */
     fun requestFix(item: CheckItem) {
         when (item.fix?.kind) {
             FixKind.AUTO -> runFix(item, confirm = false)
-            FixKind.CONFIRM -> _state.update { it.copy(confirmFix = item) }
+            FixKind.CONFIRM -> runFix(item, confirm = true)
         }
-    }
-
-    fun cancelFix() = _state.update { it.copy(confirmFix = null) }
-
-    fun confirmFix() {
-        val item = _state.value.confirmFix ?: return
-        _state.update { it.copy(confirmFix = null) }
-        runFix(item, confirm = true)
     }
 
     private fun runFix(item: CheckItem, confirm: Boolean) {

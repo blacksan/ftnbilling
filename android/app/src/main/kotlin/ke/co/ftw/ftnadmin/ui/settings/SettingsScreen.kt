@@ -23,6 +23,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -44,6 +47,7 @@ import ke.co.ftw.ftnadmin.BuildConfig
 import ke.co.ftw.ftnadmin.auth.AuthResult
 import ke.co.ftw.ftnadmin.core.network.AuthState
 import ke.co.ftw.ftnadmin.core.prefs.AppSettings
+import ke.co.ftw.ftnadmin.core.prefs.ThemeMode
 import ke.co.ftw.ftnadmin.domain.DeviceSession
 import ke.co.ftw.ftnadmin.ui.common.ErrorState
 import ke.co.ftw.ftnadmin.ui.common.LoadingSpinner
@@ -132,8 +136,25 @@ fun SettingsScreen(onBack: () -> Unit) {
                 SwitchRow("Hide content from screenshots", "Blocks screenshots and the recents preview", s.flagSecure) { on ->
                     update { it.copy(flagSecure = on) }
                 }
+                Header("Appearance")
+                Text("Theme", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    ThemeMode.entries.forEachIndexed { index, m ->
+                        SegmentedButton(
+                            selected = s.themeMode == m,
+                            onClick = { update { it.copy(themeMode = m) } },
+                            shape = SegmentedButtonDefaults.itemShape(index, ThemeMode.entries.size),
+                            label = { Text(m.label, maxLines = 1, softWrap = false) },
+                        )
+                    }
+                }
+                Text(
+                    "System follows the phone's light or dark setting.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
                 if (supportsDynamicTheming()) {
-                    Header("Appearance")
                     SwitchRow("Use wallpaper colours", "Match the system palette instead of the brand colours (Android 12+)", s.dynamicColor) { on ->
                         update { it.copy(dynamicColor = on) }
                     }

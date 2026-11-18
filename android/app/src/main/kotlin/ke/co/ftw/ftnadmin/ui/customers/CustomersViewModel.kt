@@ -24,6 +24,8 @@ val ACCOUNT_STATES = listOf("active", "expired", "suspended", "new")
 data class CustomersUiState(
     val query: String = "",
     val stateFilter: String? = null,
+    /** Router chosen in the top-bar switcher; null lists every router. */
+    val routerId: String? = null,
     val items: List<Account> = emptyList(),
     val nextCursor: String? = null,
     val loading: Boolean = true,
@@ -35,13 +37,24 @@ data class CustomersUiState(
 }
 
 @OptIn(FlowPreview::class)
-class CustomersViewModel(private val repo: AccountsRepository, private val searchDebounceMs: Long = 300) : ViewModel() {
-    private val _state = MutableStateFlow(CustomersUiState())
+class CustomersViewModel(
+    private val repo: AccountsRepository,
+    private val searchDebounceMs: Long = 300,
+    selection: StateFlow<String?> = MutableStateFlow(null),
+) : ViewModel() {
+    private val _state = MutableStateFlow(CustomersUiState(routerId = selection.value))
     val state: StateFlow<CustomersUiState> = _state.asStateFlow()
     private var job: Job? = null
 
     init {
         reload(initial = true)
+        viewModelScope.launch {
+            // The first value is the one the state started with; later ones are the person switching routers.
+            selection.drop(1).distinctUntilChanged().collect { id ->
+                _state.update { it.copy(routerId = id) }
+                reload(initial = true)
+            }
+        }
         viewModelScope.launch {
             _state.map { it.query }.distinctUntilChanged().drop(1).debounce(searchDebounceMs).collect { reload(initial = true) }
         }
@@ -67,7 +80,7 @@ class CustomersViewModel(private val repo: AccountsRepository, private val searc
         if (initial) _state.update { it.copy(loading = true, error = null, items = emptyList(), nextCursor = null) }
         val s = _state.value
         job = viewModelScope.launch {
-            val r = apiResult { repo.list(state = s.stateFilter, query = s.query.trim().ifBlank { null }) }
+            val r = apiResult { repo.list(siteId = s.routerId, state = s.stateFilter, query = s.query.trim().ifBlank { null }) }
             _state.update { cur ->
                 r.fold(
                     { p -> cur.copy(items = p.items, nextCursor = p.nextCursor, loading = false, refreshing = false, error = null) },
@@ -83,7 +96,7 @@ class CustomersViewModel(private val repo: AccountsRepository, private val searc
         if (!s.canLoadMore) return
         _state.update { it.copy(loadingMore = true) }
         job = viewModelScope.launch {
-            val r = apiResult { repo.list(state = s.stateFilter, query = s.query.trim().ifBlank { null }, cursor = cursor) }
+            val r = apiResult { repo.list(siteId = s.routerId, state = s.stateFilter, query = s.query.trim().ifBlank { null }, cursor = cursor) }
             _state.update { cur ->
                 r.fold(
                     { p -> cur.copy(items = cur.items + p.items, nextCursor = p.nextCursor, loadingMore = false) },

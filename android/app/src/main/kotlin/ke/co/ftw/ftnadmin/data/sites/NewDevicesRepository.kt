@@ -13,11 +13,11 @@ class NewDevicesRepository(private val api: ApiClient) {
     suspend fun list(siteId: String? = null, onlineOnly: Boolean = false): List<NewDevice> =
         api.get<ItemList<NewDevice>>(
             "unregistered",
-            query = mapOf("site" to siteId, "online" to if (onlineOnly) "true" else null),
+            query = mapOf("router" to siteId, "online" to if (onlineOnly) "true" else null),
         ).items
 
     /** Asks the server to re-read the router's leases and ARP table now (202). */
-    suspend fun refresh(siteId: String) = api.send("POST", "sites", siteId, "unregistered", "refresh")
+    suspend fun refresh(siteId: String) = api.send("POST", "routers", siteId, "unregistered", "refresh")
 
     suspend fun attach(siteId: String, mac: String, accountId: String): Account = api.post(
         "unregistered", "attach",
