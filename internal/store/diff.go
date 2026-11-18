@@ -68,7 +68,7 @@ func (x Setting) norm() Setting { x.UpdatedAt = nt(x.UpdatedAt); return x }
 func (x Event) norm() Event     { x.Time = nt(x.Time); return x }
 func (x AdminUser) norm() AdminUser {
 	x.TOTPConfirmedAt, x.PassChangedAt = nt(x.TOTPConfirmedAt), nt(x.PassChangedAt)
-	x.CreatedAt, x.UpdatedAt = nt(x.CreatedAt), nt(x.UpdatedAt)
+	x.CreatedAt, x.UpdatedAt, x.TOTPFailAt = nt(x.CreatedAt), nt(x.UpdatedAt), nt(x.TOTPFailAt)
 	if len(x.RecoveryCodes) == 0 {
 		x.RecoveryCodes = nil
 	}
@@ -82,6 +82,16 @@ func (x APIDevice) norm() APIDevice {
 	x.AccessExpiresAt, x.RefreshRotatedAt = nt(x.AccessExpiresAt), nt(x.RefreshRotatedAt)
 	x.RefreshExpiresAt, x.AbsoluteExpiresAt = nt(x.RefreshExpiresAt), nt(x.AbsoluteExpiresAt)
 	x.CreatedAt, x.LastSeenAt, x.RevokedAt = nt(x.CreatedAt), nt(x.LastSeenAt), nt(x.RevokedAt)
+	if len(x.RefreshOlder) == 0 {
+		x.RefreshOlder = nil
+	}
+	return x
+}
+
+func cloneAPIDevice(x APIDevice) APIDevice {
+	if x.RefreshOlder != nil {
+		x.RefreshOlder = append([]string(nil), x.RefreshOlder...)
+	}
 	return x
 }
 
@@ -257,7 +267,7 @@ var tables = []table{
 	tbl[AdminSession]{func(d *Data) *map[string]AdminSession { return &d.AdminSessions }, func(c *ChangeSet) *Delta[AdminSession] { return &c.AdminSessions },
 		eqc[AdminSession], AdminSession.norm, func(v AdminSession) string { return v.ID }, nil},
 	tbl[APIDevice]{func(d *Data) *map[string]APIDevice { return &d.APIDevices }, func(c *ChangeSet) *Delta[APIDevice] { return &c.APIDevices },
-		eqc[APIDevice], APIDevice.norm, func(v APIDevice) string { return v.ID }, nil},
+		eqDeep[APIDevice], APIDevice.norm, func(v APIDevice) string { return v.ID }, cloneAPIDevice},
 }
 
 // ---- accounts: open and closed share one key space ------------------------
@@ -439,7 +449,7 @@ func cloneData(d *Data) Data {
 		Payments: cloneMap(d.Payments, nil), Devices: cloneMap(d.Devices, nil), Tasks: cloneMap(d.Tasks, nil),
 		Customers: cloneMap(d.Customers, nil), Tenancies: cloneMap(d.Tenancies, nil), Contacts: cloneMap(d.Contacts, nil),
 		Equipment: cloneMap(d.Equipment, nil), EquipmentEvents: cloneMap(d.EquipmentEvents, nil), Notes: cloneMap(d.Notes, nil), Settings: cloneMap(d.Settings, nil),
-		AdminUsers: cloneMap(d.AdminUsers, cloneAdminUser), AdminSessions: cloneMap(d.AdminSessions, nil), APIDevices: cloneMap(d.APIDevices, nil),
+		AdminUsers: cloneMap(d.AdminUsers, cloneAdminUser), AdminSessions: cloneMap(d.AdminSessions, nil), APIDevices: cloneMap(d.APIDevices, cloneAPIDevice),
 		Events: append([]Event(nil), d.Events...),
 	}
 }

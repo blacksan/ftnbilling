@@ -119,6 +119,10 @@ type codec[V any] struct {
 	dst   func(*V) []any
 	upsql string
 	table string
+	// guard, when set, is a condition (on the existing row and EXCLUDED) that
+	// must hold for an update to apply; a write that fails it changes nothing
+	// and Commit reports store.ErrStaleWrite.
+	guard string
 }
 
 func (c *codec[V]) build() *codec[V] {
@@ -140,6 +144,8 @@ func (c *codec[V]) build() *codec[V] {
 		c.name, strings.Join(c.cols, ", "), strings.Join(ph, ", "), strings.Join(c.pk, ", "), strings.Join(sets, ", "))
 	if len(sets) == 0 {
 		c.upsql = strings.Replace(c.upsql, " DO UPDATE SET ", " DO NOTHING", 1)
+	} else if c.guard != "" {
+		c.upsql += " WHERE " + c.guard
 	}
 	if c.del == "" {
 		c.del = c.pk[0]
@@ -445,16 +451,17 @@ var eventsC = (&codec[store.Event]{
 }).build()
 
 var adminUsersC = (&codec[store.AdminUser]{
-	name: "admin_users", pk: []string{"id"}, key: func(v store.AdminUser) string { return v.ID },
+	name: "admin_users", pk: []string{"id"},
+	guard: "admin_users.updated_at IS NULL OR EXCLUDED.updated_at >= admin_users.updated_at", key: func(v store.AdminUser) string { return v.ID },
 	cols: []string{"id", "username", "role", "pass_hash", "totp_secret_enc", "totp_confirmed_at", "totp_last_step", "recovery_codes", "disabled",
-		"pass_changed_at", "created_at", "updated_at"},
+		"pass_changed_at", "created_at", "updated_at", "totp_fails", "totp_fail_at"},
 	args: func(v store.AdminUser) []any {
 		return []any{v.ID, v.Username, v.Role, v.PassHash, v.TOTPSecretEnc, nt(v.TOTPConfirmedAt), v.TOTPLastStep, stringsArg(v.RecoveryCodes), v.Disabled,
-			nt(v.PassChangedAt), tm(v.CreatedAt), nt(v.UpdatedAt)}
+			nt(v.PassChangedAt), tm(v.CreatedAt), nt(v.UpdatedAt), v.TOTPFails, nt(v.TOTPFailAt)}
 	},
 	dst: func(v *store.AdminUser) []any {
 		return []any{&v.ID, &v.Username, &v.Role, &v.PassHash, &v.TOTPSecretEnc, t_(&v.TOTPConfirmedAt), &v.TOTPLastStep, stringsDst{&v.RecoveryCodes}, &v.Disabled,
-			t_(&v.PassChangedAt), t_(&v.CreatedAt), t_(&v.UpdatedAt)}
+			t_(&v.PassChangedAt), t_(&v.CreatedAt), t_(&v.UpdatedAt), &v.TOTPFails, t_(&v.TOTPFailAt)}
 	},
 }).build()
 
@@ -470,15 +477,18 @@ var adminSessionsC = (&codec[store.AdminSession]{
 }).build()
 
 var apiDevicesC = (&codec[store.APIDevice]{
-	name: "api_devices", pk: []string{"id"}, key: func(v store.APIDevice) string { return v.ID },
+	name: "api_devices", pk: []string{"id"},
+	guard: "(api_devices.revoked_at IS NULL OR EXCLUDED.revoked_at IS NOT NULL) AND " +
+		"(api_devices.refresh_rotated_at IS NULL OR EXCLUDED.refresh_rotated_at >= api_devices.refresh_rotated_at)", key: func(v store.APIDevice) string { return v.ID },
 	cols: []string{"id", "user_id", "install_id", "name", "model", "platform", "app_version", "access_hash", "access_expires_at", "refresh_hash",
-		"refresh_prev_hash", "refresh_rotated_at", "refresh_expires_at", "absolute_expires_at", "last_ip", "created_at", "last_seen_at", "revoked_at", "revoked_reason"},
+		"refresh_prev_hash", "refresh_rotated_at", "refresh_expires_at", "absolute_expires_at", "last_ip", "created_at", "last_seen_at", "revoked_at", "revoked_reason",
+		"refresh_older"},
 	args: func(v store.APIDevice) []any {
 		return []any{v.ID, v.UserID, v.InstallID, v.Name, v.Model, v.Platform, v.AppVersion, v.AccessHash, nt(v.AccessExpiresAt), v.RefreshHash,
-			v.RefreshPrevHash, nt(v.RefreshRotatedAt), nt(v.RefreshExpiresAt), nt(v.AbsoluteExpiresAt), v.LastIP, tm(v.CreatedAt), nt(v.LastSeenAt), nt(v.RevokedAt), v.RevokedReason}
+			v.RefreshPrevHash, nt(v.RefreshRotatedAt), nt(v.RefreshExpiresAt), nt(v.AbsoluteExpiresAt), v.LastIP, tm(v.CreatedAt), nt(v.LastSeenAt), nt(v.RevokedAt), v.RevokedReason, stringsArg(v.RefreshOlder)}
 	},
 	dst: func(v *store.APIDevice) []any {
 		return []any{&v.ID, &v.UserID, &v.InstallID, &v.Name, &v.Model, &v.Platform, &v.AppVersion, &v.AccessHash, t_(&v.AccessExpiresAt), &v.RefreshHash,
-			&v.RefreshPrevHash, t_(&v.RefreshRotatedAt), t_(&v.RefreshExpiresAt), t_(&v.AbsoluteExpiresAt), &v.LastIP, t_(&v.CreatedAt), t_(&v.LastSeenAt), t_(&v.RevokedAt), &v.RevokedReason}
+			&v.RefreshPrevHash, t_(&v.RefreshRotatedAt), t_(&v.RefreshExpiresAt), t_(&v.AbsoluteExpiresAt), &v.LastIP, t_(&v.CreatedAt), t_(&v.LastSeenAt), t_(&v.RevokedAt), &v.RevokedReason, stringsDst{&v.RefreshOlder}}
 	},
 }).build()

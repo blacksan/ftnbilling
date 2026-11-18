@@ -23,6 +23,12 @@ var (
 	// key, check, not null). The change was wrong, not the database: Update
 	// rolls back, returns the error, and never counts it towards degrading.
 	ErrIntegrity = errors.New("the database refused the change")
+	// ErrStaleWrite is an integrity refusal: the sign-in row this process
+	// tried to write is older than the one in the database (another process,
+	// such as the admin-reset command, changed it). The write is dropped so a
+	// stale copy can never undo a password, 2FA or revoke change. Restart the
+	// service to load the newer rows.
+	ErrStaleWrite = fmt.Errorf("%w: a newer copy of this sign-in row is in the database (changed by another process); restart the service", ErrIntegrity)
 	// ErrConnection is wrapped by a backend when a commit failed because the
 	// database could not be reached or stopped answering (as opposed to the
 	// database refusing the change). The store turns degraded at once.

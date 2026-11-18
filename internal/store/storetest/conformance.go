@@ -65,12 +65,12 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 		d.AddEvent(store.Event{Time: at, SiteID: "s111111", Kind: "info", AccountID: "a1", CustomerID: "c1", EquipmentID: "e1", Msg: "m"})
 		d.AddEvent(store.Event{Time: at, Kind: "audit", AccountID: "a1", Msg: "changed", Actor: "brian", IP: "203.0.113.9"})
 		d.AdminUsers["u1"] = store.AdminUser{ID: "u1", Username: "Brian", Role: store.RoleOwner, PassHash: "pbkdf2$x", TOTPSecretEnc: "sealed",
-			TOTPConfirmedAt: at, TOTPLastStep: 12345, RecoveryCodes: []string{"h1", "h2"}, PassChangedAt: at, CreatedAt: at, UpdatedAt: at}
+			TOTPConfirmedAt: at, TOTPLastStep: 12345, TOTPFails: 3, TOTPFailAt: at, RecoveryCodes: []string{"h1", "h2"}, PassChangedAt: at, CreatedAt: at, UpdatedAt: at}
 		d.AdminUsers["u2"] = store.AdminUser{ID: "u2", Username: "viewer", Role: store.RoleViewer, Disabled: true, CreatedAt: at}
 		d.AdminSessions["sess1"] = store.AdminSession{ID: "sess1", UserID: "u1", CSRF: "csrf", MFA: true, IP: "203.0.113.9", UserAgent: "UA",
 			CreatedAt: at, LastSeenAt: at, ExpiresAt: at.Add(time.Hour)}
 		d.APIDevices["dev1"] = store.APIDevice{ID: "dev1", UserID: "u1", InstallID: "inst", Name: "Pixel", Model: "Pixel 9", Platform: "android",
-			AppVersion: "1.0", AccessHash: "ah", AccessExpiresAt: at, RefreshHash: "rh", RefreshPrevHash: "rp", RefreshRotatedAt: at,
+			AppVersion: "1.0", AccessHash: "ah", AccessExpiresAt: at, RefreshHash: "rh", RefreshPrevHash: "rp", RefreshOlder: []string{"o1", "o2"}, RefreshRotatedAt: at,
 			RefreshExpiresAt: at, AbsoluteExpiresAt: at, LastIP: "203.0.113.9", CreatedAt: at, LastSeenAt: at, RevokedAt: at, RevokedReason: "reuse"}
 		return nil
 	})

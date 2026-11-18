@@ -493,3 +493,77 @@ func TestCommitOrderingAgainstUniqueIndexes(t *testing.T) {
 		t.Fatalf("reloaded: %d open, %d closed accounts, %d tenancies", len(snap.Accounts), len(snap.ClosedAccounts), len(snap.Tenancies))
 	}
 }
+
+// A process holding an old copy of the sign-in rows (a running service after
+// the admin-reset command changed them) can never write that copy back.
+func TestStaleSignInWritesAreRefused(t *testing.T) {
+	url := storetest.RequirePostgres(t)
+	schema := storetest.NewSchema(t, url)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	mk := func() *store.Store {
+		b, err := open(t, url, schema, func(o *pgstore.Options) { o.NoLock = true })
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := store.OpenWith(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { s.Close() })
+		return s
+	}
+	svc := mk()
+	if err := svc.Update(func(d *store.Data) error {
+		d.AdminUsers["u1"] = store.AdminUser{ID: "u1", Username: "admin", Role: store.RoleOwner, PassHash: "old", CreatedAt: now, UpdatedAt: now}
+		d.APIDevices["dev1"] = store.APIDevice{ID: "dev1", UserID: "u1", AccessHash: "a1", RefreshHash: "r1", RefreshRotatedAt: now, CreatedAt: now}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cli := mk() // the command line: loads, changes, writes
+	if err := cli.Update(func(d *store.Data) error {
+		u := d.AdminUsers["u1"]
+		u.PassHash, u.UpdatedAt = "new", now.Add(time.Minute)
+		d.AdminUsers["u1"] = u
+		x := d.APIDevices["dev1"]
+		x.RevokedAt, x.RevokedReason = now.Add(time.Minute), "reset"
+		d.APIDevices["dev1"] = x
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The service still has the old rows in memory. Its writes are refused.
+	err := svc.Update(func(d *store.Data) error {
+		u := d.AdminUsers["u1"]
+		u.TOTPLastStep = 99 // what a sign-in does
+		d.AdminUsers["u1"] = u
+		return nil
+	})
+	if !errors.Is(err, store.ErrStaleWrite) || !errors.Is(err, store.ErrIntegrity) {
+		t.Fatalf("a stale user write: %v", err)
+	}
+	err = svc.Update(func(d *store.Data) error { // a Touch of a device the command revoked
+		x := d.APIDevices["dev1"]
+		x.LastSeenAt = now.Add(2 * time.Minute)
+		d.APIDevices["dev1"] = x
+		return nil
+	})
+	if !errors.Is(err, store.ErrStaleWrite) {
+		t.Fatalf("a stale device write: %v", err)
+	}
+	// The database kept the command's changes.
+	check := mk()
+	snap := check.Snapshot()
+	if snap.AdminUsers["u1"].PassHash != "new" || snap.AdminUsers["u1"].TOTPLastStep != 0 || snap.APIDevices["dev1"].RevokedAt.IsZero() {
+		t.Fatalf("the stale copy overwrote newer rows: %+v %+v", snap.AdminUsers["u1"], snap.APIDevices["dev1"])
+	}
+	// An ordinary write by an up-to-date process still works.
+	if err := check.Update(func(d *store.Data) error {
+		u := d.AdminUsers["u1"]
+		u.TOTPLastStep = 5
+		d.AdminUsers["u1"] = u
+		return nil
+	}); err != nil {
+		t.Fatalf("a current write: %v", err)
+	}
+}

@@ -377,9 +377,14 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	defer tx.Rollback(context.Background())
 	br := tx.SendBatch(ctx, batch)
 	for i := 0; i < batch.Len(); i++ {
-		if _, err := br.Exec(); err != nil {
+		tag, err := br.Exec()
+		if err != nil {
 			br.Close()
 			return connErr(integrityErr(fmt.Errorf("%s: %w", names[i], err)))
+		}
+		if (names[i] == "admin_users" || names[i] == "api_devices") && tag.RowsAffected() == 0 {
+			br.Close()
+			return fmt.Errorf("%s: %w", names[i], store.ErrStaleWrite)
 		}
 	}
 	if err := br.Close(); err != nil {
