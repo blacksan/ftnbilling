@@ -180,42 +180,53 @@ func TestInstallLegacyFirewallRuleNumbers(t *testing.T) {
 	}
 }
 
-// admin-reset passes the new options to the program, restarts only when
-// something that needs it changed, and explains an older program clearly.
+// admin-reset passes the new options, stops the service before the program
+// runs and starts it again afterwards (also on failure), and explains an older
+// program clearly.
 func TestAdminResetOptions(t *testing.T) {
 	bashOrSkip(t)
 	dir := t.TempDir()
 	envf := filepath.Join(dir, "env")
 	os.WriteFile(envf, []byte("ADMIN_PASS=abcdefghijklmnop\n"), 0o600)
-	logf := filepath.Join(dir, "args")
+	logf := filepath.Join(dir, "log") // one ordered log: systemctl and program calls
+	bin := filepath.Join(dir, "bin")
+	os.Mkdir(bin, 0o755)
+	os.WriteFile(filepath.Join(bin, "systemctl"), []byte("#!/bin/sh\necho \"systemctl $*\" >>"+logf+"\nexit 0\n"), 0o755)
 	fake := filepath.Join(dir, "prog")
-	os.WriteFile(fake, []byte("#!/bin/sh\necho \"$@\" >>"+logf+"\nif [ \"$FAKE_OLD\" = 1 ] && [ \"$2\" = -setup-code ]; then echo 'flag provided but not defined: -setup-code' >&2; exit 2; fi\necho 'SETUP CODE: 1234-5678'\n"), 0o755)
-	run := func(old string, args ...string) (string, error) {
+	os.WriteFile(fake, []byte("#!/bin/sh\necho \"prog $*\" >>"+logf+"\nif [ \"$FAKE_FAIL\" = old ]; then echo 'flag provided but not defined: -setup-code' >&2; exit 2; fi\nif [ \"$FAKE_FAIL\" = 1 ]; then echo boom >&2; exit 1; fi\necho 'SETUP CODE: 1234-5678'\n"), 0o755)
+	run := func(fail string, args ...string) (string, error, []string) {
 		os.Remove(logf)
 		u, _ := exec.Command("id", "-un").Output()
 		cmd := exec.Command("bash", append([]string{"ftnbilling-admin-reset"}, args...)...)
-		cmd.Env = append(os.Environ(), "FTN_ADMIN_RESET_NOROOT=1", "FTN_ENV_FILE="+envf, "FTN_BIN="+fake, "FTN_USER="+strings.TrimSpace(string(u)), "FTN_NO_RESTART=1", "FAKE_OLD="+old)
+		cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "FTN_ADMIN_RESET_NOROOT=1", "FTN_ENV_FILE="+envf, "FTN_BIN="+fake, "FTN_USER="+strings.TrimSpace(string(u)), "FAKE_FAIL="+fail)
 		out, err := cmd.CombinedOutput()
-		return string(out), err
+		raw, _ := os.ReadFile(logf)
+		return string(out), err, strings.Split(strings.TrimSpace(string(raw)), "\n")
 	}
-	out, err := run("0", "--setup-code")
+	want := func(t *testing.T, got []string, exp ...string) {
+		t.Helper()
+		if strings.Join(got, "|") != strings.Join(exp, "|") {
+			t.Errorf("calls %q, want %q", got, exp)
+		}
+	}
+	out, err, calls := run("", "--setup-code")
 	if err != nil || !strings.Contains(out, "1234-5678") {
 		t.Fatalf("--setup-code: %v %s", err, out)
 	}
-	got, _ := os.ReadFile(logf)
-	if strings.TrimSpace(string(got)) != "admin-reset-password -setup-code" {
-		t.Errorf("program got %q", got)
-	}
-	run("0", "--generate", "--revoke-sessions", "--reset-totp")
-	got, _ = os.ReadFile(logf)
-	if strings.TrimSpace(string(got)) != "admin-reset-password -generate -revoke-sessions -reset-totp" {
-		t.Errorf("program got %q", got)
-	}
-	out, err = run("1", "--setup-code")
+	want(t, calls, "systemctl is-active --quiet ftnbilling", "systemctl stop ftnbilling", "prog admin-reset-password -setup-code", "systemctl start ftnbilling")
+	_, _, calls = run("", "--generate", "--revoke-sessions", "--reset-totp")
+	want(t, calls, "systemctl is-active --quiet ftnbilling", "systemctl stop ftnbilling", "prog admin-reset-password -generate -revoke-sessions -reset-totp", "systemctl start ftnbilling")
+	out, err, calls = run("old", "--setup-code")
 	if err == nil || !strings.Contains(out, "does not support that option") {
 		t.Errorf("old program: want a clear failure, got %v %s", err, out)
 	}
-	if _, err := run("0", "--nope"); err == nil {
+	want(t, calls, "systemctl is-active --quiet ftnbilling", "systemctl stop ftnbilling", "prog admin-reset-password -setup-code", "systemctl start ftnbilling")
+	_, err, calls = run("1")
+	if err == nil {
+		t.Error("a failing program must fail the script")
+	}
+	want(t, calls, "systemctl is-active --quiet ftnbilling", "systemctl stop ftnbilling", "prog admin-reset-password", "systemctl start ftnbilling")
+	if _, err, _ := run("", "--nope"); err == nil {
 		t.Error("an unknown option must fail")
 	}
 }

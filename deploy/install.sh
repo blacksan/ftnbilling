@@ -929,13 +929,13 @@ pre_upgrade_database() {
   app_cli migrate || die "the database migration failed. Restore the dump above (deploy/BACKUP.md) and report the error."
 }
 
-# A one-time admin setup code, for signing in until the authenticator is set up.
+# A one-time admin setup code (the wrapper stops the service while it runs and starts it again), for signing in until the authenticator is set up.
 # Guarded: a program without the -setup-code option (before the sign-in rebuild)
 # must not make the installer fail.
 make_setup_code() {
   SETUP_OUT=""
   local out rc=0
-  out=$(FTN_NO_RESTART=1 "$SBIN/$APP-admin-reset" --setup-code 2>&1) || rc=$?
+  out=$("$SBIN/$APP-admin-reset" --setup-code 2>&1) || rc=$?
   if [ "$rc" = 0 ]; then SETUP_OUT=$out
   else
     SETUP_OUT=""
