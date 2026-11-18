@@ -21,6 +21,30 @@ func (s *Server) metricsRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/metrics/demo", s.adminMetricsDemo)
 }
 
+// collectorFor returns the collector of the selected building. With "all
+// buildings" selected, or a building that is not collecting yet, it redirects
+// with an explanation and returns false.
+func (s *Server) collectorFor(w http.ResponseWriter, r *http.Request, site string) (*metrics.Collector, string, bool) {
+	if site == "" {
+		sc := s.scopeOf(r)
+		if sc.All {
+			if s.hasOps() { // the fleet overview is the all-buildings view of the network
+				http.Redirect(w, r, "/admin/fleet", http.StatusSeeOther)
+				return nil, "", false
+			}
+			s.back(w, r, "/admin/sites", "Choose a building to see its usage.")
+			return nil, "", false
+		}
+		site = sc.ID
+	}
+	col := s.mgr.Collector(site)
+	if col == nil {
+		s.back(w, r, "/admin/sites/view?id="+url.QueryEscape(site), "This building is not collecting yet: it is paused or not joined.")
+		return nil, "", false
+	}
+	return col, site, true
+}
+
 func mbpsSeries(name, color string, v []float64) metrics.LineSeries {
 	return metrics.LineSeries{Name: name, Color: color, Vals: v}
 }
@@ -41,13 +65,17 @@ func svcBars(rows []metrics.SvcRow) template.HTML {
 }
 
 func (s *Server) adminMetrics(w http.ResponseWriter, r *http.Request) {
+	col, _, ok := s.collectorFor(w, r, "")
+	if !ok {
+		return
+	}
 	pg := s.page(r, "metrics")
 	period := metrics.ParsePeriod(r.URL.Query().Get("period"))
 	sortKey := r.URL.Query().Get("sort")
-	rep := s.col.BuildReport(period, s.svc.Now())
+	rep := col.BuildReport(period, s.svc.Now())
 	metrics.SortFlats(rep.Flats, sortKey)
 	lay := metrics.XLayout(rep.Tier, period)
-	cfg := s.col.Config()
+	cfg := col.Config()
 
 	wan := metrics.LineChart(metrics.LineOpts{T: rep.WAN.T, XLayout: lay, Unit: "Mbps", CapLine: cfg.WANCapMbps, CapLabel: fmt.Sprintf("capacity %.0f", cfg.WANCapMbps),
 		Series: []metrics.LineSeries{mbpsSeries("download", metrics.ColDown, rep.WAN.Vals["down"]), mbpsSeries("upload", metrics.ColUp, rep.WAN.Vals["up"])},
@@ -118,7 +146,16 @@ func (s *Server) adminMetricsFlat(w http.ResponseWriter, r *http.Request) {
 	pg := s.page(r, "metrics")
 	period := metrics.ParsePeriod(r.URL.Query().Get("period"))
 	code := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("code")))
-	fr := s.col.BuildFlat(code, period, s.svc.Now())
+	acct, found := s.svc.AccountByCode(code)
+	if !found {
+		http.NotFound(w, r)
+		return
+	}
+	col, _, ok := s.collectorFor(w, r, acct.SiteID)
+	if !ok {
+		return
+	}
+	fr := col.BuildFlat(code, period, s.svc.Now())
 	if !fr.Found {
 		http.NotFound(w, r)
 		return
@@ -133,8 +170,12 @@ func (s *Server) adminMetricsFlat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminMetricsCSV(w http.ResponseWriter, r *http.Request) {
+	col, _, ok := s.collectorFor(w, r, "")
+	if !ok {
+		return
+	}
 	period := metrics.ParsePeriod(r.URL.Query().Get("period"))
-	rep := s.col.BuildReport(period, s.svc.Now())
+	rep := col.BuildReport(period, s.svc.Now())
 	metrics.SortFlats(rep.Flats, r.URL.Query().Get("sort"))
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="flat-usage-`+string(period)+`.csv"`)
@@ -166,7 +207,11 @@ func (s *Server) adminMetricsDemo(w http.ResponseWriter, r *http.Request) {
 	if n, _ := strconv.Atoi(r.PostFormValue("days")); n > 0 && n <= 60 {
 		days = n
 	}
-	s.col.SeedDemo(s.svc.Now(), days)
+	col, _, ok := s.collectorFor(w, r, "")
+	if !ok {
+		return
+	}
+	col.SeedDemo(s.svc.Now(), days)
 	s.back(w, r, "/admin/metrics?period="+url.QueryEscape(r.PostFormValue("period")), "Demo history generated ("+strconv.Itoa(days)+" days)")
 }
 

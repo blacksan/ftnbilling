@@ -44,15 +44,16 @@ type MpesaConfig struct {
 
 // Mpesa is the Safaricom Daraja provider (STK Push + C2B).
 type Mpesa struct {
-	cfg  MpesaConfig
-	c    Completer
-	st   *store.Store
-	log  *slog.Logger
-	hc   *http.Client
-	now  func() time.Time
-	mu   sync.Mutex
-	tok  string
-	tokX time.Time
+	cfg   MpesaConfig
+	c     Completer
+	st    *store.Store
+	log   *slog.Logger
+	hc    *http.Client
+	now   func() time.Time
+	mu    sync.Mutex
+	tok   string
+	tokX  time.Time
+	spool *Spool
 }
 
 func NewMpesa(cfg MpesaConfig, c Completer, st *store.Store, log *slog.Logger) *Mpesa {
@@ -205,8 +206,49 @@ func rawString(r json.RawMessage) string {
 	return s
 }
 
+// SetSpool makes callbacks survive a database outage: a body whose payment
+// could not be saved is written to the spool and applied later by Replay.
+func (m *Mpesa) SetSpool(sp *Spool) { m.spool = sp }
+
+// Replay applies spooled callbacks. It returns how many were applied.
+func (m *Mpesa) Replay(ctx context.Context) (int, error) {
+	if m.spool == nil {
+		return 0, nil
+	}
+	return m.spool.Replay(func(kind string, body []byte) error {
+		switch kind {
+		case "stk":
+			return m.stk(ctx, body)
+		case "c2b":
+			_, err := m.c2b(ctx, body)
+			return err
+		}
+		return fmt.Errorf("unknown spool kind %q", kind)
+	})
+}
+
+func (m *Mpesa) keep(kind string, body []byte, err error) bool {
+	if err == nil || m.spool == nil || !IsPersistError(err) {
+		return false
+	}
+	if perr := m.spool.Put(kind, body); perr != nil {
+		m.log.Error("could not spool a callback: the payment must be entered by hand from the M-Pesa statement", "kind", kind, "err", perr)
+		return false
+	}
+	m.log.Warn("database unavailable: callback spooled and will be applied later", "kind", kind)
+	return true
+}
+
 // HandleSTKCallback processes Daraja's STK result. It is idempotent.
 func (m *Mpesa) HandleSTKCallback(ctx context.Context, body []byte) error {
+	err := m.stk(ctx, body)
+	if m.keep("stk", body, err) {
+		return nil
+	}
+	return err
+}
+
+func (m *Mpesa) stk(ctx context.Context, body []byte) error {
 	var cb stkCallback
 	if err := json.Unmarshal(body, &cb); err != nil {
 		return fmt.Errorf("bad stk callback: %w", err)
@@ -313,44 +355,59 @@ func (m *Mpesa) HandleC2BValidation(body []byte) C2BResponse {
 // Every payment lands in the ledger under its TransID, so a repeated delivery
 // (or the STK result for the same payment) changes nothing.
 func (m *Mpesa) HandleC2BConfirmation(ctx context.Context, body []byte) C2BResponse {
+	resp, err := m.c2b(ctx, body)
+	m.keep("c2b", body, err)
+	return resp
+}
+
+// c2b does the work; a non-nil error means the database did not take the payment.
+func (m *Mpesa) c2b(ctx context.Context, body []byte) (C2BResponse, error) {
 	p, amt, err := parseC2B(body)
 	if err != nil || p.TransID == "" {
 		m.log.Warn("bad c2b confirmation")
-		return C2BAccept
+		return C2BAccept, nil
 	}
 	amount := int(math.Floor(amt))
 	name := strings.TrimSpace(p.FirstName + " " + p.LastName)
-	unmatched := func(accountID, note string) {
+	unmatched := func(accountID, note string) error {
 		if _, err := m.c.RecordUnmatched(billing.UnmatchedInput{Key: p.TransID, Method: "mpesa-c2b", AmountKES: amount,
 			Phone: p.MSISDN, Name: name, BillRef: p.BillRefNumber, AccountID: accountID, Note: note, PaidAt: m.now()}); err != nil {
 			m.log.Error("could not store unmatched payment", "trans", p.TransID, "err", err)
+			if IsPersistError(err) {
+				return err
+			}
 		}
+		return nil
 	}
 	kind, order, acct := m.refKind(p.BillRefNumber)
 	switch kind {
 	case "order": // an STK push also triggers C2B; the reference may be the order id
 		if order.Status == store.OrderPaid {
-			return C2BAccept
+			return C2BAccept, nil
 		}
 		if amount < order.AmountKES {
-			unmatched(order.AccountID, "amount below the package price")
-			return C2BAccept
+			return C2BAccept, unmatched(order.AccountID, "amount below the package price")
 		}
 		if err := m.c.CompleteOrder(ctx, order.ID, p.TransID); err != nil {
-			unmatched(order.AccountID, "order completion failed: "+err.Error())
+			if IsPersistError(err) {
+				return C2BAccept, err
+			}
+			return C2BAccept, unmatched(order.AccountID, "order completion failed: "+err.Error())
 		}
 	case "account":
-		pkg, ok := m.c.PackageForAmount(amount)
+		pkg, ok := m.c.PackageForAmount(acct.SiteID, amount)
 		if !ok {
-			unmatched(acct.ID, "no package costs KES "+strconv.Itoa(amount))
-			return C2BAccept
+			return C2BAccept, unmatched(acct.ID, "no package costs KES "+strconv.Itoa(amount))
 		}
 		if _, _, err := m.c.Credit(ctx, billing.CreditInput{Key: p.TransID, Method: "mpesa-c2b", AccountID: acct.ID, PackageID: pkg.ID,
 			AmountKES: amount, Phone: p.MSISDN, Name: name, BillRef: p.BillRefNumber}); err != nil {
-			unmatched(acct.ID, "could not apply: "+err.Error())
+			if IsPersistError(err) {
+				return C2BAccept, err
+			}
+			return C2BAccept, unmatched(acct.ID, "could not apply: "+err.Error())
 		}
 	default:
-		unmatched("", "unknown account number")
+		return C2BAccept, unmatched("", "unknown account number")
 	}
-	return C2BAccept
+	return C2BAccept, nil
 }

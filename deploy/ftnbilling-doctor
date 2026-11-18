@@ -1,0 +1,297 @@
+#!/usr/bin/env bash
+# Health check for a Fast Tech Net billing server.
+# Installed as /usr/local/sbin/ftnbilling-doctor by deploy/install.sh.
+#
+#   sudo ftnbilling-doctor        every check, PASS / WARN / FAIL
+#   sudo ftnbilling-doctor -q     only WARN and FAIL
+#
+# Exit status: 0 when nothing FAILs (warnings are fine), 1 when something FAILs.
+# It only reads; it changes nothing.
+#
+# Test/override variables (all optional): FTN_ENV_FILE, FTN_DATA, FTN_BIN,
+# FTN_BACKUP_DIR, FTN_HEALTH_URL.
+set -u -o pipefail
+
+APP=ftnbilling
+ENVF=${FTN_ENV_FILE:-/etc/$APP/$APP.env}
+DATA=${FTN_DATA:-/var/lib/$APP}
+BIN=${FTN_BIN:-/usr/local/bin/$APP}
+BACKDIR=${FTN_BACKUP_DIR:-/var/backups/$APP}
+HEALTH_URL=${FTN_HEALTH_URL:-http://127.0.0.1:8080/healthz}
+STATUS_JSON=$DATA/backup-status.json
+DRIVE_STATE=/var/lib/$APP-backup/last.json
+QUIET=0
+[ "${1:-}" = "-q" ] && QUIET=1
+
+if [ -t 1 ]; then G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; Z=$'\033[0m'; else G=""; Y=""; R=""; Z=""; fi
+NP=0; NW=0; NF=0
+pass() { NP=$((NP + 1)); [ "$QUIET" = 1 ] || printf '%sPASS%s  %-34s %s\n' "$G" "$Z" "$1" "${2:-}"; }
+warn() { NW=$((NW + 1)); printf '%sWARN%s  %-34s %s\n' "$Y" "$Z" "$1" "${2:-}"; }
+fail() { NF=$((NF + 1)); printf '%sFAIL%s  %-34s %s\n' "$R" "$Z" "$1" "${2:-}"; }
+section() { [ "$QUIET" = 1 ] || printf '\n== %s\n' "$1"; }
+
+have() { command -v "$1" >/dev/null 2>&1; }
+# Value of KEY in the env file (not sourced: values may hold spaces).
+envval() {
+  [ -r "$ENVF" ] || return 0
+  local v
+  v=$(grep -m1 "^$1=" "$ENVF" 2>/dev/null | cut -d= -f2- || true)
+  v=${v%$'\r'}
+  case "$v" in \"*\") v=${v#\"}; v=${v%\"};; \'*\') v=${v#\'}; v=${v%\'};; esac
+  printf '%s' "$v"
+}
+unit_active() { systemctl is-active --quiet "$1" 2>/dev/null; }
+unit_enabled() { systemctl is-enabled --quiet "$1" 2>/dev/null; }
+# json_field FILE KEY: string or number value of "KEY" in a flat JSON file.
+json_field() {
+  [ -r "$1" ] || return 0
+  sed -n 's/.*"'"$2"'" *: *"\{0,1\}\([^",}]*\)"\{0,1\}.*/\1/p' "$1" | head -1
+}
+age_hours() { # ISO time -> whole hours ago, empty if unparsable
+  local t s
+  t=$1; [ -n "$t" ] || return 0
+  s=$(date -d "$t" +%s 2>/dev/null) || return 0
+  echo $(( ($(date +%s) - s) / 3600 ))
+}
+listening() { # proto(tcp|udp) port -> 0 if something listens
+  ss -H -ln"${1:0:1}" 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]$2\$"
+}
+
+[ "$(id -u)" = 0 ] || { echo "WARN: not root; some checks (ufw, wg, services' details) will be incomplete. Run: sudo ftnbilling-doctor" >&2; }
+have systemctl || { fail systemd "systemctl not found: this is not a systemd server"; }
+
+DBURL=$(envval DATABASE_URL)
+section "Settings"
+if [ -r "$ENVF" ]; then pass "settings file" "$ENVF"; else fail "settings file" "$ENVF is missing or unreadable"; fi
+
+# ------------------------------------------------------------------ programs
+section "Programs"
+for c in curl tar ufw wg wg-quick qrencode caddy psql pg_dump pg_restore rclone; do
+  if have "$c"; then pass "program: $c" "$(command -v "$c")"; else fail "program: $c" "not installed (re-run the installer)"; fi
+done
+if have rclone; then
+  rv=$(rclone version 2>/dev/null | awk 'NR==1{sub(/^rclone v/,""); print $1}')
+  if [ -n "$rv" ] && [ "$(printf '%s\n1.60\n' "$rv" | sort -V | head -1)" = "1.60" ]; then
+    pass "rclone version" "$rv"
+  else
+    warn "rclone version" "${rv:-unknown}; the backup needs 1.60 or newer"
+  fi
+fi
+if [ -x "$BIN" ]; then pass "app binary" "$BIN"; else fail "app binary" "$BIN missing or not executable"; fi
+for s in ftnbilling-wg-sync ftnbilling-backup ftnbilling-admin-peer ftnbilling-doctor; do
+  if [ -x "/usr/local/sbin/$s" ]; then pass "tool: $s" ""; else fail "tool: $s" "/usr/local/sbin/$s missing"; fi
+done
+[ -r "$(dirname "$ENVF")/VERSION" ] && pass "installed version" "$(head -1 "$(dirname "$ENVF")/VERSION")"
+
+# ------------------------------------------------------------------ services
+section "Services and timers"
+for u in $APP caddy wg-quick@wg0 wg-quick@wg-admin; do
+  if unit_active "$u"; then pass "service: $u" "active"; else fail "service: $u" "not running (journalctl -u $u -n 30)"; fi
+done
+if [ -n "$DBURL" ]; then
+  if unit_active postgresql; then pass "service: postgresql" "active"; else fail "service: postgresql" "not running (journalctl -u postgresql -n 30)"; fi
+else
+  warn "service: postgresql" "DATABASE_URL is not set: the app is using the JSON file (the installer was run with NO_POSTGRES=1?)"
+fi
+if unit_active chrony || unit_active chronyd || unit_active systemd-timesyncd; then
+  pass "service: time sync" "active"
+else
+  fail "service: time sync" "neither chrony nor systemd-timesyncd is running"
+fi
+if unit_enabled unattended-upgrades; then pass "unattended-upgrades" "enabled"; else warn "unattended-upgrades" "not enabled (security updates will not install by themselves)"; fi
+if unit_active "$APP-wg-sync.path"; then pass "unit: $APP-wg-sync.path" "watching"; else fail "unit: $APP-wg-sync.path" "not active (routers' peers will not be applied)"; fi
+for t in $APP-wg-status.timer $APP-dump.timer; do
+  if unit_active "$t"; then pass "timer: $t" "active"; else fail "timer: $t" "not active"; fi
+done
+if [ -n "$DBURL" ]; then
+  if unit_active $APP-drill.timer; then pass "timer: $APP-drill.timer" "active"; else fail "timer: $APP-drill.timer" "not active"; fi
+fi
+if unit_active $APP-backup.timer; then
+  pass "timer: $APP-backup.timer" "weekly Drive upload on"
+else
+  warn "timer: $APP-backup.timer" "Drive backup is not on: run  sudo $APP-backup setup"
+fi
+[ -e /etc/cron.daily/$APP-backup ] && warn "old daily cron" "/etc/cron.daily/$APP-backup still exists (replaced by $APP-dump.timer); re-run the installer"
+
+# ------------------------------------------------------------------ ports
+section "Ports"
+if have ss; then
+  if listening tcp 8080; then pass "port tcp/8080" "app listening"; else fail "port tcp/8080" "nothing listening (is $APP running?)"; fi
+  for p in 80 443; do
+    if listening tcp "$p"; then pass "port tcp/$p" "caddy listening"; else fail "port tcp/$p" "nothing listening"; fi
+  done
+  if listening udp 51820; then pass "port udp/51820" "wg0 (routers)"; else fail "port udp/51820" "wg0 not listening"; fi
+  if listening udp 51821; then pass "port udp/51821" "wg-admin (you)"; else fail "port udp/51821" "wg-admin not listening"; fi
+  if listening udp 2055; then pass "port udp/2055" "NetFlow"; else warn "port udp/2055" "NetFlow not listening"; fi
+  if listening tcp 5432; then fail "port tcp/5432" "Postgres is listening on TCP; it must only use its local socket"; else pass "port tcp/5432" "no Postgres TCP listener"; fi
+else
+  warn "ports" "ss not found; skipped"
+fi
+
+# ------------------------------------------------------------------ postgres
+section "PostgreSQL"
+if [ -n "$DBURL" ]; then
+  if have pg_isready && pg_isready -q 2>/dev/null; then pass "postgres accepting connections" ""; else fail "postgres accepting connections" "pg_isready says no"; fi
+  asapp() { # run a command as the app user so file permissions match the real service
+    if [ "$(id -u)" = 0 ] && id -u $APP >/dev/null 2>&1 && have runuser; then runuser -u $APP -- "$@"; else "$@"; fi
+  }
+  if have psql; then
+    if out=$(asapp psql "$DBURL" -Atc 'select 1' 2>&1) && [ "$out" = 1 ]; then
+      pass "app role can connect" "psql select 1"
+    else
+      fail "app role can connect" "$(printf '%s' "$out" | head -1)"
+    fi
+  fi
+  if [ -x "$BIN" ]; then
+    out=$(asapp env DATABASE_URL="$DBURL" DATA_DIR="$DATA" "$BIN" migrate -check 2>&1); rc=$?
+    if [ $rc -eq 0 ]; then
+      pass "migrations current" "$(printf '%s' "$out" | head -1)"
+    elif printf '%s' "$out" | grep -q 'flag provided but not defined'; then
+      out=$(asapp env DATABASE_URL="$DBURL" DATA_DIR="$DATA" "$BIN" db-check 2>&1); rc=$?
+      if [ $rc -eq 0 ]; then
+        pass "database readable (db-check)" "migrate -check not in this build; schema version not verified"
+      else
+        fail "database readable (db-check)" "$(printf '%s' "$out" | head -1)"
+      fi
+    else
+      fail "migrations current" "$(printf '%s' "$out" | head -1)"
+    fi
+  fi
+  if [ -f /etc/systemd/system/postgresql@.service.d/ftnbilling-oom.conf ] || ls /etc/systemd/system/postgresql*.service.d/*oom*.conf >/dev/null 2>&1; then
+    pass "postgres OOM protection" "OOMScoreAdjust drop-in present"
+  else
+    warn "postgres OOM protection" "OOMScoreAdjust drop-in missing (re-run the installer)"
+  fi
+  [ -n "$(envval DATA_KEY)" ] && pass "DATA_KEY set" "" || warn "DATA_KEY set" "empty: the national-ID feature is off"
+else
+  warn "database" "no DATABASE_URL, skipped"
+fi
+
+# ------------------------------------------------------------------ app
+section "App"
+if have curl; then
+  hz=$(curl -fsS --max-time 5 "$HEALTH_URL" 2>&1); rc=$?
+  if [ $rc -ne 0 ]; then
+    fail "app /healthz" "no answer from $HEALTH_URL"
+  else
+    if printf '%s' "$hz" | grep -Eq '"ok" *: *true'; then pass "app /healthz" "ok"; else fail "app /healthz" "answered but ok is not true: $hz"; fi
+    if printf '%s' "$hz" | grep -Eq '"db_ok" *: *true'; then
+      pass "app database (db_ok)" "true"
+    elif printf '%s' "$hz" | grep -Eq '"db_ok" *: *false'; then
+      fail "app database (db_ok)" "the app cannot reach its database"
+    elif [ -n "$DBURL" ]; then
+      warn "app database (db_ok)" "/healthz does not report db_ok (older app build)"
+    fi
+    sites=$(printf '%s' "$hz" | sed -n 's/.*"sites_total" *: *\([0-9]*\).*/\1/p')
+    online=$(printf '%s' "$hz" | sed -n 's/.*"sites_online" *: *\([0-9]*\).*/\1/p')
+    if [ -n "$sites" ]; then
+      if [ "${online:-0}" = "$sites" ]; then pass "buildings online" "$online of $sites"; else warn "buildings online" "${online:-0} of $sites (see Admin > Fleet)"; fi
+    fi
+  fi
+fi
+if [ -n "$(envval ADMIN_ALLOW_CIDR)" ]; then pass "ADMIN_ALLOW_CIDR" "$(envval ADMIN_ALLOW_CIDR)"; else pass "ADMIN_ALLOW_CIDR" "not set: app default 10.98.0.0/24"; fi
+case "$(envval PUBLIC_BASE_URL)" in
+  https://*) pass "public URL" "$(envval PUBLIC_BASE_URL)";;
+  *) warn "public URL" "$(envval PUBLIC_BASE_URL) is not HTTPS: M-Pesa and router join commands need DOMAIN=...";;
+esac
+if [ -r "$ENVF" ]; then
+  perm=$(stat -c '%a %U:%G' "$ENVF" 2>/dev/null || true)
+  case "$perm" in "640 root:$APP") pass "settings file permissions" "$perm";; *) warn "settings file permissions" "$perm (expected 640 root:$APP)";; esac
+fi
+if have caddy && [ -r /etc/caddy/Caddyfile ]; then
+  if caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then pass "Caddyfile valid" ""; else fail "Caddyfile valid" "caddy validate failed"; fi
+fi
+
+# ------------------------------------------------------------------ wireguard
+section "WireGuard"
+if have wg; then
+  for i in wg0 wg-admin; do
+    if wg show "$i" >/dev/null 2>&1; then pass "interface $i" "up"; else fail "interface $i" "down or missing (systemctl status wg-quick@$i)"; fi
+  done
+  n=$(wg show wg-admin peers 2>/dev/null | grep -c . || true)
+  if [ "${n:-0}" -ge 1 ]; then pass "admin devices" "$n"; else fail "admin devices" "none: you cannot open the admin. Run: sudo ftnbilling-admin-peer add <name>"; fi
+  n=$(wg show wg0 peers 2>/dev/null | grep -c . || true)
+  pass "router tunnels (wg0 peers)" "${n:-0}"
+else
+  fail "WireGuard" "wg is not installed, so tunnels cannot be checked"
+fi
+fw=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo 0)
+if [ "$fw" = 1 ]; then warn "ip_forward" "1: this server routes packets; leave it 0 unless you need it"; else pass "ip_forward" "0"; fi
+
+# ------------------------------------------------------------------ firewall
+section "Firewall"
+if have ufw; then
+  st=$(ufw status verbose 2>/dev/null || true)
+  if printf '%s' "$st" | grep -q '^Status: active'; then
+    pass "ufw" "active"
+    printf '%s' "$st" | grep -Eq 'Default: deny \(incoming\)' && pass "ufw default" "deny incoming" || fail "ufw default" "incoming is not denied by default"
+    for r in '51820/udp' '51821/udp' '80/tcp' '443/tcp'; do
+      printf '%s' "$st" | grep -Eq "^$r +ALLOW" && pass "ufw allow $r" "" || fail "ufw allow $r" "rule missing"
+    done
+    printf '%s' "$st" | grep -Eq '8080/tcp +on wg-admin +ALLOW' && pass "ufw wg-admin -> :8080" "allowed" || warn "ufw wg-admin -> :8080" "rule not found in 'ufw status' (format differs?)"
+    if printf '%s' "$st" | grep -Eq '^8080(/tcp)? +ALLOW +Anywhere'; then fail "ufw :8080 public" "port 8080 is open to everyone"; else pass "ufw :8080 public" "not open to the internet"; fi
+    printf '%s' "$st" | grep -Eq 'on wg-admin.*DENY FWD|DENY FWD.*wg-admin' && pass "ufw wg-admin no routing" "route deny" || warn "ufw wg-admin no routing" "route deny rule not found in 'ufw status'"
+  else
+    fail "ufw" "not active (the server is unprotected; re-run the installer)"
+  fi
+else
+  fail "ufw" "not installed: no firewall"
+fi
+
+# ------------------------------------------------------------------ resources
+section "Resources"
+for m in / "$DATA"; do
+  [ -d "$m" ] || continue
+  use=$(df -P "$m" 2>/dev/null | awk 'NR==2{gsub("%","",$5); print $5}')
+  [ -n "$use" ] || continue
+  if [ "$use" -ge 95 ]; then fail "disk $m" "${use}% full"; elif [ "$use" -ge 85 ]; then warn "disk $m" "${use}% full"; else pass "disk $m" "${use}% used"; fi
+done
+mem_total=$(awk '/^MemTotal:/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+mem_avail=$(awk '/^MemAvailable:/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+swap_total=$(awk '/^SwapTotal:/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+if [ "${mem_avail:-0}" -lt 100 ]; then fail "memory" "only ${mem_avail} MB available of ${mem_total} MB"; elif [ "${mem_avail:-0}" -lt 250 ]; then warn "memory" "${mem_avail} MB available of ${mem_total} MB"; else pass "memory" "${mem_avail} MB available of ${mem_total} MB"; fi
+if [ "${swap_total:-0}" -gt 0 ]; then pass "swap" "${swap_total} MB"; elif [ "${mem_total:-0}" -le 2200 ]; then warn "swap" "none, and RAM is ${mem_total} MB (re-run the installer to add a swap file)"; else pass "swap" "none (RAM ${mem_total} MB)"; fi
+if have timedatectl; then
+  if [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ]; then pass "clock" "synchronised"; else warn "clock" "not synchronised yet (M-Pesa timestamps and WireGuard need a correct clock)"; fi
+else
+  warn "clock" "timedatectl not found"
+fi
+if [ -r /etc/systemd/journald.conf.d/$APP.conf ]; then pass "journald limit" "$(grep -m1 SystemMaxUse /etc/systemd/journald.conf.d/$APP.conf)"; else warn "journald limit" "SystemMaxUse not set (logs can fill the disk)"; fi
+
+# ------------------------------------------------------------------ backups
+section "Backups"
+lb=$(json_field "$STATUS_JSON" dump_at); lbe=$(json_field "$STATUS_JSON" error)
+if [ -n "$DBURL" ] || [ -n "$lb" ]; then
+  h=$(age_hours "$lb")
+  if [ -z "$h" ]; then fail "last database dump" "never ($STATUS_JSON missing). Run: sudo $APP-backup dump"
+  elif [ "$h" -le 12 ]; then pass "last database dump" "$h h ago"
+  elif [ "$h" -le 36 ]; then warn "last database dump" "$h h ago (should be every 6 h)"
+  else fail "last database dump" "$h h ago (the app shows it as stale after 36 h)"; fi
+  [ -n "$lbe" ] && fail "last dump error" "$lbe"
+  nd=$(ls "$BACKDIR"/db/*.dump 2>/dev/null | wc -l)
+  [ "$nd" -ge 1 ] && pass "dump files" "$nd kept in $BACKDIR/db" || fail "dump files" "none in $BACKDIR/db"
+  ld=$(json_field "$STATUS_JSON" drill_at); lok=$(json_field "$STATUS_JSON" drill_ok)
+  if [ "$lok" = false ] && [ -n "$ld" ]; then
+    fail "last restore drill" "FAILED at $ld: $(json_field "$STATUS_JSON" drill_msg)"
+  elif [ -z "$ld" ]; then
+    warn "last restore drill" "never run (the monthly timer will; or: sudo $APP-backup drill)"
+  else
+    h=$(age_hours "$ld")
+    if [ -n "$h" ] && [ "$h" -gt 1000 ]; then warn "last restore drill" "$((h / 24)) days ago (monthly expected)"
+    else pass "last restore drill" "ok, $((${h:-0} / 24)) days ago"; fi
+  fi
+fi
+if have rclone && grep -qs '^\[ftn-backup\]' "${RCLONE_CONFIG:-/root/.config/rclone/rclone.conf}"; then
+  pass "Drive backup configured" "remote ftn-backup"
+  ds=$(json_field "$DRIVE_STATE" status); dt=$(json_field "$DRIVE_STATE" time); h=$(age_hours "$dt")
+  if [ -z "$ds" ]; then warn "last Drive upload" "never (run: sudo $APP-backup run)"
+  elif [ "$ds" != ok ]; then fail "last Drive upload" "failed at $dt: $(json_field "$DRIVE_STATE" error)"
+  elif [ -n "$h" ] && [ "$h" -gt 216 ]; then warn "last Drive upload" "$((h / 24)) days ago (weekly expected)"
+  else pass "last Drive upload" "ok, $((${h:-0} / 24)) days ago"; fi
+else
+  warn "Drive backup configured" "not set up: run  sudo $APP-backup setup  (dumps stay on this server only until then)"
+fi
+
+echo
+printf 'Result: %s%d passed%s, %s%d warnings%s, %s%d failed%s\n' "$G" "$NP" "$Z" "$Y" "$NW" "$Z" "$R" "$NF" "$Z"
+[ "$NF" -eq 0 ]

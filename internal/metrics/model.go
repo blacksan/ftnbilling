@@ -1,13 +1,12 @@
 // Package metrics collects usage and quality-of-experience data from the
 // router (hotspot sessions, interface counters, NetFlow v5, ping) into small
-// time-bucketed series, stores them in metrics.json and builds the admin report.
+// time-bucketed series, stores them in one file per building and builds the admin report.
 package metrics
 
 import (
 	"encoding/json"
 	"math"
 	"os"
-	"path/filepath"
 	"sort"
 	"time"
 
@@ -26,6 +25,10 @@ const (
 	TD             // 1 day (EAT), kept 400 days
 	numTiers
 )
+
+// svcAcctRetention is how long per-flat service days are kept (they are the
+// largest part of the file, and only the last two months are ever shown).
+const svcAcctRetention = 62 * 24 * time.Hour
 
 // Retention per tier. Pruned on every save so the file stays bounded.
 var retention = [numTiers]time.Duration{48 * time.Hour, 14 * 24 * time.Hour, 400 * 24 * time.Hour}
@@ -159,6 +162,10 @@ func (s *Series) Sum(tier Tier, from, to time.Time) Cell {
 	return c
 }
 
+// Prune drops buckets older than the retention of their tier and reports
+// whether the series is now empty.
+func (s *Series) Prune(now time.Time) bool { return s.prune(now) }
+
 func (s *Series) prune(now time.Time) bool {
 	for tr := T5; tr < numTiers; tr++ {
 		cut := now.Add(-retention[tr]).Unix()
@@ -243,7 +250,7 @@ type NFStats struct {
 	Exporter string    `json:"exporter,omitempty"`
 }
 
-// Data is everything persisted in metrics.json.
+// Data is everything persisted in a building's metrics file.
 type Data struct {
 	Version int                                    `json:"version"`
 	Accts   map[string]*Series                     `json:"accts"`    // by account code
@@ -307,7 +314,7 @@ func (d *Data) Prune(now time.Time) {
 	}
 	d.Sys.prune(now)
 	d.Svc.prune(now)
-	cut := BucketStart(TD, now.Add(-retention[TD]))
+	cut := BucketStart(TD, now.Add(-svcAcctRetention))
 	for code, days := range d.SvcAcct {
 		for k := range days {
 			if k < cut {
@@ -356,8 +363,6 @@ func save(path string, d *Data) error {
 	}
 	return store.WriteFileAtomic(path, b)
 }
-
-func metricsPath(dir string) string { return filepath.Join(dir, "metrics.json") }
 
 func marshal(d *Data) ([]byte, error) { return json.Marshal(d) }
 

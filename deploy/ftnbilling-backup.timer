@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly Fast Tech Net backup (Sunday 02:30 Nairobi time)
+
+[Timer]
+# Sunday 02:30 East Africa Time (= Saturday 23:30 UTC). install.sh swaps this
+# for the UTC form on a systemd too old to understand a time zone suffix.
+OnCalendar=Sun *-*-* 02:30:00 Africa/Nairobi
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target

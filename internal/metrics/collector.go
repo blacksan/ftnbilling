@@ -2,9 +2,12 @@ package metrics
 
 import (
 	"context"
+	"hash/fnv"
 	"log/slog"
 	"math"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -31,8 +34,15 @@ type Config struct {
 	FlowEvery, PortEvery   time.Duration
 	PingEvery, DNSEvery    time.Duration
 	SaveEvery              time.Duration
-	NetflowAddr            string
-	Synthetic              bool // ROUTER_MOCK: generate service data from session deltas
+	// NetflowAddr is informational (shown on the usage page): the receiver
+	// lives in internal/sites and feeds HandleNetflow. "off" = no NetFlow.
+	NetflowAddr string
+	Synthetic   bool // ROUTER_MOCK: generate service data from session deltas
+	// SiteID staggers this collector's loops against the other buildings'.
+	SiteID string
+	// PortAllow, when non-empty, limits SamplePorts to exactly these
+	// interface names (joined buildings). Empty keeps the legacy prefix filter.
+	PortAllow []string
 }
 
 // CapFraction is "at the cap" for the percent-of-time-at-cap measure.
@@ -111,14 +121,15 @@ type ipEntry struct {
 	seen time.Time
 }
 
-// New loads metrics.json from dir (a corrupt file is logged and replaced).
-func New(dir string, cfg Config, rt routeros.Telemetry, d Directory, log *slog.Logger) *Collector {
-	c := &Collector{cfg: cfg, rt: rt, dir: d, log: log, path: metricsPath(dir), now: time.Now,
+// New loads the metrics file at path (a corrupt file is logged and replaced).
+// Its directory is created when the first save happens.
+func New(path string, cfg Config, rt routeros.Telemetry, d Directory, log *slog.Logger) *Collector {
+	c := &Collector{cfg: cfg, rt: rt, dir: d, log: log, path: path, now: time.Now,
 		prevS: map[string]sessPrev{}, prevIf: map[string]ifPrev{}, ipCode: map[string]ipEntry{},
 		dns: map[netip.Addr]dnsInfo{}, failing: map[string]bool{}}
 	data, err := load(c.path)
 	if err != nil {
-		log.Warn("metrics.json unreadable; starting empty", "err", err)
+		log.Warn("metrics file unreadable; starting empty", "path", path, "err", err)
 	}
 	c.D = data
 	c.L = Live{Flats: map[string]LiveRate{}, Ports: map[string]LivePort{}, Ping: map[string]LivePing{},
@@ -129,8 +140,58 @@ func New(dir string, cfg Config, rt routeros.Telemetry, d Directory, log *slog.L
 // SetClock overrides the clock (tests).
 func (c *Collector) SetClock(f func() time.Time) { c.now = f }
 
-// DisableNetflow turns the UDP listener off (ROUTER_MOCK).
-func (c *Collector) DisableNetflow() { c.cfg.NetflowAddr = "off" }
+// Snapshot returns a copy of the live view, taken under the lock, so callers
+// (fleet prober, alerts) can read it while the collector keeps sampling.
+func (c *Collector) Snapshot() Live {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := c.L
+	out.Flats = make(map[string]LiveRate, len(c.L.Flats))
+	for k, v := range c.L.Flats {
+		out.Flats[k] = v
+	}
+	out.Ports = make(map[string]LivePort, len(c.L.Ports))
+	for k, v := range c.L.Ports {
+		out.Ports[k] = v
+	}
+	out.Ping = make(map[string]LivePing, len(c.L.Ping))
+	for k, v := range c.L.Ping {
+		out.Ping[k] = v
+	}
+	out.Err = make(map[string]string, len(c.L.Err))
+	for k, v := range c.L.Err {
+		out.Err[k] = v
+	}
+	out.ErrAt = make(map[string]time.Time, len(c.L.ErrAt))
+	for k, v := range c.L.ErrAt {
+		out.ErrAt[k] = v
+	}
+	return out
+}
+
+// portWanted decides whether SamplePorts records an interface.
+func (c *Collector) portWanted(n string) bool {
+	if len(c.cfg.PortAllow) > 0 {
+		for _, a := range c.cfg.PortAllow {
+			if a == n {
+				return true
+			}
+		}
+		return false
+	}
+	return strings.HasPrefix(n, "ether") || strings.HasPrefix(n, "sfp") || strings.HasPrefix(n, "vlan") || strings.HasPrefix(n, "bridge")
+}
+
+// jitter is this site's fixed offset into a polling interval: it spreads the
+// first tick of every loop so many buildings do not all poll in the same second.
+func (c *Collector) jitter(every time.Duration) time.Duration {
+	if c.cfg.SiteID == "" || every <= 0 {
+		return 0
+	}
+	h := fnv.New32a()
+	h.Write([]byte(c.cfg.SiteID))
+	return time.Duration(uint64(h.Sum32()) % uint64(every))
+}
 
 // Config returns the settings.
 func (c *Collector) Config() Config { return c.cfg }
@@ -349,7 +410,7 @@ func (c *Collector) SamplePorts(now time.Time, ifs []routeros.Iface) {
 	live := map[string]LivePort{}
 	for _, f := range ifs {
 		n := f.Name
-		if !(strings.HasPrefix(n, "ether") || strings.HasPrefix(n, "sfp") || strings.HasPrefix(n, "vlan") || strings.HasPrefix(n, "bridge")) {
+		if !c.portWanted(n) {
 			continue
 		}
 		p, had := c.prevIf[n]
@@ -474,7 +535,7 @@ func (c *Collector) UpdateDNS(now time.Time, entries []routeros.DNSEntry) {
 
 // ---- persistence ----------------------------------------------------------------
 
-// Save prunes and writes metrics.json atomically.
+// Save prunes and writes the metrics file atomically.
 func (c *Collector) Save() error {
 	c.mu.Lock()
 	now := c.now()
@@ -484,6 +545,9 @@ func (c *Collector) Save() error {
 	b, err := marshal(&data)
 	c.mu.Unlock()
 	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(c.path), 0o755); err != nil {
 		return err
 	}
 	return writeBytes(c.path, b)
@@ -512,10 +576,27 @@ func (c *Collector) note(name string, err error) {
 // Run starts the collection loops and blocks until ctx is cancelled, then saves.
 func (c *Collector) Run(ctx context.Context) {
 	var wg sync.WaitGroup
+	// wait sleeps the site's jitter; false means ctx ended first.
+	wait := func(d time.Duration) bool {
+		if d <= 0 {
+			return true
+		}
+		tm := time.NewTimer(d)
+		defer tm.Stop()
+		select {
+		case <-ctx.Done():
+			return false
+		case <-tm.C:
+			return true
+		}
+	}
 	loop := func(every time.Duration, fn func(context.Context)) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			if !wait(c.jitter(every)) {
+				return
+			}
 			t := time.NewTicker(every)
 			defer t.Stop()
 			fn(ctx)
@@ -577,18 +658,27 @@ func (c *Collector) Run(ctx context.Context) {
 			c.UpdateDNS(c.now(), es)
 		}
 	}))
-	loop(c.cfg.SaveEvery, func(context.Context) {
-		if err := c.Save(); err != nil {
-			c.log.Warn("metrics save failed", "err", err)
-		}
-	})
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if err := c.ListenNetflow(ctx, c.cfg.NetflowAddr, nil); err != nil {
-			c.log.Warn("netflow listener stopped", "addr", c.cfg.NetflowAddr, "err", err)
-		}
-	}()
+	if every := c.cfg.SaveEvery; every > 0 { // staggered: first save one interval + jitter from now
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if !wait(c.jitter(every)) {
+				return
+			}
+			t := time.NewTicker(every)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					if err := c.Save(); err != nil {
+						c.log.Warn("metrics save failed", "err", err)
+					}
+				}
+			}
+		}()
+	}
 	<-ctx.Done()
 	wg.Wait()
 	if err := c.Save(); err != nil {

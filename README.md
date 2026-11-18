@@ -1,8 +1,8 @@
 # ispbill
 
 > **Two ways to run it.** On the RB5009 as a container (this README), or on a
-> VPS with a Tailscale tunnel to the router: see [deploy/README.md](deploy/README.md)
-> for the one-line install.
+> VPS with WireGuard tunnels to the routers and PostgreSQL: see
+> [deploy/README.md](deploy/README.md) for the one-command install of a new server.
 
 A small internet-billing app with a captive portal. It runs as a container on a
 MikroTik RB5009UG+S+IN (RouterOS 7, arm64) and controls the router's Hotspot
@@ -94,16 +94,125 @@ ROUTER_MOCK=true TEST_MODE=true ADMIN_PASS=change-me DATA_DIR=/tmp/ispbill \
 ```
 Open http://127.0.0.1:8080/admin (user `admin`), create an account with MAC `AA:BB:CC:DD:EE:01`, then http://127.0.0.1:8080/portal?mac=AA:BB:CC:DD:EE:01&ip=10.5.50.20 and tap "Test payment" (it completes after about 3 s). A different MAC shows the "not registered" page. `ROUTER_MOCK=true` uses an in-memory fake router, so nothing is sent anywhere. Screenshots of the pages are in `dist/screenshots/`.
 
+## Many buildings (multi-site)
+
+One server can bill many buildings. Each building is a MikroTik router with
+its own hotspot and a `Site` record. Account codes are global (they are the
+Paybill account numbers); ONT MACs and flat labels only have to be unique
+inside a building. Packages are shared, and each building can hide a plan or
+give it a different price (Admin, Buildings, the building page). Prices must
+stay unique inside a building because Paybill payments are matched by amount.
+The admin has a building switcher in the top bar (`All buildings` or one) and
+list pages gain a Building column when all are shown. An account can be moved
+to another building from its page.
+
+Routers join over WireGuard with a one-time command from the admin: see
+[deploy/README.md](deploy/README.md) for the server setup (one command on a
+fresh VPS: PostgreSQL, Caddy, WireGuard for the routers and a separate WireGuard
+admin VPN with QR-code onboarding, firewall, backups, `ftnbilling-doctor`) and
+for the join flow. The
+design target is about 40 buildings and 1500 flats on a 1 vCPU / 1 GB VPS.
+
+Upgrading from the single-router version needs no admin action: the data file
+is converted (the old one is kept as `ispbill.json.v2.bak`), and a server with
+`ROUTER_URL`/`ROUTER_PASS` (or the container on the router) gets one building
+called "Main building" that keeps working from the environment settings.
+`routeros/setup.rsc` and `internal/web/routerfiles/remote.rsc` are the legacy
+one-router setup; new buildings use the join command.
+
+The extra settings are `WG_PUBLIC_KEY`, `WG_ENDPOINT` (default `PUBLIC_IP:51820`),
+`WG_SUBNET` (`10.99.0.0/22`), `WG_DUMP_PATH`, `JOIN_TOKEN_TTL` (`30m`),
+`ALLOW_INSECURE_JOIN` (bench tests only), `JOIN_REQUIRE_MIKROTIK_UA` (`true`)
+and `SITE_NAME` (renames the legacy building once). `ROUTER_PASS` is only needed
+while a legacy building exists.
+
+## Monitoring, alerts and WhatsApp
+
+The server checks every building every 30 seconds (a TCP connection to the router's API through the tunnel). A building is **down** after 3 failed checks in a row and **up** again after 2 good ones. Each outage is logged with a cause: `no-handshake` (the WireGuard handshake is older than 3 minutes: power or internet at the building), `tunnel-up-rest-down` (the tunnel works but the router does not answer) or `unknown`.
+
+- **Fleet overview** (`/admin/fleet`): one tile per building, reloads every 30 seconds. It is the start page when "All buildings" is selected and there is more than one building.
+- **Uptime** (`/admin/uptime`): 30 or 90 days of daily availability, the tunnel round-trip time and the outage list.
+- **Alerts** (`/admin/alerts`): the rules, their settings, a Send test button for each channel, mute, and the history.
+- **Messages** (`/admin/messages`): everything the server sent or tried to send, with retry and cancel.
+
+### Alert settings
+
+All of these are edited on the Alerts page. Defaults:
+
+| Rule | Fires when | Default |
+|---|---|---|
+| Building offline | the router API does not answer | for 5 minutes |
+| WAN saturated | WAN use is at or above the threshold | 85% of capacity for 15 minutes |
+| Packet loss | average loss to the ping targets | 5% for 10 minutes |
+| High latency | average round trip | 150 ms for 10 minutes |
+| OLT port down | the OLT interface is not running | for 2 minutes |
+
+An alert is *pending* until its condition has held for the whole time, then *firing* (you get the message), then *resolved*. The recovery message is sent only if the problem message was. The same alert is announced at most once per **cooldown** (60 minutes), and optionally repeated every 6 hours while it stays firing. While a building is offline its other alerts are paused. If more than half of the buildings (and at least 3) go offline within 2 minutes you get one message listing them, and one when they are all back. **Mute** silences a building for planned work. Messages go to every channel that is switched on and set up.
+
+The secrets and addresses are environment settings, not part of the admin page:
+
+| Variable | Default | Notes |
+|---|---|---|
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | port `587` | email: STARTTLS on 587, TLS from the first byte on 465. The password is only sent over TLS (or to localhost) |
+| `ALERT_EMAIL_TO` | | comma separated recipients |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | | create a bot with @BotFather, add it to the chat |
+| `WA_TOKEN`, `WA_PHONE_NUMBER_ID` | | WhatsApp Cloud API |
+| `WA_ADMIN_NUMBERS` | | numbers that get admin alerts, like `254712345678`, comma separated |
+| `WA_API_VERSION`, `WA_LANG` | `v23.0`, `en` | Graph API version; template language |
+| `WA_DAILY_LIMIT` | `240` | tenant WhatsApp messages per day (admin alerts are exempt) |
+| `WA_MIN_CONFIRM_KES` | `250` | smallest payment that gets a confirmation |
+| `WA_APP_SECRET`, `WA_VERIFY_TOKEN` | | switch the inbound webhook on (see below) |
+
+### Messages to tenants (WhatsApp)
+
+| Message | When | Template |
+|---|---|---|
+| Expiry reminder | `REMINDER_DAYS` before a plan ends | `ftn_expiry_reminder` |
+| Plan ended | when a plan of 7 days or longer ends (`REMINDER_ON_EXPIRY`) | `ftn_plan_expired` |
+| Payment received | an M-Pesa payment of at least `WA_MIN_CONFIRM_KES` was applied in the last 6 hours (not free admin grants or vouchers) | `ftn_payment_received` |
+| Outage notice | the admin presses "Tell tenants about the outage" on the fleet page, or automatically after the offline alert has fired for 30 minutes (setting: never / manual / automatic, default manual) | `ftn_outage_notice` |
+| Service restored | to the tenants who got the notice, when the outage ends | `ftn_outage_resolved` |
+
+Each message is created once per event (an expiry, a payment, an outage), however often the server checks. A message is checked again just before it is sent and skipped if it no longer applies (the tenant paid, opted out or changed number).
+
+**Meta Business Manager checklist**
+
+1. A Meta Business portfolio and a WhatsApp Business Account (WABA).
+2. A dedicated phone number registered to the Cloud API. It cannot also be in use in the WhatsApp app or WhatsApp Business app.
+3. A System User with a permanent token that has the `whatsapp_business_messaging` and `whatsapp_business_management` permissions. Put the token in `WA_TOKEN`, and the phone number's ID (not the number) in `WA_PHONE_NUMBER_ID`.
+4. A payment method on the WABA.
+5. The tenants' consent to receive messages. Collect it when you take the flat's details, and keep a record.
+6. Create the six templates below, category **Utility**, language **English (`en`)**, and wait for approval. The wording and the number of parameters must match exactly, or Meta refuses the message (error 132000 or 132001, shown on the Messages page as failed).
+7. The five tenant templates carry the footer **Reply STOP to opt out**.
+8. Put your own number(s) in `WA_ADMIN_NUMBERS` and press **Send test** next to WhatsApp on the Alerts page: it sends `ftn_admin_alert`.
+
+Message templates (create these exactly; `{{1}}` and so on are the parameters):
+
+| Name | Body | Parameters |
+|---|---|---|
+| `ftn_expiry_reminder` | Hello, your {{1}} internet plan for {{2}} ends on {{3}}. To stay connected, pay KES {{4}} via {{5}}, account number {{6}}. Thank you. | package, flat + building, expiry, price, pay hint, account code |
+| `ftn_plan_expired` | Hello, the internet plan for {{1}} ended on {{2}}. To reconnect, pay via {{3}}, account number {{4}}. You will be reconnected automatically. | flat + building, expiry, pay hint, code |
+| `ftn_payment_received` | Payment received: KES {{1}}, reference {{2}}. Your {{3}} plan for {{4}} is active until {{5}}. Thank you. | amount, receipt, package, flat + building, expiry |
+| `ftn_outage_notice` | Hello, we are aware of an internet outage at {{1}} since {{2}}. Our team is working on it. We apologise for the inconvenience. | building, start |
+| `ftn_outage_resolved` | Internet service at {{1}} was restored at {{2}}. Thank you for your patience. | building, time |
+| `ftn_admin_alert` | Network alert, {{1}}: {{2}} at {{3}}. Details: {{4}}. Time: {{5}}. End of alert. | PROBLEM/RECOVERED, rule, building, detail, time |
+
+A tenant only gets messages if the account has a WhatsApp number (Accounts, the flat's page; "same as phone" copies the phone number) and has not been opted out. Messages go out between 07:00 and 21:00 EAT for reminders; payment confirmations and outage notices go at once. At most `WA_DAILY_LIMIT` (240) tenant messages are sent per day; admin alerts are not counted. Failed sends retry with growing waits (30 s up to 1 h, 8 tries). A rejected token pauses the channel and shows a banner on the Messages page.
+
+### Inbound WhatsApp replies (optional)
+
+If `WA_APP_SECRET` (the app secret of your Meta app) and `WA_VERIFY_TOKEN` (any string you choose) are both set, the server answers `GET/POST /wa/webhook`. In the Meta app's WhatsApp configuration set the callback URL to `PUBLIC_BASE_URL/wa/webhook`, the verify token to the same string, and subscribe to the `messages` field. Every POST must carry a valid `X-Hub-Signature-256`; others are refused. Delivery statuses (sent, delivered, read, failed) are shown on the Messages page. A tenant whose number is on an account can send `BALANCE` or `STATUS` (plan, expiry, account code and how to pay), `STOP` (opt out) or `START` (opt back in); anything else gets a short help text. A number that is on no account gets only the support phone. At most 5 replies per sender per minute.
+
 ## Configuration (environment variables)
 
 | Variable | Default | Notes |
 |---|---|---|
 | `LISTEN_ADDR` | `:8080` | |
-| `DATA_DIR` | `/data` | holds `ispbill.json` and `metrics.json` |
+| `DATA_DIR` | `/data` | holds `ispbill.json`, `metrics/` (one file per building), `fleet.json`, `alerts.json` and `outbox.json` |
 | `BRAND_NAME` | `Fast Tech Net` | |
 | `TEST_MODE` | `false` | enables the Test payment button |
 | `ROUTER_URL` | `http://172.17.0.1` | `setup.rsc` sets `http://172.17.0.1:8081` |
-| `ROUTER_USER` / `ROUTER_PASS` | `ispbill` / required | PASS not needed with `ROUTER_MOCK` |
+| `ROUTER_USER` / `ROUTER_PASS` | `ispbill` / | legacy single-router mode only (the "Main building"); not needed on a server that only uses join commands |
 | `ROUTER_MOCK` | `false` | fake router |
 | `HOTSPOT_SERVER` | `hotspot1` | |
 | `ADMIN_USER` / `ADMIN_PASS` | `admin` / required | app refuses to start if PASS is empty or `admin` |
@@ -111,16 +220,17 @@ Open http://127.0.0.1:8080/admin (user `admin`), create an account with MAC `AA:
 | `PUBLIC_BASE_URL` | | needed for M-Pesa callbacks |
 | `MPESA_ENV` | `sandbox` | or `production` |
 | `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORTCODE`, `MPESA_PASSKEY` | | all four (with `PUBLIC_BASE_URL`) switch M-Pesa on |
-| `MPESA_CALLBACK_TOKEN` | | optional: callbacks must carry `?t=<token>` |
+| `MPESA_CALLBACK_TOKEN` | | required once the M-Pesa key, secret and shortcode are set (the app refuses to start without it): callbacks must carry `?t=<token>`. The installer generates one |
 | `REMINDER_DAYS` | `3` | days before expiry for the reminder event (0 = off) |
 | `REMINDER_ON_EXPIRY` | `true` | log an event when an account expires |
-| `WAN_INTERFACE` / `OLT_INTERFACE` | `ether1` / `sfp-sfpplus1` | for the ports charts |
+| `WAN_INTERFACE` / `OLT_INTERFACE` | `ether1` / `sfp-sfpplus1` | for the ports charts; these layout settings (with the two capacity values, `FUP_TB`, `CUSTOMER_SUBNET`) apply to the legacy building only. Join-command buildings have them on their own page |
 | `WAN_CAPACITY_MBPS` / `OLT_CAPACITY_MBPS` | `500` / `10000` | |
 | `FUP_TB` | `15` | monthly fair-use figure used for the projection |
-| `NETFLOW_ADDR` | `:2055` | UDP listen address for NetFlow v5 |
+| `SMTP_*`, `ALERT_EMAIL_TO`, `TELEGRAM_*`, `WA_*` | | alerts and tenant messages, see "Monitoring, alerts and WhatsApp" above |
+| `NETFLOW_ADDR` | `:2055` | UDP listen address for NetFlow v5; one socket for all buildings, told apart by tunnel source address |
 | `CUSTOMER_SUBNET` | `10.5.50.0/24` | flows from here are attributed to flats |
 | `QOE_PING_TARGETS` | `8.8.8.8,1.1.1.1` | comma separated |
-| `METRICS_FLOW_EVERY`, `METRICS_PORT_EVERY`, `METRICS_PING_EVERY`, `METRICS_DNS_EVERY`, `METRICS_SAVE_EVERY` | `60s`, `30s`, `60s`, `60s`, `5m` | Go durations, at least 1s |
+| `METRICS_FLOW_EVERY`, `METRICS_PORT_EVERY`, `METRICS_PING_EVERY`, `METRICS_DNS_EVERY`, `METRICS_SAVE_EVERY` | `60s`, `30s`, `60s`, `60s`, `15m` | Go durations, at least 1s |
 
 ## Topology
 
@@ -172,13 +282,13 @@ Admin -> Vouchers -> pick package and count (up to 500) -> "Generate and print".
 
 1. Get a Paybill/Till, then create a Daraja app at developer.safaricom.co.ke. Use the **sandbox** first (`MPESA_ENV=sandbox`, test shortcode 174379 and the passkey shown in the Daraja simulator).
 2. Make the container reachable from the internet over **HTTPS** at `PUBLIC_BASE_URL` (a public IP plus a TLS reverse proxy, or a tunnel such as Cloudflare Tunnel). The app itself speaks plain HTTP. Expose only `/pay/cb/*`, not `/admin`.
-3. Add to the env list: `MPESA_ENV`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORTCODE`, `MPESA_PASSKEY`, `PUBLIC_BASE_URL` (and optionally `MPESA_CALLBACK_TOKEN`). Restart the container. `/healthz` then shows `mpesa_enabled:true` and the portal shows "Pay with M-Pesa". Set `TEST_MODE=false`.
+3. Add to the env list: `MPESA_ENV`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORTCODE`, `MPESA_PASSKEY`, `PUBLIC_BASE_URL` and `MPESA_CALLBACK_TOKEN` (required). Restart the container. `/healthz` then shows `mpesa_enabled:true` and the portal shows "Pay with M-Pesa". Set `TEST_MODE=false`.
 4. Callback paths. Daraja rejects URLs containing "mpesa" or "safaricom", so the app uses:
    - STK Push result: `PUBLIC_BASE_URL/pay/cb/stk` (sent automatically with each push)
    - C2B validation: `PUBLIC_BASE_URL/pay/cb/c2b/validate`
    - C2B confirmation: `PUBLIC_BASE_URL/pay/cb/c2b/confirm`
 
-   If you set `MPESA_CALLBACK_TOKEN`, append `?t=<token>` to all three.
+   Append `?t=<token>` (your `MPESA_CALLBACK_TOKEN`) to all three.
 5. Register the C2B URLs once (Daraja "C2B Register URL" API, `ResponseType` Completed or Cancelled as you prefer) pointing at the two C2B paths above.
 6. Customers can then also pay the Paybill directly with the flat's account code as the account number. The app extends that account by the package whose price equals the amount. Anything it cannot match lands in Admin -> Unmatched. Keep prices unique.
 
@@ -186,15 +296,15 @@ STK Push uses the account code as AccountReference; Daraja usually also sends a 
 
 ## Backup
 
-Everything important is in `ispbill.json` under the mounted data folder (`usb1/ispbill-data`); `metrics.json` is history that is nice to keep but can be lost. Copy both off the USB stick regularly (`/file` download, scp, or a scheduled `/tool/fetch` upload). Restore by putting them back and restarting the container. Writes are atomic, so a live copy is consistent.
+Everything important is in `ispbill.json` under the data folder (`usb1/ispbill-data` for the container); the `metrics/` folder is history that is nice to keep but can be lost. On a VPS with PostgreSQL the data is in the database: the installer sets up a verified `pg_dump` every 6 hours, a monthly restore drill (restore into a scratch database and compare with production) and an encrypted weekly upload to Google Drive (see [deploy/BACKUP.md](deploy/BACKUP.md)); `sudo ftnbilling-doctor` shows their status. Copy both off the USB stick regularly (`/file` download, scp, or a scheduled `/tool/fetch` upload). Restore by putting them back and restarting the container. Writes are atomic, so a live copy is consistent.
 
 ## Known limitations
 
 - **Not tested on a real RouterOS device, a real Daraja account or a real OLT.** The REST calls follow the RouterOS 7 documentation; the first real run may need small fixes, especially container, hotspot and traffic-flow settings in `setup.rsc` and the exact field names RouterOS returns for hosts, queues and `/system/health`.
 - JSON file storage: fine for a building, not for thousands of users. All data is held in memory.
-- One router, one hotspot server. Each account is locked to one MAC (the ONT WAN); `shared-users=1`. Flat isolation relies on the OLT configuration, which this project cannot check.
-- No refunds on the router side, no pro-rata upgrades, no SMS or receipts (reminders are log events only).
-- Daraja callbacks are unsigned. Use `MPESA_CALLBACK_TOKEN` and, if you can, restrict the source IPs.
+- One router and one hotspot server per building. Each account is locked to one MAC (the ONT WAN); `shared-users=1`. Flat isolation relies on the OLT configuration, which this project cannot check.
+- No refunds on the router side, no pro-rata upgrades, no SMS or receipts (reminders are log events, and WhatsApp messages when WhatsApp is set up).
+- Daraja callbacks are unsigned. `MPESA_CALLBACK_TOKEN` is required. To also restrict the source IPs, run the installer with `CADDY_MPESA_IPS="<ip/cidr> ..."`; get the current Safaricom callback ranges from Safaricom (they are not hard-coded because a wrong list would drop real payments). Caddy must be the only reverse proxy in front of the app, because the app trusts `X-Forwarded-For` from loopback.
 - The portal is plain HTTP inside the building. The admin UI has no login rate limit and no HTTPS; keep it off the open internet and block `/admin` from the hotspot network.
 - Test payments count in "revenue" while `TEST_MODE=true`.
 - Metrics are estimates: see the NetFlow caveats above. The WAN figures are the router's interface counters, not the ISP's invoice.

@@ -3,6 +3,8 @@ package billing
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"ispbill/internal/routeros"
@@ -31,41 +33,74 @@ func backoff(attempts int) time.Duration {
 
 // enqueueLocked adds or refreshes the reconcile task for an account (inside an
 // Update). Merging resets the retry timer so a new change is tried at once.
+// Tasks merge per (account, building): moving an account queues one task for
+// the old router and one for the new.
 func (s *Service) enqueueLocked(d *store.Data, a store.Account, kick bool, reason string) {
 	now := s.now()
 	for id, t := range d.Tasks {
-		if t.AccountID == a.ID {
+		if t.AccountID == a.ID && t.SiteID == a.SiteID {
 			t.Kick = t.Kick || kick
 			t.Reason, t.NextTry, t.Attempts, t.Rev = reason, now, 0, t.Rev+1
 			d.Tasks[id] = t
 			return
 		}
 	}
-	t := store.Task{ID: RandomID(), AccountID: a.ID, Code: a.Code, Kick: kick, Reason: reason, NextTry: now, CreatedAt: now, Rev: 1}
+	t := store.Task{ID: RandomID(), SiteID: a.SiteID, AccountID: a.ID, Code: a.Code, Kick: kick, Reason: reason, NextTry: now, CreatedAt: now, Rev: 1}
 	d.Tasks[t.ID] = t
 }
 
-// PendingTasks lists queued router actions (oldest first).
+// PendingTasks lists queued router actions (oldest first), all buildings.
 func (s *Service) PendingTasks() (out []store.Task) {
 	s.st.View(func(d *store.Data) { out = d.TaskList() })
 	return
 }
 
-func (s *Service) runTasksShort(ctx context.Context) {
+func (s *Service) runSiteShort(ctx context.Context, siteID string) {
 	c, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	s.RunTasks(c)
+	s.RunSiteTasks(c, siteID)
 }
 
-// RunTasks attempts every task that is due. It returns how many succeeded.
+// RunTasks attempts every due task in every building. Each building with due
+// work runs in its own goroutine, so one dead router cannot stall the others.
+// It returns how many tasks succeeded.
 func (s *Service) RunTasks(ctx context.Context) int {
-	s.taskMu.Lock()
-	defer s.taskMu.Unlock()
+	now := s.now()
+	bySite := map[string]bool{}
+	s.st.View(func(d *store.Data) {
+		for _, t := range d.Tasks {
+			if !t.NextTry.After(now) {
+				bySite[t.SiteID] = true
+			}
+		}
+	})
+	var wg sync.WaitGroup
+	var total atomic.Int64
+	for id := range bySite {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			total.Add(int64(s.RunSiteTasks(ctx, id)))
+		}()
+	}
+	wg.Wait()
+	return int(total.Load())
+}
+
+// RunSiteTasks attempts every due task of one building. Tasks of a paused,
+// removed or not yet joined building stay queued and use up no attempts.
+func (s *Service) RunSiteTasks(ctx context.Context, siteID string) int {
+	if st, ok := s.site(siteID); !ok || !st.Runnable() {
+		return 0
+	}
+	state := s.state(siteID)
+	state.taskMu.Lock()
+	defer state.taskMu.Unlock()
 	now := s.now()
 	var due []store.Task
 	s.st.View(func(d *store.Data) {
 		for _, t := range d.TaskList() {
-			if !t.NextTry.After(now) {
+			if t.SiteID == siteID && !t.NextTry.After(now) {
 				due = append(due, t)
 			}
 		}
@@ -99,13 +134,15 @@ func (s *Service) RunTasks(ctx context.Context) int {
 		if err == nil {
 			ok++
 		} else {
-			s.log.Warn("router task failed; will retry", "code", t.Code, "attempt", t.Attempts+1, "err", err)
+			s.log.Warn("router task failed; will retry", "site", siteID, "code", t.Code, "attempt", t.Attempts+1, "err", err)
 		}
 	}
 	return ok
 }
 
-// reconcile makes the router match the account's current state.
+// reconcile makes the task's building router match the account's current state.
+// If the account is gone, or now lives in another building, the router user is
+// removed from this building's router.
 func (s *Service) reconcile(ctx context.Context, t store.Task) error {
 	var a store.Account
 	var pkg store.Package
@@ -114,35 +151,35 @@ func (s *Service) reconcile(ctx context.Context, t store.Task) error {
 		a, found = d.Accounts[t.AccountID]
 		pkg = d.Packages[a.PackageID]
 	})
-	if !found {
-		// Account deleted: make sure its router user and session are gone.
-		if err := s.rt.KickUser(ctx, t.Code); err != nil {
+	rt := s.router(t.SiteID)
+	if !found || a.SiteID != t.SiteID {
+		if err := rt.KickUser(ctx, t.Code); err != nil {
 			return err
 		}
-		return s.rt.RemoveUser(ctx, t.Code)
+		return rt.RemoveUser(ctx, t.Code)
 	}
 	want := wantUser(a, s.now())
 	if want {
-		if !s.profilesOK.Load() {
-			if err := s.SyncProfiles(ctx); err != nil {
+		if !s.state(t.SiteID).profilesOK.Load() {
+			if err := s.SyncProfiles(ctx, t.SiteID); err != nil {
 				return fmt.Errorf("profile sync: %w", err)
 			}
 		}
-		if err := s.rt.EnsureUser(ctx, routeros.User{
+		if err := rt.EnsureUser(ctx, routeros.User{
 			Name: a.Code, Password: a.HSPass, Profile: pkg.Profile(), MAC: a.MAC, Comment: "ispbill:" + a.Flat,
 		}); err != nil {
 			return err
 		}
 		if t.Kick {
-			if err := s.rt.KickUser(ctx, a.Code); err != nil {
+			if err := rt.KickUser(ctx, a.Code); err != nil {
 				return err
 			}
 		}
 	} else {
-		if err := s.rt.KickUser(ctx, a.Code); err != nil {
+		if err := rt.KickUser(ctx, a.Code); err != nil {
 			return err
 		}
-		if err := s.rt.RemoveUser(ctx, a.Code); err != nil {
+		if err := rt.RemoveUser(ctx, a.Code); err != nil {
 			return err
 		}
 	}
@@ -159,25 +196,20 @@ func (s *Service) reconcile(ctx context.Context, t store.Task) error {
 
 // ---- sweeper ------------------------------------------------------------
 
-// Sweep re-syncs profiles after a failure, queues router work for accounts
-// whose state changed by the clock (a plan that just expired), records
-// reminder events, and runs the task queue.
+// Sweep records state changes made by the clock (a plan that just expired,
+// reminder events), then, per building and in parallel, re-syncs profiles
+// after a failure and runs the task queue.
 func (s *Service) Sweep(ctx context.Context) {
-	if !s.profilesOK.Load() {
-		if err := s.SyncProfiles(ctx); err != nil {
-			s.log.Warn("profile sync retry failed", "err", err)
-		}
-	}
 	now := s.now()
 	_ = s.st.Update(func(d *store.Data) error {
 		changed := false
 		queued := map[string]bool{}
 		for _, t := range d.Tasks {
-			queued[t.AccountID] = true
+			queued[t.SiteID+"|"+t.AccountID] = true
 		}
 		remind := time.Duration(s.policy.ReminderDays) * 24 * time.Hour
 		for _, a := range d.AccountList() {
-			if wantUser(a, now) != a.RouterActive && !queued[a.ID] {
+			if wantUser(a, now) != a.RouterActive && !queued[a.SiteID+"|"+a.ID] {
 				s.enqueueLocked(d, a, false, "state changed by clock")
 				changed = true
 			}
@@ -187,14 +219,14 @@ func (s *Service) Sweep(ctx context.Context) {
 			pkg := d.Packages[a.PackageID]
 			long := time.Duration(pkg.DurationMin)*time.Minute > remind
 			if s.policy.ReminderDays > 0 && long && a.ExpiresAt.After(now) && a.ExpiresAt.Sub(now) <= remind && !a.RemindedFor.Equal(a.ExpiresAt) {
-				d.AddEvent(store.Event{Time: now, Kind: "reminder_due", AccountID: a.ID,
+				d.AddEvent(store.Event{Time: now, SiteID: a.SiteID, Kind: "reminder_due", AccountID: a.ID,
 					Msg: fmt.Sprintf("%s (%s): plan ends %s, send the %d-day reminder", a.Flat, a.Code, a.ExpiresAt.In(EAT).Format("2 Jan 15:04"), s.policy.ReminderDays)})
 				a.RemindedFor = a.ExpiresAt
 				d.Accounts[a.ID] = a
 				changed = true
 			}
 			if s.policy.ReminderOnExpiry && !a.ExpiresAt.After(now) && !a.ExpiredFor.Equal(a.ExpiresAt) {
-				d.AddEvent(store.Event{Time: now, Kind: "expired", AccountID: a.ID,
+				d.AddEvent(store.Event{Time: now, SiteID: a.SiteID, Kind: "expired", AccountID: a.ID,
 					Msg: fmt.Sprintf("%s (%s): plan expired %s, send the expiry reminder", a.Flat, a.Code, a.ExpiresAt.In(EAT).Format("2 Jan 15:04"))})
 				a.ExpiredFor = a.ExpiresAt
 				d.Accounts[a.ID] = a
@@ -206,7 +238,20 @@ func (s *Service) Sweep(ctx context.Context) {
 		}
 		return nil
 	})
-	s.RunTasks(ctx)
+	var wg sync.WaitGroup
+	for _, id := range s.runnableSites() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if !s.state(id).profilesOK.Load() {
+				if err := s.SyncProfiles(ctx, id); err != nil {
+					s.log.Warn("profile sync retry failed", "site", id, "err", err)
+				}
+			}
+			s.RunSiteTasks(ctx, id)
+		}()
+	}
+	wg.Wait()
 }
 
 // RunSweeper retries router tasks every few seconds and sweeps every interval.

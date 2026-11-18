@@ -1,11 +1,9 @@
 package metrics
 
 import (
-	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"net"
 	"net/netip"
 	"strings"
 	"time"
@@ -152,34 +150,8 @@ func Classify(hosts []string, proto uint8, remotePort uint16) string {
 
 // ---- receiver ---------------------------------------------------------------
 
-// ListenNetflow receives NetFlow v5 on a UDP address until ctx is cancelled.
-// addr "" or "off" disables it. It returns the bound address through ready
-// (useful with ":0" in tests).
-func (c *Collector) ListenNetflow(ctx context.Context, addr string, ready chan<- net.Addr) error {
-	if addr == "" || strings.EqualFold(addr, "off") {
-		return nil
-	}
-	pc, err := net.ListenPacket("udp", addr)
-	if err != nil {
-		return err
-	}
-	defer pc.Close()
-	if ready != nil {
-		ready <- pc.LocalAddr()
-	}
-	go func() { <-ctx.Done(); pc.Close() }()
-	buf := make([]byte, 2048)
-	for {
-		n, from, err := pc.ReadFrom(buf)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return err
-		}
-		c.HandleNetflow(time.Now(), buf[:n], from.String())
-	}
-}
+// The UDP socket is owned by internal/sites, which demultiplexes datagrams by
+// source tunnel address and hands each one to the right collector.
 
 // HandleNetflow processes one datagram.
 func (c *Collector) HandleNetflow(now time.Time, pkt []byte, from string) {
@@ -232,4 +204,11 @@ func (c *Collector) addFlowLocked(now time.Time, r V5Record, mult uint64) {
 		}
 		days[k][svc] += bytes
 	}
+}
+
+// NetflowStats returns a copy of the receiver counters.
+func (c *Collector) NetflowStats() NFStats {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.D.NF
 }

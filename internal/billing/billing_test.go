@@ -11,16 +11,42 @@ import (
 
 	"ispbill/internal/routeros"
 	"ispbill/internal/store"
+	"ispbill/internal/store/storetest"
 )
 
 const mac1 = "AA:BB:CC:DD:EE:01"
 
 type env struct {
-	svc *Service
-	st  *store.Store
-	rt  *routeros.Mock
-	now time.Time
-	dir string
+	svc     *Service
+	st      *store.Store
+	rt      *routeros.Mock // building A's router
+	routers MockRouters
+	site    string // building A
+	now     time.Time
+	dir     string
+	h       *storetest.Handle
+}
+
+// addSite creates another building in the store and gives it its own mock router.
+func (e *env) addSite(t *testing.T, name string) (id string, rt *routeros.Mock) {
+	t.Helper()
+	id = store.NewSiteID()
+	rt = routeros.NewMock()
+	err := e.st.Update(func(d *store.Data) error {
+		d.Sites[id] = store.Site{ID: id, Name: name, Mode: store.SiteModeEnv, CreatedAt: e.now}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.routers[id] = rt
+	return id, rt
+}
+
+// setRT swaps building A's router (a "wiped router").
+func (e *env) setRT(rt *routeros.Mock) {
+	e.rt = rt
+	e.routers[e.site] = rt
 }
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -28,11 +54,14 @@ func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	e := &env{dir: t.TempDir(), rt: routeros.NewMock(), now: time.Date(2026, 11, 17, 9, 0, 0, 0, time.UTC)}
+	e.routers = MockRouters{}
 	e.open(t)
+	e.site, _ = e.addSite(t, "Block A")
+	e.routers[e.site] = e.rt
 	if err := e.svc.SeedPackages(); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.svc.SyncProfiles(context.Background()); err != nil {
+	if err := e.svc.SyncProfiles(context.Background(), e.site); err != nil {
 		t.Fatal(err)
 	}
 	return e
@@ -41,12 +70,14 @@ func newEnv(t *testing.T) *env {
 // open (re)opens the store and service on the same directory: a "restart".
 func (e *env) open(t *testing.T) {
 	t.Helper()
-	st, err := store.Open(e.dir)
-	if err != nil {
-		t.Fatal(err)
+	if e.h == nil {
+		e.h = storetest.NewIn(t, e.dir)
+	} else {
+		e.h.Reopen()
 	}
+	st := e.h.Store
 	e.st = st
-	e.svc = NewService(st, e.rt, quiet())
+	e.svc = NewService(st, e.routers, quiet())
 	e.svc.SetClock(func() time.Time { return e.now })
 }
 
@@ -64,7 +95,7 @@ func (e *env) pkg(name string) store.Package {
 
 func (e *env) flat(t *testing.T, label, mac string) store.Account {
 	t.Helper()
-	a, err := e.svc.CreateAccount(AccountInput{Flat: label, MAC: mac})
+	a, err := e.svc.CreateAccount(AccountInput{SiteID: e.site, Flat: label, MAC: mac})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,23 +198,23 @@ func TestSeededPackagesAndProfiles(t *testing.T) {
 
 func TestCreateAccountRules(t *testing.T) {
 	e := newEnv(t)
-	a, err := e.svc.CreateAccount(AccountInput{Flat: " Flat   3B ", MAC: "aa-bb-cc-dd-ee-01", Tenant: "Jane", Phone: "0712345678", Notes: "n"})
+	a, err := e.svc.CreateAccount(AccountInput{SiteID: e.site, Flat: " Flat   3B ", MAC: "aa-bb-cc-dd-ee-01", Tenant: "Jane", Phone: "0712345678", Notes: "n"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a.Flat != "Flat 3B" || a.MAC != mac1 || len(a.Code) != 6 || a.Phone != "254712345678" || len(a.HSPass) < 16 || a.HSPass == a.Code {
 		t.Fatalf("%+v", a)
 	}
-	if _, err := e.svc.CreateAccount(AccountInput{Flat: "Flat 4A", MAC: mac1}); err == nil || !strings.Contains(err.Error(), "already belongs") {
+	if _, err := e.svc.CreateAccount(AccountInput{SiteID: e.site, Flat: "Flat 4A", MAC: mac1}); err == nil || !strings.Contains(err.Error(), "already belongs") {
 		t.Fatalf("duplicate MAC: %v", err)
 	}
-	if _, err := e.svc.CreateAccount(AccountInput{Flat: "flat 3b", MAC: "AA:BB:CC:DD:EE:02"}); err == nil {
+	if _, err := e.svc.CreateAccount(AccountInput{SiteID: e.site, Flat: "flat 3b", MAC: "AA:BB:CC:DD:EE:02"}); err == nil {
 		t.Fatal("duplicate flat label")
 	}
-	if _, err := e.svc.CreateAccount(AccountInput{Flat: "", MAC: "AA:BB:CC:DD:EE:02"}); err == nil {
+	if _, err := e.svc.CreateAccount(AccountInput{SiteID: e.site, Flat: "", MAC: "AA:BB:CC:DD:EE:02"}); err == nil {
 		t.Fatal("flat required")
 	}
-	if _, err := e.svc.CreateAccount(AccountInput{Flat: "X", MAC: "nonsense"}); err == nil {
+	if _, err := e.svc.CreateAccount(AccountInput{SiteID: e.site, Flat: "X", MAC: "nonsense"}); err == nil {
 		t.Fatal("mac required")
 	}
 	// Code is immutable through every edit path.
@@ -197,31 +228,31 @@ func TestCreateAccountRules(t *testing.T) {
 
 func TestUnknownMACGetsNoAccountAndIsRecorded(t *testing.T) {
 	e := newEnv(t)
-	if _, ok := e.svc.AccountByMAC("AA:BB:CC:DD:EE:77"); ok {
+	if _, ok := e.svc.AccountByMAC(e.site, "AA:BB:CC:DD:EE:77"); ok {
 		t.Fatal("unknown MAC must not match")
 	}
-	e.svc.NoteDevice("AA:BB:CC:DD:EE:77", "10.5.50.9", "portal")
-	e.svc.NoteDevice("AA:BB:CC:DD:EE:77", "10.5.50.10", "portal")
+	e.svc.NoteDevice(e.site, "AA:BB:CC:DD:EE:77", "10.5.50.9", "portal")
+	e.svc.NoteDevice(e.site, "AA:BB:CC:DD:EE:77", "10.5.50.10", "portal")
 	e.st.View(func(d *store.Data) {
-		dev := d.Devices["AA:BB:CC:DD:EE:77"]
+		dev := d.Devices[store.DeviceKey(e.site, "AA:BB:CC:DD:EE:77")]
 		if dev.Hits != 2 || dev.IP != "10.5.50.10" {
 			t.Fatalf("%+v", dev)
 		}
 	})
 	// Becoming an account removes it from the list; known MACs are never listed.
 	a := e.flat(t, "Flat 1A", "AA:BB:CC:DD:EE:77")
-	e.svc.NoteDevice(a.MAC, "10.5.50.9", "portal")
+	e.svc.NoteDevice(e.site, a.MAC, "10.5.50.9", "portal")
 	e.st.View(func(d *store.Data) {
 		if len(d.Devices) != 0 {
 			t.Fatalf("devices %v", d.Devices)
 		}
 	})
 	e.rt.AddHost("AA:BB:CC:DD:EE:55", "10.5.50.30")
-	if err := e.svc.RefreshHosts(context.Background()); err != nil {
+	if err := e.svc.RefreshHosts(context.Background(), e.site); err != nil {
 		t.Fatal(err)
 	}
 	e.st.View(func(d *store.Data) {
-		if d.Devices["AA:BB:CC:DD:EE:55"].Source != "hotspot-host" {
+		if d.Devices[store.DeviceKey(e.site, "AA:BB:CC:DD:EE:55")].Source != "hotspot-host" {
 			t.Fatalf("%v", d.Devices)
 		}
 	})
@@ -386,10 +417,10 @@ func TestChangeMACUpdatesRouterUserAndKicksOldSession(t *testing.T) {
 		t.Fatal("account not updated")
 	}
 	// The old ONT's MAC is now unregistered; the new one maps to the account.
-	if _, ok := e.svc.AccountByMAC(mac1); ok {
+	if _, ok := e.svc.AccountByMAC(e.site, mac1); ok {
 		t.Fatal("old MAC still mapped")
 	}
-	if got, ok := e.svc.AccountByMAC("AA:BB:CC:DD:EE:99"); !ok || got.ID != a.ID {
+	if got, ok := e.svc.AccountByMAC(e.site, "AA:BB:CC:DD:EE:99"); !ok || got.ID != a.ID {
 		t.Fatal("new MAC not mapped")
 	}
 }
@@ -423,7 +454,7 @@ func TestVoucherAppliesToMACsAccountAndIsSingleUse(t *testing.T) {
 	e := newEnv(t)
 	a := e.flat(t, "Flat 3B", mac1)
 	b := e.flat(t, "Flat 4A", "AA:BB:CC:DD:EE:02")
-	_, vs, err := e.svc.GenerateVouchers(e.pkg("1 Day").ID, 2)
+	_, vs, err := e.svc.GenerateVouchers(e.pkg("1 Day").ID, "", 2)
 	if err != nil || len(vs) != 2 || len(vs[0].Code) != 8 {
 		t.Fatal(err)
 	}
@@ -592,6 +623,7 @@ func TestSavePackageUpdatesProfile(t *testing.T) {
 	if _, err := e.svc.SavePackage(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
+	e.svc.Wait() // profiles are pushed in the background
 	if pr, _ := e.rt.GetProfile("ispbill-1-day"); pr.RateLimit != "15M/15M" {
 		t.Fatalf("%+v", pr)
 	}
@@ -617,9 +649,9 @@ func TestResyncAllRebuildsRouterAfterRouterReset(t *testing.T) {
 	e := newEnv(t)
 	a := e.flat(t, "Flat 3B", mac1)
 	e.pay(t, a, "1 Day", "")
-	e.rt = routeros.NewMock() // router wiped
+	e.setRT(routeros.NewMock()) // router wiped
 	e.open(t)
-	e.svc.SyncProfiles(context.Background())
+	e.svc.SyncProfiles(context.Background(), e.site)
 	e.svc.ResyncAll()
 	e.svc.Sweep(context.Background())
 	if u, ok := e.rt.GetUser(a.Code); !ok || u.MAC != mac1 {

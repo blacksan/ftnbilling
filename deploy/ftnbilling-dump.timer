@@ -1,0 +1,10 @@
+[Unit]
+Description=Database dump every 6 hours (UTC 00:17, 06:17, 12:17, 18:17)
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:17:00 UTC
+Persistent=true
+RandomizedDelaySec=3m
+
+[Install]
+WantedBy=timers.target

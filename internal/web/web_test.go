@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
@@ -18,7 +17,9 @@ import (
 	"ispbill/internal/metrics"
 	"ispbill/internal/payments"
 	"ispbill/internal/routeros"
+	"ispbill/internal/sites"
 	"ispbill/internal/store"
+	"ispbill/internal/store/storetest"
 	"ispbill/internal/web"
 )
 
@@ -28,13 +29,15 @@ const (
 )
 
 type app struct {
-	ts   *httptest.Server
-	st   *store.Store
-	svc  *billing.Service
-	rt   *routeros.Mock
-	col  *metrics.Collector
-	csrf string
-	cl   *http.Client
+	ts     *httptest.Server
+	st     *store.Store
+	svc    *billing.Service
+	rt     *routeros.Mock
+	mgr    *sites.Manager
+	site   string
+	cookie *http.Cookie // extra admin cookie (building selection)
+	csrf   string
+	cl     *http.Client
 }
 
 func newApp(t *testing.T, testMode bool) *app { return newAppCfg(t, testMode, nil) }
@@ -48,22 +51,31 @@ func newAppCfg(t *testing.T, testMode bool, mut func(*config.Config)) *app {
 		mut(&cfg)
 	}
 	dir := t.TempDir()
-	st, _ := store.Open(dir)
-	rt := routeros.NewMock()
+	cfg.DataDir = dir
+	cfg.FlowEvery, cfg.PortEvery, cfg.PingEvery, cfg.DNSEvery, cfg.SaveEvery = time.Hour, time.Hour, time.Hour, time.Hour, time.Hour
+	st, _ := storetest.Open(t, dir)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := billing.NewService(st, rt, log)
+	envID, err := sites.Bootstrap(cfg, st, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var svc *billing.Service
+	mgr := sites.New(sites.Options{Cfg: cfg, Store: st, Log: log, Dir: func(id string) metrics.Directory { return svc.Directory(id) }})
+	svc = billing.NewService(st, mgr, log)
 	svc.SeedPackages()
-	svc.SyncProfiles(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	mgr.Start(ctx)
+	t.Cleanup(func() { cancel(); mgr.Wait(); svc.Wait() })
+	rt := mgr.MockRouter()
+	svc.SyncProfiles(context.Background(), envID)
 	mp := payments.NewMpesa(payments.MpesaConfig{}, svc, st, log)
 	prov := map[string]payments.Provider{
 		"test":    &payments.Test{Enabled_: testMode, Delay: 30 * time.Millisecond, C: svc},
 		"voucher": payments.Voucher{C: svc}, "mpesa": mp,
 	}
-	col := metrics.New(dir, metrics.Config{WAN: "ether1", OLT: "sfp-sfpplus1", WANCapMbps: 500, OLTCapMbps: 10000, FUPTB: 15,
-		PingTargets: cfg.PingTargets, Subnet: netip.MustParsePrefix("10.5.50.0/24"), FlowEvery: time.Minute, NetflowAddr: "off", Synthetic: true}, rt, svc.Directory(), log)
-	ts := httptest.NewServer(web.New(cfg, st, svc, prov, mp, col, log).Handler())
+	ts := httptest.NewServer(web.New(cfg, st, svc, prov, mp, mgr, log).Handler())
 	t.Cleanup(ts.Close)
-	a := &app{ts: ts, st: st, svc: svc, rt: rt, col: col,
+	a := &app{ts: ts, st: st, svc: svc, rt: rt, mgr: mgr, site: envID,
 		cl: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	// Prime the CSRF cookie.
 	resp := a.admin("GET", "/admin", nil)
@@ -95,6 +107,9 @@ func (a *app) admin(method, path string, form url.Values) *http.Response {
 	}
 	if a.csrf != "" {
 		req.AddCookie(&http.Cookie{Name: "ispbill_csrf", Value: a.csrf})
+	}
+	if a.cookie != nil {
+		req.AddCookie(a.cookie)
 	}
 	resp, err := a.cl.Do(req)
 	if err != nil {
@@ -210,7 +225,15 @@ func TestAdminAuthAndCSRF(t *testing.T) {
 	if post(a.csrf, true) != 303 {
 		t.Error("valid post")
 	}
-	if p, ok := a.rt.GetProfile("ispbill-promo"); !ok || p.RateLimit != "3M/3M" {
+	// The push to the router runs in the background; wait for it.
+	var p routeros.Profile
+	var ok bool
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if p, ok = a.rt.GetProfile("ispbill-promo"); ok && p.RateLimit == "3M/3M" {
+			break
+		}
+	}
+	if !ok || p.RateLimit != "3M/3M" {
 		t.Errorf("profile not pushed: %+v", p)
 	}
 	resp, _ := c.PostForm(a.ts.URL+"/admin/packages/save", url.Values{"_csrf": {a.csrf}})
@@ -350,7 +373,7 @@ func TestVoucherRedeemAppliesToMACsAccount(t *testing.T) {
 	a := newApp(t, false)
 	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"Flat 3B"}, "mac": {mac1}})
 	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"Flat 4A"}, "mac": {"AA:BB:CC:DD:EE:02"}})
-	_, vs, _ := a.svc.GenerateVouchers(a.pkgID("1 Day"), 1)
+	_, vs, _ := a.svc.GenerateVouchers(a.pkgID("1 Day"), "", 1)
 	f := url.Values{"voucher": {strings.ToLower(vs[0].Code)}, "mac": {mac1}, "ip": {"10.5.50.7"}}
 	resp, _ := a.cl.PostForm(a.ts.URL+"/portal/voucher", f)
 	if resp.StatusCode != 303 {
@@ -509,7 +532,7 @@ func TestNoTaxWordingAnywhere(t *testing.T) {
 	acct := a.account(t, "Flat 3B")
 	a.adminPost(t, "/admin/payments/record", url.Values{"account": {acct.Code}, "trans": {"WORDCHK123"}, "amount": {"250"}})
 	a.svc.RecordUnmatched(billing.UnmatchedInput{Key: "UNMATCH999", Method: "mpesa-c2b", AmountKES: 77, Note: "odd"})
-	a.svc.GenerateVouchers(a.pkgID("1 Day"), 2)
+	a.svc.GenerateVouchers(a.pkgID("1 Day"), "", 2)
 	a.adminPost(t, "/admin/metrics/demo", url.Values{})
 	banned := regexp.MustCompile(`(?i)\bvat\b|etims|excise|tax|tariff levy|inclusive of|exclusive of`)
 	pages := []string{"/admin", "/admin/accounts", "/admin/accounts/view?code=" + acct.Code, "/admin/devices", "/admin/payments", "/admin/payments.csv",

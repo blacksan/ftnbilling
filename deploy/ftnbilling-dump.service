@@ -1,0 +1,10 @@
+[Unit]
+Description=Fast Tech Net database dump (pg_dump, verified) and local file backups
+After=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ftnbilling-backup dump
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=1h

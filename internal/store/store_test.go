@@ -64,7 +64,8 @@ func TestCorruptFileRefused(t *testing.T) {
 }
 
 func TestConcurrentUpdates(t *testing.T) {
-	s, _ := Open(t.TempDir())
+	dir := t.TempDir()
+	s, _ := Open(dir)
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
@@ -77,7 +78,7 @@ func TestConcurrentUpdates(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	s2, _ := Open(s.path[:len(s.path)-len("/ispbill.json")])
+	s2, _ := Open(dir)
 	s2.View(func(d *Data) {
 		if len(d.Payments) != 20 {
 			t.Fatalf("got %d", len(d.Payments))
@@ -104,7 +105,7 @@ func TestFreshFileHasFormatVersionAndEmptyAccounts(t *testing.T) {
 	s, _ := Open(dir)
 	s.Update(func(d *Data) error { d.Packages["p"] = Package{ID: "p"}; return nil })
 	b, _ := os.ReadFile(filepath.Join(dir, "ispbill.json"))
-	if !strings.Contains(string(b), `"format": 2`) {
+	if !strings.Contains(string(b), `"format": 4`) {
 		t.Fatalf("no format marker: %s", b)
 	}
 	if _, err := Open(dir); err != nil {

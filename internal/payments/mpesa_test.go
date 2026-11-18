@@ -17,6 +17,7 @@ import (
 	"ispbill/internal/payments"
 	"ispbill/internal/routeros"
 	"ispbill/internal/store"
+	"ispbill/internal/store/storetest"
 )
 
 type fakeDaraja struct {
@@ -56,6 +57,8 @@ func (f *fakeDaraja) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type rig struct {
 	svc  *billing.Service
 	st   *store.Store
+	h    *storetest.Handle
+	site string
 	rt   *routeros.Mock
 	mp   *payments.Mpesa
 	fd   *fakeDaraja
@@ -70,15 +73,21 @@ func newRig(t *testing.T) *rig {
 	fd := &fakeDaraja{}
 	srv := httptest.NewServer(fd)
 	t.Cleanup(srv.Close)
-	st, _ := store.Open(t.TempDir())
+	h := storetest.NewIn(t, t.TempDir())
+	st := h.Store
 	rt := routeros.NewMock()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := billing.NewService(st, rt, log)
-	r := &rig{svc: svc, st: st, rt: rt, fd: fd, now: time.Date(2026, 11, 17, 21, 30, 5, 0, time.UTC)}
+	site := store.NewSiteID()
+	st.Update(func(d *store.Data) error {
+		d.Sites[site] = store.Site{ID: site, Name: "Block A", Mode: store.SiteModeEnv}
+		return nil
+	})
+	svc := billing.NewService(st, billing.MockRouters{site: rt}, log)
+	r := &rig{svc: svc, st: st, h: h, site: site, rt: rt, fd: fd, now: time.Date(2026, 11, 17, 21, 30, 5, 0, time.UTC)}
 	svc.SetClock(func() time.Time { return r.now })
 	svc.SeedPackages()
-	svc.SyncProfiles(context.Background())
-	a, err := svc.CreateAccount(billing.AccountInput{Flat: "Flat 3B", MAC: ontMAC})
+	svc.SyncProfiles(context.Background(), site)
+	a, err := svc.CreateAccount(billing.AccountInput{SiteID: site, Flat: "Flat 3B", MAC: ontMAC})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,5 +358,65 @@ func TestC2BLowerPlanWhileActiveGoesToUnmatched(t *testing.T) {
 	r.st.View(func(d *store.Data) { row = d.Payments["LOW1ABCDEF"] })
 	if row.Status != store.PayUnmatched || !strings.Contains(row.Note, "lower plan while active") || row.AccountID != r.acct.ID {
 		t.Fatalf("row: %+v", row)
+	}
+}
+
+// A Paybill amount is matched against the prices of the building the account
+// lives in: site B's override credits a site B account and is unmatched for a
+// site A account, whose shared price list does not have that amount.
+func TestC2BAmountMatchesTheAccountsOwnSitePrices(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	rtB := routeros.NewMock()
+	siteB := store.NewSiteID()
+	dayID := r.pkg("1 Day").ID
+	r.st.Update(func(d *store.Data) error {
+		d.Sites[siteB] = store.Site{ID: siteB, Name: "Block B", Mode: store.SiteModeEnv,
+			PkgOverrides: map[string]store.PkgOverride{dayID: {PriceKES: 80}}}
+		return nil
+	})
+	// Rebuild the service so it knows both routers.
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc := billing.NewService(r.st, billing.MockRouters{r.site: r.rt, siteB: rtB}, log)
+	svc.SetClock(func() time.Time { return r.now })
+	svc.SyncProfiles(ctx, siteB)
+	mp := payments.NewMpesa(payments.MpesaConfig{PublicBaseURL: "https://example.org", Enabled: true}, svc, r.st, log)
+	mp.SetClock(func() time.Time { return r.now })
+	bAcct, err := svc.CreateAccount(billing.AccountInput{SiteID: siteB, Flat: "Flat 3B", MAC: ontMAC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp.HandleC2BConfirmation(ctx, c2b("BBB1ABCDEF", bAcct.Code, "80.00"))
+	var pay store.Payment
+	r.st.View(func(d *store.Data) { pay = d.Payments["BBB1ABCDEF"] })
+	if pay.Status != store.PayApplied || pay.SiteID != siteB || pay.AccountID != bAcct.ID {
+		t.Fatalf("site B account must be credited: %+v", pay)
+	}
+	if _, ok := rtB.GetUser(bAcct.Code); !ok {
+		t.Fatal("site B router user missing")
+	}
+	if _, ok := r.rt.GetUser(bAcct.Code); ok {
+		t.Fatal("site A router touched")
+	}
+	// The same amount for the site A account does not match any package there.
+	mp.HandleC2BConfirmation(ctx, c2b("AAA1ABCDEF", r.acct.Code, "80.00"))
+	r.st.View(func(d *store.Data) { pay = d.Payments["AAA1ABCDEF"] })
+	if pay.Status != store.PayUnmatched || pay.SiteID != r.site || pay.AccountID != r.acct.ID {
+		t.Fatalf("site A account must get an unmatched row stamped with its site: %+v", pay)
+	}
+	if !r.expiry().IsZero() {
+		t.Fatal("site A account must not be credited")
+	}
+	// And 50 (the shared price) is no longer a match at B.
+	mp.HandleC2BConfirmation(ctx, c2b("BBB2ABCDEF", bAcct.Code, "50.00"))
+	r.st.View(func(d *store.Data) { pay = d.Payments["BBB2ABCDEF"] })
+	if pay.Status != store.PayUnmatched || pay.SiteID != siteB {
+		t.Fatalf("%+v", pay)
+	}
+	// An unknown account number has no site.
+	mp.HandleC2BConfirmation(ctx, c2b("ZZZ1ABCDEF", "QQQQQQ", "50.00"))
+	r.st.View(func(d *store.Data) { pay = d.Payments["ZZZ1ABCDEF"] })
+	if pay.Status != store.PayUnmatched || pay.SiteID != "" {
+		t.Fatalf("%+v", pay)
 	}
 }

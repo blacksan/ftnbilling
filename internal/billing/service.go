@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"ispbill/internal/routeros"
@@ -22,6 +21,8 @@ var (
 	ErrDuplicateMAC = errors.New("that MAC address already belongs to another account")
 	ErrDuplicateKey = errors.New("that transaction code is already recorded")
 	ErrBadState     = errors.New("that payment is not waiting for a decision")
+	ErrVoucherSite  = errors.New("this voucher is for another building")
+	ErrNoSite       = errors.New("choose a building")
 )
 
 // Account states shown to people.
@@ -44,22 +45,34 @@ func DefaultPolicy() Policy { return Policy{ReminderDays: 3, ReminderOnExpiry: t
 
 // Service implements the billing rules on top of the store and the router.
 type Service struct {
-	st     *store.Store
-	rt     routeros.Client
-	log    *slog.Logger
-	now    func() time.Time
-	policy Policy
+	st      *store.Store
+	routers RouterSource
+	log     *slog.Logger
+	now     func() time.Time
+	policy  Policy
+	box     *Secretbox // national-ID encryption; nil = feature off
 
-	profilesOK atomic.Bool
-	taskMu     sync.Mutex
+	sites sync.Map // siteID -> *siteState
+	hook  func()   // called after a payment was applied (tenant messages)
+	bg    sync.WaitGroup
 }
 
-func NewService(st *store.Store, rt routeros.Client, log *slog.Logger) *Service {
-	return &Service{st: st, rt: rt, log: log, now: time.Now, policy: DefaultPolicy()}
+func NewService(st *store.Store, rs RouterSource, log *slog.Logger) *Service {
+	return &Service{st: st, routers: rs, log: log, now: time.Now, policy: DefaultPolicy()}
 }
 
 // SetClock overrides the clock (tests).
 func (s *Service) SetClock(f func() time.Time) { s.now = f }
+
+// SetCreditHook registers a function called (without locks held) after a
+// payment was applied, so the tenant message scanners can run at once.
+func (s *Service) SetCreditHook(f func()) { s.hook = f }
+
+func (s *Service) credited() {
+	if s.hook != nil {
+		s.hook()
+	}
+}
 
 // SetPolicy overrides the lifecycle policy.
 func (s *Service) SetPolicy(p Policy) { s.policy = p }
@@ -92,7 +105,11 @@ func wantUser(a store.Account, now time.Time) bool {
 
 // AccountInput is what the admin types when creating or editing a flat.
 type AccountInput struct {
+	SiteID                          string // required: the building
 	Flat, MAC, Tenant, Phone, Notes string
+	// WhatsApp is the tenant's WhatsApp number; WASamePhone copies Phone instead.
+	WhatsApp    string
+	WASamePhone bool
 }
 
 func cleanText(s string, max int) string {
@@ -106,15 +123,25 @@ func cleanText(s string, max int) string {
 func (s *Service) uniqueCode(d *store.Data) string {
 	for {
 		c := RandomCode(6)
-		if _, taken := d.AccountByCode(c); !taken {
+		if _, taken := d.AccountByCode(c); !taken && !closedCodeTaken(d, c) {
 			return c
 		}
 	}
 }
 
-func flatTaken(d *store.Data, flat, exceptID string) bool {
+func closedCodeTaken(d *store.Data, code string) bool {
+	for _, a := range d.ClosedAccounts {
+		if a.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+// flatTaken: flat labels only need to be unique inside one building.
+func flatTaken(d *store.Data, siteID, flat, exceptID string) bool {
 	for _, a := range d.Accounts {
-		if a.ID != exceptID && strings.EqualFold(a.Flat, flat) {
+		if a.SiteID == siteID && a.ID != exceptID && strings.EqualFold(a.Flat, flat) {
 			return true
 		}
 	}
@@ -126,6 +153,38 @@ func normPhone(raw string) (string, error) {
 		return "", nil
 	}
 	return NormalizePhone(raw)
+}
+
+// waNumber picks the WhatsApp number: the phone when same is set, else the
+// typed number (empty = none).
+func waNumber(raw string, same bool, phone string) (string, error) {
+	if same {
+		return phone, nil
+	}
+	n, err := normPhone(raw)
+	if err != nil {
+		return "", errors.New("WhatsApp number: " + err.Error())
+	}
+	return n, nil
+}
+
+// SetWhatsApp sets the tenant's WhatsApp number and opt-out. samePhone copies
+// the account's phone number.
+func (s *Service) SetWhatsApp(id, raw string, samePhone, optOut bool) error {
+	return s.st.Update(func(d *store.Data) error {
+		a, ok := d.Accounts[id]
+		if !ok {
+			return ErrNotFound
+		}
+		wa, err := waNumber(raw, samePhone, a.Phone)
+		if err != nil {
+			return err
+		}
+		if !d.SetWhatsApp(id, wa, optOut) { // also updates the linked customer
+			return store.ErrNoChange
+		}
+		return nil
+	})
 }
 
 // CreateAccount makes a new flat account (admin only). The MAC must be unique.
@@ -142,25 +201,32 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 	if err != nil {
 		return store.Account{}, err
 	}
+	wa, err := waNumber(in.WhatsApp, in.WASamePhone, phone)
+	if err != nil {
+		return store.Account{}, err
+	}
 	var a store.Account
 	err = s.st.Update(func(d *store.Data) error {
-		if other, ok := d.AccountByMAC(mac); ok {
+		if st, ok := d.Sites[in.SiteID]; !ok || st.Removed {
+			return ErrNoSite
+		}
+		if other, ok := d.AccountByMAC(in.SiteID, mac); ok {
 			return fmt.Errorf("%w (%s)", ErrDuplicateMAC, other.Flat)
 		}
-		if flatTaken(d, flat, "") {
-			return fmt.Errorf("an account for %q already exists", flat)
+		if flatTaken(d, in.SiteID, flat, "") {
+			return fmt.Errorf("an account for %q already exists in this building", flat)
 		}
 		a = store.Account{
-			ID: RandomID(), Code: s.uniqueCode(d), Flat: flat, MAC: mac,
-			Tenant: cleanText(in.Tenant, 60), Phone: phone, Notes: cleanText(in.Notes, 300),
+			ID: RandomID(), SiteID: in.SiteID, Code: s.uniqueCode(d), Flat: flat, MAC: mac,
+			Tenant: cleanText(in.Tenant, 60), Phone: phone, Notes: cleanText(in.Notes, 300), WhatsApp: wa,
 			HSPass: RandomSecret(16), CreatedAt: s.now(),
 		}
 		d.Accounts[a.ID] = a
-		delete(d.Devices, mac)
+		delete(d.Devices, store.DeviceKey(a.SiteID, mac))
 		return nil
 	})
 	if err == nil {
-		s.log.Info("account created", "code", a.Code, "flat", a.Flat, "mac", a.MAC)
+		s.log.Info("account created", "site", a.SiteID, "code", a.Code, "flat", a.Flat, "mac", a.MAC)
 	}
 	return a, err
 }
@@ -181,8 +247,8 @@ func (s *Service) UpdateAccount(id, flat, tenant, phone, notes string) error {
 		if !ok {
 			return ErrNotFound
 		}
-		if flatTaken(d, flat, id) {
-			return fmt.Errorf("an account for %q already exists", flat)
+		if flatTaken(d, a.SiteID, flat, id) {
+			return fmt.Errorf("an account for %q already exists in this building", flat)
 		}
 		a.Flat, a.Tenant, a.Phone, a.Notes = flat, cleanText(tenant, 60), ph, cleanText(notes, 300)
 		d.Accounts[id] = a
@@ -202,21 +268,21 @@ func (s *Service) ChangeMAC(ctx context.Context, id, rawMAC string) error {
 		if !ok {
 			return ErrNotFound
 		}
-		if other, ok := d.AccountByMAC(mac); ok && other.ID != id {
+		if other, ok := d.AccountByMAC(a.SiteID, mac); ok && other.ID != id {
 			return fmt.Errorf("%w (%s)", ErrDuplicateMAC, other.Flat)
 		}
 		if strings.EqualFold(a.MAC, mac) {
 			return store.ErrNoChange
 		}
-		d.AddEvent(store.Event{Time: s.now(), Kind: "info", AccountID: id, Msg: fmt.Sprintf("%s: ONT MAC changed %s -> %s", a.Flat, a.MAC, mac)})
+		d.AddEvent(store.Event{Time: s.now(), SiteID: a.SiteID, Kind: "info", AccountID: id, Msg: fmt.Sprintf("%s: ONT MAC changed %s -> %s", a.Flat, a.MAC, mac)})
 		a.MAC = mac
 		d.Accounts[id] = a
-		delete(d.Devices, mac)
+		delete(d.Devices, store.DeviceKey(a.SiteID, mac))
 		s.enqueueLocked(d, a, true, "MAC changed")
 		return nil
 	})
 	if err == nil {
-		s.RunTasks(ctx)
+		s.runAccountSite(ctx, id)
 	}
 	return err
 }
@@ -238,7 +304,7 @@ func (s *Service) SetSuspended(ctx context.Context, id string, suspended bool) e
 		return nil
 	})
 	if err == nil {
-		s.RunTasks(ctx)
+		s.runAccountSite(ctx, id)
 	}
 	return err
 }
@@ -253,26 +319,30 @@ func (s *Service) AccountByCode(code string) (a store.Account, ok bool) {
 	return
 }
 
-func (s *Service) AccountByMAC(mac string) (a store.Account, ok bool) {
-	s.st.View(func(d *store.Data) { a, ok = d.AccountByMAC(mac) })
+func (s *Service) AccountByMAC(siteID, mac string) (a store.Account, ok bool) {
+	s.st.View(func(d *store.Data) { a, ok = d.AccountByMAC(siteID, mac) })
 	return
 }
 
 // ---- unregistered devices ----------------------------------------------
 
 // NoteDevice records a MAC that has no account. It is a no-op for known MACs.
-func (s *Service) NoteDevice(mac, ip, source string) {
-	if mac == "" {
+func (s *Service) NoteDevice(siteID, mac, ip, source string) {
+	if mac == "" || siteID == "" {
 		return
 	}
 	_ = s.st.Update(func(d *store.Data) error {
-		if _, ok := d.AccountByMAC(mac); ok {
+		if _, ok := d.AccountByMAC(siteID, mac); ok {
+			return store.ErrNoChange
+		}
+		if st, ok := d.Sites[siteID]; !ok || st.Removed {
 			return store.ErrNoChange
 		}
 		now := s.now()
-		dev, ok := d.Devices[mac]
+		key := store.DeviceKey(siteID, mac)
+		dev, ok := d.Devices[key]
 		if !ok {
-			dev = store.Device{MAC: mac, FirstSeen: now}
+			dev = store.Device{SiteID: siteID, MAC: mac, FirstSeen: now}
 		}
 		dev.LastSeen, dev.Hits = now, dev.Hits+1
 		if ip != "" {
@@ -281,8 +351,8 @@ func (s *Service) NoteDevice(mac, ip, source string) {
 		if source == "portal" || dev.Source == "" {
 			dev.Source = source
 		}
-		d.Devices[mac] = dev
-		if len(d.Devices) > 500 { // bounded: drop the stalest
+		d.Devices[key] = dev
+		for len(d.Devices) > 500 { // bounded: drop the stalest
 			var oldest string
 			for m, v := range d.Devices {
 				if oldest == "" || v.LastSeen.Before(d.Devices[oldest].LastSeen) {
@@ -295,14 +365,14 @@ func (s *Service) NoteDevice(mac, ip, source string) {
 	})
 }
 
-// HotspotHosts returns the router's current hotspot host table.
-func (s *Service) HotspotHosts(ctx context.Context) ([]routeros.Host, error) {
-	return s.rt.Hosts(ctx)
+// HotspotHosts returns the building router's current hotspot host table.
+func (s *Service) HotspotHosts(ctx context.Context, siteID string) ([]routeros.Host, error) {
+	return s.router(siteID).Hosts(ctx)
 }
 
 // RefreshHosts pulls unauthorised hotspot hosts from the router into the list.
-func (s *Service) RefreshHosts(ctx context.Context) error {
-	hosts, err := s.rt.Hosts(ctx)
+func (s *Service) RefreshHosts(ctx context.Context, siteID string) error {
+	hosts, err := s.router(siteID).Hosts(ctx)
 	if err != nil {
 		return err
 	}
@@ -314,28 +384,31 @@ func (s *Service) RefreshHosts(ctx context.Context) error {
 		if err != nil {
 			continue
 		}
-		s.NoteDevice(mac, h.Address, "hotspot-host")
+		s.NoteDevice(siteID, mac, h.Address, "hotspot-host")
 	}
 	return nil
 }
 
 // DismissDevice removes a MAC from the unregistered list.
-func (s *Service) DismissDevice(mac string) error {
+func (s *Service) DismissDevice(siteID, mac string) error {
 	return s.st.Update(func(d *store.Data) error {
-		if _, ok := d.Devices[mac]; !ok {
+		key := store.DeviceKey(siteID, mac)
+		if _, ok := d.Devices[key]; !ok {
 			return store.ErrNoChange
 		}
-		delete(d.Devices, mac)
+		delete(d.Devices, key)
 		return nil
 	})
 }
 
 // ---- packages -----------------------------------------------------------
 
-// PackageForAmount finds the package whose price equals amount (enabled ones first).
-func (s *Service) PackageForAmount(amount int) (p store.Package, ok bool) {
+// PackageForAmount finds the package whose price at the building equals
+// amount (enabled ones first). The returned package carries the building's
+// effective price.
+func (s *Service) PackageForAmount(siteID string, amount int) (p store.Package, ok bool) {
 	s.st.View(func(d *store.Data) {
-		for _, c := range d.PackageList() {
+		for _, c := range d.EffectivePackages(siteID) {
 			if c.PriceKES == amount && c.PriceKES > 0 && (!ok || (p.Disabled && !c.Disabled)) {
 				p, ok = c, true
 			}
@@ -344,8 +417,8 @@ func (s *Service) PackageForAmount(amount int) (p store.Package, ok bool) {
 	return
 }
 
-// Ping reports whether the router answers.
-func (s *Service) Ping(ctx context.Context) error { return s.rt.Ping(ctx) }
+// Ping reports whether the building's router answers.
+func (s *Service) Ping(ctx context.Context, siteID string) error { return s.router(siteID).Ping(ctx) }
 
 // ---- login --------------------------------------------------------------
 
@@ -356,7 +429,8 @@ func (s *Service) AutoLogin(ctx context.Context, a store.Account, ip string) boo
 	if ip == "" || !wantUser(a, s.now()) {
 		return false
 	}
-	if sessions, err := s.rt.ActiveSessions(ctx); err == nil {
+	rt := s.router(a.SiteID)
+	if sessions, err := rt.ActiveSessions(ctx); err == nil {
 		for _, se := range sessions {
 			if se.User != a.Code {
 				continue
@@ -364,12 +438,12 @@ func (s *Service) AutoLogin(ctx context.Context, a store.Account, ip string) boo
 			if se.Address == ip {
 				return true
 			}
-			if err := s.rt.KickUser(ctx, a.Code); err != nil {
+			if err := rt.KickUser(ctx, a.Code); err != nil {
 				s.log.Warn("kick stale session failed", "code", a.Code, "err", err)
 			}
 		}
 	}
-	if err := s.rt.Login(ctx, a.Code, a.HSPass, a.MAC, ip); err != nil {
+	if err := rt.Login(ctx, a.Code, a.HSPass, a.MAC, ip); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "already") {
 			return true
 		}
@@ -380,8 +454,15 @@ func (s *Service) AutoLogin(ctx context.Context, a store.Account, ip string) boo
 }
 
 // Kick ends the account's live session without touching the subscription.
-func (s *Service) Kick(ctx context.Context, code string) error {
-	return s.rt.KickUser(ctx, strings.ToUpper(code))
+func (s *Service) Kick(ctx context.Context, siteID, code string) error {
+	return s.router(siteID).KickUser(ctx, strings.ToUpper(code))
+}
+
+// runAccountSite runs the router tasks of the building that holds the account.
+func (s *Service) runAccountSite(ctx context.Context, accountID string) {
+	if a, ok := s.GetAccount(accountID); ok {
+		s.RunSiteTasks(ctx, a.SiteID)
+	}
 }
 
 // DescribeMinutes renders 90 as "1 h 30 min", 1440 as "1 day".

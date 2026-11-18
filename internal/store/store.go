@@ -1,15 +1,16 @@
-// Package store is a tiny JSON-file database: one mutex, atomic writes.
+// Package store is the in-memory database of ispbill. Every read and write
+// goes through View and Update; a Backend (a JSON file by default, Postgres
+// when DATABASE_URL is set) makes each Update durable.
 package store
 
 import (
-	"encoding/json"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"net/netip"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 )
@@ -21,8 +22,11 @@ var ErrNoChange = errors.New("no change")
 // incompatible version (the PIN/subscriber model).
 var ErrOldFormat = errors.New("ispbill.json is in an old or unknown data format")
 
-// FormatVersion is the on-disk data format. 2 = flat accounts locked to an ONT MAC.
-const FormatVersion = 2
+// FormatVersion is the data format. 2 = flat accounts locked to an ONT MAC
+// (single building); 3 = adds Sites and a SiteID on every row; 4 = adds
+// customers, tenancies, equipment, contacts, notes, closed accounts and event
+// sequence numbers.
+const FormatVersion = 4
 
 const (
 	OrderPending = "pending"
@@ -34,6 +38,75 @@ const (
 	PayRefunded  = "refunded"
 	PayIgnored   = "ignored"
 )
+
+// Site modes.
+const (
+	SiteModeWG  = "wg"  // joined over WireGuard
+	SiteModeEnv = "env" // legacy / container mode: router settings come from the environment
+)
+
+// Site is one building: one MikroTik router with its own hotspot.
+type Site struct {
+	ID           string `json:"id"` // "s" + 6 hex, immutable, used in portal URLs
+	Name         string `json:"name"`
+	Mode         string `json:"mode"` // wg | env
+	Notes        string `json:"notes,omitempty"`
+	SupportPhone string `json:"support_phone,omitempty"`
+	Disabled     bool   `json:"disabled,omitempty"` // paused: no collection, no router tasks
+	Removed      bool   `json:"removed,omitempty"`  // tombstone; keeps ledger names
+
+	// WireGuard / REST (Mode=wg)
+	TunnelIP    string    `json:"tunnel_ip,omitempty"` // 10.99.0.x
+	WGPublicKey string    `json:"wg_pub,omitempty"`
+	RESTUser    string    `json:"rest_user,omitempty"` // "ftn-api"
+	RESTPass    string    `json:"rest_pass,omitempty"` // 32 alphanumeric
+	RESTPort    int       `json:"rest_port,omitempty"` // 8081
+	Join        JoinToken `json:"join"`
+	JoinedAt    time.Time `json:"joined_at,omitempty"` // first successful REST ping after a join
+
+	// Router layout (metrics + join script)
+	HotspotServer  string  `json:"hotspot_server,omitempty"` // "hotspot1"
+	WANInterface   string  `json:"wan_interface,omitempty"`  // "ether1"
+	WANList        string  `json:"wan_list,omitempty"`       // "WAN"
+	OLTInterface   string  `json:"olt_interface,omitempty"`  // "sfp-sfpplus1"
+	VLANID         int     `json:"vlan_id,omitempty"`        // 0 = untagged
+	CustomerSubnet string  `json:"customer_subnet,omitempty"`
+	WANCapMbps     float64 `json:"wan_cap_mbps,omitempty"`
+	OLTCapMbps     float64 `json:"olt_cap_mbps,omitempty"`
+	FUPTB          float64 `json:"fup_tb,omitempty"`
+	Provision      bool    `json:"provision,omitempty"` // script builds bridge/DHCP/hotspot
+	BenchPort      string  `json:"bench_port,omitempty"`
+	// LegacyContainer makes the script stop the old ispbill/tailscale containers.
+	LegacyContainer bool `json:"legacy_container,omitempty"`
+
+	// PkgOverrides adjust the shared package list for this building, by package
+	// ID. The map is always reassigned, never edited in place.
+	PkgOverrides map[string]PkgOverride `json:"pkg_overrides,omitempty"`
+
+	// Building profile.
+	Address string    `json:"address,omitempty"`
+	Lat     float64   `json:"lat,omitempty"` // 0 = unset
+	Lng     float64   `json:"lng,omitempty"`
+	GoLive  time.Time `json:"go_live,omitempty"`
+
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// PkgOverride is a per-building tweak of a shared package.
+type PkgOverride struct {
+	Hidden   bool `json:"hidden,omitempty"`
+	PriceKES int  `json:"price_kes,omitempty"` // 0 = use the shared price
+}
+
+// JoinToken is a single-use, short-lived token to fetch the join script. Only
+// a SHA-256 hash of the token is stored.
+type JoinToken struct {
+	Hash      string    `json:"hash,omitempty"`
+	ExpiresAt time.Time `json:"expires_at,omitempty"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+	UsedAt    time.Time `json:"used_at,omitempty"`
+	UsedFrom  string    `json:"used_from,omitempty"`
+}
 
 type Package struct {
 	ID          string `json:"id"`
@@ -58,12 +131,16 @@ func (p Package) RateLimit() string { return fmt.Sprintf("%dM/%dM", p.SpeedMbps,
 // the M-Pesa Paybill account number.
 type Account struct {
 	ID     string `json:"id"`
+	SiteID string `json:"site_id"`
 	Code   string `json:"code"`
 	Flat   string `json:"flat"`
 	MAC    string `json:"mac"`
 	Tenant string `json:"tenant,omitempty"`
 	Phone  string `json:"phone,omitempty"`
 	Notes  string `json:"notes,omitempty"`
+	// WhatsApp (format 2547XXXXXXXX) and WAOptOut are used by tenant messaging.
+	WhatsApp string `json:"whatsapp,omitempty"`
+	WAOptOut bool   `json:"wa_opt_out,omitempty"`
 
 	PackageID string    `json:"package_id,omitempty"`
 	ExpiresAt time.Time `json:"expires_at,omitempty"`
@@ -78,11 +155,25 @@ type Account struct {
 	RemindedFor time.Time `json:"reminded_for,omitempty"`
 	ExpiredFor  time.Time `json:"expired_for,omitempty"`
 
+	// CustomerID is the current occupant. Tenant, Phone, WhatsApp and
+	// WAOptOut above stay authoritative for messaging and are copied from
+	// the customer when it is saved or linked.
+	CustomerID string `json:"customer_id,omitempty"`
+	// Location inside the building.
+	Floor        string `json:"floor,omitempty"`
+	ODB          string `json:"odb,omitempty"`
+	SplitterID   string `json:"splitter_id,omitempty"` // equipment id of the splitter
+	SplitterPort int    `json:"splitter_port,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
+	// ClosedAt is set when the account is closed (it then lives in
+	// Data.ClosedAccounts).
+	ClosedAt time.Time `json:"closed_at,omitempty"`
 }
 
 type Order struct {
 	ID                string    `json:"id"`
+	SiteID            string    `json:"site_id"`
 	AccountID         string    `json:"account_id"`
 	PackageID         string    `json:"package_id"`
 	Phone             string    `json:"phone,omitempty"` // M-Pesa payer
@@ -103,6 +194,7 @@ type Order struct {
 
 type Voucher struct {
 	Code      string    `json:"code"`
+	SiteID    string    `json:"site_id,omitempty"` // "" = valid at any building
 	PackageID string    `json:"package_id"`
 	Batch     string    `json:"batch"`
 	Used      bool      `json:"used"`
@@ -115,6 +207,7 @@ type Voucher struct {
 // VOUCHER-<code>, TEST-<order>, ADMIN-<id>. Inserting a duplicate key is a no-op.
 type Payment struct {
 	Key        string    `json:"key"`
+	SiteID     string    `json:"site_id"`
 	Method     string    `json:"method"` // mpesa-manual, mpesa-stk, mpesa-c2b, voucher, test, admin
 	Status     string    `json:"status"` // applied, unmatched, refunded, ignored
 	AmountKES  int       `json:"amount_kes"`
@@ -122,6 +215,7 @@ type Payment struct {
 	Name       string    `json:"name,omitempty"`
 	BillRef    string    `json:"bill_ref,omitempty"` // what the payer typed as account number
 	AccountID  string    `json:"account_id,omitempty"`
+	CustomerID string    `json:"customer_id,omitempty"` // the occupant when the money was credited
 	PackageID  string    `json:"package_id,omitempty"`
 	OrderID    string    `json:"order_id,omitempty"`
 	Note       string    `json:"note,omitempty"`
@@ -133,6 +227,7 @@ type Payment struct {
 // Device is a MAC that opened the portal (or showed up as a hotspot host)
 // without a matching account.
 type Device struct {
+	SiteID    string    `json:"site_id"`
 	MAC       string    `json:"mac"`
 	IP        string    `json:"ip,omitempty"`
 	Source    string    `json:"source"` // portal, hotspot-host
@@ -146,6 +241,7 @@ type Device struct {
 // and they survive a restart.
 type Task struct {
 	ID        string    `json:"id"`
+	SiteID    string    `json:"site_id"`
 	AccountID string    `json:"account_id"`
 	Code      string    `json:"code"`
 	Kick      bool      `json:"kick,omitempty"` // also end the live session (MAC change)
@@ -157,31 +253,178 @@ type Task struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Event is a lifecycle note (reminder due, expired). No SMS is sent yet.
+// Event is a lifecycle note (reminder due, expired, audit). Seq is assigned
+// by AddEvent and never reused.
 type Event struct {
-	Time      time.Time `json:"time"`
-	Kind      string    `json:"kind"` // reminder_due, expired, info
-	AccountID string    `json:"account_id,omitempty"`
-	Msg       string    `json:"msg"`
+	Seq         int64     `json:"seq,omitempty"`
+	Time        time.Time `json:"time"`
+	SiteID      string    `json:"site_id,omitempty"`
+	Kind        string    `json:"kind"` // reminder_due, expired, info, audit
+	AccountID   string    `json:"account_id,omitempty"`
+	CustomerID  string    `json:"customer_id,omitempty"`
+	EquipmentID string    `json:"equipment_id,omitempty"`
+	Msg         string    `json:"msg"`
 }
 
+// Customer is a person (or business) who takes internet service, kept apart
+// from the flat so that a flat can change hands and a person can have several.
+type Customer struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Phone    string `json:"phone,omitempty"`
+	Phone2   string `json:"phone2,omitempty"`
+	WhatsApp string `json:"whatsapp,omitempty"`
+	Email    string `json:"email,omitempty"`
+	Notes    string `json:"notes,omitempty"`
+	WAOptOut bool   `json:"wa_opt_out,omitempty"`
+	// The national ID is optional and kept encrypted (see billing.Secretbox):
+	// ciphertext, the last four digits, and a keyed hash for exact search.
+	NationalIDEnc   string    `json:"national_id_enc,omitempty"`
+	NationalIDHMAC  string    `json:"national_id_hmac,omitempty"`
+	NationalIDLast4 string    `json:"national_id_last4,omitempty"`
+	AnonymizedAt    time.Time `json:"anonymized_at,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at,omitempty"`
+}
+
+// Tenancy links a customer to an account over time. MoveOut zero = current.
+type Tenancy struct {
+	ID         string    `json:"id"`
+	CustomerID string    `json:"customer_id"`
+	AccountID  string    `json:"account_id"`
+	Note       string    `json:"note,omitempty"`
+	MoveIn     time.Time `json:"move_in"`
+	MoveOut    time.Time `json:"move_out,omitempty"`
+}
+
+// Contact is a person tied to a building: landlord, caretaker, agent...
+type Contact struct {
+	ID        string    `json:"id"`
+	SiteID    string    `json:"site_id"`
+	Role      string    `json:"role"`
+	Name      string    `json:"name"`
+	Phone     string    `json:"phone,omitempty"`
+	Email     string    `json:"email,omitempty"`
+	Notes     string    `json:"notes,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Contact roles.
+const (
+	RoleLandlord  = "landlord"
+	RoleCaretaker = "caretaker"
+	RoleAgent     = "agent"
+	RoleSecurity  = "security"
+	RoleOther     = "other"
+)
+
+// Equipment kinds and statuses.
+const (
+	KindONT      = "ont"
+	KindRouter   = "router"
+	KindOLT      = "olt"
+	KindSplitter = "splitter"
+	KindSwitch   = "switch"
+	KindOther    = "other"
+
+	EqInStock   = "in_stock"
+	EqInstalled = "installed"
+	EqFaulty    = "faulty"
+	EqReturned  = "returned"
+	EqRetired   = "retired"
+)
+
+// Equipment is one physical item (ONT, router, OLT, splitter...). An item
+// that is installed at a customer has an AccountID; one that belongs to a
+// building (its router, its OLT) has a SiteID and no account.
+type Equipment struct {
+	ID          string    `json:"id"`
+	Kind        string    `json:"kind"`
+	Serial      string    `json:"serial,omitempty"`
+	MAC         string    `json:"mac,omitempty"`
+	Model       string    `json:"model,omitempty"`
+	Firmware    string    `json:"firmware,omitempty"`
+	Status      string    `json:"status"`
+	SiteID      string    `json:"site_id,omitempty"`
+	AccountID   string    `json:"account_id,omitempty"`
+	Notes       string    `json:"notes,omitempty"`
+	InstalledAt time.Time `json:"installed_at,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at,omitempty"`
+}
+
+// Equipment event kinds.
+const (
+	EqEvReceived   = "received"
+	EqEvAssigned   = "assigned"
+	EqEvUnassigned = "unassigned"
+	EqEvReturned   = "returned"
+	EqEvFaulty     = "faulty"
+	EqEvRepaired   = "repaired"
+	EqEvMoved      = "moved"
+	EqEvEdited     = "edited"
+	EqEvNote       = "note"
+)
+
+// EquipmentEvent is one line of an item's history.
+type EquipmentEvent struct {
+	ID          string    `json:"id"`
+	EquipmentID string    `json:"equipment_id"`
+	Kind        string    `json:"kind"`
+	FromStatus  string    `json:"from_status,omitempty"`
+	ToStatus    string    `json:"to_status,omitempty"`
+	SiteID      string    `json:"site_id,omitempty"`
+	AccountID   string    `json:"account_id,omitempty"`
+	CustomerID  string    `json:"customer_id,omitempty"`
+	Note        string    `json:"note,omitempty"`
+	Time        time.Time `json:"time"`
+}
+
+// Note is a free-text entry on a customer, account, building or item.
+type Note struct {
+	ID          string    `json:"id"`
+	CustomerID  string    `json:"customer_id,omitempty"`
+	AccountID   string    `json:"account_id,omitempty"`
+	SiteID      string    `json:"site_id,omitempty"`
+	EquipmentID string    `json:"equipment_id,omitempty"`
+	Text        string    `json:"text"`
+	Time        time.Time `json:"time"`
+}
+
+// maxEvents is how many events stay in memory (a database keeps them all).
 const maxEvents = 300
 
 // Data is the whole database.
 type Data struct {
 	Format   int                `json:"format"`
+	Sites    map[string]Site    `json:"sites"`
 	Packages map[string]Package `json:"packages"`
 	Accounts map[string]Account `json:"accounts"`
 	Orders   map[string]Order   `json:"orders"`
 	Vouchers map[string]Voucher `json:"vouchers"`
 	Payments map[string]Payment `json:"payments"` // key -> entry
-	Devices  map[string]Device  `json:"devices"`  // mac -> device
+	Devices  map[string]Device  `json:"devices"`  // siteID|MAC -> device
 	Tasks    map[string]Task    `json:"tasks"`
 	Events   []Event            `json:"events"`
+
+	// Format 4.
+	// ClosedAccounts holds deleted flats (same table, ClosedAt set). A key is
+	// in Accounts or in ClosedAccounts, never both.
+	ClosedAccounts  map[string]Account        `json:"closed_accounts"`
+	Customers       map[string]Customer       `json:"customers"`
+	Tenancies       map[string]Tenancy        `json:"tenancies"`
+	Contacts        map[string]Contact        `json:"contacts"`
+	Equipment       map[string]Equipment      `json:"equipment"`
+	EquipmentEvents map[string]EquipmentEvent `json:"equipment_events"`
+	Notes           map[string]Note           `json:"notes"`
+	EventSeq        int64                     `json:"event_seq"` // last Event.Seq handed out
 }
 
 func (d *Data) init() {
 	d.Format = FormatVersion
+	if d.Sites == nil {
+		d.Sites = map[string]Site{}
+	}
 	if d.Packages == nil {
 		d.Packages = map[string]Package{}
 	}
@@ -203,10 +446,34 @@ func (d *Data) init() {
 	if d.Tasks == nil {
 		d.Tasks = map[string]Task{}
 	}
+	if d.ClosedAccounts == nil {
+		d.ClosedAccounts = map[string]Account{}
+	}
+	if d.Customers == nil {
+		d.Customers = map[string]Customer{}
+	}
+	if d.Tenancies == nil {
+		d.Tenancies = map[string]Tenancy{}
+	}
+	if d.Contacts == nil {
+		d.Contacts = map[string]Contact{}
+	}
+	if d.Equipment == nil {
+		d.Equipment = map[string]Equipment{}
+	}
+	if d.EquipmentEvents == nil {
+		d.EquipmentEvents = map[string]EquipmentEvent{}
+	}
+	if d.Notes == nil {
+		d.Notes = map[string]Note{}
+	}
 }
 
-// AddEvent appends a lifecycle event, keeping only the newest maxEvents.
+// AddEvent appends a lifecycle event, assigning its sequence number and
+// keeping only the newest maxEvents in memory.
 func (d *Data) AddEvent(e Event) {
+	d.EventSeq++
+	e.Seq = d.EventSeq
 	d.Events = append(d.Events, e)
 	if n := len(d.Events); n > maxEvents {
 		d.Events = append([]Event(nil), d.Events[n-maxEvents:]...)
@@ -228,13 +495,17 @@ func (d *Data) AccountByCode(code string) (Account, bool) {
 	return Account{}, false
 }
 
-// AccountByMAC expects a normalised MAC (AA:BB:CC:DD:EE:FF).
-func (d *Data) AccountByMAC(mac string) (Account, bool) {
+// DeviceKey is the key of d.Devices.
+func DeviceKey(siteID, mac string) string { return siteID + "|" + mac }
+
+// AccountByMAC expects a normalised MAC (AA:BB:CC:DD:EE:FF). MACs are only
+// unique inside one building.
+func (d *Data) AccountByMAC(siteID, mac string) (Account, bool) {
 	if mac == "" {
 		return Account{}, false
 	}
 	for _, a := range d.Accounts {
-		if strings.EqualFold(a.MAC, mac) {
+		if a.SiteID == siteID && strings.EqualFold(a.MAC, mac) {
 			return a, true
 		}
 	}
@@ -373,109 +644,117 @@ func (d *Data) TaskList() []Task {
 	return out
 }
 
-// Store guards Data with a mutex and persists it to a JSON file.
-type Store struct {
-	mu   sync.RWMutex
-	path string
-	data Data
+// ---- sites ----------------------------------------------------------------
+
+// NewSiteID returns "s" + 6 random hex characters.
+func NewSiteID() string {
+	b := make([]byte, 3)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return "s" + hex.EncodeToString(b)
 }
 
-// Open loads (or creates) the database file at dir/ispbill.json. It refuses
-// to start on a file written by an older, incompatible version instead of
-// silently reading it wrongly.
-func Open(dir string) (*Store, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
-	}
-	s := &Store{path: filepath.Join(dir, "ispbill.json")}
-	b, err := os.ReadFile(s.path)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-	case err != nil:
-		return nil, err
-	default:
-		var probe struct {
-			Format int `json:"format"`
-		}
-		if err := json.Unmarshal(b, &probe); err != nil {
-			return nil, fmt.Errorf("corrupt %s: %w", s.path, err)
-		}
-		if probe.Format != FormatVersion {
-			return nil, fmt.Errorf("%w: %s has format %d, this version needs %d (old PIN/subscriber model). "+
-				"Move or delete the file to start fresh; ispbill will not touch it", ErrOldFormat, s.path, probe.Format, FormatVersion)
-		}
-		if err := json.Unmarshal(b, &s.data); err != nil {
-			return nil, fmt.Errorf("corrupt %s: %w", s.path, err)
+// SiteList returns the non-removed sites, natural-sorted by name.
+func (d *Data) SiteList() []Site {
+	out := make([]Site, 0, len(d.Sites))
+	for _, s := range d.Sites {
+		if !s.Removed {
+			out = append(out, s)
 		}
 	}
-	s.data.init()
-	return s, nil
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return NaturalLess(out[i].Name, out[j].Name)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
 }
 
-// View runs fn under a read lock. fn must not retain or modify d's maps.
-func (s *Store) View(fn func(d *Data)) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	fn(&s.data)
-}
-
-// Update runs fn under the write lock and then saves atomically. fn should
-// validate before it mutates: if it returns an error nothing is written
-// (but earlier in-memory edits would remain). Return ErrNoChange to skip the save.
-func (s *Store) Update(fn func(d *Data) error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := fn(&s.data); err != nil {
-		if errors.Is(err, ErrNoChange) {
-			return nil
+// SiteByTunnelIP finds the non-removed site that owns a WireGuard tunnel IP.
+func (d *Data) SiteByTunnelIP(ip string) (Site, bool) {
+	if ip == "" {
+		return Site{}, false
+	}
+	for _, s := range d.Sites {
+		if !s.Removed && s.TunnelIP == ip {
+			return s, true
 		}
-		return err
 	}
-	return s.saveLocked()
+	return Site{}, false
 }
 
-// saveLocked persists the whole database atomically.
-func (s *Store) saveLocked() error {
-	b, err := json.MarshalIndent(&s.data, "", " ")
-	if err != nil {
-		return err
+// EnvSite returns the non-removed site that takes its router settings from
+// the environment (legacy / container mode), if there is one.
+func (d *Data) EnvSite() (Site, bool) {
+	var best Site
+	found := false
+	for _, s := range d.Sites {
+		if !s.Removed && s.Mode == SiteModeEnv && (!found || s.CreatedAt.Before(best.CreatedAt)) {
+			best, found = s, true
+		}
 	}
-	return WriteFileAtomic(s.path, b)
+	return best, found
 }
 
-// WriteFileAtomic writes to a temp file in the same directory, fsyncs, renames
-// over path, then fsyncs the directory so the rename survives power loss.
-func WriteFileAtomic(path string, b []byte) error {
-	dir := filepath.Dir(path)
-	f, err := os.CreateTemp(dir, ".ispbill-*.tmp")
-	if err != nil {
-		return err
+// EffectivePackage is the shared package with the building's overrides
+// applied: the price is replaced when the override is non-zero, and the
+// package counts as disabled when the building hides it.
+func (d *Data) EffectivePackage(siteID, pkgID string) (Package, bool) {
+	p, ok := d.Packages[pkgID]
+	if !ok {
+		return Package{}, false
 	}
-	tmp := f.Name()
-	cleanup := func() { f.Close(); os.Remove(tmp) }
-	if _, err := f.Write(b); err != nil {
-		cleanup()
-		return err
+	if o, has := d.Sites[siteID].PkgOverrides[pkgID]; has {
+		if o.PriceKES > 0 {
+			p.PriceKES = o.PriceKES
+		}
+		p.Disabled = p.Disabled || o.Hidden
 	}
-	if err := f.Sync(); err != nil {
-		cleanup()
-		return err
+	return p, true
+}
+
+// EffectivePackages is PackageList with the building's overrides applied.
+func (d *Data) EffectivePackages(siteID string) []Package {
+	out := d.PackageList()
+	for i, p := range out {
+		if ep, ok := d.EffectivePackage(siteID, p.ID); ok {
+			out[i] = ep
+		}
 	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return err
+	return out
+}
+
+// NextTunnelIP returns the lowest free host address in prefix after the first
+// host (the server), skipping addresses held by non-removed sites.
+func (d *Data) NextTunnelIP(prefix netip.Prefix) (string, error) {
+	prefix = prefix.Masked()
+	used := map[string]bool{}
+	for _, s := range d.Sites {
+		if !s.Removed && s.TunnelIP != "" {
+			used[s.TunnelIP] = true
+		}
 	}
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		os.Remove(tmp)
-		return err
+	first := prefix.Addr().Next() // network address + 1 = the server
+	for a := first.Next(); prefix.Contains(a); a = a.Next() {
+		next := a.Next()
+		if !prefix.Contains(next) { // the broadcast address
+			break
+		}
+		if !used[a.String()] {
+			return a.String(), nil
+		}
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return err
+	return "", fmt.Errorf("no free tunnel address left in %s", prefix)
+}
+
+// Runnable reports whether router work (tasks, profile sync, collection) may
+// run for the site: not removed, not paused, and, for a WireGuard site, joined
+// (the join script was fetched, so it has a key).
+func (s Site) Runnable() bool {
+	if s.Removed || s.Disabled {
+		return false
 	}
-	if d, err := os.Open(dir); err == nil {
-		d.Sync()
-		d.Close()
-	}
-	return nil
+	return s.Mode == SiteModeEnv || s.WGPublicKey != ""
 }

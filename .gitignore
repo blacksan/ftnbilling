@@ -2,3 +2,5 @@ build/
 dist/*.tar
 dist/*.zip
 *.log
+dist/*.tar.gz
+dist/SHA256SUMS

@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"crypto/rand"
-	"encoding/csv"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -30,6 +29,9 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 		w.WriteHeader(http.StatusUnauthorized)
 		fmt.Fprint(w, `<!doctype html><meta name="viewport" content="width=device-width"><body style="font:16px system-ui;background:#0d1117;color:#e6e9ef;display:grid;place-items:center;height:90vh"><div>Logged out. <a style="color:#8b83ff" href="/admin">Log in again</a></div>`)
 	})
+	get("/admin/site/select", s.adminSiteSelect)
+	post("/admin/accounts/move", s.adminAccountMove)
+	s.siteRoutes(get, post)
 	get("/admin/accounts", s.adminAccounts)
 	get("/admin/accounts/view", s.adminAccount)
 	post("/admin/accounts/create", s.adminAccountCreate)
@@ -61,12 +63,20 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	post("/admin/vouchers/generate", s.adminGenVouchers)
 	get("/admin/vouchers/print", s.adminPrintVouchers)
 	get("/admin/settings", s.adminSettings)
+	s.crmRoutes(get, post)
 	s.metricsRoutes(get, post)
+	s.opsRoutes(get, post)
 }
 
 // admin enforces basic auth and, for POST, the CSRF double-submit check.
 func (s *Server) admin(h http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.adminAllowed(r) {
+			// The admin is served only to loopback and the admin tunnel,
+			// never to the router tunnels or the internet.
+			http.NotFound(w, r)
+			return
+		}
 		u, p, ok := r.BasicAuth()
 		userOK := safeEq(u, s.cfg.AdminUser)
 		passOK := safeEq(p, s.cfg.AdminPass)
@@ -103,7 +113,15 @@ func csrfOf(r *http.Request) string { t, _ := r.Context().Value(csrfKey{}).(stri
 
 type adminPage struct {
 	Brand, Active, CSRF, Flash string
+	Sites                      []store.Site // live buildings, for the switcher
+	Site                       string       // selected building id, "" = all
+	SiteName                   string
+	AllSites, Multi            bool
+	Next                       string // where the switcher returns to
 	Now                        string // banner clock, EAT
+	Refresh                    int    // seconds between automatic reloads, 0 = none
+	HasOps                     bool   // the fleet monitor is running
+	OpenAlerts, FailedMsgs     int    // sidebar badges
 	FlashBad                   bool
 	UnregCount, UnmatchedCount int
 	Data                       map[string]any
@@ -113,15 +131,46 @@ func (s *Server) page(r *http.Request, active string) adminPage {
 	p := adminPage{Brand: s.cfg.BrandName, Active: active, CSRF: csrfOf(r), Flash: r.URL.Query().Get("msg"), Data: map[string]any{}}
 	p.FlashBad = strings.HasPrefix(p.Flash, "Error")
 	p.Now = s.svc.Now().In(billing.EAT).Format("Mon 02 Jan, 15:04")
+	sc := s.scopeOf(r)
+	p.Sites, p.Site, p.AllSites, p.Multi = sc.Sites, sc.ID, sc.All, sc.Multi()
+	p.Next = r.URL.RequestURI()
+	names := map[string]string{}
+	for _, st := range sc.Sites {
+		names[st.ID] = st.Name
+		if st.ID == sc.ID {
+			p.SiteName = st.Name
+		}
+	}
+	p.Data["SiteNames"], p.Data["ShowSite"], p.Data["Scope"] = names, sc.All && sc.Multi(), sc
+	p.HasOps = s.hasOps()
+	if s.ops.Alerts != nil {
+		p.OpenAlerts = s.ops.Alerts.OpenCount(sc.ID)
+	}
+	if s.ops.Box != nil {
+		p.FailedMsgs = s.ops.Box.Counts()["failed"]
+	}
 	s.st.View(func(d *store.Data) {
-		p.UnregCount = len(d.Devices)
+		for _, dv := range d.Devices {
+			if sc.Has(dv.SiteID) {
+				p.UnregCount++
+			}
+		}
 		for _, pay := range d.Payments {
-			if pay.Status == store.PayUnmatched {
+			if pay.Status == store.PayUnmatched && (pay.SiteID == "" || sc.Has(pay.SiteID)) {
 				p.UnmatchedCount++
 			}
 		}
 	})
 	return p
+}
+
+// siteFor resolves the building a create form targets: the form's own site
+// field, else the selected building. Empty when neither is set.
+func (s *Server) siteFor(r *http.Request) string {
+	if v := strings.TrimSpace(r.PostFormValue("site")); v != "" {
+		return v
+	}
+	return s.scopeOf(r).ID
 }
 
 func (s *Server) back(w http.ResponseWriter, r *http.Request, to, msg string) {
@@ -154,17 +203,26 @@ func countsAsRevenue(p store.Payment) bool {
 // ---- dashboard ---------------------------------------------------------------
 
 func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
+	if sc := s.scopeOf(r); sc.All && sc.Multi() && s.hasOps() {
+		http.Redirect(w, r, "/admin/fleet", http.StatusSeeOther) // many buildings: start at the fleet overview
+		return
+	}
 	p := s.page(r, "dashboard")
 	now := s.svc.Now()
 	nowE := now.In(billing.EAT)
 	dayStart := time.Date(nowE.Year(), nowE.Month(), nowE.Day(), 0, 0, 0, 0, billing.EAT)
 	monthStart := time.Date(nowE.Year(), nowE.Month(), 1, 0, 0, 0, 0, billing.EAT)
 	pol := s.svc.Policy()
+	sc := s.scopeOf(r)
 	var active, soon, expired, newAcc, susp, today, month, pending, total int
 	var events []store.Event
+	var tasks []store.Task
 	s.st.View(func(d *store.Data) {
-		total = len(d.Accounts)
 		for _, a := range d.Accounts {
+			if !sc.Has(a.SiteID) {
+				continue
+			}
+			total++
 			switch billing.AccountState(a, now) {
 			case billing.StateActive:
 				active++
@@ -180,12 +238,12 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		for _, o := range d.Orders {
-			if o.Status == store.OrderPending {
+			if o.Status == store.OrderPending && sc.Has(o.SiteID) {
 				pending++
 			}
 		}
 		for _, pay := range d.Payments {
-			if countsAsRevenue(pay) {
+			if countsAsRevenue(pay) && sc.Has(pay.SiteID) {
 				if !pay.PaidAt.Before(dayStart) {
 					today += pay.AmountKES
 				}
@@ -196,19 +254,57 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		ev := d.Events
 		for i := len(ev) - 1; i >= 0 && len(events) < 8; i-- {
-			events = append(events, ev[i])
+			if sc.Has(ev[i].SiteID) {
+				events = append(events, ev[i])
+			}
+		}
+		for _, t := range d.TaskList() {
+			if sc.Has(t.SiteID) {
+				tasks = append(tasks, t)
+			}
 		}
 	})
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
-	routerErr := s.svc.Ping(ctx)
+	routerOK, routerMsg := s.routerSummary(ctx, sc)
 	p.Data = map[string]any{"Total": total, "Active": active, "Soon": soon, "Expired": expired, "New": newAcc, "Suspended": susp,
-		"Today": today, "Month": month, "Pending": pending, "Events": events, "Tasks": s.svc.PendingTasks(),
-		"RouterOK": routerErr == nil, "RouterErr": errString(routerErr), "TestMode": s.cfg.TestMode, "Mpesa": s.cfg.MpesaEnabled()}
+		"Today": today, "Month": month, "Pending": pending, "Events": events, "Tasks": tasks,
+		"RouterOK": routerOK, "RouterErr": routerMsg, "TestMode": s.cfg.TestMode, "Mpesa": s.cfg.MpesaEnabled(),
+		"SiteNames": p.Data["SiteNames"], "ShowSite": p.Data["ShowSite"]}
 	s.render(w, "admin_dashboard", p)
 }
 
 // ---- accounts ----------------------------------------------------------------
+
+// routerSummary pings the selected building, or every runnable one.
+func (s *Server) routerSummary(ctx context.Context, sc scope) (bool, string) {
+	if !sc.All {
+		err := s.svc.Ping(ctx, sc.ID)
+		return err == nil, errString(err)
+	}
+	up, n := 0, 0
+	var firstErr string
+	for _, st := range sc.Sites {
+		if !st.Runnable() {
+			continue
+		}
+		n++
+		if err := s.svc.Ping(ctx, st.ID); err != nil {
+			if firstErr == "" {
+				firstErr = st.Name + ": " + err.Error()
+			}
+			continue
+		}
+		up++
+	}
+	if n == 0 {
+		return false, "no building is connected yet"
+	}
+	if up == n {
+		return true, strconv.Itoa(n) + " of " + strconv.Itoa(n) + " buildings reachable"
+	}
+	return false, strconv.Itoa(up) + " of " + strconv.Itoa(n) + " buildings reachable. " + firstErr
+}
 
 type acctRow struct {
 	A     store.Account
@@ -220,8 +316,12 @@ func (s *Server) adminAccounts(w http.ResponseWriter, r *http.Request) {
 	p := s.page(r, "accounts")
 	now := s.svc.Now()
 	var rows []acctRow
+	sc := s.scopeOf(r)
 	s.st.View(func(d *store.Data) {
 		for _, a := range d.AccountList() {
+			if !sc.Has(a.SiteID) {
+				continue
+			}
 			rows = append(rows, acctRow{a, d.Packages[a.PackageID], billing.AccountState(a, now)})
 		}
 	})
@@ -234,7 +334,8 @@ func (s *Server) adminAccounts(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminAccountCreate(w http.ResponseWriter, r *http.Request) {
 	a, err := s.svc.CreateAccount(billing.AccountInput{
 		Flat: r.PostFormValue("flat"), MAC: r.PostFormValue("mac"), Tenant: r.PostFormValue("tenant"),
-		Phone: r.PostFormValue("phone"), Notes: r.PostFormValue("notes"),
+		Phone: r.PostFormValue("phone"), Notes: r.PostFormValue("notes"), SiteID: s.siteFor(r),
+		WhatsApp: r.PostFormValue("whatsapp"), WASamePhone: r.PostFormValue("wa_same") == "1",
 	})
 	if err != nil {
 		s.back(w, r, "/admin/accounts?mac="+url.QueryEscape(r.PostFormValue("mac"))+"&flat="+url.QueryEscape(r.PostFormValue("flat")), "Error: "+err.Error())
@@ -264,10 +365,25 @@ func (s *Server) adminAccount(w http.ResponseWriter, r *http.Request) {
 		for k, v := range d.Packages {
 			pkgMap[k] = v
 		}
-		pkgs = d.PackageList()
+		pkgs = d.EffectivePackages(a.SiteID)
+		for _, ep := range pkgs {
+			pkgMap[ep.ID] = ep
+		}
+		if ep, ok := d.EffectivePackage(a.SiteID, a.PackageID); ok {
+			pkg = ep
+		}
 	})
 	p.Data["A"], p.Data["Pkg"], p.Data["State"] = a, pkg, billing.AccountState(a, s.svc.Now())
 	p.Data["Payments"], p.Data["PkgMap"], p.Data["Pkgs"] = pays, pkgMap, pkgs
+	p.Data["AcctSite"] = p.Data["SiteNames"].(map[string]string)[a.SiteID]
+	var others []store.Site
+	for _, st := range p.Sites {
+		if st.ID != a.SiteID {
+			others = append(others, st)
+		}
+	}
+	p.Data["MoveTo"] = others
+	s.accountCards(p.Data, a, s.scopeOf(r))
 	s.render(w, "admin_account", p)
 }
 
@@ -278,9 +394,27 @@ func (s *Server) accountURL(id string) string {
 	return "/admin/accounts"
 }
 
+func (s *Server) adminAccountMove(w http.ResponseWriter, r *http.Request) {
+	id := r.PostFormValue("id")
+	to := r.PostFormValue("to")
+	a, _ := s.svc.GetAccount(id)
+	if strings.ToUpper(strings.TrimSpace(r.PostFormValue("confirm"))) != a.Code {
+		s.back(w, r, s.accountURL(id), "Error: type the account code to confirm the move")
+		return
+	}
+	if err := s.svc.MoveAccount(r.Context(), id, to); err != nil {
+		s.back(w, r, s.accountURL(id), "Error: "+err.Error())
+		return
+	}
+	s.back(w, r, s.accountURL(id), "Moved. Its ONT MAC must now be on the new building's network. Payments already made stay with the old building in the ledger.")
+}
+
 func (s *Server) adminAccountUpdate(w http.ResponseWriter, r *http.Request) {
 	id := r.PostFormValue("id")
 	err := s.svc.UpdateAccount(id, r.PostFormValue("flat"), r.PostFormValue("tenant"), r.PostFormValue("phone"), r.PostFormValue("notes"))
+	if err == nil {
+		err = s.svc.SetWhatsApp(id, r.PostFormValue("whatsapp"), r.PostFormValue("wa_same") == "1", r.PostFormValue("wa_optout") == "1")
+	}
 	s.back(w, r, s.accountURL(id), msgOr(err, "Details saved"))
 }
 
@@ -336,28 +470,42 @@ func (s *Server) adminAccountDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminAccountKick(w http.ResponseWriter, r *http.Request) {
 	id := r.PostFormValue("id")
 	a, _ := s.svc.GetAccount(id)
-	s.back(w, r, s.accountURL(id), msgOr(s.svc.Kick(r.Context(), a.Code), "Session ended (the flat logs in again by itself if still active)"))
+	s.back(w, r, s.accountURL(id), msgOr(s.svc.Kick(r.Context(), a.SiteID, a.Code), "Session ended (the flat logs in again by itself if still active)"))
 }
 
 // ---- unregistered devices ---------------------------------------------------------
 
 func (s *Server) adminDevices(w http.ResponseWriter, r *http.Request) {
 	p := s.page(r, "devices")
+	sc := s.scopeOf(r)
 	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
 	defer cancel()
-	if err := s.svc.RefreshHosts(ctx); err != nil {
-		p.Data["HostErr"] = err.Error()
+	if !sc.All { // refreshing asks one router; "all buildings" shows what is already known
+		if err := s.svc.RefreshHosts(ctx, sc.ID); err != nil {
+			p.Data["HostErr"] = err.Error()
+		}
 	}
 	var devs []store.Device
 	var accts []store.Account
-	s.st.View(func(d *store.Data) { devs, accts = d.DeviceList(), d.AccountList() })
+	s.st.View(func(d *store.Data) {
+		for _, dv := range d.DeviceList() {
+			if sc.Has(dv.SiteID) {
+				devs = append(devs, dv)
+			}
+		}
+		for _, a := range d.AccountList() {
+			if sc.Has(a.SiteID) {
+				accts = append(accts, a)
+			}
+		}
+	})
 	p.UnregCount = len(devs)
 	p.Data["Devices"], p.Data["Accounts"] = devs, accts
 	s.render(w, "admin_devices", p)
 }
 
 func (s *Server) adminDeviceCreate(w http.ResponseWriter, r *http.Request) {
-	a, err := s.svc.CreateAccount(billing.AccountInput{Flat: r.PostFormValue("flat"), MAC: r.PostFormValue("mac"), Tenant: r.PostFormValue("tenant")})
+	a, err := s.svc.CreateAccount(billing.AccountInput{Flat: r.PostFormValue("flat"), MAC: r.PostFormValue("mac"), Tenant: r.PostFormValue("tenant"), SiteID: s.siteFor(r)})
 	if err != nil {
 		s.back(w, r, "/admin/devices", "Error: "+err.Error())
 		return
@@ -376,7 +524,7 @@ func (s *Server) adminDeviceAttach(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminDeviceDismiss(w http.ResponseWriter, r *http.Request) {
-	s.back(w, r, "/admin/devices", msgOr(s.svc.DismissDevice(r.PostFormValue("mac")), "Dismissed (it comes back if it opens the portal again)"))
+	s.back(w, r, "/admin/devices", msgOr(s.svc.DismissDevice(s.siteFor(r), r.PostFormValue("mac")), "Dismissed (it comes back if it opens the portal again)"))
 }
 
 // ---- payments ledger ----------------------------------------------------------------
@@ -387,11 +535,15 @@ type payRow struct {
 	Pkg store.Package
 }
 
-func (s *Server) payRows(status string, limit int) []payRow {
+func (s *Server) payRows(sc scope, status string, limit int) []payRow {
 	var out []payRow
 	s.st.View(func(d *store.Data) {
 		for _, p := range d.PaymentList() {
 			if status != "" && p.Status != status {
+				continue
+			}
+			// An unmatched payment may not know its building yet; it shows everywhere.
+			if !sc.Has(p.SiteID) && !(p.SiteID == "" && p.Status == store.PayUnmatched) {
 				continue
 			}
 			out = append(out, payRow{p, d.Accounts[p.AccountID], d.Packages[p.PackageID]})
@@ -405,9 +557,23 @@ func (s *Server) payRows(status string, limit int) []payRow {
 
 func (s *Server) adminPayments(w http.ResponseWriter, r *http.Request) {
 	p := s.page(r, "payments")
-	st := r.URL.Query().Get("status")
-	p.Data["Rows"] = s.payRows(st, 500)
-	p.Data["Status"] = st
+	f, form := s.payFilter(r)
+	rows, tot := s.svc.FilterPayments(f)
+	const limit = 500
+	shown := rows
+	if len(shown) > limit {
+		shown = shown[:limit]
+	}
+	var out []payRow
+	s.st.View(func(d *store.Data) {
+		for _, pay := range shown {
+			a, _ := d.AnyAccount(pay.AccountID)
+			out = append(out, payRow{pay, a, d.Packages[pay.PackageID]})
+		}
+	})
+	p.Data["Rows"], p.Data["Status"], p.Data["F"], p.Data["Tot"] = out, form.Status, form, tot
+	p.Data["Methods"], p.Data["Total"], p.Data["Limit"] = s.paymentMethods(), len(rows), limit
+	p.Data["Query"] = r.URL.RawQuery
 	s.render(w, "admin_payments", p)
 }
 
@@ -421,31 +587,36 @@ func csvSafe(v string) string {
 func (s *Server) adminPaymentsCSV(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="payments-ledger.csv"`)
-	cw := csv.NewWriter(w)
-	cw.Write([]string{"key", "paid_at_eat", "recorded_at_eat", "method", "status", "amount_kes", "account_code", "flat", "package", "payer_phone", "payer_name", "bill_ref", "order_id", "note"})
-	f := func(t time.Time) string {
-		if t.IsZero() {
-			return ""
-		}
-		return t.In(billing.EAT).Format("2006-01-02 15:04:05")
+	f, _ := s.payFilter(r)
+	rows, _ := s.svc.FilterPayments(f)
+	names := map[string]string{}
+	for _, st := range s.scopeOf(r).Sites {
+		names[st.ID] = st.Name
 	}
-	for _, row := range s.payRows("", 0) {
-		p := row.P
-		cw.Write([]string{csvSafe(p.Key), f(p.PaidAt), f(p.CreatedAt), p.Method, p.Status, strconv.Itoa(p.AmountKES), row.A.Code,
-			csvSafe(row.A.Flat), csvSafe(row.Pkg.Name), csvSafe(p.Phone), csvSafe(p.Name), csvSafe(p.BillRef), p.OrderID, csvSafe(p.Note)})
-	}
-	cw.Flush()
+	s.writePaymentsCSV(w, rows, names)
 }
 
 func (s *Server) adminRecordForm(w http.ResponseWriter, r *http.Request) {
 	p := s.page(r, "record")
+	sc := s.scopeOf(r)
 	var accts []store.Account
 	var pkgs []store.Package
-	s.st.View(func(d *store.Data) { accts, pkgs = d.AccountList(), d.PackageList() })
+	s.st.View(func(d *store.Data) {
+		for _, a := range d.AccountList() {
+			if sc.Has(a.SiteID) {
+				accts = append(accts, a)
+			}
+		}
+		pkgs = d.EffectivePackages(sc.ID)
+	})
 	amount, _ := strconv.Atoi(r.URL.Query().Get("amount"))
 	selected := ""
 	if amount > 0 {
-		if pk, ok := s.svc.PackageForAmount(amount); ok {
+		site := sc.ID
+		if ac, ok := s.svc.AccountByCode(r.URL.Query().Get("account")); ok {
+			site = ac.SiteID
+		}
+		if pk, ok := s.svc.PackageForAmount(site, amount); ok {
 			selected = pk.ID
 		}
 	}
@@ -492,11 +663,19 @@ func (s *Server) adminRecordPost(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminUnmatched(w http.ResponseWriter, r *http.Request) {
 	p := s.page(r, "unmatched")
+	sc := s.scopeOf(r)
 	var accts []store.Account
 	var pkgs []store.Package
-	s.st.View(func(d *store.Data) { accts, pkgs = d.AccountList(), d.PackageList() })
+	s.st.View(func(d *store.Data) {
+		for _, a := range d.AccountList() {
+			if sc.Has(a.SiteID) {
+				accts = append(accts, a)
+			}
+		}
+		pkgs = d.PackageList()
+	})
 	var open, done []payRow
-	for _, row := range s.payRows("", 0) {
+	for _, row := range s.payRows(sc, "", 0) {
 		switch row.P.Status {
 		case store.PayUnmatched:
 			open = append(open, row)
@@ -523,8 +702,14 @@ func (s *Server) adminUnmatchedResolve(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminOrders(w http.ResponseWriter, r *http.Request) {
 	p := s.page(r, "orders")
+	sc := s.scopeOf(r)
 	s.st.View(func(d *store.Data) {
-		o := d.OrderList()
+		var o []store.Order
+		for _, x := range d.OrderList() {
+			if sc.Has(x.SiteID) {
+				o = append(o, x)
+			}
+		}
 		if len(o) > 300 {
 			o = o[:300]
 		}
@@ -560,8 +745,15 @@ func (s *Server) adminSavePackage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminVouchers(w http.ResponseWriter, r *http.Request) {
 	p := s.page(r, "vouchers")
+	sc := s.scopeOf(r)
 	s.st.View(func(d *store.Data) {
-		v := d.VoucherList()
+		var v []store.Voucher
+		for _, x := range d.VoucherList() {
+			// A voucher for "any building" shows in every view.
+			if x.SiteID == "" || sc.Has(x.SiteID) {
+				v = append(v, x)
+			}
+		}
 		if len(v) > 500 {
 			v = v[:500]
 		}
@@ -574,7 +766,7 @@ func (s *Server) adminVouchers(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminGenVouchers(w http.ResponseWriter, r *http.Request) {
 	n, _ := strconv.Atoi(r.PostFormValue("count"))
-	batch, _, err := s.svc.GenerateVouchers(r.PostFormValue("package"), n)
+	batch, _, err := s.svc.GenerateVouchers(r.PostFormValue("package"), strings.TrimSpace(r.PostFormValue("site")), n)
 	if err != nil {
 		s.back(w, r, "/admin/vouchers", "Error: "+err.Error())
 		return
@@ -615,7 +807,13 @@ func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 	p.Data = map[string]any{
 		"Policy": pol, "Cfg": s.cfg, "Mpesa": s.cfg.MpesaEnabled(),
 		"CBStk": base + "/pay/cb/stk" + tok, "CBVal": base + "/pay/cb/c2b/validate" + tok, "CBConf": base + "/pay/cb/c2b/confirm" + tok,
-		"Support": s.cfg.SupportPhone,
+		"Support":    s.cfg.SupportPhone,
+		"WGEndpoint": s.cfg.WGEndpoint, "WGSubnet": s.cfg.WGSubnet, "JoinTTL": s.cfg.JoinTokenTTL.String(),
+		"Stray": s.mgr.Stray(), "Backup": s.backupStatus(), "DBKind": s.st.Kind(), "DBErr": errString(s.st.Healthy()),
+		"AdminCIDR": s.cfg.AdminAllowCIDR,
+	}
+	if env, ok := s.envSite(); ok {
+		p.Data["Env"] = s.mgr.Effective(env)
 	}
 	s.render(w, "admin_settings", p)
 }

@@ -1,0 +1,89 @@
+#!/bin/bash
+# Applies the billing app's WireGuard peer list to wg0.
+#
+# The app (user ftnbilling) writes $DATA/wg/peers.conf and touches
+# $DATA/wg/apply; a root systemd path unit runs this script. The file is
+# written by an unprivileged process, so it is validated here line by line
+# and only simple peer blocks are accepted:
+#
+#   [Peer]
+#   PublicKey = <44 characters of base64>
+#   AllowedIPs = <one address inside the tunnel subnet>/32
+#
+# Anything else (PostUp, Endpoint, another interface, a symlink, a huge file)
+# makes the script refuse the whole file and change nothing.
+set -euo pipefail
+
+CONF=${FTN_WG_SYNC_CONF:-/etc/ftnbilling/wg-sync.env}
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+IFACE=${WG_IFACE:-wg0}
+DATA=${DATA:-/var/lib/ftnbilling}
+WG_SUBNET=${WG_SUBNET:-10.99.0.0/22}
+WG=${WG_BIN:-wg}
+WGQ=${WG_QUICK_BIN:-wg-quick}
+FILE=$DATA/wg/peers.conf
+MAXSIZE=262144
+
+die() { echo "ftnbilling-wg-sync: $*" >&2; exit 1; }
+
+ip2int() {
+  local a b c d
+  IFS=. read -r a b c d <<<"$1"
+  echo $(((a << 24) | (b << 16) | (c << 8) | d))
+}
+
+NET=${WG_SUBNET%/*}
+BITS=${WG_SUBNET#*/}
+[[ $NET =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "bad WG_SUBNET"
+[[ $BITS =~ ^[0-9]+$ ]] && [ "$BITS" -ge 16 ] && [ "$BITS" -le 30 ] || die "bad WG_SUBNET"
+MASK=$(((0xFFFFFFFF << (32 - BITS)) & 0xFFFFFFFF))
+NETINT=$(($(ip2int "$NET") & MASK))
+SERVER=$((NETINT + 1))
+
+if [ ! -e "$FILE" ]; then
+  echo "no peers file yet; nothing to do"
+  exit 0
+fi
+[ ! -L "$FILE" ] || die "refusing: $FILE is a symlink"
+[ -f "$FILE" ] || die "refusing: $FILE is not a regular file"
+SIZE=$(stat -c %s "$FILE")
+[ "$SIZE" -le "$MAXSIZE" ] || die "refusing: $FILE is larger than $MAXSIZE bytes"
+
+OUT=$(mktemp)
+trap 'rm -f "$OUT"' EXIT
+n=0
+haskey=0
+while IFS= read -r line || [ -n "$line" ]; do
+  n=$((n + 1))
+  case $line in
+    "") echo >>"$OUT" ;;
+    "[Peer]")
+      echo "$line" >>"$OUT"
+      haskey=0
+      ;;
+    "PublicKey = "*)
+      key=${line#PublicKey = }
+      [[ $key =~ ^[A-Za-z0-9+/]{43}=$ ]] || die "line $n: not a valid public key"
+      echo "$line" >>"$OUT"
+      haskey=1
+      ;;
+    "AllowedIPs = "*)
+      v=${line#AllowedIPs = }
+      [ "$haskey" = 1 ] || die "line $n: AllowedIPs before PublicKey"
+      [[ $v =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/32$ ]] || die "line $n: AllowedIPs must be one /32 address"
+      for o in "${BASH_REMATCH[@]:1:4}"; do
+        [ "$((10#$o))" -le 255 ] || die "line $n: bad address"
+      done
+      ip=${v%/32}
+      i=$(ip2int "$ip")
+      [ $((i & MASK)) -eq "$NETINT" ] || die "line $n: $ip is outside $WG_SUBNET"
+      [ "$i" -ne "$SERVER" ] && [ "$i" -ne "$NETINT" ] || die "line $n: $ip is reserved"
+      echo "$line" >>"$OUT"
+      ;;
+    *) die "line $n: not allowed" ;;
+  esac
+done <"$FILE"
+
+"$WG" syncconf "$IFACE" <("$WGQ" strip "$IFACE"; cat "$OUT")
+echo "applied $(grep -c '^\[Peer\]' "$OUT" || true) peers to $IFACE"

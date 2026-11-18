@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strings"
@@ -20,8 +21,8 @@ import (
 
 	"ispbill/internal/billing"
 	"ispbill/internal/config"
-	"ispbill/internal/metrics"
 	"ispbill/internal/payments"
+	"ispbill/internal/sites"
 	"ispbill/internal/store"
 )
 
@@ -47,17 +48,32 @@ type Server struct {
 	svc       *billing.Service
 	providers map[string]payments.Provider
 	mpesa     *payments.Mpesa // may be nil
-	col       *metrics.Collector
+	mgr       *sites.Manager
 	log       *slog.Logger
 	tpl       *template.Template
 	rl        *limiter
-	guard     *hostGuard // nil unless VERIFY_HOTSPOT_HOST=true
+	joinRL    *limiter // /j/ by client address
+	wgNet     netip.Prefix
+	adminNet  netip.Prefix
+	ops       Ops
+
+	onlineMu sync.Mutex
+	online   map[string]onlineEntry
 }
 
-func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map[string]payments.Provider, mpesa *payments.Mpesa, col *metrics.Collector, log *slog.Logger) *Server {
-	s := &Server{cfg: cfg, st: st, svc: svc, providers: providers, mpesa: mpesa, col: col, log: log, rl: newLimiter(15, time.Minute)}
-	if cfg.VerifyHotspotHost {
-		s.guard = newHostGuard(svc)
+type onlineEntry struct {
+	ok bool
+	at time.Time
+}
+
+func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map[string]payments.Provider, mpesa *payments.Mpesa, mgr *sites.Manager, log *slog.Logger) *Server {
+	s := &Server{cfg: cfg, st: st, svc: svc, providers: providers, mpesa: mpesa, mgr: mgr, log: log,
+		rl: newLimiter(15, time.Minute), joinRL: newLimiter(10, time.Minute), online: map[string]onlineEntry{}}
+	if p, err := netip.ParsePrefix(cfg.WGSubnet); err == nil {
+		s.wgNet = p.Masked()
+	}
+	if p, err := netip.ParsePrefix(cfg.AdminAllowCIDR); err == nil {
+		s.adminNet = p.Masked()
 	}
 	funcs := template.FuncMap{
 		"kes": func(n int) string { return "KES " + itoa(n) },
@@ -81,6 +97,10 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 		"f2":     func(v float64) string { return fmt.Sprintf("%.2f", v) },
 		"eatNow": func() string { return svc.Now().In(billing.EAT).Format("2006-01-02T15:04") },
 		"inc":    func(i int) int { return i + 1 },
+		"day":    day,
+		"stat":   func(v string) string { return strings.ReplaceAll(v, "_", " ") },
+		"deref":  func(b *bool) bool { return b != nil && *b },
+		"last4":  lastFour,
 		"pct": func(a, b float64) float64 {
 			if b <= 0 {
 				return 0
@@ -101,21 +121,92 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/portal", http.StatusFound) })
 	mux.HandleFunc("GET /healthz", s.healthz)
+	mux.HandleFunc("GET /j/{token}", s.joinScript)
 	s.portalRoutes(mux)
 	s.routerFileRoutes(mux)
 	s.callbackRoutes(mux)
+	s.waRoutes(mux)
 	s.adminRoutes(mux)
 	return s.middleware(mux)
 }
 
-func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+// siteOnline reports whether a building's router answered a ping recently.
+// The answer is cached for 15 seconds, so health checks never pile up pings.
+func (s *Server) siteOnline(ctx context.Context, siteID string) bool {
+	s.onlineMu.Lock()
+	e, ok := s.online[siteID]
+	s.onlineMu.Unlock()
+	if ok && time.Since(e.at) < 15*time.Second {
+		return e.ok
+	}
+	pc, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	routerOK := s.svc.Ping(ctx) == nil
+	up := s.svc.Ping(pc, siteID) == nil
+	s.onlineMu.Lock()
+	s.online[siteID] = onlineEntry{up, time.Now()}
+	s.onlineMu.Unlock()
+	return up
+}
+
+// healthz: sites_total counts the buildings, sites_online those whose router
+// answered recently (cached for 15 s). router_ok is true when every building
+// that should be running is online (and trivially true with no buildings), so
+// a single legacy router behaves as before.
+func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
+	var all, runnable []string
+	s.st.View(func(d *store.Data) {
+		for _, st := range d.SiteList() {
+			all = append(all, st.ID)
+			if st.Runnable() {
+				runnable = append(runnable, st.ID)
+			}
+		}
+	})
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	online := 0
+	for _, id := range runnable {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if s.siteOnline(r.Context(), id) {
+				mu.Lock()
+				online++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"ok": true, "router_ok": routerOK, "test_mode": s.cfg.TestMode, "mpesa_enabled": s.cfg.MpesaEnabled(),
+		"ok": true, "router_ok": online == len(runnable), "sites_total": len(all), "sites_online": online,
+		"test_mode": s.cfg.TestMode, "mpesa_enabled": s.cfg.MpesaEnabled(),
+		"db": s.st.Kind(), "db_ok": s.st.Healthy() == nil,
 	})
+}
+
+// redactPath hides secrets in a request path before it is logged: a join token
+// is a credential.
+func redactPath(p string) string {
+	if strings.HasPrefix(p, "/j/") {
+		return "/j/[redacted]"
+	}
+	return p
+}
+
+// realIP is the address of the client: the connection's, unless it comes from
+// the local reverse proxy, which appends the real one to X-Forwarded-For.
+func realIP(r *http.Request) string {
+	ip := clientIP(r)
+	if a, err := netip.ParseAddr(ip); err == nil && a.IsLoopback() {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			if last := strings.TrimSpace(parts[len(parts)-1]); last != "" {
+				return last
+			}
+		}
+	}
+	return ip
 }
 
 // ---- middleware ---------------------------------------------------------
@@ -137,12 +228,12 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		h.Set("Cache-Control", "no-store")
 		defer func() {
 			if rec := recover(); rec != nil {
-				s.log.Error("panic in handler", "path", r.URL.Path, "panic", rec)
+				s.log.Error("panic in handler", "path", redactPath(r.URL.Path), "panic", rec)
 				http.Error(sw, "internal error", 500)
 			}
 			if r.URL.Path != "/healthz" {
 				// Query strings are deliberately not logged.
-				s.log.Info("http", "method", r.Method, "path", r.URL.Path, "status", sw.code, "ms", time.Since(start).Milliseconds())
+				s.log.Info("http", "method", r.Method, "path", redactPath(r.URL.Path), "status", sw.code, "ms", time.Since(start).Milliseconds())
 			}
 		}()
 		r.Body = http.MaxBytesReader(sw, r.Body, 1<<20)
@@ -249,3 +340,32 @@ func isHTTPURL(s string) bool {
 var _ = strings.TrimSpace
 
 func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
+
+// fromTunnel reports whether the request came from inside the WireGuard
+// subnet (a router, not a person). The admin is refused there.
+func (s *Server) fromTunnel(r *http.Request) bool {
+	if !s.wgNet.IsValid() {
+		return false
+	}
+	a, err := netip.ParseAddr(realIP(r))
+	return err == nil && s.wgNet.Contains(a.Unmap())
+}
+
+// adminAllowed says whether the admin may be served to this request: only
+// from the machine itself (SSH tunnel) and the admin WireGuard network.
+// Router tunnels (WG_SUBNET) and every other address are refused, even
+// though the reverse proxy already blocks /admin from the internet.
+func (s *Server) adminAllowed(r *http.Request) bool {
+	if s.fromTunnel(r) {
+		return false
+	}
+	a, err := netip.ParseAddr(realIP(r))
+	if err != nil {
+		return false
+	}
+	a = a.Unmap()
+	if a.IsLoopback() {
+		return true
+	}
+	return s.adminNet.IsValid() && s.adminNet.Contains(a)
+}

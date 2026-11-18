@@ -93,6 +93,9 @@ func (s *Service) creditLocked(d *store.Data, in CreditInput) (p store.Payment, 
 		if !ok || v.Used || v.PackageID != pkg.ID {
 			return p, false, ErrVoucherUsed
 		}
+		if v.SiteID != "" && v.SiteID != a.SiteID {
+			return p, false, ErrVoucherSite
+		}
 		v.Used, v.UsedAt, v.UsedBy = true, now, in.OrderID
 		d.Vouchers[v.Code] = v
 	}
@@ -104,8 +107,8 @@ func (s *Service) creditLocked(d *store.Data, in CreditInput) (p store.Payment, 
 	d.Accounts[a.ID] = a
 	s.enqueueLocked(d, a, false, "payment "+key)
 	p = store.Payment{
-		Key: key, Method: in.Method, Status: store.PayApplied, AmountKES: in.AmountKES,
-		Phone: in.Phone, Name: in.Name, BillRef: in.BillRef, AccountID: a.ID, PackageID: pkg.ID,
+		Key: key, SiteID: a.SiteID, Method: in.Method, Status: store.PayApplied, AmountKES: in.AmountKES,
+		Phone: in.Phone, Name: in.Name, BillRef: in.BillRef, AccountID: a.ID, CustomerID: a.CustomerID, PackageID: pkg.ID,
 		OrderID: in.OrderID, Note: in.Note, PaidAt: paid, CreatedAt: now,
 	}
 	d.Payments[key] = p
@@ -132,14 +135,16 @@ func (s *Service) Credit(ctx context.Context, in CreditInput) (store.Payment, bo
 		return p, false, err
 	}
 	if created {
-		s.log.Info("payment applied", "key", p.Key, "method", p.Method, "amount", p.AmountKES)
-		s.runTasksShort(ctx)
+		s.log.Info("payment applied", "site", p.SiteID, "key", p.Key, "method", p.Method, "amount", p.AmountKES)
+		s.runSiteShort(ctx, p.SiteID)
+		s.credited()
 	}
 	return p, created, nil
 }
 
 // UnmatchedInput is a payment that could not be tied to an account and package.
 type UnmatchedInput struct {
+	SiteID               string // optional; taken from the account when AccountID is set
 	Key, Method          string
 	AmountKES            int
 	Phone, Name, BillRef string
@@ -164,9 +169,13 @@ func (s *Service) RecordUnmatched(in UnmatchedInput) (bool, error) {
 		if paid.IsZero() {
 			paid = now
 		}
+		siteID, customerID := in.SiteID, ""
+		if a, ok := d.Accounts[in.AccountID]; ok {
+			siteID, customerID = a.SiteID, a.CustomerID
+		}
 		d.Payments[key] = store.Payment{
-			Key: key, Method: in.Method, Status: store.PayUnmatched, AmountKES: in.AmountKES,
-			Phone: in.Phone, Name: in.Name, BillRef: in.BillRef, AccountID: in.AccountID,
+			Key: key, SiteID: siteID, Method: in.Method, Status: store.PayUnmatched, AmountKES: in.AmountKES,
+			Phone: in.Phone, Name: in.Name, BillRef: in.BillRef, AccountID: in.AccountID, CustomerID: customerID,
 			OrderID: in.Ord, Note: in.Note, PaidAt: paid, CreatedAt: now,
 		}
 		created = true
@@ -177,6 +186,7 @@ func (s *Service) RecordUnmatched(in UnmatchedInput) (bool, error) {
 
 // AssignPayment applies an unmatched payment to an account and package.
 func (s *Service) AssignPayment(ctx context.Context, key, accountID, pkgID, note string) error {
+	var site string
 	err := s.st.Update(func(d *store.Data) error {
 		p, ok := d.Payments[key]
 		if !ok {
@@ -198,12 +208,16 @@ func (s *Service) AssignPayment(ctx context.Context, key, accountID, pkgID, note
 		d.Accounts[a.ID] = a
 		s.enqueueLocked(d, a, false, "assigned payment "+key)
 		p.Status, p.AccountID, p.PackageID, p.ResolvedAt = store.PayApplied, a.ID, pkg.ID, now
+		p.CustomerID = a.CustomerID
+		p.SiteID = a.SiteID
+		site = a.SiteID
 		p.Note = joinNote(p.Note, note)
 		d.Payments[key] = p
 		return nil
 	})
 	if err == nil {
-		s.runTasksShort(ctx)
+		s.runSiteShort(ctx, site)
+		s.credited()
 	}
 	return err
 }
@@ -265,16 +279,20 @@ func (s *Service) RecordManual(ctx context.Context, in ManualInput) (store.Payme
 	if err != nil {
 		return store.Payment{}, err
 	}
+	acct, ok := s.GetAccount(in.AccountID)
+	if !ok {
+		return store.Payment{}, ErrNotFound
+	}
 	if in.PackageID == "" {
-		p, ok := s.PackageForAmount(in.AmountKES)
+		p, ok := s.PackageForAmount(acct.SiteID, in.AmountKES)
 		if !ok {
 			return store.Payment{}, fmt.Errorf("%w (KES %d): choose a package", ErrNoPackage, in.AmountKES)
 		}
 		in.PackageID = p.ID
 	}
 	note := in.Note
-	if pk, ok := s.packageByID(in.PackageID); ok && pk.PriceKES != in.AmountKES {
-		note = joinNote(note, fmt.Sprintf("amount KES %d differs from package price KES %d", in.AmountKES, pk.PriceKES))
+	if pk, ok := s.packageByID(acct.SiteID, in.PackageID); ok && pk.PriceKES != in.AmountKES {
+		note = joinNote(note, fmt.Sprintf("amount KES %d differs from package price KES %d at this building", in.AmountKES, pk.PriceKES))
 	}
 	p, created, err := s.Credit(ctx, CreditInput{
 		Key: code, Method: "mpesa-manual", AccountID: in.AccountID, PackageID: in.PackageID,
@@ -295,15 +313,16 @@ func (s *Service) RecordManual(ctx context.Context, in ManualInput) (store.Payme
 	return p, nil
 }
 
-func (s *Service) packageByID(id string) (p store.Package, ok bool) {
-	s.st.View(func(d *store.Data) { p, ok = d.Packages[id] })
+// packageByID returns the package with the building's overrides applied.
+func (s *Service) packageByID(siteID, id string) (p store.Package, ok bool) {
+	s.st.View(func(d *store.Data) { p, ok = d.EffectivePackage(siteID, id) })
 	return
 }
 
 // ExtendAccount is an admin grant (no money). It is logged in the ledger with
 // amount 0 and method "admin".
 func (s *Service) ExtendAccount(ctx context.Context, accountID, pkgID, note string, force bool) error {
-	if p, ok := s.packageByID(pkgID); !ok || p.Deleted {
+	if p, ok := s.packageByID("", pkgID); !ok || p.Deleted {
 		return errors.New("choose a package")
 	}
 	_, _, err := s.Credit(ctx, CreditInput{
@@ -337,7 +356,7 @@ func (s *Service) CreateOrder(in OrderInput) (store.Order, error) {
 		if a.Suspended {
 			return ErrSuspended
 		}
-		p, ok := d.Packages[in.PackageID]
+		p, ok := d.EffectivePackage(a.SiteID, in.PackageID)
 		if !ok || p.Disabled || p.Deleted {
 			return errors.New("that package is not available")
 		}
@@ -345,7 +364,7 @@ func (s *Service) CreateOrder(in OrderInput) (store.Order, error) {
 			return fmt.Errorf("this plan is slower than your current one. It becomes available when your current plan ends on %s", a.ExpiresAt.In(EAT).Format("2 Jan 2006"))
 		}
 		o = store.Order{
-			ID: RandomID(), AccountID: a.ID, PackageID: p.ID, Phone: in.Phone, Method: in.Method,
+			ID: RandomID(), SiteID: a.SiteID, AccountID: a.ID, PackageID: p.ID, Phone: in.Phone, Method: in.Method,
 			AmountKES: p.PriceKES, Status: store.OrderPending, VoucherCode: in.VoucherCode,
 			MAC: in.MAC, IP: in.IP, Dst: in.Dst, CreatedAt: s.now(),
 		}
@@ -431,7 +450,7 @@ func (s *Service) CompleteOrder(ctx context.Context, orderID, receipt string) er
 					k := strings.ToUpper(receipt)
 					if _, dup := d.Payments[k]; !dup {
 						now := s.now()
-						d.Payments[k] = store.Payment{Key: k, Method: "mpesa-stk", Status: store.PayUnmatched, AmountKES: o.AmountKES,
+						d.Payments[k] = store.Payment{Key: k, SiteID: o.SiteID, Method: "mpesa-stk", Status: store.PayUnmatched, AmountKES: o.AmountKES,
 							Phone: o.Phone, BillRef: o.ID, AccountID: o.AccountID, OrderID: o.ID, Note: why, PaidAt: now, CreatedAt: now}
 					}
 				}
@@ -456,7 +475,8 @@ func (s *Service) CompleteOrder(ctx context.Context, orderID, receipt string) er
 		return ErrLowerPlan
 	}
 	s.log.Info("order paid", "order", o.ID, "method", o.Method, "amount", o.AmountKES, "code", acct.Code)
-	s.runTasksShort(ctx)
+	s.runSiteShort(ctx, acct.SiteID)
+	s.credited()
 	if o.IP != "" && strings.EqualFold(o.MAC, acct.MAC) {
 		cur, _ := s.GetAccount(acct.ID)
 		if s.AutoLogin(ctx, cur, o.IP) {

@@ -1,3 +1,5 @@
+# LEGACY: the one-router setup. New buildings join with the one-time command
+# from Admin > Buildings > Add building (see deploy/README.md).
 # ============================================================================
 # ispbill - RouterOS 7 setup for MikroTik RB5009UG+S+IN (arm64)  -- TESTING SETUP
 #

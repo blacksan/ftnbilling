@@ -1,0 +1,126 @@
+# Fast Tech Net: join script for Block A (sab12cd), generated 2026-11-18 09:30 UTC
+# Single use. It holds this router's WireGuard private key and REST password,
+# so keep it private. It removes itself from the router when it finishes, and
+# also when it stops on an error (the whole body is wrapped for that).
+# Every object it creates has a comment that starts with "ftn:".
+:local fails 0
+:local abort ""
+:do {
+
+:put "ftn 0/9: checking RouterOS"
+:local ver [/system/resource/get version]
+:put ("   RouterOS " . $ver)
+:local major [:tonum [:pick $ver 0 [:find $ver "."]]]
+:if ($major < 7) do={ :set abort "ftn: RouterOS 7 or newer is required"; :error $abort }
+
+:put "ftn 1/9: WireGuard tunnel to the billing server"
+:do {
+  :if ([:len [/interface/wireguard/find where name="wg-ftn"]] = 0) do={
+    /interface/wireguard add name=wg-ftn private-key="mFtRkR0kq3B0hH8xYQ1p0Zk9m3m8wq2Fv5s8y8q1m0A=" mtu=1380 comment="ftn: tunnel to the billing server"
+  } else={
+    /interface/wireguard set [find where name="wg-ftn"] private-key="mFtRkR0kq3B0hH8xYQ1p0Zk9m3m8wq2Fv5s8y8q1m0A=" mtu=1380
+  }
+  /ip/address remove [find where comment="ftn: tunnel address"]
+  /ip/address add address=10.99.0.2 network=10.99.0.1 interface=wg-ftn comment="ftn: tunnel address"
+  /interface/wireguard/peers remove [find where comment="ftn: billing server"]
+  /interface/wireguard/peers add interface=wg-ftn public-key="kJ3b0m2Zs8Xc1Vn5Bq7Lw9Rt4Yu6Ip0Oa2Sd8Fg1Hk=" endpoint-address=203.0.113.10 endpoint-port=51820 allowed-address=10.99.0.1/32 persistent-keepalive=25s comment="ftn: billing server"
+} on-error={ :set abort "ftn: section 1 (WireGuard) failed"; :error $abort }
+
+:put "ftn 2/9: firewall (the tunnel can only reach the REST API)"
+:do {
+  /ip/firewall/filter remove [find where comment~"^ftn: wg"]
+  :if ([:len [/ip/firewall/filter find where dynamic=no]] > 0) do={ /ip/firewall/filter add chain=forward action=drop out-interface=wg-ftn place-before=([/ip/firewall/filter find where dynamic=no]->0) comment="ftn: wg no forward out" } else={ /ip/firewall/filter add chain=forward action=drop out-interface=wg-ftn comment="ftn: wg no forward out" }
+  :if ([:len [/ip/firewall/filter find where dynamic=no]] > 0) do={ /ip/firewall/filter add chain=forward action=drop in-interface=wg-ftn place-before=([/ip/firewall/filter find where dynamic=no]->0) comment="ftn: wg no forward in" } else={ /ip/firewall/filter add chain=forward action=drop in-interface=wg-ftn comment="ftn: wg no forward in" }
+  :if ([:len [/ip/firewall/filter find where dynamic=no]] > 0) do={ /ip/firewall/filter add chain=input action=drop in-interface=wg-ftn place-before=([/ip/firewall/filter find where dynamic=no]->0) comment="ftn: wg drop other input" } else={ /ip/firewall/filter add chain=input action=drop in-interface=wg-ftn comment="ftn: wg drop other input" }
+  :if ([:len [/ip/firewall/filter find where dynamic=no]] > 0) do={ /ip/firewall/filter add chain=input action=accept protocol=icmp in-interface=wg-ftn src-address=10.99.0.1 place-before=([/ip/firewall/filter find where dynamic=no]->0) comment="ftn: wg icmp" } else={ /ip/firewall/filter add chain=input action=accept protocol=icmp in-interface=wg-ftn src-address=10.99.0.1 comment="ftn: wg icmp" }
+  :if ([:len [/ip/firewall/filter find where dynamic=no]] > 0) do={ /ip/firewall/filter add chain=input action=accept protocol=tcp in-interface=wg-ftn src-address=10.99.0.1 dst-port=8081 place-before=([/ip/firewall/filter find where dynamic=no]->0) comment="ftn: wg rest" } else={ /ip/firewall/filter add chain=input action=accept protocol=tcp in-interface=wg-ftn src-address=10.99.0.1 dst-port=8081 comment="ftn: wg rest" }
+} on-error={ :set abort "ftn: section 2 (firewall) failed"; :error $abort }
+
+:put "ftn 3/9: REST API for the billing server"
+:do {
+  :if ([:len [/user/group/find where name="ftn-api"]] = 0) do={
+    /user/group add name=ftn-api policy=read,write,test,sensitive,rest-api comment="ftn: billing API"
+  } else={
+    /user/group set [find where name="ftn-api"] policy=read,write,test,sensitive,rest-api
+  }
+  :if ([:len [/user/find where name="ftn-api"]] = 0) do={
+    /user/add name=ftn-api group=ftn-api password="Zx3Kp9Qw7Lm2Vb5Nc8Td1Rf4Gh6Jy0Ua" address=10.99.0.1/32 comment="ftn: billing API"
+  } else={
+    /user/set [find where name="ftn-api"] group=ftn-api password="Zx3Kp9Qw7Lm2Vb5Nc8Td1Rf4Gh6Jy0Ua" address=10.99.0.1/32
+  }
+  /ip/service set www port=8081 disabled=no address=10.99.0.1/32
+} on-error={ :set abort "ftn: section 3 (REST API) failed"; :error $abort }
+
+:put "ftn 4/9: customer network 10.5.50.0/24"
+:do {
+  /interface/bridge/port remove [find where interface="sfp-sfpplus1"]
+  :if ([:len [/interface/bridge/find where name="br-hotspot"]] = 0) do={
+    /interface/bridge add name=br-hotspot comment="ftn: customer bridge"
+  }
+  :if ([:len [/interface/bridge/port/find where bridge="br-hotspot" and interface="sfp-sfpplus1"]] = 0) do={
+    /interface/bridge/port add bridge=br-hotspot interface=sfp-sfpplus1 comment="ftn: customer port"
+  }
+  :if ([:len [/ip/address/find where address="10.5.50.1/24" and interface="br-hotspot"]] = 0) do={
+    /ip/address add address=10.5.50.1/24 interface=br-hotspot comment="ftn: customer gateway"
+  }
+  :if ([:len [/ip/pool/find where name="pool-hotspot"]] = 0) do={
+    /ip/pool add name=pool-hotspot ranges=10.5.50.10-10.5.50.254 comment="ftn: customer pool"
+  } else={
+    /ip/pool set [find where name="pool-hotspot"] ranges=10.5.50.10-10.5.50.254
+  }
+  :if ([:len [/ip/dhcp-server/find where name="dhcp-hotspot"]] = 0) do={
+    /ip/dhcp-server add name=dhcp-hotspot interface=br-hotspot address-pool=pool-hotspot lease-time=1h disabled=no comment="ftn: customer DHCP"
+  }
+  :if ([:len [/ip/dhcp-server/network/find where address="10.5.50.0/24"]] = 0) do={
+    /ip/dhcp-server/network add address=10.5.50.0/24 gateway=10.5.50.1 dns-server=10.5.50.1 comment="ftn: customer DHCP network"
+  }
+  /ip/firewall/nat remove [find where comment="ftn: customer masquerade"]
+  /ip/firewall/nat add chain=srcnat action=masquerade out-interface-list=WAN src-address=10.5.50.0/24 comment="ftn: customer masquerade"
+  /ip/dns set allow-remote-requests=yes
+} on-error={ :set fails ($fails + 1); :put "ftn: section 4 (customer network) failed, continuing" }
+
+:put "ftn 5/9: hotspot hotspot1"
+:do {
+  :if ([:len [/ip/hotspot/profile/find where name="ispbill-hsprof"]] = 0) do={
+    /ip/hotspot/profile add name=ispbill-hsprof hotspot-address=10.5.50.1 login-by=http-pap,http-chap,mac-cookie html-directory=hotspot-ftn
+  }
+  :if ([:len [/file/find where name="flash"]] > 0) do={
+    /ip/hotspot/profile set [find where name="ispbill-hsprof"] html-directory=flash/hotspot-ftn
+  }
+  :if ([:len [/ip/hotspot/find where name="hotspot1"]] = 0) do={
+    /ip/hotspot add name=hotspot1 interface=br-hotspot address-pool=pool-hotspot profile=ispbill-hsprof disabled=no
+  }
+  /ip/firewall/filter remove [find where comment~"^ftn: hs"]
+  :if ([:len [/ip/firewall/filter find where dynamic=no]] > 0) do={ /ip/firewall/filter add chain=forward action=drop in-interface=br-hotspot out-interface=br-hotspot place-before=([/ip/firewall/filter find where dynamic=no]->0) comment="ftn: hs isolate flats" } else={ /ip/firewall/filter add chain=forward action=drop in-interface=br-hotspot out-interface=br-hotspot comment="ftn: hs isolate flats" }
+  :if ([:len [/ip/firewall/filter find where dynamic=no]] > 0) do={ /ip/firewall/filter add chain=input action=drop protocol=tcp in-interface=br-hotspot dst-port=8081 place-before=([/ip/firewall/filter find where dynamic=no]->0) comment="ftn: hs block rest" } else={ /ip/firewall/filter add chain=input action=drop protocol=tcp in-interface=br-hotspot dst-port=8081 comment="ftn: hs block rest" }
+} on-error={ :set fails ($fails + 1); :put "ftn: section 5 (hotspot) failed, continuing" }
+
+:put "ftn 6/9: hotspot login pages and walled garden"
+:do {
+  :local dir [/ip/hotspot/profile/get [find where name="ispbill-hsprof"] html-directory]
+  :foreach f in={ "login.html";"alogin.html";"status.html";"logout.html";"rlogin.html";"error.html" } do={
+    /tool/fetch url=("https://billing.example.co.ke/routeros/hotspot/sab12cd/" . $f) dst-path=($dir . "/" . $f) check-certificate=yes
+  }
+  /ip/hotspot/walled-garden/ip remove [find where comment="ftn: portal"]
+  /ip/hotspot/walled-garden/ip add action=accept dst-address=203.0.113.10 comment="ftn: portal"
+} on-error={ :set fails ($fails + 1); :put "ftn: section 6 (login pages) failed, continuing" }
+
+:put "ftn 7/9: traffic flow to the billing server"
+:do {
+  /ip/traffic-flow set enabled=yes interfaces=br-hotspot
+  /ip/traffic-flow/target remove [find where comment="ispbill metrics"]
+  /ip/traffic-flow/target remove [find where comment="ftn: netflow"]
+  /ip/traffic-flow/target add dst-address=10.99.0.1 port=2055 version=5 comment="ftn: netflow"
+  :put "   note: per-flat totals do not depend on traffic flow; the per-service split can be incomplete while FastTrack is on"
+} on-error={ :set fails ($fails + 1); :put "ftn: section 7 (traffic flow) failed, continuing" }
+
+:put "ftn 9/9: checking the tunnel"
+:do { /ping 10.99.0.1 count=3 } on-error={ :put "   no answer from the billing server yet; the tunnel can take a few seconds to come up" }
+:if ($fails > 0) do={ :put ("ftn: finished with " . $fails . " section(s) failed, see the messages above") } else={ :put "ftn: all sections done" }
+} on-error={
+  :put "ftn: the join script stopped early, see below"
+  :if ([:len $abort] > 0) do={ :put $abort }
+  /file remove [find where name="ftn-join.rsc"]
+  :error "ftn: join stopped; the script file was removed from the router. Fix the cause, then make a new join command"
+}
+/file remove [find where name="ftn-join.rsc"]
