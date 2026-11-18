@@ -137,6 +137,7 @@ func (s *Service) Credit(ctx context.Context, in CreditInput) (store.Payment, bo
 	if created {
 		s.log.Info("payment applied", "site", p.SiteID, "key", p.Key, "method", p.Method, "amount", p.AmountKES)
 		s.runSiteShort(ctx, p.SiteID)
+		s.credited()
 	}
 	return p, created, nil
 }
@@ -215,6 +216,7 @@ func (s *Service) AssignPayment(ctx context.Context, key, accountID, pkgID, note
 	})
 	if err == nil {
 		s.runSiteShort(ctx, site)
+		s.credited()
 	}
 	return err
 }
@@ -473,6 +475,7 @@ func (s *Service) CompleteOrder(ctx context.Context, orderID, receipt string) er
 	}
 	s.log.Info("order paid", "order", o.ID, "method", o.Method, "amount", o.AmountKES, "code", acct.Code)
 	s.runSiteShort(ctx, acct.SiteID)
+	s.credited()
 	if o.IP != "" && strings.EqualFold(o.MAC, acct.MAC) {
 		cur, _ := s.GetAccount(acct.ID)
 		if s.AutoLogin(ctx, cur, o.IP) {

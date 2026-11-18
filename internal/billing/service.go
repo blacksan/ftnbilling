@@ -52,6 +52,7 @@ type Service struct {
 	policy  Policy
 
 	sites sync.Map // siteID -> *siteState
+	hook  func()   // called after a payment was applied (tenant messages)
 	bg    sync.WaitGroup
 }
 
@@ -61,6 +62,16 @@ func NewService(st *store.Store, rs RouterSource, log *slog.Logger) *Service {
 
 // SetClock overrides the clock (tests).
 func (s *Service) SetClock(f func() time.Time) { s.now = f }
+
+// SetCreditHook registers a function called (without locks held) after a
+// payment was applied, so the tenant message scanners can run at once.
+func (s *Service) SetCreditHook(f func()) { s.hook = f }
+
+func (s *Service) credited() {
+	if s.hook != nil {
+		s.hook()
+	}
+}
 
 // SetPolicy overrides the lifecycle policy.
 func (s *Service) SetPolicy(p Policy) { s.policy = p }
@@ -95,6 +106,9 @@ func wantUser(a store.Account, now time.Time) bool {
 type AccountInput struct {
 	SiteID                          string // required: the building
 	Flat, MAC, Tenant, Phone, Notes string
+	// WhatsApp is the tenant's WhatsApp number; WASamePhone copies Phone instead.
+	WhatsApp    string
+	WASamePhone bool
 }
 
 func cleanText(s string, max int) string {
@@ -131,6 +145,40 @@ func normPhone(raw string) (string, error) {
 	return NormalizePhone(raw)
 }
 
+// waNumber picks the WhatsApp number: the phone when same is set, else the
+// typed number (empty = none).
+func waNumber(raw string, same bool, phone string) (string, error) {
+	if same {
+		return phone, nil
+	}
+	n, err := normPhone(raw)
+	if err != nil {
+		return "", errors.New("WhatsApp number: " + err.Error())
+	}
+	return n, nil
+}
+
+// SetWhatsApp sets the tenant's WhatsApp number and opt-out. samePhone copies
+// the account's phone number.
+func (s *Service) SetWhatsApp(id, raw string, samePhone, optOut bool) error {
+	return s.st.Update(func(d *store.Data) error {
+		a, ok := d.Accounts[id]
+		if !ok {
+			return ErrNotFound
+		}
+		wa, err := waNumber(raw, samePhone, a.Phone)
+		if err != nil {
+			return err
+		}
+		if a.WhatsApp == wa && a.WAOptOut == optOut {
+			return store.ErrNoChange
+		}
+		a.WhatsApp, a.WAOptOut = wa, optOut
+		d.Accounts[id] = a
+		return nil
+	})
+}
+
 // CreateAccount makes a new flat account (admin only). The MAC must be unique.
 func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 	flat := cleanText(in.Flat, 40)
@@ -142,6 +190,10 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 		return store.Account{}, err
 	}
 	phone, err := normPhone(in.Phone)
+	if err != nil {
+		return store.Account{}, err
+	}
+	wa, err := waNumber(in.WhatsApp, in.WASamePhone, phone)
 	if err != nil {
 		return store.Account{}, err
 	}
@@ -158,7 +210,7 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 		}
 		a = store.Account{
 			ID: RandomID(), SiteID: in.SiteID, Code: s.uniqueCode(d), Flat: flat, MAC: mac,
-			Tenant: cleanText(in.Tenant, 60), Phone: phone, Notes: cleanText(in.Notes, 300),
+			Tenant: cleanText(in.Tenant, 60), Phone: phone, Notes: cleanText(in.Notes, 300), WhatsApp: wa,
 			HSPass: RandomSecret(16), CreatedAt: s.now(),
 		}
 		d.Accounts[a.ID] = a
