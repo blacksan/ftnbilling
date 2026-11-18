@@ -5,12 +5,12 @@ import (
 	"strings"
 )
 
-// Content-Security-Policy values. The sign-in pages and the API run no script
-// at all. The rest of the admin pages and the portal still carry small inline
+// Content-Security-Policy values. The sign-in pages and the API run no inline script
+// (only /static scripts). The rest of the admin pages and the portal still carry small inline
 // scripts and handlers (theme switch, building picker, polling), so those keep
 // 'unsafe-inline' for script; everything else is limited to this site.
 const (
-	cspStrict = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+	cspStrict = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
 	cspPages  = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; " +
 		"connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
 )

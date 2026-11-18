@@ -567,7 +567,7 @@ PUBLIC_BASE_URL=$BASE
 PUBLIC_IP=$PUBIP
 SUPPORT_PHONE=${SUPPORT_PHONE:-}
 
-# Routers connect over WireGuard. Add each building in Admin > Buildings.
+# Routers connect over WireGuard. Add each router in Admin > Routers.
 WG_PUBLIC_KEY=$WG_PUB
 WG_ENDPOINT=$PUBIP:$WG_PORT
 WG_SUBNET=$WG_SUBNET
@@ -821,7 +821,7 @@ EOF
   fi
   local catchall=""
   if [ -n "${DOMAIN:-}" ]; then
-    # Customers suspended on their building's router have their plain-HTTP
+    # Customers suspended on their router have their plain-HTTP
     # requests redirected to this server's public IP, whatever site they asked
     # for. Send them to the payment page. (Caddy already redirects http to https
     # for $DOMAIN itself; this only catches every other host name.)
@@ -1035,8 +1035,8 @@ EOF
   if [ -n "$REMOVED_NOTE" ]; then printf '\n %s\n' "$REMOVED_NOTE"; fi
   cat <<EOF
 
- Next: in the admin, Buildings -> Add building. It gives you one command to
- paste into the building's MikroTik terminal; the router then joins the tunnel.
+ Next: in the admin, Routers -> Add router. It gives you one command to
+ paste into the router's MikroTik terminal; the router then joins the tunnel.
 EOF
   case "$BASE" in https://*) ;; *) echo " NOTE: join commands need HTTPS. Re-run this installer with DOMAIN=your.domain first." ;; esac
   if grep -q '^ROUTER_URL=' "$ENVF"; then

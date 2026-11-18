@@ -46,7 +46,7 @@ var RuleOrder = []string{RuleOffline, RuleWANSat, RuleLoss, RuleLatency, RuleOLT
 func Label(rule string) string {
 	switch rule {
 	case RuleOffline:
-		return "Building offline"
+		return "Router offline"
 	case RuleWANSat:
 		return "WAN saturated"
 	case RuleLoss:
@@ -626,8 +626,8 @@ func (e *Engine) resolveLocked(key string, a *Alert, now time.Time, announce boo
 		}
 		if st := e.d.Storms[a.Group]; st != nil && !st.Resolved {
 			st.Resolved = true
-			e.sendLocked("RECOVERED", "Many buildings offline", fmt.Sprintf("%d of %d buildings", len(st.Names), st.Total),
-				"all buildings are reachable again: "+strings.Join(st.Names, ", "), "alertok:"+a.Group, now, "")
+			e.sendLocked("RECOVERED", "Many routers offline", fmt.Sprintf("%d of %d routers", len(st.Names), st.Total),
+				"all routers are reachable again: "+strings.Join(st.Names, ", "), "alertok:"+a.Group, now, "")
 		}
 		return
 	}
@@ -697,7 +697,7 @@ func (e *Engine) notifyLocked(sites []store.Site, set Settings, now time.Time) {
 				}
 				sort.Strings(st.Names)
 				e.d.Storms[id] = st
-				e.sendLocked("PROBLEM", "Many buildings offline", fmt.Sprintf("%d of %d buildings", len(group), len(sites)),
+				e.sendLocked("PROBLEM", "Many routers offline", fmt.Sprintf("%d of %d routers", len(group), len(sites)),
 					"offline together: "+strings.Join(st.Names, ", "), "alert:"+id, now, "")
 				var rest []*Alert
 				for _, o := range cands {
@@ -783,7 +783,7 @@ func (e *Engine) TestMessage(channel string) (notify.Message, bool) {
 	set := e.d.Settings
 	e.mu.Unlock()
 	set.Email, set.WhatsApp = true, true
-	for _, m := range e.compose("PROBLEM", "Test alert", "Test building", "this is a test from the Alerts page", "", e.now(), "", set) {
+	for _, m := range e.compose("PROBLEM", "Test alert", "Test router", "this is a test from the Alerts page", "", e.now(), "", set) {
 		if m.Channel == channel {
 			m.Kind = notify.KindTest
 			return m, true

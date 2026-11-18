@@ -14,8 +14,22 @@ import (
 )
 
 func (s *Server) adminRoutes(mux *http.ServeMux) {
-	get := func(p string, h http.HandlerFunc) { mux.Handle("GET "+p, s.admin(h)) }
-	post := func(p string, h http.HandlerFunc) { mux.Handle("POST "+p, s.admin(h)) }
+	// D8: /admin/routers… is the page address; /admin/sites… keeps working
+	// (GET redirects to the new address, POST is served on both).
+	get := func(p string, h http.HandlerFunc) {
+		if np, ok := routerAdminPath(p); ok {
+			mux.Handle("GET "+np, s.admin(h))
+			mux.Handle("GET "+p, s.admin(redirectToRouters))
+			return
+		}
+		mux.Handle("GET "+p, s.admin(h))
+	}
+	post := func(p string, h http.HandlerFunc) {
+		mux.Handle("POST "+p, s.admin(h))
+		if np, ok := routerAdminPath(p); ok {
+			mux.Handle("POST "+np, s.admin(h))
+		}
+	}
 	get("/admin", s.adminDashboard)
 	get("/admin/site/select", s.adminSiteSelect)
 	post("/admin/accounts/move", s.adminAccountMove)
@@ -240,12 +254,12 @@ func (s *Server) routerSummary(ctx context.Context, sc scope) (bool, string) {
 		up++
 	}
 	if n == 0 {
-		return false, "no building is connected yet"
+		return false, "no router is connected yet"
 	}
 	if up == n {
-		return true, strconv.Itoa(n) + " of " + strconv.Itoa(n) + " buildings reachable"
+		return true, strconv.Itoa(n) + " of " + strconv.Itoa(n) + " routers reachable"
 	}
-	return false, strconv.Itoa(up) + " of " + strconv.Itoa(n) + " buildings reachable. " + firstErr
+	return false, strconv.Itoa(up) + " of " + strconv.Itoa(n) + " routers reachable. " + firstErr
 }
 
 type acctRow struct {
@@ -348,7 +362,7 @@ func (s *Server) adminAccountMove(w http.ResponseWriter, r *http.Request) {
 		s.back(w, r, s.accountURL(id), "Error: "+err.Error())
 		return
 	}
-	s.back(w, r, s.accountURL(id), "Moved. Its ONT MAC must now be on the new building's network. Payments already made stay with the old building in the ledger.")
+	s.back(w, r, s.accountURL(id), "Moved. Its ONT MAC must now be on the new router's network. Payments already made stay with the old router in the ledger.")
 }
 
 func (s *Server) adminAccountUpdate(w http.ResponseWriter, r *http.Request) {

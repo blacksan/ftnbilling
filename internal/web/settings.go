@@ -117,12 +117,12 @@ var waTemplates = []struct {
 	Name   string
 	Params []string
 }{
-	{"ftn_admin_alert", []string{"TEST", "Test alert", "Test building", "this is a test from Settings", "now"}},
-	{"ftn_expiry_reminder", []string{"1 Month", "Flat 1, Test building", "Fri 1 Jan, 10:00", "1500", "M-Pesa Paybill 000000", "ABC234"}},
-	{"ftn_plan_expired", []string{"Flat 1, Test building", "Fri 1 Jan, 10:00", "M-Pesa Paybill 000000", "ABC234"}},
-	{"ftn_payment_received", []string{"1500", "TEST123456", "1 Month", "Flat 1, Test building", "Fri 1 Jan, 10:00"}},
-	{"ftn_outage_notice", []string{"Test building", "Fri 1 Jan, 10:00"}},
-	{"ftn_outage_resolved", []string{"Test building", "Fri 1 Jan, 11:00"}},
+	{"ftn_admin_alert", []string{"TEST", "Test alert", "Test router", "this is a test from Settings", "now"}},
+	{"ftn_expiry_reminder", []string{"1 Month", "Flat 1, Test router", "Fri 1 Jan, 10:00", "1500", "M-Pesa Paybill 000000", "ABC234"}},
+	{"ftn_plan_expired", []string{"Flat 1, Test router", "Fri 1 Jan, 10:00", "M-Pesa Paybill 000000", "ABC234"}},
+	{"ftn_payment_received", []string{"1500", "TEST123456", "1 Month", "Flat 1, Test router", "Fri 1 Jan, 10:00"}},
+	{"ftn_outage_notice", []string{"Test router", "Fri 1 Jan, 10:00"}},
+	{"ftn_outage_resolved", []string{"Test router", "Fri 1 Jan, 11:00"}},
 }
 
 func (s *Server) settingsWhatsApp(w http.ResponseWriter, r *http.Request) {
@@ -327,7 +327,7 @@ func (s *Server) settingsEquipmentFind(w http.ResponseWriter, r *http.Request) {
 	})
 	note := ""
 	if len(list) == 0 {
-		note = "No building is connected yet."
+		note = "No router is connected yet."
 	}
 	s.renderEquipment(w, r, mac, res, note)
 }

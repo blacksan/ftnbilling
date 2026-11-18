@@ -35,7 +35,7 @@ func (s *Server) adminDevices(w http.ResponseWriter, r *http.Request) {
 	sc := s.scopeOf(r)
 	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
 	defer cancel()
-	if !sc.All { // refreshing asks one router; "all buildings" shows what is already known
+	if !sc.All { // refreshing asks one router; "all routers" shows what is already known
 		if err := s.svc.RefreshHosts(ctx, sc.ID); err != nil {
 			p.Data["HostErr"] = err.Error()
 		}
@@ -127,7 +127,7 @@ func (s *Server) adminDeviceAttach(w http.ResponseWriter, r *http.Request) {
 		a, ok = s.svc.GetAccount(id)
 	}
 	if !ok {
-		s.back(w, r, "/admin/devices", "Error: choose a flat of this building (type its name or code)")
+		s.back(w, r, "/admin/devices", "Error: choose a flat of this router (type its name or code)")
 		return
 	}
 	if _, err := s.svc.AttachDevice(r.Context(), site, r.PostFormValue("mac"), a.ID); err != nil {

@@ -234,7 +234,7 @@ if have curl; then
     sites=$(printf '%s' "$hz" | sed -n 's/.*"sites_total" *: *\([0-9]*\).*/\1/p')
     online=$(printf '%s' "$hz" | sed -n 's/.*"sites_online" *: *\([0-9]*\).*/\1/p')
     if [ -n "$sites" ]; then
-      if [ "${online:-0}" = "$sites" ]; then pass "buildings online" "$online of $sites"; else warn "buildings online" "${online:-0} of $sites (see Admin > Fleet)"; fi
+      if [ "${online:-0}" = "$sites" ]; then pass "routers online" "$online of $sites"; else warn "routers online" "${online:-0} of $sites (see Admin > Fleet)"; fi
     fi
   fi
 fi

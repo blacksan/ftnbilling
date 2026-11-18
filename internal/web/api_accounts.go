@@ -249,9 +249,9 @@ func (s *Server) apiAccountCreate(w http.ResponseWriter, r *http.Request, c *api
 	}
 	fields := map[string]string{}
 	if strings.TrimSpace(req.SiteID) == "" {
-		fields["site_id"] = "choose a building"
+		fields["site_id"] = "choose a router"
 	} else if !s.siteExists(req.SiteID) {
-		fields["site_id"] = "no such building"
+		fields["site_id"] = "no such router"
 	}
 	if strings.TrimSpace(req.Flat) == "" {
 		fields["flat"] = "a flat label is required"

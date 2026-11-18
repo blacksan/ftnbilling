@@ -1,5 +1,7 @@
 # Fast Tech Net API v1
 
+**Version 4** (2026-11-18, see addendum L): adds the `/routers` aliases, `router_id`/`router_name` and the setup, live and overview calls. Versions 1 to 3 are unchanged.
+
 Contract between the server (`internal/web/api*.go`, W1) and the Android app (W4). Source: `docs/rebuild-plan.md` section B, copied verbatim below, plus the section H addendum. Any later change needs a version-bump note in the Changes section at the end.
 
 ## API contract: `https://isp.ftw.co.ke/api/v1`
@@ -88,7 +90,7 @@ Supersedes the `GET /unregistered` row above. `GET /unregistered?site=&online=` 
 | POST `/unregistered/create` | `{site_id,mac,flat,tenant?,phone?,package_id?}` | 201 `Account`; 409 `mac_in_use` / `flat_in_use` |
 | POST `/unregistered/dismiss` | `{site_id,mac}` | 204 |
 
-`attach` goes through the same rule as `PUT /accounts/{id}/mac`: one MAC can never be on more than one open account in any building.
+`attach` goes through the same rule as `PUT /accounts/{id}/mac`: one MAC can never be on more than one open account in any router.
 
 ## Addendum J: assumptions fixed by the server (v2)
 
@@ -97,7 +99,7 @@ Supersedes the `GET /unregistered` row above. `GET /unregistered?site=&online=` 
 - Payment `status` is one of `matched`, `unmatched`, `refunded`, `ignored` (the store's `applied` is shown as `matched`). The app lists the queue with `GET /payments?status=unmatched`. Methods include `cash` (manual payments without a transaction code get a `CASH-...` key).
 - Account detail: `customer` is always an object `{id,name,phone,email}` (`id` is empty and name/phone come from the account when no customer record is linked); `events` are `{time,msg,actor}` (last 20); `usage.month_bytes`.
 - `lease_status` is `bound`, `waiting` or `none`. Account `state` is `active`, `expired`, `suspended` or `new`.
-- `/unregistered` items include `site_name` and a nullable `suggested_account` `{id,code,flat}`: in that building, an open account with no MAC first, else an account whose MAC has not been seen for over 24 h. `?online=true` is accepted (`online` = seen within the last 3 minutes and flagged online).
+- `/unregistered` items include `site_name` and a nullable `suggested_account` `{id,code,flat}`: in that router, an open account with no MAC first, else an account whose MAC has not been seen for over 24 h. `?online=true` is accepted (`online` = seen within the last 3 minutes and flagged online).
 - `/unregistered` items also carry `router_user` (string, may be empty; added with the router setup automation, API 1.x additive): who holds that MAC on the router itself although no server account does, as of the last device refresh. It is the hotspot session user (`test1`), else a hotspot user bound to the MAC, else `ip-binding (<type>)`. Devices are now discovered in every access mode (DHCP leases, ARP and the hotspot host table), including hotspot hosts that are already authorised or bypassed on the router; a MAC with an open account is never listed.
 - `POST /sites/{id}/unregistered/refresh` answers 202 `{queued:true}`.
 - `Idempotency-Key`: the identical stored status and body are replayed (header `Idempotent-Replayed: true`) for 24 h per device; only answers below 500 are kept; the same key with a different request is 400 `bad_request`. The store is in memory, so a server restart forgets it.
@@ -112,7 +114,64 @@ Supersedes the `GET /unregistered` row above. `GET /unregistered?site=&online=` 
 - A refresh token older than the previous one (any of the last 5 the device had) that is presented again revokes the device (`token_revoked`); a token the device never had changes nothing.
 - Idempotency keys are capped at 500 per device (the oldest go first).
 
+## Addendum L: routers, setup, live data, overview (v4, additive)
+
+The product word is "router"; the code word stays `site`. Every route in this document that has `/sites` in its path is also served at `/routers` with the same handler (`GET /routers/{id}` = `GET /sites/{id}`, and so on). `?router=` is accepted wherever `?site=` is, a request body may say `router_id` where it says `site_id`, and every JSON answer that carries `site_id` / `site_name` also carries `router_id` / `router_name` with the same values. Old and new spellings both stay valid; new clients use the router names. Routes added in v4 exist under `/routers` only. Notes of each workstream are kept in `docs/api/` until they are folded in here.
+
+All rows below are additive; the D8 aliases apply to every row.
+| Method/path | Role | Body | Response |
+|---|---|---|---|
+| GET `/overview?router=` | viewer | | `Overview` |
+| POST `/routers` | owner | `{name,serving_customers?:false,wan_interface?,olt_interface?,vlan_id?,customer_subnet?,wan_cap_mbps?,support_phone?}` | 201 `{router:Site,join:{command,command_nocheck,expires_at}}`, `no-store`, never replayed |
+| PATCH `/routers/{id}` | owner | same optional fields | `Site` |
+| GET `/routers/{id}/setup` | viewer | | `Setup` |
+| POST `/routers/{id}/setup/run` | operator | | 202 `Setup` |
+| POST `/routers/{id}/setup/migrate` | operator | `{confirm_name,keep_unknown?:false}` | 202 `Setup` |
+| POST `/routers/{id}/setup/rollback` | operator | | 202 `Setup` |
+| GET `/routers/{id}/live` | viewer | | `RouterLive` |
+| GET `/routers/{id}/interfaces` | viewer | | `{items:[Interface],generated_at}` |
+| GET `/routers/{id}/clients?q=&kind=all\|flats\|unregistered&online=` | viewer | | `{items:[Client],counts:{flats,online,unregistered}}` |
+| POST `/routers/{id}/actions/reboot` | owner | `{confirm_name}` | 202 `{queued:true}`; 409 `bad_state`; 409 `router_refused` |
+| POST `/routers/{id}/actions/recheck` | operator | | `Checks` (fresh) |
+| POST `/routers/{id}/actions/resync` | operator | | 202 `{queued:true}` |
+| POST `/accounts` (extended) | operator | adds `package_id?`, `activate?:false`, `note?`, `router_id` alias | 201 `Account` with `router` filled after one synchronous attempt |
+
+W5 plan section 6 endpoints stay (`checks`, `fix`, `mode`, `join-command`, `cutover`, `cutover/start`, `cutover/rollback`, `bench/*`); `cutover*` are thin views over the job. `cutover/confirm` is removed from clients (A1).
+
+```json
+Setup {"router_id","state","kind":"fresh|migrate|","serving_customers":false,"auto_start":true,
+ "join":{"state":"none|waiting|used|expired","expires_at","report":{"at","ok","lines":[""]}|null},
+ "next_action":{"kind":"paste_join|press_button|fix|migrate|retry|none","text","check_id":""},
+ "steps":[Step],"checks":{"ok":0,"warn":0,"fail":0,"unknown":0},"blockers":[""],
+ "live_devices":0,"evidence":{"tunnel_up":true,"internet_ok":true,"flats_required":0,"flats_bound":0},
+ "deadline_at":null,"seconds_left":0,"last_error":""}
+RouterLive {"router_id","generated_at","reachable":true,
+ "system":{"board","model","serial","version","arch","cpu_count":0,"cpu_load_pct":0,"mem_used_bytes":0,"mem_total_bytes":0,"disk_free_bytes":0,"uptime_s":0,"temp_c":null},
+ "wan":{"interface","running":true,"down_bps":0,"up_bps":0,"cap_mbps":0,"util_pct":0},
+ "tunnel":{"handshake_age_s":0,"rtt_ms":null,"loss_pct":null},
+ "throughput":{"step_s":300,"t":[],"down_bps":[],"up_bps":[]},
+ "flats":{"total":0,"online":0,"active":0,"expired":0,"suspended":0,"expiring_7d":0},
+ "unregistered_online":0,"onts_bound":0,"equipment":{"olt":0,"ont":0},
+ "revenue":{"today_kes":0,"month_kes":0},"open_alerts":0,
+ "provision":{"in_sync":true,"drift":0,"pending_ops":0,"last_error":""},"setup_state":""}
+Interface {"name","type","running":true,"disabled":false,"comment","mac","mtu":0,
+ "role":"wan|olt|customer|tunnel|bench|other","rx_bps":null,"tx_bps":null,"rx_bytes":0,"tx_bytes":0,
+ "addresses":[""],"last_link_up":null}
+Client {"kind":"flat|unregistered","account_id":"","code":"","flat":"","tenant":"","state":"",
+ "mac","vendor","host_name","ip","online":true,"lease_status":"bound|waiting|none","last_seen":null,
+ "port":"","queue_limit":"","down_bps":0,"up_bps":0,"usage_today_bytes":0,"usage_month_bytes":0,
+ "suspended_on_router":false,"in_sync":true,"router_user":""}
+Overview {"greeting_period":"morning|afternoon|evening|late","setup":{"done":0,"total":0,"pct":0,"steps":[{"key","title","done":true,"href"}]},
+ "revenue":{"today_kes":0,"yesterday_kes":0,"month_kes":0,"spark_7d":[]},"active":0,"online_now":0,
+ "routers":{"total":0,"online":0},"today":[{"time","kind","text","account_id","router_id"}],
+ "next":[{"kind","text","count":0,"href"}],"renewals_48h":[{"account_id","flat","tenant","router_name","expires_at","package"}],
+ "busiest_routers":[{"router_id","name","down_bps","util_pct","online":0}],
+ "health":{"at_risk":0,"churned":0,"expiring_7d":0},"expiries_per_day":[{"date","count":0}]}
+```
+W9 notes (`internal/sites/live.go`): fixed read paths `/system/resource`, `/system/health`, `/system/routerboard`, `/interface`, `/ip/address`, `/ip/dhcp-server/lease`, `/ip/arp`, `/interface/bridge/host`, `/queue/simple` via `Inspector.One` and `Client.Rows`; cache 5 s per router+view, single-flight, 3 s timeout, stale-on-error ≤60 s with `reachable:false`; interface rates from byte-counter deltas between samples (null on first call); WAN/flat rates from `metrics.Collector.Snapshot()`, throughput series from the T5 port series; `clients` merges accounts, `AccountRouterState`, live flats, `billing.Unregistered`, leases, `billing/oui.go`; `q` matches name, flat, code, IP, MAC, vendor, host; `at_risk` = active not seen 7 d; `churned` = expired >30 d.
+
 ## Changes
 - v1 (2026-11-18): first version (W0).
 - v2 (2026-11-18): W1 server. Adds addendum J (see above): refresh returns `user`, payment status `matched`, customer/events shapes, `suggested_account`, 202 refresh, 429 details, idempotent replay semantics, `GET /audit` cursor, `cash` method.
 - v3 (2026-11-18): W1 review fixes: addendum K (`known_token`, TOTP back-off and lock, refresh history, idempotency cap). Additive only.
+- v4 (2026-11-18): routers release. `/routers` aliases of every `/sites` route, `?router=`, `router_id` in bodies, `router_id`/`router_name` beside `site_id`/`site_name` in answers (P0, implemented); addendum L lists the new calls (setup, live, interfaces, clients, reboot, recheck, resync, overview, extended `POST /accounts`), built by W5c and W9. Additive only.

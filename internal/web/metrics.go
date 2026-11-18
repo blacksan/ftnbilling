@@ -32,14 +32,14 @@ func (s *Server) collectorFor(w http.ResponseWriter, r *http.Request, site strin
 				http.Redirect(w, r, "/admin/fleet", http.StatusSeeOther)
 				return nil, "", false
 			}
-			s.back(w, r, "/admin/sites", "Choose a building to see its usage.")
+			s.back(w, r, "/admin/sites", "Choose a router to see its usage.")
 			return nil, "", false
 		}
 		site = sc.ID
 	}
 	col := s.mgr.Collector(site)
 	if col == nil {
-		s.back(w, r, "/admin/sites/view?id="+url.QueryEscape(site), "This building is not collecting yet: it is paused or not joined.")
+		s.back(w, r, "/admin/sites/view?id="+url.QueryEscape(site), "This router is not collecting yet: it is paused or not joined.")
 		return nil, "", false
 	}
 	return col, site, true

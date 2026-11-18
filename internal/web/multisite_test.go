@@ -282,7 +282,7 @@ func TestJoinEndpoint(t *testing.T) {
 	if len(token) < 40 {
 		t.Fatalf("token %q", token)
 	}
-	if strings.Contains(m.adminGet(t, "/admin/sites/view?id="+site.ID), token) {
+	if strings.Contains(m.adminGet(t, "/admin/routers/view?id="+site.ID), token) {
 		t.Fatal("the command is shown again on a later page load")
 	}
 
@@ -399,10 +399,10 @@ func TestVoucherFromAnotherBuildingIsRefused(t *testing.T) {
 
 func TestBuildingPages(t *testing.T) {
 	m := newMulti(t)
-	if h := m.adminGet(t, "/admin/sites"); !strings.Contains(h, "No buildings yet") {
+	if h := m.adminGet(t, "/admin/routers"); !strings.Contains(h, "No buildings yet") {
 		t.Fatal("empty list")
 	}
-	if h := m.adminGet(t, "/admin/sites/new"); !strings.Contains(h, "Add building") {
+	if h := m.adminGet(t, "/admin/routers/new"); !strings.Contains(h, "Add building") {
 		t.Fatal("new page")
 	}
 	loc := m.adminPost(t, "/admin/sites/create", url.Values{"name": {"Delta Court"}, "support": {"0711000000"}})
@@ -410,10 +410,10 @@ func TestBuildingPages(t *testing.T) {
 		t.Fatalf("create: %s", loc)
 	}
 	id := strings.TrimPrefix(strings.SplitN(loc, "&msg", 2)[0], "/admin/sites/view?id=")
-	if h := m.adminGet(t, "/admin/sites/view?id="+id); !strings.Contains(h, "Delta Court") || !strings.Contains(h, "Make the join command") {
+	if h := m.adminGet(t, "/admin/routers/view?id="+id); !strings.Contains(h, "Delta Court") || !strings.Contains(h, "Make the join command") {
 		t.Fatal("view page")
 	}
-	if h := m.adminGet(t, "/admin/sites/status.json?id="+id); !strings.Contains(h, `"token":"none"`) {
+	if h := m.adminGet(t, "/admin/routers/status.json?id="+id); !strings.Contains(h, `"token":"none"`) {
 		t.Fatalf("status json: %s", h)
 	}
 	if l := m.adminPost(t, "/admin/sites/create", url.Values{"name": {"delta court"}}); !strings.Contains(l, "Error") {
@@ -426,7 +426,7 @@ func TestBuildingPages(t *testing.T) {
 	if l := m.adminPost(t, "/admin/sites/remove", url.Values{"id": {id}, "confirm": {"Delta Court"}}); strings.Contains(l, "Error") {
 		t.Fatalf("remove: %s", l)
 	}
-	if h := m.adminGet(t, "/admin/sites"); strings.Contains(h, "Delta Court") {
+	if h := m.adminGet(t, "/admin/routers"); strings.Contains(h, "Delta Court") {
 		t.Fatal("removed building still listed")
 	}
 }
