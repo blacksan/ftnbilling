@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# Weekly encrypted backup of the Fast Tech Net billing server to Google Drive.
+# Backups of the Fast Tech Net billing server: local database dumps every 6
+# hours, a monthly restore drill, and a weekly encrypted upload to Google Drive.
 # Installed as /usr/local/sbin/ftnbilling-backup by deploy/install.sh.
 #
+#   ftnbilling-backup dump             pg_dump now (also the daily file tar); timer: every 6 h
+#   ftnbilling-backup drill            restore the newest dump into a scratch
+#                                      database, compare with production; timer: monthly
 #   ftnbilling-backup setup            connect Google Drive (interactive; once)
 #   ftnbilling-backup run              take a snapshot and upload it now
 #   ftnbilling-backup list             list snapshots on Drive
 #   ftnbilling-backup restore <name|latest> [dir]
 #                                      download + decrypt into a NEW folder
 #                                      (never touches live data)
-#   ftnbilling-backup status           last run, schedule, Drive usage
+#   ftnbilling-backup status           last dump/drill/run, schedule, Drive usage
 #
 # Everything is encrypted with an rclone "crypt" remote before it leaves the
 # server (file contents and file names), so the env file, the WireGuard key and
@@ -16,6 +20,10 @@
 #
 # Test/override variables (all optional):
 #   FTN_ROOT          prefix for every server path (default empty = real paths)
+#   FTN_PGRUN         how to run Postgres tools as the postgres user (default
+#                     "runuser -u postgres --"; empty string = run directly)
+#   FTN_BIN           the app binary used for db-check (default /usr/local/bin/ftnbilling)
+#   FTN_PGSOCK        Postgres socket directory (default /var/run/postgresql)
 #   RCLONE_CONFIG     rclone config file (default /root/.config/rclone/rclone.conf)
 #   FTN_REMOTE        crypt remote that holds the snapshots (default ftn-backup)
 #   BACKUP_KEEP_WEEKS snapshots older than this many weeks are deleted from
@@ -33,9 +41,16 @@ DATA=$ROOT/var/lib/$APP
 ETC=$ROOT/etc/$APP
 ENVF=$ETC/$APP.env
 WGCONF=$ROOT/etc/wireguard/wg0.conf
+WGADMINCONF=$ROOT/etc/wireguard/wg-admin.conf
 CADDYF=$ROOT/etc/caddy/Caddyfile
 SRC=$ROOT/opt/$APP/src
 LOCALDIR=$ROOT/var/backups/$APP/weekly
+BACKDIR=$ROOT/var/backups/$APP
+DBDIR=$BACKDIR/db
+STATUS_JSON=$DATA/backup-status.json
+BIN=${FTN_BIN:-$ROOT/usr/local/bin/$APP}
+PGSOCK=${FTN_PGSOCK:-/var/run/postgresql}
+DRILLDB=ftnbilling_drill
 STATEDIR=$ROOT/var/lib/$APP-backup
 STATE=$STATEDIR/last.json
 RESTORE_BASE=$ROOT/root
@@ -47,6 +62,7 @@ REMOTE=${FTN_REMOTE:-ftn-backup}
 SNAPDIR=weekly
 KEEP_WEEKS=${BACKUP_KEEP_WEEKS:-12}
 UNIT=$APP-backup.timer
+if [ "${FTN_PGRUN+set}" = set ]; then read -r -a PGRUN <<<"$FTN_PGRUN"; else PGRUN=(runuser -u postgres --); fi
 SELF=ftnbilling-backup
 
 export RCLONE_DRIVE_CHUNK_SIZE=${RCLONE_DRIVE_CHUNK_SIZE:-32M}
@@ -73,7 +89,56 @@ envval() {
 
 json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n\t' '  '; }
 
+# Status file read by the app's Settings page and the doctor (flat JSON, one key per line):
+#   dump_at dump_file dump_bytes      newest good dump
+#   drill_at drill_ok drill_msg       last restore drill (attempt time, result, detail or error)
+#   upload_at upload_ok               last weekly Drive upload
+#   error                             last dump failure, empty while healthy
+# Unknown keys already in the file are kept.
+declare -A ST=()
+status_load() {
+  ST=()
+  [ -r "$STATUS_JSON" ] || return 0
+  local k v
+  while IFS='|' read -r k v; do [ -n "$k" ] && ST[$k]=$v; done < <(
+    sed -n 's/^ *"\([A-Za-z_]*\)": *"\{0,1\}\([^",]*\)"\{0,1\},\{0,1\} *$/\1|\2/p' "$STATUS_JSON")
+}
+status_save() {
+  local k first=1 out="$STATUS_JSON.tmp"
+  mkdir -p "$(dirname "$STATUS_JSON")"
+  ( umask 027
+    {
+      printf '{\n'
+      for k in dump_at dump_file dump_bytes drill_at drill_ok drill_msg upload_at upload_ok error $(printf '%s\n' "${!ST[@]}" | LC_ALL=C sort); do
+        [ -n "${ST[$k]+x}" ] || continue
+        [ -z "${SEEN[$k]:-}" ] || continue
+        SEEN[$k]=1
+        [ "$first" = 1 ] || printf ',\n'
+        first=0
+        case "$k" in
+          dump_bytes) printf '  "%s": %s' "$k" "${ST[$k]:-0}";;
+          drill_ok | upload_ok) printf '  "%s": %s' "$k" "${ST[$k]:-false}";;
+          *) printf '  "%s": "%s"' "$k" "${ST[$k]:-}";;
+        esac
+      done
+      printf '\n}\n'
+    } >"$out" )
+  getent group $APP >/dev/null 2>&1 && chgrp $APP "$out" 2>/dev/null || true
+  chmod 640 "$out"
+  mv -f "$out" "$STATUS_JSON"
+}
+# status_set key=value ... (values are stripped of quotes and backslashes)
+status_set() {
+  local kv
+  status_load
+  SEEN=()
+  for kv in "$@"; do ST[${kv%%=*}]=$(printf '%s' "${kv#*=}" | tr -d '"\\' | tr '\n\t' '  ' | cut -c1-300); done
+  status_save
+}
+declare -A SEEN=()
+
 write_state() { # status snapshot bytes sha256 error
+  if [ "$1" = ok ]; then status_set "upload_at=$(date -u +%FT%TZ)" upload_ok=true; else status_set "upload_at=$(date -u +%FT%TZ)" upload_ok=false; fi || true
   mkdir -p "$STATEDIR"
   umask 077
   printf '{"status":"%s","time":"%s","host":"%s","snapshot":"%s","bytes":%s,"sha256":"%s","keep_weeks":%s,"error":"%s"}\n' \
@@ -238,14 +303,140 @@ HOST=$(hostname 2>/dev/null || echo unknown)
 HOST=${FTN_HOSTNAME:-$HOST}
 STAGE=""
 
-run_exit() {
+JOB=""          # run | dump | drill: what job_exit reports a failure for
+DRILL_MADE=0
+job_exit() {
   local rc=$?
   [ -n "$STAGE" ] && rm -rf "$STAGE"
-  if [ "$rc" -ne 0 ] && [ "${IN_RUN:-0}" = 1 ]; then
+  [ -n "${DUMP_TMP:-}" ] && rm -f "$DUMP_TMP"
+  if [ "$DRILL_MADE" = 1 ]; then "${PGRUN[@]}" dropdb --if-exists "$DRILLDB" >/dev/null 2>&1 || true; fi
+  if [ "$rc" -ne 0 ] && [ -n "$JOB" ]; then
     ERRMSG=${ERRMSG:-"exit status $rc"}
-    write_state failed "${SNAP:-}" 0 "" "$ERRMSG" || true
-    notify_failure "$ERRMSG"
+    case "$JOB" in
+      run) write_state failed "${SNAP:-}" 0 "" "$ERRMSG" || true; notify_failure "$ERRMSG";;
+      dump) status_set "error=$ERRMSG" || true; notify_failure "database dump: $ERRMSG";;
+      drill) status_set "drill_at=$(date -u +%FT%TZ)" drill_ok=false "drill_msg=$ERRMSG" || true
+             notify_failure "restore drill: $ERRMSG";;
+    esac
   fi
+}
+
+# ---------------------------------------------------------------- dump
+newest_dump() { ls -1 "$DBDIR"/$APP-*.dump 2>/dev/null | LC_ALL=C sort | tail -1 || true; }
+
+# Keep: the newest 8 dumps (every 6 h = 2 days), the newest of each of the last
+# 14 days, 8 ISO weeks and 12 months. Everything else is deleted.
+prune_dumps() {
+  local f b d day wk mo
+  local -A keep=() seen_d=() seen_w=() seen_m=()
+  local n=0 nd=0 nw=0 nm=0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    b=$(basename "$f"); d=${b#"$APP"-}; day=${d:0:8}
+    n=$((n + 1))
+    [ "$n" -le 8 ] && keep[$f]=1
+    if [ -z "${seen_d[$day]:-}" ] && [ "$nd" -lt 14 ]; then seen_d[$day]=1; nd=$((nd + 1)); keep[$f]=1; fi
+    wk=$(date -u -d "${day:0:4}-${day:4:2}-${day:6:2}" +%G-%V 2>/dev/null || echo "$day")
+    if [ -z "${seen_w[$wk]:-}" ] && [ "$nw" -lt 8 ]; then seen_w[$wk]=1; nw=$((nw + 1)); keep[$f]=1; fi
+    mo=${day:0:6}
+    if [ -z "${seen_m[$mo]:-}" ] && [ "$nm" -lt 12 ]; then seen_m[$mo]=1; nm=$((nm + 1)); keep[$f]=1; fi
+  done < <(ls -1 "$DBDIR"/$APP-*.dump 2>/dev/null | LC_ALL=C sort -r)
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ -n "${keep[$f]:-}" ] || rm -f "$f"
+  done < <(ls -1 "$DBDIR"/$APP-*.dump 2>/dev/null)
+}
+
+# One verified dump. Returns 0 on success, 1 on failure (ERRMSG says why).
+do_dump() {
+  local dburl dbname ts final bytes
+  dburl=$(envval DATABASE_URL)
+  command -v pg_dump >/dev/null && command -v pg_restore >/dev/null || { ERRMSG="pg_dump/pg_restore missing (apt install postgresql-client)"; return 1; }
+  dbname=$(printf '%s' "$dburl" | sed -E 's#^[a-z]+://[^/]*/([^?]*).*#\1#')
+  case "$dbname" in ''|*[!A-Za-z0-9_]*) dbname=$APP;; esac
+  ( umask 077; mkdir -p "$DBDIR" )
+  chmod 700 "$BACKDIR" "$DBDIR" 2>/dev/null || true
+  ts=$(date -u +%Y%m%dT%H%M%SZ)
+  final=$DBDIR/$APP-$ts.dump
+  DUMP_TMP=$DBDIR/.tmp-$ts.dump
+  # Root opens the file (mode 0600); postgres writes into the pipe.
+  ( umask 077; "${PGRUN[@]}" pg_dump -Fc "$dbname" >"$DUMP_TMP" ) || { ERRMSG="pg_dump failed"; return 1; }
+  [ -s "$DUMP_TMP" ] || { ERRMSG="pg_dump wrote an empty file"; return 1; }
+  pg_restore -l "$DUMP_TMP" >/dev/null 2>&1 || { ERRMSG="the new dump does not pass pg_restore -l"; return 1; }
+  chmod 600 "$DUMP_TMP"
+  mv -f "$DUMP_TMP" "$final"
+  DUMP_TMP=""
+  bytes=$(stat -c %s "$final")
+  prune_dumps
+  status_set "dump_at=$(date -u +%FT%TZ)" "dump_file=$(basename "$final")" "dump_bytes=$bytes" "error="
+  log "Dump OK: $(basename "$final") ($bytes bytes)"
+}
+
+# Daily file tar (small JSON state, spool, any ispbill.json*), weekly metrics tar.
+local_tars() {
+  [ -d "$DATA" ] || return 0
+  ( umask 077; mkdir -p "$BACKDIR" )
+  local f files=() day tmp
+  day=$(date +%F)
+  for f in "$DATA"/ispbill.json* "$DATA"/outbox.json "$DATA"/alerts.json "$DATA"/fleet.json "$DATA"/spool; do
+    [ -e "$f" ] && files+=("$(basename "$f")")
+  done
+  if [ ${#files[@]} -gt 0 ]; then
+    tmp=$BACKDIR/.$APP-$day.tgz.tmp
+    if ( umask 077; tar -C "$DATA" -czf "$tmp" "${files[@]}" 2>/dev/null ); then mv -f "$tmp" "$BACKDIR/$APP-$day.tgz"; else rm -f "$tmp"; warn "could not write the daily file backup"; fi
+  fi
+  if [ "$(date +%u)" = 7 ] && [ -d "$DATA/metrics" ]; then
+    tmp=$BACKDIR/.$APP-metrics.tmp
+    if ( umask 077; tar -C "$DATA" -czf "$tmp" metrics 2>/dev/null ); then mv -f "$tmp" "$BACKDIR/$APP-metrics-$day.tgz"; else rm -f "$tmp"; warn "could not write the weekly metrics backup"; fi
+  fi
+  find "$BACKDIR" -maxdepth 1 -name "$APP-2*.tgz" -mtime +30 -delete 2>/dev/null || true
+  find "$BACKDIR" -maxdepth 1 -name "$APP-metrics-*.tgz" -mtime +28 -delete 2>/dev/null || true
+}
+
+cmd_dump() {
+  need_root
+  JOB=dump
+  trap job_exit EXIT
+  umask 077
+  if [ -n "$(envval DATABASE_URL)" ]; then
+    do_dump || die "$ERRMSG"
+  else
+    log "No DATABASE_URL: the app uses the JSON file; only the file backups are taken."
+  fi
+  local_tars
+  JOB=""
+}
+
+# ---------------------------------------------------------------- drill
+cmd_drill() {
+  need_root
+  local dburl dump out rc detail
+  dburl=$(envval DATABASE_URL)
+  if [ -z "$dburl" ]; then log "No DATABASE_URL: nothing to drill."; return 0; fi
+  JOB=drill
+  trap job_exit EXIT
+  umask 077
+  dump=$(newest_dump)
+  [ -n "$dump" ] || die "no dump found in $DBDIR; run: sudo $SELF dump"
+  [ -x "$BIN" ] || die "$BIN not found (needed for db-check)"
+  command -v pg_restore >/dev/null && command -v createdb >/dev/null || die "postgresql-client is missing"
+  log "Drill: restoring $(basename "$dump") into $DRILLDB ..."
+  "${PGRUN[@]}" dropdb --if-exists "$DRILLDB" >/dev/null 2>&1 || true
+  "${PGRUN[@]}" createdb "$DRILLDB" || die "could not create the scratch database $DRILLDB"
+  DRILL_MADE=1
+  # The postgres user cannot read the 0600 dump, so root feeds it on stdin.
+  "${PGRUN[@]}" pg_restore --no-owner --exit-on-error -d "$DRILLDB" <"$dump" || die "pg_restore of $(basename "$dump") failed"
+  set +e
+  out=$("${PGRUN[@]}" "$BIN" db-check -url "postgres://postgres@/$DRILLDB?host=$PGSOCK&sslmode=disable" -against "$dburl" 2>&1)
+  rc=$?
+  set -e
+  printf '%s\n' "$out" >&2
+  [ "$rc" -eq 0 ] || die "restored copy does not match production: $(printf '%s' "$out" | tail -1)"
+  detail="$(basename "$dump"): $(printf '%s' "$out" | grep 'applied payments' | head -1 | tr -s ' ')"
+  "${PGRUN[@]}" dropdb --if-exists "$DRILLDB" >/dev/null 2>&1 && DRILL_MADE=0
+  status_set "drill_at=$(date -u +%FT%TZ)" drill_ok=true "drill_msg=$detail"
+  JOB=""
+  log "Drill OK: the newest dump restores and matches production."
 }
 
 cmd_run() {
@@ -253,8 +444,8 @@ cmd_run() {
   rclone_ver_ok || die "rclone >= 1.60 not installed; run: sudo $SELF setup"
   cfg_has "$REMOTE" || die "Google Drive is not set up; run: sudo $SELF setup"
   case "$KEEP_WEEKS" in ''|*[!0-9]*|0) die "BACKUP_KEEP_WEEKS must be a whole number >= 1";; esac
-  IN_RUN=1
-  trap run_exit EXIT
+  JOB=run
+  trap job_exit EXIT
   umask 077
 
   local day base tarball rev sums dburl
@@ -264,6 +455,7 @@ cmd_run() {
   STAGE=$(mktemp -d "${TMPDIR:-/var/tmp}/ftn-backup.XXXXXX")
   local top=$STAGE/$base
   mkdir -p "$top/data" "$top/etc-$APP" "$top/wireguard" "$top/caddy"
+  # (the env file in etc-$APP holds DATA_KEY: without it stored national IDs are unreadable)
 
   log "Collecting files..."
   [ -d "$DATA" ] || die "$DATA not found"
@@ -278,13 +470,16 @@ cmd_run() {
   done
   [ -d "$ETC" ] && cp -a "$ETC/." "$top/etc-$APP/"
   [ -f "$WGCONF" ] && cp -a "$WGCONF" "$top/wireguard/"
+  [ -f "$WGADMINCONF" ] && cp -a "$WGADMINCONF" "$top/wireguard/"
   [ -f "$CADDYF" ] && cp -a "$CADDYF" "$top/caddy/"
 
   dburl=$(envval DATABASE_URL)
   if [ -n "$dburl" ]; then
-    command -v pg_dump >/dev/null || die "DATABASE_URL is set but pg_dump is missing (apt install postgresql-client)"
+    # A fresh, verified dump (the same one the 6-hourly timer makes), so the
+    # snapshot holds the newest database state.
     log "Dumping PostgreSQL..."
-    pg_dump --format=custom --file "$top/database.dump" "$dburl" || die "pg_dump failed"
+    do_dump || die "$ERRMSG"
+    cp -a "$(newest_dump)" "$top/database.dump"
   fi
 
   rev=unknown
@@ -318,7 +513,7 @@ cmd_run() {
       || die "verification failed: the uploaded file does not match"
   fi
 
-  # Keep the newest copy on this server too (it is the one the daily cron does not hold).
+  # Keep the newest copy on this server too.
   mkdir -p "$LOCALDIR"
   cp -f "$tarball" "$LOCALDIR/$SNAP"
   find "$LOCALDIR" -maxdepth 1 -name "$APP-*.tar.gz" ! -name "$SNAP" -delete
@@ -328,7 +523,7 @@ cmd_run() {
     --include "$APP-*.tar.gz" "$REMOTE:$SNAPDIR" || warn "pruning old snapshots failed (backup itself is fine)"
 
   write_state ok "$SNAP" "$bytes" "$sha" ""
-  IN_RUN=0
+  JOB=""
   log "Backup OK: $SNAP"
 }
 
@@ -386,12 +581,15 @@ Nothing on this server was changed. To put it back, step by step:
   2. Billing data:          sudo cp -a $dir/data/. /var/lib/$APP/
                             sudo chown -R $APP:$APP /var/lib/$APP
   3. Settings:              sudo cp -a $dir/etc-$APP/. /etc/$APP/
-  4. WireGuard (same key, so routers keep working):
+  4. WireGuard (same keys, so routers and your admin devices keep working):
                             sudo cp -a $dir/wireguard/wg0.conf /etc/wireguard/wg0.conf
-                            sudo systemctl restart wg-quick@wg0
+                            sudo cp -a $dir/wireguard/wg-admin.conf /etc/wireguard/wg-admin.conf
+                            sudo systemctl restart wg-quick@wg0 wg-quick@wg-admin
   5. Caddy (optional):      sudo cp -a $dir/caddy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
-  6. PostgreSQL (only if the folder contains database.dump):
-                            pg_restore --clean --if-exists --no-owner -d "\$DATABASE_URL" $dir/database.dump
+  6. PostgreSQL (only if the folder contains database.dump; the installer has
+     already made the empty database and role, DATABASE_URL is in the env file):
+                            DBURL=\$(grep '^DATABASE_URL=' /etc/$APP/$APP.env | cut -d= -f2-)
+                            pg_restore --clean --if-exists --no-owner -d "\$DBURL" $dir/database.dump
   7. Start the app:         sudo systemctl start $APP
 
 On a brand-new VPS run the installer first (it creates the user and folders),
@@ -402,7 +600,15 @@ EOF
 # ---------------------------------------------------------------- status
 cmd_status() {
   need_root
-  if [ -f "$STATE" ]; then echo "Last run: $(cat "$STATE")"; else echo "Last run: never"; fi
+  if [ -f "$STATE" ]; then echo "Last Drive upload: $(cat "$STATE")"; else echo "Last Drive upload: never"; fi
+  if [ -f "$STATUS_JSON" ]; then
+    status_load
+    echo "Last database dump:  ${ST[dump_at]:-never} ${ST[dump_file]:-} ${ST[error]:+(last attempt failed: ${ST[error]})}"
+    echo "Last verified drill: ${ST[drill_at]:-never} ${ST[drill_ok]:+ok=${ST[drill_ok]}} ${ST[drill_msg]:-}"
+  else
+    echo "Last database dump:  never"
+  fi
+  echo "Dumps on this server: $(ls "$DBDIR"/$APP-*.dump 2>/dev/null | wc -l) in $DBDIR"
   if [ -z "$ROOT" ] && command -v systemctl >/dev/null && [ -d /run/systemd/system ]; then
     if systemctl is-enabled --quiet "$UNIT" 2>/dev/null; then
       systemctl list-timers "$UNIT" --no-pager 2>/dev/null | sed -n '1,2p'
@@ -423,10 +629,12 @@ cmd_status() {
 CMD=${1:-help}
 [ $# -gt 0 ] && shift
 case "$CMD" in
+  dump)    cmd_dump "$@";;
+  drill)   cmd_drill "$@";;
   setup)   cmd_setup "$@";;
   run)     cmd_run "$@";;
   list)    cmd_list "$@";;
   restore) cmd_restore "$@";;
   status)  cmd_status "$@";;
-  *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; [ "$CMD" = help ] || exit 2;;
+  *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; [ "$CMD" = help ] || exit 2;;
 esac

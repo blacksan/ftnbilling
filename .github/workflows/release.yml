@@ -1,0 +1,42 @@
+# Tag vX.Y.Z -> build the server install bundles and attach them to the GitHub
+# Release. deploy/install.sh on a new server downloads ftnbilling-<version>-linux-<arch>.tar.gz
+# (verified against SHA256SUMS), so the VPS never needs Go.
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - name: Test
+        run: |
+          go vet ./...
+          go test -count=1 ./...
+      - name: Build bundles (amd64 and arm64)
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: ./build.sh bundle all
+      - name: Check the bundles
+        run: |
+          ls -l dist
+          (cd dist && sha256sum -c SHA256SUMS)
+          for f in dist/ftnbilling-*-linux-*.tar.gz; do
+            echo "== $f"; tar tzf "$f" | head -30
+            d=$(mktemp -d); tar -C "$d" -xzf "$f"
+            (cd "$d"/ftnbilling-*/ && sha256sum -c --quiet SHA256SUMS)
+            bash -n "$d"/ftnbilling-*/deploy/install.sh
+          done
+      - name: Publish to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes
+          gh release upload "$TAG" dist/ftnbilling-"$TAG"-linux-amd64.tar.gz dist/ftnbilling-"$TAG"-linux-arm64.tar.gz dist/SHA256SUMS --clobber

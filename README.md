@@ -1,8 +1,8 @@
 # ispbill
 
 > **Two ways to run it.** On the RB5009 as a container (this README), or on a
-> VPS with a Tailscale tunnel to the router: see [deploy/README.md](deploy/README.md)
-> for the one-line install.
+> VPS with WireGuard tunnels to the routers and PostgreSQL: see
+> [deploy/README.md](deploy/README.md) for the one-command install of a new server.
 
 A small internet-billing app with a captive portal. It runs as a container on a
 MikroTik RB5009UG+S+IN (RouterOS 7, arm64) and controls the router's Hotspot
@@ -107,8 +107,10 @@ list pages gain a Building column when all are shown. An account can be moved
 to another building from its page.
 
 Routers join over WireGuard with a one-time command from the admin: see
-[deploy/README.md](deploy/README.md) for the server setup (WireGuard, firewall,
-the root-run peer sync script, optional Tailscale) and for the join flow. The
+[deploy/README.md](deploy/README.md) for the server setup (one command on a
+fresh VPS: PostgreSQL, Caddy, WireGuard for the routers and a separate WireGuard
+admin VPN with QR-code onboarding, firewall, backups, `ftnbilling-doctor`) and
+for the join flow. The
 design target is about 40 buildings and 1500 flats on a 1 vCPU / 1 GB VPS.
 
 Upgrading from the single-router version needs no admin action: the data file
@@ -294,7 +296,7 @@ STK Push uses the account code as AccountReference; Daraja usually also sends a 
 
 ## Backup
 
-Everything important is in `ispbill.json` under the data folder (`usb1/ispbill-data` for the container); the `metrics/` folder is history that is nice to keep but can be lost. The VPS installer backs both up (see deploy/README.md). Copy both off the USB stick regularly (`/file` download, scp, or a scheduled `/tool/fetch` upload). Restore by putting them back and restarting the container. Writes are atomic, so a live copy is consistent.
+Everything important is in `ispbill.json` under the data folder (`usb1/ispbill-data` for the container); the `metrics/` folder is history that is nice to keep but can be lost. On a VPS with PostgreSQL the data is in the database: the installer sets up a verified `pg_dump` every 6 hours, a monthly restore drill (restore into a scratch database and compare with production) and an encrypted weekly upload to Google Drive (see [deploy/BACKUP.md](deploy/BACKUP.md)); `sudo ftnbilling-doctor` shows their status. Copy both off the USB stick regularly (`/file` download, scp, or a scheduled `/tool/fetch` upload). Restore by putting them back and restarting the container. Writes are atomic, so a live copy is consistent.
 
 ## Known limitations
 

@@ -25,7 +25,7 @@ The owner approved this plan. Module `ispbill`, Go 1.24, standard library only.
 | NetFlow | One UDP socket, demultiplexed by the source tunnel IP. Each peer's AllowedIPs is a /32, so the source IP authenticates the site. |
 | Notification secrets | Kept in env only. Thresholds and toggles are stored and edited on an admin page. |
 | Outbox | A separate `DATA/outbox.json` owned by `internal/notify`. Sends are idempotent by dedupe key. |
-| Admin access | Tailscale is optional; without it, use an SSH tunnel. `/admin` is never public. |
+| Admin access | A separate WireGuard interface `wg-admin` (10.98.0.0/24) with QR onboarding; SSH tunnel as fallback. `/admin` is never public. |
 
 ## 1. Data model (`internal/store/store.go`), with `FormatVersion = 3`
 
@@ -348,7 +348,7 @@ The page also shows the prerequisites:
    - `deny in on wg0`;
    - `route deny in on wg0`.
 10. Warn if `ip_forward=1`.
-11. Set up Tailscale only if `TS_AUTHKEY` is given or Tailscale is already up. Otherwise print the SSH tunnel line.
+11. Set up the `wg-admin` interface and the first admin device (QR code); print the SSH tunnel line as a fallback.
 12. Drop `ROUTER_PASS` and `ROUTER_URL` from the fresh env template; keep them on upgrade. The final banner says: Admin → Buildings → Add building.
 13. Back up these files daily for 30 days: `ispbill.json`, `outbox.json`, `alerts.json`, `fleet.json`. Back up `metrics/` weekly and keep 4.
 
