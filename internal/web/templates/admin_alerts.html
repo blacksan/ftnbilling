@@ -1,7 +1,7 @@
 {{define "admin_alerts"}}{{template "ahead" .}}
 {{range .Data.Channels}}{{if .Paused}}<div class="banner"><b>{{.Label}} is paused.</b> The provider refused the credentials: <code>{{.Paused}}</code>. Fix the setting on the server, then press the test button.</div>{{end}}{{end}}
 <h3>Open alerts</h3>
-<div class="tw"><table><tr><th>Building</th><th>Alert</th><th>State</th><th>For</th><th>Detail</th><th>Message</th></tr>
+<div class="tw"><table><tr><th>Router</th><th>Alert</th><th>State</th><th>For</th><th>Detail</th><th>Message</th></tr>
 {{range .Data.Active}}<tr><td><b>{{.Building}}</b></td><td>{{.Label}}</td><td><span class="pill {{.A.State}}">{{.A.State}}</span></td><td>{{.For}}</td><td class="nw">{{.A.Detail}}</td>
 <td>{{if .Muted}}muted{{else if .A.Group}}sent as one group message{{else if .A.NotifiedAt.IsZero}}{{if eq .A.State "firing"}}held back (cooldown){{else}}waiting for the hold time{{end}}{{else}}sent {{eat .A.NotifiedAt}}{{end}}</td></tr>
 {{else}}<tr><td colspan="6">Nothing is wrong right now.</td></tr>{{end}}</table></div>
@@ -12,9 +12,9 @@
 <table>{{range .Data.Channels}}<tr><td><b>{{.Label}}</b></td><td class="nw">{{if .Configured}}{{.To}}{{else}}<span class="muted">not set up: {{.To}}</span>{{end}}</td>
 <td><form method="post" action="/admin/alerts/test" class="i"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="channel" value="{{.Name}}"><button{{if not .Configured}} disabled style="opacity:.45;cursor:not-allowed"{{end}}>Send test</button></form></td></tr>{{end}}</table>
 <p class="muted" style="margin-top:8px">The WhatsApp test sends the approved <code>ftn_admin_alert</code> template to every number in <code>WA_ADMIN_NUMBERS</code>.</p></div>
-<div class="card"><b>Mute a building</b>
+<div class="card"><b>Mute a router</b>
 <p class="muted" style="margin:4px 0 8px">For planned work. Alerts still show here, but no messages go out until the mute ends.</p>
-<form method="post" action="/admin/alerts/mute" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Building<select name="site">{{range .Data.Sites}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>
+<form method="post" action="/admin/alerts/mute" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Router<select name="site">{{range .Data.Sites}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>
 <label>For<select name="hours"><option value="1">1 hour</option><option value="4" selected>4 hours</option><option value="24">1 day</option><option value="168">1 week</option></select></label><button>Mute</button></form>
 {{range .Data.Mutes}}<form method="post" action="/admin/alerts/unmute" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="site" value="{{.ID}}"><b>{{.Name}}</b> muted until {{.Until}} <button>Lift</button></form>{{end}}</div>
 </div>
@@ -38,11 +38,11 @@
 <label>Tell tenants about an outage<select name="notice"><option value="off"{{if eq .Data.Set.OutageNotice "off"}} selected{{end}}>never</option><option value="manual"{{if eq .Data.Set.OutageNotice "manual"}} selected{{end}}>when I press the button</option><option value="auto"{{if eq .Data.Set.OutageNotice "auto"}} selected{{end}}>automatically</option></select></label>
 <label>Automatic notice after (minutes down)<input name="auto_min" value="{{.Data.Set.AutoMin}}" size="5"></label>
 <span class="muted" style="align-self:end">{{if .Data.Tenant}}Tenants get a WhatsApp only if they have a number on their account.{{else}}Tenant messages need WhatsApp to be set up on the server.{{end}}</span></div>
-<p class="muted">While a building is offline its other alerts are paused. If more than half of the buildings (at least 3) go offline within 2 minutes you get one message, not one per building. A recovery message is sent only if the problem message was.</p>
+<p class="muted">While a router is offline its other alerts are paused. If more than half of the routers (at least 3) go offline within 2 minutes you get one message, not one per router. A recovery message is sent only if the problem message was.</p>
 <p><button>Save settings</button></p></form>
 
 <h3>History</h3>
-<div class="tw"><table><tr><th>Building</th><th>Alert</th><th>Started (EAT)</th><th>Lasted</th><th>Detail</th><th>Told you</th></tr>
+<div class="tw"><table><tr><th>Router</th><th>Alert</th><th>Started (EAT)</th><th>Lasted</th><th>Detail</th><th>Told you</th></tr>
 {{range .Data.History}}<tr><td><b>{{.Building}}</b></td><td>{{.Label}}</td><td>{{.Start}}</td><td>{{.Dur}}</td><td class="nw">{{.E.Detail}}</td><td>{{if .E.Notified}}yes{{else}}no{{end}}</td></tr>
 {{else}}<tr><td colspan="6">No resolved alerts yet.</td></tr>{{end}}</table></div>
-{{template "afoot"}}{{end}}
+{{template "afoot" .}}{{end}}

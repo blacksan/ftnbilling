@@ -129,15 +129,20 @@ func TestFleetPageAndLanding(t *testing.T) {
 	a := r.joined(t, "Alpha Court", "10.99.0.2", true)
 	b := r.joined(t, "Beta Heights", "10.99.0.3", false)
 	r.probe(3)
-	// With two buildings and "All", /admin lands on the fleet page.
+	// With two routers and "All", /admin is the Overview and the old fleet address is the Routers page.
 	resp := r.admin("GET", "/admin", nil)
 	resp.Body.Close()
-	if resp.StatusCode != 303 || resp.Header.Get("Location") != "/admin/fleet" {
-		t.Fatalf("landing: %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	if resp.StatusCode != 200 {
+		t.Fatalf("landing: %d", resp.StatusCode)
 	}
-	page := r.adminGet(t, "/admin/fleet")
-	for _, want := range []string{"Alpha Court", "Beta Heights", `<meta http-equiv="refresh" content="30">`, "Buildings online", "1 <small", "Tell tenants about the outage",
-		"cause unknown", `name="site" value="` + b.ID + `"`, "Fleet overview"} {
+	resp = r.admin("GET", "/admin/fleet", nil)
+	resp.Body.Close()
+	if resp.StatusCode != 302 || resp.Header.Get("Location") != "/admin/routers" {
+		t.Fatalf("fleet: %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	page := r.adminGet(t, "/admin/routers")
+	for _, want := range []string{"Alpha Court", "Beta Heights", "Routers online", "Tell tenants about the outage",
+		"cause unknown", `name="site" value="` + b.ID + `"`} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("fleet page lacks %q:\n%s", want, page)
 		}
@@ -154,7 +159,7 @@ func TestFleetPageAndLanding(t *testing.T) {
 	r.cookie = nil
 	resp = r.admin("GET", "/admin/metrics", nil)
 	resp.Body.Close()
-	if resp.StatusCode != 303 || resp.Header.Get("Location") != "/admin/fleet" {
+	if resp.StatusCode != 303 || resp.Header.Get("Location") != "/admin/routers" {
 		t.Fatalf("metrics with All: %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	// Sidebar entries exist.
@@ -175,7 +180,7 @@ func TestUptimePage(t *testing.T) {
 	r.mu.Unlock()
 	r.probe(3)
 	page := r.adminGet(t, "/admin/uptime?site="+a.ID+"&days=30")
-	for _, want := range []string{"Availability, last 30 days", `class="ustrip"`, "ongoing", "Alpha Court", "All buildings", "Beta Heights", "Tunnel round-trip time"} {
+	for _, want := range []string{"Availability, last 30 days", `class="ustrip"`, "ongoing", "Alpha Court", "All routers", "Beta Heights", "Tunnel round-trip time"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("uptime page lacks %q", want)
 		}
@@ -189,7 +194,7 @@ func TestAlertsSettingsTestAndMute(t *testing.T) {
 	r := newOpsRig(t)
 	a := r.joined(t, "Alpha Court", "10.99.0.2", true)
 	page := r.adminGet(t, "/admin/alerts")
-	for _, want := range []string{"Open alerts", "Router offline", "WAN saturated", "Packet loss", "High latency", "OLT port down", "Send test", "Mute a building"} {
+	for _, want := range []string{"Open alerts", "Router offline", "WAN saturated", "Packet loss", "High latency", "OLT port down", "Send test", "Mute a router"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("alerts page lacks %q", want)
 		}
@@ -317,7 +322,7 @@ func TestOutageNoticeButton(t *testing.T) {
 		t.Fatalf("%s", resp.Header.Get("Location"))
 	}
 	// the notice count shows on the fleet page
-	if !strings.Contains(r.adminGet(t, "/admin/fleet"), "2 notices already sent") {
+	if !strings.Contains(r.adminGet(t, "/admin/routers"), "2 notices already sent") {
 		t.Fatal("fleet page should count the notices")
 	}
 	// switched off: refused

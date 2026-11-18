@@ -1,137 +1,40 @@
-{{define "sitefields"}}<div class="row"><label>Building name<input name="name" value="{{.Name}}" required maxlength="60" placeholder="Riverside Apartments"></label>
-<label>Support phone (shown to tenants)<input name="support" value="{{.SupportPhone}}" placeholder="optional"></label>
-<label>Notes<input name="notes" value="{{.Notes}}" size="36" maxlength="300"></label></div>{{end}}
-{{define "sitelayout"}}<div class="row" style="margin-top:8px">
-<label>Hotspot server<input name="hotspot" value="{{.HotspotServer}}" size="12"></label>
-<label>WAN port<input name="wan" value="{{.WANInterface}}" size="12"></label>
-<label>WAN interface list<input name="wanlist" value="{{.WANList}}" size="8"></label>
-<label>OLT port<input name="olt" value="{{.OLTInterface}}" size="14"></label>
-<label>Customer subnet<input name="subnet" value="{{.CustomerSubnet}}" size="16" placeholder="10.5.50.0/24"></label>
-<label>VLAN (0 = none)<input name="vlan" type="number" min="0" max="4094" value="{{.VLANID}}" style="width:90px"></label></div>
-<div class="row" style="margin-top:8px">
-<label>WAN capacity (Mbps)<input name="wancap" value="{{f0 .WANCapMbps}}" style="width:100px"></label>
-<label>OLT capacity (Mbps)<input name="oltcap" value="{{f0 .OLTCapMbps}}" style="width:100px"></label>
-<label>Fair-use limit (TB/month)<input name="fup" value="{{f0 .FUPTB}}" style="width:100px"></label>
-<label>Bench port (optional)<input name="bench" value="{{.BenchPort}}" size="10"></label>
-<label class="muted" style="align-self:end"><input type="checkbox" name="provision" value="1"{{if .Provision}} checked{{end}}> script builds the bridge, DHCP and hotspot</label>
-<label class="muted" style="align-self:end"><input type="checkbox" name="legacy" value="1"{{if .LegacyContainer}} checked{{end}}> router had the old container (script removes it)</label></div>{{end}}
+{{define "sitefields"}}<div class="two"><label class="field">Router name<input name="name" value="{{.Name}}" required maxlength="60" placeholder="Riverside Apartments"></label>
+<label class="field">Support phone (shown to tenants)<input name="support" value="{{.SupportPhone}}" placeholder="optional"></label></div>
+<label class="field">Notes<input name="notes" value="{{.Notes}}" maxlength="300"></label>{{end}}
+{{define "sitelayout"}}<div class="two">
+<label class="field">Hotspot server<input name="hotspot" value="{{.HotspotServer}}"></label>
+<label class="field">WAN port<input name="wan" value="{{.WANInterface}}"></label>
+<label class="field">WAN interface list<input name="wanlist" value="{{.WANList}}"></label>
+<label class="field">OLT port<input name="olt" value="{{.OLTInterface}}"></label>
+<label class="field">Customer subnet<input name="subnet" value="{{.CustomerSubnet}}" placeholder="10.5.50.0/24"></label>
+<label class="field">VLAN (0 = none)<input name="vlan" type="number" min="0" max="4094" value="{{.VLANID}}"></label>
+<label class="field">WAN capacity (Mbps)<input name="wancap" value="{{f0 .WANCapMbps}}"></label>
+<label class="field">OLT capacity (Mbps)<input name="oltcap" value="{{f0 .OLTCapMbps}}"></label>
+<label class="field">Fair-use limit (TB/month)<input name="fup" value="{{f0 .FUPTB}}"></label>
+<label class="field">Bench port (optional)<input name="bench" value="{{.BenchPort}}"></label></div>
+<label class="ck"><input type="checkbox" name="provision" value="1"{{if .Provision}} checked{{end}}> script builds the bridge, DHCP and hotspot</label>
+<label class="ck"><input type="checkbox" name="legacy" value="1"{{if .LegacyContainer}} checked{{end}}> router had the old container (script removes it)</label>{{end}}
 
-{{define "admin_sites"}}{{template "ahead" .}}
-{{if eq .Data.Mode "new"}}
-<p class="muted">A building is one MikroTik router with its own hotspot. Add it here, then paste one command into the router's terminal. The server and the router connect over a private WireGuard tunnel; no port on the building's router is opened to the internet.</p>
-<form method="post" action="/admin/sites/create" class="card"><input type="hidden" name="_csrf" value="{{.CSRF}}">
-{{template "sitefields" .Data.Form}}
-<details style="margin-top:8px"><summary>Router layout (defaults suit a standard install)</summary>{{template "sitelayout" .Data.Form}}</details>
-<p><button>Add building</button></p></form>
-{{else if .Data.Site}}{{template "admin_site_view" .}}
-{{else}}
-<p><a href="/admin/sites/new"><b>+ Add building</b></a></p>
-<div class="tw"><table><tr><th>Building</th><th>Status</th><th class="n">Flats</th><th class="n">Active</th><th>Connection</th><th></th></tr>
-{{range .Data.Rows}}<tr><td><a href="/admin/sites/view?id={{.S.ID}}"><b>{{.S.Name}}</b></a>{{if eq .S.Mode "env"}} <span class="muted">legacy</span>{{end}}</td>
-<td><span class="pill {{if eq .State "joined"}}active{{else if eq .State "waiting"}}expired{{else}}suspended{{end}}">{{.State}}</span></td>
-<td class="n">{{.Accounts}}</td><td class="n">{{.Active}}</td><td>{{.Detail}}</td>
-<td><a href="/admin/site/select?site={{.S.ID}}&amp;next=/admin">open dashboard</a></td></tr>
-{{else}}<tr><td colspan="6">No buildings yet. <a href="/admin/sites/new">Add the first one.</a></td></tr>{{end}}</table></div>
-<p class="muted">Flat labels and ONT MACs only need to be unique inside a building. Account codes are unique everywhere, so a Paybill payment always finds its flat.</p>
-{{end}}
-{{template "afoot"}}{{end}}
-
-{{define "admin_site_view"}}{{$s := .Data.Site}}{{$d := .}}
-<h2>{{$s.Name}} <small class="muted">{{if .Data.Env}}legacy building{{else}}{{$s.ID}}{{end}}</small>{{if $s.Disabled}} <span class="pill suspended">paused</span>{{end}}</h2>
-<p><a href="/admin/sites">&larr; all buildings</a> &middot; <a href="/admin/site/select?site={{$s.ID}}&amp;next=/admin/accounts">view its flats ({{.Data.Accounts}})</a></p>
-<div class="tiles">
-<div class="tile {{if .Data.Status.RESTOK}}good{{else}}bad{{end}}">Router<b style="font-size:19px">{{if .Data.Status.RESTOK}}reachable{{else}}not reachable{{end}}</b><small>{{.Data.Status.RESTErr}}</small></div>
-{{if not .Data.Env}}<div class="tile {{if .Data.Status.Handshake}}good{{end}}">WireGuard<b style="font-size:19px">{{if .Data.Status.Handshake}}up{{else if .Data.Status.WGKnown}}no handshake{{else}}unknown{{end}}</b><small>{{if .Data.Status.Handshake}}last handshake {{.Data.Status.HandshakeAge}} s ago{{end}}</small></div>{{end}}
-<div class="tile">Tenant portal<b style="font-size:15px;word-break:break-all">{{.Data.Portal}}</b><small>the router's login page sends tenants here</small></div></div>
-
-{{with .Data.Rep}}{{$r := .}}
-<div class="tiles"><div class="tile">Flats<b>{{.Flats}}</b><small>{{.Occupied}} occupied, {{.Vacant}} vacant</small></div>
-<div class="tile good">Active<b>{{.Active}}</b><small>{{.Expired}} expired, {{.Suspended}} suspended, {{.New}} new</small></div>
-<div class="tile">Revenue this month<b>{{kes .ThisMonth}}</b><small>last month {{kes .LastMonth}}</small></div>
-<div class="tile">Equipment<b>{{index .ByStatus "installed"}}</b><small>installed &middot; {{index .ByStatus "in_stock"}} in stock &middot; {{index .ByStatus "faulty"}} faulty</small></div></div>
-<div class="grid2">
-<div class="card"><b>Building profile</b>
-<form method="post" action="/admin/sites/profile" style="margin-top:6px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
-<label class="muted">Address<br><input name="address" value="{{$s.Address}}" style="width:100%" maxlength="200" placeholder="Street, estate, town"></label>
-<div class="row" style="margin-top:8px"><label>Latitude<input name="lat" value="{{if $s.Lat}}{{$s.Lat}}{{end}}" size="12" placeholder="-1.2864"></label><label>Longitude<input name="lng" value="{{if $s.Lng}}{{$s.Lng}}{{end}}" size="12" placeholder="36.8172"></label><label>Went live<input type="date" name="go_live" value="{{day $s.GoLive}}"></label><button>Save profile</button></div></form>
-{{if $s.Lat}}<p class="muted" style="margin:8px 0 0"><a href="https://www.openstreetmap.org/?mlat={{$s.Lat}}&amp;mlon={{$s.Lng}}#map=18/{{$s.Lat}}/{{$s.Lng}}" target="_blank" rel="noopener noreferrer">Open on the map</a></p>{{end}}
-<hr><b>Network equipment</b><table style="margin-top:4px">
-{{range .Router}}<tr><td>Router</td><td><a href="/admin/equipment/view?id={{.ID}}">{{if .Serial}}{{.Serial}}{{else}}{{.Model}}{{end}}</a> <span class="muted">{{.Model}} {{.MAC}}</span></td></tr>{{end}}
-{{range .OLT}}<tr><td>OLT</td><td><a href="/admin/equipment/view?id={{.ID}}">{{if .Serial}}{{.Serial}}{{else}}{{.Model}}{{end}}</a> <span class="muted">{{.Model}} {{.MAC}}</span></td></tr>{{end}}
-{{if not (or .Router .OLT)}}<tr><td class="muted">None recorded. <a href="/admin/equipment">Add the router and OLT</a> to this building.</td></tr>{{end}}</table></div>
-<div class="card"><b>Contacts</b>
-<div class="tw" style="margin-top:6px"><table>{{range .Contacts}}<tr><td><b>{{.Role}}</b></td><td>{{.Name}}</td><td>{{.Phone}}{{if .Email}} <span class="muted">{{.Email}}</span>{{end}}</td>
-<td><form method="post" action="/admin/sites/contacts/delete" class="i"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$s.ID}}"><input type="hidden" name="cid" value="{{.ID}}"><button>Remove</button></form></td></tr>
-{{else}}<tr><td class="muted">No contacts yet.</td></tr>{{end}}</table></div>
-<form method="post" action="/admin/sites/contacts/save" class="row" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$s.ID}}">
-<label>Role<select name="role">{{range $d.Data.Roles}}<option>{{.}}</option>{{end}}</select></label><label>Name<input name="name" required size="14"></label><label>Phone<input name="phone" size="12"></label><button>Add contact</button></form></div></div>
-<div class="card"><b>Revenue by month</b><div class="tw" style="margin-top:6px"><table><tr><th>Month</th><th class="n">Payments</th><th class="n">KES</th></tr>{{range .Months}}<tr><td>{{.Month}}</td><td class="n">{{.Payments}}</td><td class="n">{{.KES}}</td></tr>{{end}}</table></div></div>
-{{end}}
-<div class="grid2">
-<div class="card"><b>Details</b>
-<form method="post" action="/admin/sites/update" style="margin-top:6px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
-{{template "sitefields" $s}}
-{{if .Data.Env}}<p class="muted">The router layout of this building comes from the server's environment variables.</p>
-{{else}}<details style="margin-top:8px"><summary>Router layout</summary>{{template "sitelayout" .Data.Eff}}
-<p class="muted">Changes apply to the next join command and to metrics. Re-run the join command to rebuild the router side.</p></details>{{end}}
-<p><button>Save</button></p></form></div>
-
-{{if not .Data.Env}}<div class="card"><b>Connect the router</b>
-<ol class="muted" style="margin:6px 0 6px 18px;padding:0">
-<li>The router runs RouterOS 7 and its clock is right (NTP).</li>
-<li>Hotspot and fetch are enabled: <code>/system/device-mode/update hotspot=yes fetch=yes</code>, then confirm as the router asks (power button or a reboot).</li>
-<li>WebFig on port 80 is moved: the script turns the router's web admin off port 80, because the hotspot uses it.</li>
-</ol>
-{{if .Data.Cmd}}{{if .Data.CmdStage}}<p><span class="pill active">stage: {{.Data.CmdStage}}</span></p>{{end}}<p><b>Paste this once in the router's terminal</b> (WinBox &rarr; New Terminal). It works once, for {{.Data.TTL}} minutes, then is gone.</p>
-<textarea readonly rows="3" style="width:100%;font:13px monospace" onclick="this.select()">{{.Data.Cmd}}</textarea>
-<details><summary>If the router's clock is wrong, or it has no certificate store</summary><p class="muted">This skips the certificate check. Use it only if the line above fails with a certificate error.</p>
-<textarea readonly rows="3" style="width:100%;font:13px monospace" onclick="this.select()">{{.Data.CmdNoCheck}}</textarea></details>
-<p class="muted">Shown only now. Expires {{eat .Data.CmdExpires}}. Do not paste it into chat.</p>
-<form method="post" action="/admin/sites/join/revoke" style="display:inline"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button>Cancel this command</button></form>
-{{else}}{{if and .Data.Insecure (not .Data.AllowInsecure)}}<p class="bad">PUBLIC_BASE_URL must start with https:// before a join command can be made.</p>{{end}}
-<form method="post" action="/admin/sites/join"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button>{{if .Data.Status.Joined}}Make a new join command (rebuilds the tunnel){{else}}Make the join command{{end}}</button></form>{{end}}
-<p id="jst" class="muted" style="margin-top:8px">Status: {{.Data.Status.Token}}</p></div>{{end}}</div>
-
-{{if not .Data.Env}}<div class="card"><b>Access mode: server-driven IPoE</b>
-<p class="muted" style="margin:4px 0">Mode is <b>{{.Data.Mode}}</b>. <i>hotspot</i>: tenants log in on the router's hotspot (the old way). <i>ipoe_observe</i>: the server gives each flat a fixed address and speed queue, but suspends nobody. <i>ipoe</i>: unpaid flats are walled to the payment page.</p>
-<form method="post" action="/admin/sites/mode" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
-<label>Mode<select name="mode">{{range seq "hotspot" "ipoe_observe" "ipoe"}}<option{{if eq . $.Data.Mode}} selected{{end}}>{{.}}</option>{{end}}</select></label><label class="muted"><input type="checkbox" name="override" value="1"> router unreachable: switch anyway</label><button>Switch mode</button></form>
-{{if .Data.IPoE}}
-{{with .Data.Prov}}<p style="margin-top:8px"><span class="pill {{if .InSync}}active{{else}}expired{{end}}">{{if .InSync}}router in sync{{else}}router not in sync{{end}}</span>
-<span class="muted">last pass {{if .LastRunAt.IsZero}}never{{else}}{{eat .LastRunAt}}{{end}} &middot; {{.Drift}} differences &middot; {{.PendingOps}} writes pending{{if .Repaired}} &middot; {{.Repaired}} rows repaired last pass{{end}}{{if .WouldSuspend}} &middot; {{.WouldSuspend}} flats would be suspended in ipoe mode{{end}}</span></p>
-{{if .Note}}<p class="muted">{{.Note}}</p>{{end}}{{if .LastError}}<p class="bad">Last error: {{.LastError}}</p>{{end}}
-{{if .ForeignConflicts}}<p class="bad">Rows on the router that the server does not own and will not touch:</p><ul>{{range .ForeignConflicts}}<li>{{.}}</li>{{end}}</ul>{{end}}{{end}}
-{{if or .Data.Unseen .Data.UnseenErr .Data.Unmanaged .Data.AlreadyCutOver}}<div class="card danger"><b class="bad">The cutover command was not made</b>
-{{if .Data.UnseenErr}}<p>The router could not be read to check the flats: {{.Data.UnseenErr}}</p>{{end}}
-{{if .Data.AlreadyCutOver}}<p>This building was already cut over and confirmed. Changes are applied by the server now; running the cutover again only refreshes the router's objects.</p>{{end}}
-{{if .Data.Unmanaged}}<p>The router has devices the server does not know. The cutover puts the flats' network on reply-only ARP, so these would stop working unless they are copied as static entries (a forced cutover does that):</p><ul>{{range .Data.Unmanaged}}<li>{{.}}</li>{{end}}</ul>{{end}}
-{{if .Data.Unseen}}<p>These paying flats have not been seen on the router (no lease or ARP entry with their MAC), so they would lose service:</p><ul>{{range .Data.Unseen}}<li>{{.}}</li>{{end}}</ul>{{end}}
-<p class="muted">Fix their MACs (Unregistered devices) and try again, or cut over anyway.</p>
-<form method="post" action="/admin/sites/script"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="stage" value="cutover"><input type="hidden" name="force" value="1"><button>Cut over anyway</button></form></div>{{end}}
-{{if .Data.CutoverPending}}<div class="card danger"><b class="bad">Cutover not confirmed</b><p class="muted" style="margin:4px 0">The router rolls back by itself 15 minutes after the cutover command unless you confirm. Check that a flat can browse, then confirm.</p>
-<form method="post" action="/admin/sites/confirm"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button>Confirm cutover</button></form></div>{{end}}
-<div class="row" style="margin-top:8px">
-<form method="post" action="/admin/sites/adopt" onsubmit="return confirm('Give every current dynamic lease to the flat whose MAC it has, as that flat\'s fixed address?')"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button>Adopt leases</button></form>
-<form method="post" action="/admin/sites/script"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="stage" value="join"><button>Join only command</button></form>
-<form method="post" action="/admin/sites/script"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="stage" value="cutover"><button>Cut over command</button></form>
-<form method="post" action="/admin/sites/script"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="stage" value="cleanup"><button>Cleanup command</button></form></div>
-<p class="muted">After a cutover, a flat that was moved out of the .10-.59 range gets its new address when its ONT renews: reboot those ONTs.</p>
-<p class="muted">Order: join only (tunnel and API, nothing else changes), adopt leases, observe for a few days, then the cut over command at a quiet hour with someone on site. Cleanup removes the old hotspot objects once the cutover is confirmed.</p>
-{{else}}<form method="post" action="/admin/sites/script" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="stage" value="join"><button>Join only command</button> <span class="muted">connects the router to the server without changing how tenants connect</span></form>{{end}}</div>{{end}}
-
-<div class="card"><b>Plans at this building</b><p class="muted" style="margin:4px 0">Hide a plan here, or give it a different price. Prices must stay unique inside the building.</p>
-<form method="post" action="/admin/sites/packages"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
-<div class="tw"><table><tr><th>Plan</th><th class="n">Shared price</th><th>Hidden here</th><th>Price here (KES, 0 = shared)</th></tr>
-{{range .Data.Pkgs}}{{$o := index $s.PkgOverrides .ID}}<tr><td>{{.Name}} <span class="muted">{{.SpeedMbps}} Mbps</span></td><td class="n">{{.PriceKES}}</td>
-<td><input type="checkbox" name="hidden_{{.ID}}" value="1"{{if $o.Hidden}} checked{{end}}></td><td><input name="price_{{.ID}}" type="number" min="0" value="{{if $o.PriceKES}}{{$o.PriceKES}}{{else}}0{{end}}" style="width:100px"></td></tr>{{end}}</table></div>
-<p><button>Save plans</button></p></form></div>
-
-<div class="grid2">
-<div class="card"><b>Router actions</b>
-<form method="post" action="/admin/sites/sync" style="margin-top:6px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button>{{if .Data.IPoE}}Reconcile now{{else}}Push speed profiles now{{end}}</button> <span class="muted">normally automatic</span></form>
-<form method="post" action="/admin/sites/disable" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="disable" value="{{if $s.Disabled}}0{{else}}1{{end}}"><button>{{if $s.Disabled}}Resume this building{{else}}Pause this building{{end}}</button> <span class="muted">paused: no collection, no router changes; tenants cannot buy</span></form></div>
-<div class="card danger"><b class="bad">Remove building</b><p class="muted" style="margin:4px 0">Only possible when it has no flats. Its payments stay in the ledger. Type the building name to confirm.</p>
-<form method="post" action="/admin/sites/remove" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input name="confirm" placeholder="{{$s.Name}}" required autocomplete="off"><button>Remove</button></form></div></div>
-{{if and (not .Data.Env) (not .Data.Cmd)}}<script>(function(){var el=document.getElementById('jst');if(!el)return;function t(){var x=new XMLHttpRequest();x.open('GET','/admin/sites/status.json?id={{$s.ID}}');x.onload=function(){try{var r=JSON.parse(x.responseText);el.textContent='Status: command '+r.token+', tunnel '+(r.handshake?'up':'down')+', router API '+(r.rest_ok?'reachable':'not reachable')}catch(e){}};x.send()}setInterval(t,5000)})()</script>{{end}}
-{{if .Data.Cmd}}<script>(function(){var el=document.getElementById('jst');function t(){var x=new XMLHttpRequest();x.open('GET','/admin/sites/status.json?id={{$s.ID}}');x.onload=function(){try{var r=JSON.parse(x.responseText);el.textContent='Waiting: command '+r.token+(r.used_from?' (fetched from '+r.used_from+')':'')+', tunnel '+(r.handshake?'up':'down')+', router API '+(r.rest_ok?'reachable':'not reachable');if(r.rest_ok&&r.token==='used'){el.textContent='Connected. The router is joined.';clearInterval(h)}}catch(e){}};x.send()}var h=setInterval(t,3000)})()</script>{{end}}
-{{end}}
+{{define "admin_sites"}}{{template "ahead" .}}{{$d := .}}{{$c := .Data.Cnt}}
+<div class="stats">
+{{template "stat" (dict "K" "Routers" "V" .Data.All "S" "linked to the server" "Icon" "sites" "Feature" true)}}
+{{template "stat" (dict "K" "Routers online" "V" .Data.Online "S" "answering now" "Icon" "check" "Tone" "ok")}}
+{{template "stat" (dict "K" "Offline" "V" .Data.Offline "S" "not answering" "Icon" "warn" "Tone" (cond (gt .Data.Offline 0) "bad" "plum"))}}
+{{template "stat" (dict "K" "Flats online" "V" .Data.FlatsOn "S" "across all routers" "Icon" "live" "Tone" "teal" "Href" "/admin/live")}}
+{{template "stat" (dict "K" "Need a look" "V" .Data.Attn "S" "down or out of sync" "Icon" "pulse" "Tone" (cond (gt .Data.Attn 0) "warn" "info"))}}
+</div>
+<nav class="tabs" aria-label="Filter routers">{{range $t := (seq "all|All" "online|Online" "offline|Offline" "setting|Setting up")}}{{$k := index (split $t "|") 0}}{{$l := index (split $t "|") 1}}<a class="tab" href="/admin/routers?tab={{$k}}"{{if eq $k $d.Data.Tab}} aria-current="page"{{end}}>{{$l}}<span class="n">{{index $c $k}}</span></a>{{end}}</nav>
+{{if .Data.Rows}}<div class="tw"><table class="rs"><thead><tr><th>Router</th><th>State</th><th>Setup</th><th class="n">Flats</th><th class="n">Online</th><th>WAN</th><th>Tunnel</th><th>Seen</th><th></th></tr></thead><tbody>
+{{range .Data.Rows}}<tr><td class="who"><b><a href="/admin/routers/view?id={{.S.ID}}">{{.S.Name}}</a></b><span>{{.Mode}}{{if eq .S.Mode "env"}} &middot; legacy{{end}}</span></td>
+<td data-label="State"><span class="pill {{.State}}">{{.State}}</span></td><td data-label="Setup"><span class="pill {{.SetupTone}}">{{.Setup}}</span></td>
+<td class="n" data-label="Flats">{{.Flats}}</td><td class="n" data-label="Online">{{.Online}}</td>
+<td data-label="WAN">{{if .WAN}}{{.WAN}}{{if .WANPct}}<div class="meter" role="img" aria-label="{{f0 .WANPct}} percent of capacity"><i style="width:{{f0 .WANPct}}%"></i></div>{{end}}{{else}}<span class="muted">none yet</span>{{end}}</td>
+<td data-label="Tunnel">{{if .Tunnel}}{{.Tunnel}}{{else}}<span class="muted">none</span>{{end}}</td><td data-label="Seen">{{.Seen}}</td>
+<td><a class="btn ghost sm" href="/admin/site/select?site={{.S.ID}}&amp;next=/admin">Open</a></td></tr>{{end}}</tbody></table></div>
+{{else if eq .Data.All 0}}{{template "empty" (dict "Title" "No routers linked yet." "Text" "Add a router, paste the one line it gives you into the router's terminal, and the server does the rest." "Acts" (acts "Add router|#modal:addrouter"))}}
+{{else}}{{template "empty" (dict "Title" "No router in this view." "Text" "Try another tab." "Acts" (acts "Show all|/admin/routers"))}}{{end}}
+{{if .Data.Notices}}<section class="panel"><h2>Tenants waiting on a router</h2><p class="muted" style="margin:6px 0 10px">These routers are down. Send tenants a WhatsApp notice once per outage.</p>
+{{range .Data.Notices}}<form method="post" action="/admin/sites/outage-notice" class="row" data-confirm="Send a WhatsApp outage notice to every tenant of {{.S.Name}} who has a WhatsApp number?"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{.S.ID}}"><b>{{.S.Name}}</b><span class="muted">{{.Cause}}</span><button class="sm">Tell tenants about the outage</button>{{if .Notified}} <span class="muted">{{.Notified}} notices already sent</span>{{end}}</form>{{end}}</section>{{end}}
+<p class="muted">Flat labels and ONT MACs only need to be unique inside a router. Account codes are unique everywhere, so a Paybill payment always finds its flat.</p>
+{{if .Data.AutoOpen}}<span hidden data-autoopen="addrouter"></span>{{end}}
+{{template "afoot" .}}{{end}}

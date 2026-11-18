@@ -29,7 +29,7 @@ func (s *Server) collectorFor(w http.ResponseWriter, r *http.Request, site strin
 		sc := s.scopeOf(r)
 		if sc.All {
 			if s.hasOps() { // the fleet overview is the all-buildings view of the network
-				http.Redirect(w, r, "/admin/fleet", http.StatusSeeOther)
+				http.Redirect(w, r, "/admin/routers", http.StatusSeeOther)
 				return nil, "", false
 			}
 			s.back(w, r, "/admin/sites", "Choose a router to see its usage.")

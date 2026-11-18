@@ -3,13 +3,17 @@ package web
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"ispbill/internal/billing"
+	"ispbill/internal/metrics"
+	"ispbill/internal/sites"
 	"ispbill/internal/store"
 )
 
@@ -31,6 +35,12 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 		}
 	}
 	get("/admin", s.adminDashboard)
+	get("/admin/live", s.adminLive)
+	get("/admin/live.json", s.adminLiveJSON)
+	get("/admin/map", s.adminMap)
+	get("/admin/search.json", s.adminSearchJSON)
+	get("/admin/audit", s.adminAudit)
+	get("/admin/accounts/status.json", s.adminAccountStatus)
 	get("/admin/site/select", s.adminSiteSelect)
 	post("/admin/accounts/move", s.adminAccountMove)
 	s.siteRoutes(get, post)
@@ -82,6 +92,17 @@ type adminPage struct {
 	FlashBad                   bool
 	UnregCount, UnmatchedCount int
 	Data                       map[string]any
+
+	// Shell and hero (see nav.go): what the sidebar, breadcrumb and page
+	// header show. Pages override Detail, Lead and Acts when they know more.
+	Group, Label, Href string
+	Detail             string
+	H1a, H1b, Lead     string
+	Acts               []heroAct
+	CanWrite           bool            // owner or operator: the add and edit buttons show
+	Pkgs               []store.Package // enabled plans, for the Add customer form
+	Initial            string          // avatar letter
+	Version            string
 }
 
 func (s *Server) page(r *http.Request, active string) adminPage {
@@ -110,6 +131,21 @@ func (s *Server) page(r *http.Request, active string) adminPage {
 		p.FailedMsgs = s.ops.Box.Counts()["failed"]
 	}
 	p.UnregCount = s.svc.UnregisteredOnline(sc.Has) // online, unregistered devices only
+	p.CanWrite = p.Role == store.RoleOwner || p.Role == store.RoleOperator
+	p.Initial = initialOf(p.User)
+	if p.CanWrite {
+		p.Data["RouterDefaults"] = sites.ApplyDefaults(s.cfg, store.Site{Mode: store.SiteModeWG})
+		p.Data["JoinTTL"] = int(s.cfg.JoinTokenTTL.Minutes())
+	}
+	s.st.View(func(d *store.Data) {
+		for _, pk := range d.EffectivePackages(sc.ID) {
+			if !pk.Disabled && !pk.Deleted {
+				p.Pkgs = append(p.Pkgs, pk)
+			}
+		}
+	})
+	sort.SliceStable(p.Pkgs, func(i, j int) bool { return p.Pkgs[i].PriceKES < p.Pkgs[j].PriceKES })
+	p.setHero(active, s.svc.Now())
 	s.st.View(func(d *store.Data) {
 		for _, pay := range d.Payments {
 			if pay.Status == store.PayUnmatched && (pay.SiteID == "" || sc.Has(pay.SiteID)) {
@@ -156,80 +192,6 @@ func countsAsRevenue(p store.Payment) bool {
 	return p.Status == store.PayApplied && p.Method != "voucher" && p.Method != "admin"
 }
 
-// ---- dashboard ---------------------------------------------------------------
-
-func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
-	if sc := s.scopeOf(r); sc.All && sc.Multi() && s.hasOps() {
-		http.Redirect(w, r, "/admin/fleet", http.StatusSeeOther) // many buildings: start at the fleet overview
-		return
-	}
-	p := s.page(r, "dashboard")
-	now := s.svc.Now()
-	nowE := now.In(billing.EAT)
-	dayStart := time.Date(nowE.Year(), nowE.Month(), nowE.Day(), 0, 0, 0, 0, billing.EAT)
-	monthStart := time.Date(nowE.Year(), nowE.Month(), 1, 0, 0, 0, 0, billing.EAT)
-	pol := s.svc.Policy()
-	sc := s.scopeOf(r)
-	var active, soon, expired, newAcc, susp, today, month, pending, total int
-	var events []store.Event
-	var tasks []store.Task
-	s.st.View(func(d *store.Data) {
-		for _, a := range d.Accounts {
-			if !sc.Has(a.SiteID) {
-				continue
-			}
-			total++
-			switch billing.AccountState(a, now) {
-			case billing.StateActive:
-				active++
-				if a.ExpiresAt.Sub(now) <= time.Duration(pol.ReminderDays)*24*time.Hour {
-					soon++
-				}
-			case billing.StateExpired:
-				expired++
-			case billing.StateSuspended:
-				susp++
-			default:
-				newAcc++
-			}
-		}
-		for _, o := range d.Orders {
-			if o.Status == store.OrderPending && sc.Has(o.SiteID) {
-				pending++
-			}
-		}
-		for _, pay := range d.Payments {
-			if countsAsRevenue(pay) && sc.Has(pay.SiteID) {
-				if !pay.PaidAt.Before(dayStart) {
-					today += pay.AmountKES
-				}
-				if !pay.PaidAt.Before(monthStart) {
-					month += pay.AmountKES
-				}
-			}
-		}
-		ev := d.Events
-		for i := len(ev) - 1; i >= 0 && len(events) < 8; i-- {
-			if sc.Has(ev[i].SiteID) {
-				events = append(events, ev[i])
-			}
-		}
-		for _, t := range d.TaskList() {
-			if sc.Has(t.SiteID) {
-				tasks = append(tasks, t)
-			}
-		}
-	})
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-	defer cancel()
-	routerOK, routerMsg := s.routerSummary(ctx, sc)
-	p.Data = map[string]any{"Total": total, "Active": active, "Soon": soon, "Expired": expired, "New": newAcc, "Suspended": susp,
-		"Today": today, "Month": month, "Pending": pending, "Events": events, "Tasks": tasks,
-		"RouterOK": routerOK, "RouterErr": routerMsg, "TestMode": s.cfg.TestMode, "Mpesa": s.live().MpesaEnabled(),
-		"SiteNames": p.Data["SiteNames"], "ShowSite": p.Data["ShowSite"]}
-	s.render(w, "admin_dashboard", p)
-}
-
 // ---- accounts ----------------------------------------------------------------
 
 // routerSummary pings the selected building, or every runnable one.
@@ -263,41 +225,208 @@ func (s *Server) routerSummary(ctx context.Context, sc scope) (bool, string) {
 }
 
 type acctRow struct {
-	A     store.Account
-	Pkg   store.Package
-	State string
+	A         store.Account
+	Pkg       store.Package
+	State     string
+	Router    string
+	Seen      string
+	Sync      string
+	SyncCls   string
+	Online    bool
+	New       bool // created in the last 7 days
+	Expiring7 bool
 }
 
 func (s *Server) adminAccounts(w http.ResponseWriter, r *http.Request) {
 	p := s.page(r, "accounts")
 	now := s.svc.Now()
-	var rows []acctRow
 	sc := s.scopeOf(r)
+	live := map[string]bool{}
+	for _, row := range s.liveRows(sc).Rows {
+		if row.Kind == "flat" {
+			live[row.SiteID+"/"+row.Code] = true
+		}
+	}
+	names := map[string]string{}
+	for _, st := range sc.Sites {
+		names[st.ID] = st.Name
+	}
+	tab := r.URL.Query().Get("tab")
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	var all []acctRow
 	s.st.View(func(d *store.Data) {
 		for _, a := range d.AccountList() {
 			if !sc.Has(a.SiteID) {
 				continue
 			}
-			rows = append(rows, acctRow{a, d.Packages[a.PackageID], billing.AccountState(a, now)})
+			row := acctRow{A: a, Pkg: d.Packages[a.PackageID], State: billing.AccountState(a, now), Router: names[a.SiteID], Online: live[a.SiteID+"/"+a.Code]}
+			row.New = now.Sub(a.CreatedAt) < 7*24*time.Hour
+			row.Expiring7 = row.State == billing.StateActive && a.ExpiresAt.Sub(now) <= 7*24*time.Hour
+			all = append(all, row)
 		}
 	})
-	p.Data["Rows"] = rows
+	var atRisk int
+	for i := range all {
+		rs := s.svc.AccountRouterState(all[i].A.ID)
+		switch {
+		case rs.PendingTask:
+			all[i].Sync, all[i].SyncCls = "pending", "pending"
+		case !rs.InSync:
+			all[i].Sync, all[i].SyncCls = "drift", "drift"
+		default:
+			all[i].Sync, all[i].SyncCls = "in sync", "synced"
+		}
+		switch {
+		case all[i].Online:
+			all[i].Seen = "online now"
+		case !rs.LastSeen.IsZero():
+			all[i].Seen = shortAge(now.Sub(rs.LastSeen)) + " ago"
+			if all[i].State == billing.StateActive && now.Sub(rs.LastSeen) > 7*24*time.Hour {
+				atRisk++
+			}
+		}
+	}
+	cnt := map[string]int{"all": len(all)}
+	var online, expiring, fresh int
+	var rows []acctRow
+	for _, x := range all {
+		cnt[x.State]++
+		if x.A.MACConflict {
+			cnt["conflict"]++
+		}
+		if x.New {
+			cnt["new7"]++
+			fresh++
+		}
+		if x.Online {
+			online++
+		}
+		if x.Expiring7 {
+			expiring++
+		}
+		ok := true
+		switch tab {
+		case "active", "expired", "suspended":
+			ok = x.State == tab
+		case "new":
+			ok = x.State == billing.StateNew
+		case "conflict":
+			ok = x.A.MACConflict
+		}
+		if ok && q != "" {
+			ok = store.ContainsFold(x.A.Flat, q) || store.ContainsFold(x.A.Tenant, q) || strings.EqualFold(x.A.Code, q) || store.ContainsFold(x.A.MAC, q) || strings.Contains(x.A.Phone, q)
+		}
+		if ok {
+			rows = append(rows, x)
+		}
+	}
+	if tab == "" {
+		tab = "all"
+	}
+	p.Data["Rows"], p.Data["Tab"], p.Data["Cnt"], p.Data["Q"] = rows, tab, cnt, q
+	p.Data["Total"], p.Data["Online"], p.Data["Expiring"], p.Data["Fresh"], p.Data["AtRisk"] = len(all), online, expiring, fresh, atRisk
 	p.Data["FormMAC"] = r.URL.Query().Get("mac")
 	p.Data["FormFlat"] = r.URL.Query().Get("flat")
+	p.Data["FormSite"] = r.URL.Query().Get("site")
 	s.render(w, "admin_accounts", p)
 }
 
-func (s *Server) adminAccountCreate(w http.ResponseWriter, r *http.Request) {
-	a, err := s.svc.CreateAccount(billing.AccountInput{
-		Flat: r.PostFormValue("flat"), MAC: r.PostFormValue("mac"), Tenant: r.PostFormValue("tenant"),
-		Phone: r.PostFormValue("phone"), Notes: r.PostFormValue("notes"), SiteID: s.siteFor(r),
-		WhatsApp: r.PostFormValue("whatsapp"), WASamePhone: r.PostFormValue("wa_same") == "1",
-	})
+// customerForm is everything the Add customer form can say.
+type customerForm struct {
+	SiteID, Flat, Tenant, Phone, WhatsApp, MAC, PackageID, Notes string
+	WASame, Activate                                             bool
+}
+
+func customerFormOf(r *http.Request, site string) customerForm {
+	f := func(k string) string { return strings.TrimSpace(r.PostFormValue(k)) }
+	return customerForm{SiteID: site, Flat: f("flat"), Tenant: f("tenant"), Phone: f("phone"), WhatsApp: f("whatsapp"), MAC: f("mac"),
+		PackageID: f("package"), Notes: f("notes"), WASame: r.PostFormValue("wa_same") == "1", Activate: r.PostFormValue("activate") == "1"}
+}
+
+// createCustomer is the single place the web admin creates a customer account.
+// W5c: replace the body with one call to billing.CreateCustomer(ctx,
+// CustomerInput{SiteID, Flat, Tenant, Phone, MAC, PackageID, Activate, Note});
+// the form, the JSON answer and the status poll stay as they are.
+func (s *Server) createCustomer(ctx context.Context, in customerForm) (store.Account, error) {
+	if in.SiteID == "" {
+		return store.Account{}, errors.New("choose a router")
+	}
+	if in.Activate && in.PackageID == "" {
+		return store.Account{}, errors.New("choose a plan to activate")
+	}
+	var a store.Account
+	var err error
+	if in.PackageID != "" {
+		a, err = s.svc.CreateFromDevice(ctx, billing.DeviceAccountInput{SiteID: in.SiteID, MAC: in.MAC, Flat: in.Flat, Tenant: in.Tenant, Phone: in.Phone, PackageID: in.PackageID})
+		if err == nil && (in.Notes != "" || in.WhatsApp != "" || in.WASame) {
+			_ = s.svc.UpdateAccount(a.ID, a.Flat, a.Tenant, a.Phone, in.Notes)
+			_ = s.svc.SetWhatsApp(a.ID, in.WhatsApp, in.WASame, false)
+		}
+	} else {
+		a, err = s.svc.CreateAccount(billing.AccountInput{Flat: in.Flat, MAC: in.MAC, Tenant: in.Tenant, Phone: in.Phone, Notes: in.Notes, SiteID: in.SiteID,
+			WhatsApp: in.WhatsApp, WASamePhone: in.WASame})
+	}
 	if err != nil {
-		s.back(w, r, "/admin/accounts?mac="+url.QueryEscape(r.PostFormValue("mac"))+"&flat="+url.QueryEscape(r.PostFormValue("flat")), "Error: "+err.Error())
+		return store.Account{}, err
+	}
+	if in.Activate {
+		if err := s.svc.ExtendAccount(ctx, a.ID, in.PackageID, "activated when the account was added", false); err != nil {
+			return a, fmt.Errorf("the account was created but could not be activated: %w", err)
+		}
+		a, _ = s.svc.GetAccount(a.ID)
+	}
+	return a, nil
+}
+
+func (s *Server) adminAccountCreate(w http.ResponseWriter, r *http.Request) {
+	in := customerFormOf(r, s.siteFor(r))
+	a, err := s.createCustomer(r.Context(), in)
+	if wantsJSON(r) {
+		if err != nil && a.ID == "" {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		out := map[string]any{"ok": true, "id": a.ID, "code": a.Code, "flat": a.Flat, "url": s.accountURL(a.ID)}
+		if err != nil {
+			out["warning"] = err.Error()
+		}
+		writeJSON(w, http.StatusCreated, out)
+		return
+	}
+	if err != nil && a.ID == "" {
+		s.back(w, r, "/admin/accounts?mac="+url.QueryEscape(in.MAC)+"&flat="+url.QueryEscape(in.Flat), "Error: "+err.Error())
 		return
 	}
 	s.back(w, r, "/admin/accounts/view?code="+a.Code, "Account created: "+a.Flat+" ("+a.Code+")")
+}
+
+// adminAccountStatus is what the Add customer dialog polls after a create: has
+// the router caught up with the new account?
+func (s *Server) adminAccountStatus(w http.ResponseWriter, r *http.Request) {
+	a, ok := s.svc.GetAccount(r.URL.Query().Get("id"))
+	if !ok || !s.scopeOf(r).Has(a.SiteID) {
+		http.NotFound(w, r)
+		return
+	}
+	st, _ := s.siteByID(a.SiteID)
+	rs := s.svc.AccountRouterState(a.ID)
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	out := map[string]any{"in_sync": rs.InSync, "pending_task": rs.PendingTask, "lease_status": rs.LeaseStatus, "last_error": rs.LastError}
+	switch {
+	case !st.Runnable():
+		out["state"], out["done"], out["text"] = "wait", true, "Saved. Queued: the router has not joined yet, it applies when it does"
+	case rs.PendingTask && !s.siteOnline(ctx, a.SiteID):
+		out["state"], out["done"], out["text"] = "wait", true, "Queued: the router is offline, this applies automatically"
+	case rs.PendingTask || !rs.InSync:
+		out["state"], out["done"], out["text"] = "work", false, "Applying on the router"
+		if rs.LastError != "" {
+			out["text"] = "Applying on the router (" + rs.LastError + ")"
+		}
+	default:
+		out["state"], out["done"], out["text"] = "ok", true, "Provisioned on router"
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) adminAccount(w http.ResponseWriter, r *http.Request) {
@@ -329,6 +458,29 @@ func (s *Server) adminAccount(w http.ResponseWriter, r *http.Request) {
 			pkg = ep
 		}
 	})
+	tab := r.URL.Query().Get("tab")
+	if tab != "payments" && tab != "usage" && tab != "events" {
+		tab = "overview"
+	}
+	p.Data["Tab"] = tab
+	p.Detail, p.H1a, p.H1b, p.Lead = a.Flat, "Flat", a.Flat+".", ""
+	p.Label, p.Href, p.Group = "Subscribers", "/admin/accounts", "Customers"
+	var evs []store.Event
+	s.st.View(func(d *store.Data) {
+		for i := len(d.Events) - 1; i >= 0 && len(evs) < 60; i-- {
+			if d.Events[i].AccountID == a.ID {
+				evs = append(evs, d.Events[i])
+			}
+		}
+	})
+	p.Data["Events"] = evs
+	if col := s.mgr.Collector(a.SiteID); col != nil && tab == "usage" {
+		fr := col.BuildFlat(a.Code, metrics.PeriodMonth, s.svc.Now())
+		if fr.Found {
+			p.Data["Usage"] = fr.Row
+		}
+	}
+	p.Data["RS"] = s.svc.AccountRouterState(a.ID)
 	p.Data["A"], p.Data["Pkg"], p.Data["State"] = a, pkg, billing.AccountState(a, s.svc.Now())
 	p.Data["Payments"], p.Data["PkgMap"], p.Data["Pkgs"] = pays, pkgMap, pkgs
 	p.Data["AcctSite"] = p.Data["SiteNames"].(map[string]string)[a.SiteID]
@@ -473,6 +625,59 @@ func (s *Server) adminPayments(w http.ResponseWriter, r *http.Request) {
 			out = append(out, payRow{pay, a, d.Packages[pay.PackageID]})
 		}
 	})
+	// Ledger strip: money in today, this week, this month, and the tab counts.
+	now := s.svc.Now()
+	nowE := now.In(billing.EAT)
+	dayStart := time.Date(nowE.Year(), nowE.Month(), nowE.Day(), 0, 0, 0, 0, billing.EAT)
+	monthStart := time.Date(nowE.Year(), nowE.Month(), 1, 0, 0, 0, 0, billing.EAT)
+	var pToday, pWeek, pMonth, pMpesa int
+	pc := map[string]int{}
+	sc := s.scopeOf(r)
+	s.st.View(func(d *store.Data) {
+		for _, pay := range d.Payments {
+			if !sc.Has(pay.SiteID) && !(pay.SiteID == "" && pay.Status == store.PayUnmatched) {
+				continue
+			}
+			pc["all"]++
+			switch {
+			case pay.Status == store.PayUnmatched:
+				pc["unmatched"]++
+			case pay.Status == store.PayRefunded:
+				pc["refunded"]++
+			}
+			switch pay.Method {
+			case "mpesa", "cash", "voucher":
+				pc[pay.Method]++
+			}
+			if !countsAsRevenue(pay) {
+				continue
+			}
+			if !pay.PaidAt.Before(dayStart) {
+				pToday += pay.AmountKES
+			}
+			if !pay.PaidAt.Before(dayStart.AddDate(0, 0, -6)) {
+				pWeek += pay.AmountKES
+			}
+			if !pay.PaidAt.Before(monthStart) {
+				pMonth += pay.AmountKES
+				if pay.Method == "mpesa" {
+					pMpesa += pay.AmountKES
+				}
+			}
+		}
+	})
+	share := 0
+	if pMonth > 0 {
+		share = 100 * pMpesa / pMonth
+	}
+	ptab := "all"
+	switch {
+	case form.Status == "unmatched" || form.Status == "refunded":
+		ptab = form.Status
+	case form.Method == "mpesa" || form.Method == "cash" || form.Method == "voucher":
+		ptab = form.Method
+	}
+	p.Data["PToday"], p.Data["PWeek"], p.Data["PMonth"], p.Data["PShare"], p.Data["PCnt"], p.Data["PTab"] = pToday, pWeek, pMonth, share, pc, ptab
 	p.Data["Rows"], p.Data["Status"], p.Data["F"], p.Data["Tot"] = out, form.Status, form, tot
 	p.Data["Methods"], p.Data["Total"], p.Data["Limit"] = s.paymentMethods(), len(rows), limit
 	p.Data["Query"] = r.URL.RawQuery
@@ -630,7 +835,51 @@ func (s *Server) adminMarkPaid(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminPackages(w http.ResponseWriter, r *http.Request) {
 	p := s.page(r, "packages")
-	s.st.View(func(d *store.Data) { p.Data["Pkgs"] = d.PackageList() })
+	tab := r.URL.Query().Get("tab")
+	if tab == "" {
+		tab = "all"
+	}
+	cnt := map[string]int{}
+	subs := map[string]int{}
+	var shown []store.Package
+	var active, disabled, subTotal int
+	now := s.svc.Now()
+	s.st.View(func(d *store.Data) {
+		for _, a := range d.Accounts {
+			if a.PackageID != "" && billing.AccountState(a, now) == "active" {
+				subs[a.PackageID]++
+				subTotal++
+			}
+		}
+		for _, pk := range d.PackageList() {
+			if pk.Deleted {
+				continue
+			}
+			quick := pk.DurationMin < 28*24*60
+			kinds := []string{"all"}
+			if pk.Disabled {
+				disabled++
+				kinds = append(kinds, "disabled")
+			} else {
+				active++
+			}
+			if quick {
+				kinds = append(kinds, "quick")
+			} else {
+				kinds = append(kinds, "monthly")
+			}
+			match := false
+			for _, k := range kinds {
+				cnt[k]++
+				match = match || k == tab
+			}
+			if match {
+				shown = append(shown, pk)
+			}
+		}
+	})
+	p.Data["Pkgs"], p.Data["Tab"], p.Data["Cnt"] = shown, tab, cnt
+	p.Data["PActive"], p.Data["PDisabled"], p.Data["PSubs"], p.Data["PSubMap"] = active, disabled, subTotal, subs
 	s.render(w, "admin_packages", p)
 }
 

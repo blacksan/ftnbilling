@@ -5,13 +5,16 @@ import (
 	"strings"
 )
 
-// Content-Security-Policy values. The sign-in pages and the API run no inline script
-// (only /static scripts). The rest of the admin pages and the portal still carry small inline
-// scripts and handlers (theme switch, building picker, polling), so those keep
-// 'unsafe-inline' for script; everything else is limited to this site.
+// Content-Security-Policy values. The sign-in pages, the API and every admin page run no
+// inline script and no inline handler (only /static scripts; the admin pages keep inline
+// styles for small layout tweaks). The tenant portal and its payment pages still carry
+// small inline scripts, so those keep 'unsafe-inline' for script. Everything is limited
+// to this site: no external script, style, font, image or connection.
 const (
 	cspStrict = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
-	cspPages  = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; " +
+	cspAdmin  = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; " +
+		"connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+	cspPages = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; " +
 		"connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
 )
 
@@ -30,6 +33,10 @@ func (s *Server) securityHeaders(h http.Header, r *http.Request) {
 	p := r.URL.Path
 	if strings.HasPrefix(p, "/admin/login") || strings.HasPrefix(p, "/admin/security/enrol") || strings.HasPrefix(p, "/api/v1") {
 		h.Set("Content-Security-Policy", cspStrict)
+		return
+	}
+	if strings.HasPrefix(p, "/admin") {
+		h.Set("Content-Security-Policy", cspAdmin)
 		return
 	}
 	h.Set("Content-Security-Policy", cspPages)

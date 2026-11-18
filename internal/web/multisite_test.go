@@ -77,6 +77,11 @@ func newMultiOps(t *testing.T, mut func(*config.Config), mkOps func(cfg config.C
 	}
 	st, _ := storetest.Open(t, cfg.DataDir)
 	logs := &syncBuf{}
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Log(logs.String())
+		}
+	})
 	log := slog.New(slog.NewTextHandler(logs, nil))
 	m := &multi{mocks: map[string]*routeros.Mock{}, logs: logs}
 	var mu sync.Mutex
@@ -163,7 +168,7 @@ func TestAdminSwitcherFiltersLists(t *testing.T) {
 	m.svc.CreateAccount(billing.AccountInput{SiteID: B.ID, Flat: "Flat B2", MAC: "AA:BB:CC:00:00:02"})
 
 	html := m.adminGet(t, "/admin/accounts") // no cookie, two buildings: all
-	for _, f := range []string{"Flat A1", "Flat B1", "Flat B2", "<th>Building</th>", "All buildings"} {
+	for _, f := range []string{"Flat A1", "Flat B1", "Flat B2", "<th>Router</th>"} {
 		if !strings.Contains(html, f) {
 			t.Errorf("all view lacks %q", f)
 		}
@@ -399,18 +404,18 @@ func TestVoucherFromAnotherBuildingIsRefused(t *testing.T) {
 
 func TestBuildingPages(t *testing.T) {
 	m := newMulti(t)
-	if h := m.adminGet(t, "/admin/routers"); !strings.Contains(h, "No buildings yet") {
+	if h := m.adminGet(t, "/admin/routers"); !strings.Contains(h, "No routers linked yet") {
 		t.Fatal("empty list")
 	}
-	if h := m.adminGet(t, "/admin/routers/new"); !strings.Contains(h, "Add building") {
+	if h := m.adminGet(t, "/admin/routers/new"); !strings.Contains(h, "Add router") {
 		t.Fatal("new page")
 	}
 	loc := m.adminPost(t, "/admin/sites/create", url.Values{"name": {"Delta Court"}, "support": {"0711000000"}})
-	if !strings.Contains(loc, "/admin/sites/view?id=") {
+	if !strings.Contains(loc, "/admin/routers/view?id=") {
 		t.Fatalf("create: %s", loc)
 	}
-	id := strings.TrimPrefix(strings.SplitN(loc, "&msg", 2)[0], "/admin/sites/view?id=")
-	if h := m.adminGet(t, "/admin/routers/view?id="+id); !strings.Contains(h, "Delta Court") || !strings.Contains(h, "Make the join command") {
+	id := strings.TrimPrefix(strings.SplitN(loc, "&", 2)[0], "/admin/routers/view?id=")
+	if h := m.adminGet(t, "/admin/routers/view?id="+id+"&tab=setup"); !strings.Contains(h, "Delta Court") || !strings.Contains(h, "Make the join line") {
 		t.Fatal("view page")
 	}
 	if h := m.adminGet(t, "/admin/routers/status.json?id="+id); !strings.Contains(h, `"token":"none"`) {

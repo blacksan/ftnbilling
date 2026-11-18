@@ -89,7 +89,7 @@ func (s *Server) adminSearch(w http.ResponseWriter, r *http.Request) {
 		case "payment":
 			to = "/admin/payments?q=" + url.QueryEscape(id)
 		case "building":
-			to = "/admin/sites/view?id=" + url.QueryEscape(id)
+			to = "/admin/routers/view?id=" + url.QueryEscape(id)
 		}
 		http.Redirect(w, r, to, http.StatusSeeOther)
 		return

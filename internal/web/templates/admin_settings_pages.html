@@ -20,7 +20,7 @@
 <label>Mode<select name="notice">{{$m := .Data.Notice.OutageNotice}}<option{{if eq $m "off"}} selected{{end}}>off</option><option{{if eq $m "manual"}} selected{{end}}>manual</option><option{{if eq $m "auto"}} selected{{end}}>auto</option></select></label>
 <label>Automatic after (minutes)<input type="number" name="auto_min" value="{{.Data.Notice.AutoMin}}" style="width:90px"></label><button>Save</button></form>
 <p class="muted">off: never; manual: you press a button on the alert; auto: sent after the outage lasts that long.</p></div>{{end}}
-</div>{{template "afoot"}}{{end}}
+</div>{{template "afoot" .}}{{end}}
 
 {{define "admin_settings_mpesa"}}{{template "ahead" .}}{{template "set_tabs" .}}
 <p class="muted">Safaricom Daraja. Changes apply at once. {{if not .Data.Enabled}}<b>M-Pesa is off until the consumer key, secret, shortcode and passkey are all set.</b>{{end}}</p>
@@ -39,9 +39,8 @@
 <form method="post" action="/admin/settings/mpesa/register-c2b" style="margin:6px 0"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button>Register the C2B URLs</button> <span class="muted">tells Daraja where to send Paybill payments</span></form>
 <form method="post" action="/admin/settings/mpesa/stk-test" class="row" style="margin:6px 0"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Your phone<input name="phone" placeholder="0712 345 678" autocomplete="off"></label><button>Send KES 1 prompt</button></form>
 {{if .Data.Production}}<p class="muted">Production: the KES 1 is real money. It is recorded as an unmatched payment noted "settings test".</p>{{end}}
-{{with .Data.Test}}<p id="stk" data-id="{{.CheckoutID}}"><b>Test payment:</b> <span id="stks" class="pill {{.Status}}">{{.Status}}</span> <span id="stkd">{{.Detail}}</span></p>
-<script>(function(){var id=document.getElementById('stk').dataset.id,n=0;function poll(){fetch('/admin/settings/mpesa/stk-test?id='+encodeURIComponent(id),{credentials:'same-origin'}).then(function(r){return r.json()}).then(function(j){document.getElementById('stks').textContent=j.status;document.getElementById('stkd').textContent=j.detail||(j.receipt?'receipt '+j.receipt:'');if(j.status==='pending'&&++n<15)setTimeout(poll,8000)})}poll()})()</script>{{end}}</div>
-</div>{{template "afoot"}}{{end}}
+{{with .Data.Test}}<p data-stk="{{.CheckoutID}}"><b>Test payment:</b> <span data-stk-status class="pill {{.Status}}">{{.Status}}</span> <span data-stk-detail>{{.Detail}}</span></p>{{end}}</div>
+</div>{{template "afoot" .}}{{end}}
 
 {{define "admin_settings_email"}}{{template "ahead" .}}{{template "set_tabs" .}}
 <p class="muted">Email for alerts, in addition to WhatsApp. Changes apply at once.</p>
@@ -49,32 +48,32 @@
 <div class="card"><b>Send a test email</b>
 {{if .Data.Configured}}<form method="post" action="/admin/settings/email/test" class="row" style="margin-top:6px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>To<input name="to" value="{{range $i, $r := .Data.Recipients}}{{if eq $i 0}}{{$r}}{{end}}{{end}}" autocomplete="off"></label><button>Send test</button></form>
 {{else}}<p class="muted">Save the mail server and the From address first.</p>{{end}}</div>
-{{template "afoot"}}{{end}}
+{{template "afoot" .}}{{end}}
 
 {{define "admin_settings_equipment"}}{{template "ahead" .}}{{template "set_tabs" .}}
 <div class="card"><b>Import ONT list</b><p class="muted">One per line: <code>kind,serial,mac,model</code> (for example <code>ont,ZTEG12345678,AA:BB:CC:DD:EE:FF,F601</code>).</p>
 <form method="post" action="/admin/equipment/import"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="next" value="/admin/settings/equipment"><textarea name="lines" rows="4" style="width:100%" placeholder="ont,ZTEG12345678,AA:BB:CC:DD:EE:FF,F601"></textarea><div style="margin-top:6px"><button>Import</button></div></form></div>
-<div class="card"><b>Find a MAC address</b><p class="muted">Asks every connected building's router: hotspot hosts and DHCP leases. Each building gets 5 seconds.</p>
+<div class="card"><b>Find a MAC address</b><p class="muted">Asks every connected router's router: hotspot hosts and DHCP leases. Each router gets 5 seconds.</p>
 <form method="get" action="/admin/settings/equipment/find" class="row"><label>MAC address<input name="mac" value="{{.Data.MAC}}" placeholder="AA:BB:CC:DD:EE:FF" autocomplete="off"></label><button>Find</button></form>
-{{if .Data.Searched}}{{if .Data.Found}}<table style="margin-top:8px"><tr><th>Building</th><th>IP</th><th>Name</th><th>State</th><th>Seen in</th></tr>{{range .Data.Found}}<tr><td>{{.Site}}</td><td>{{.IP}}</td><td>{{.Host}}</td><td>{{if .State}}{{.State}}{{else if .Authorized}}logged in{{end}}</td><td>{{.Source}}</td></tr>{{end}}</table>{{else}}<p class="muted">Not seen on any router.{{if .Data.FindNote}} {{.Data.FindNote}}{{end}}</p>{{end}}{{end}}</div>
-<div class="card"><b>Unassigned ONTs with a MAC address</b>{{if .Data.Rows}}<table><tr><th>MAC</th><th>Serial</th><th>Model</th><th>Building</th><th>Status</th></tr>{{range .Data.Rows}}<tr><td><a href="/admin/settings/equipment/find?mac={{.E.MAC}}">{{.E.MAC}}</a></td><td>{{.E.Serial}}</td><td>{{.E.Model}}</td><td>{{.Site}}</td><td>{{.E.Status}}</td></tr>{{end}}</table>{{else}}<p class="muted">None.</p>{{end}}</div>
-{{template "afoot"}}{{end}}
+{{if .Data.Searched}}{{if .Data.Found}}<table style="margin-top:8px"><tr><th>Router</th><th>IP</th><th>Name</th><th>State</th><th>Seen in</th></tr>{{range .Data.Found}}<tr><td>{{.Site}}</td><td>{{.IP}}</td><td>{{.Host}}</td><td>{{if .State}}{{.State}}{{else if .Authorized}}logged in{{end}}</td><td>{{.Source}}</td></tr>{{end}}</table>{{else}}<p class="muted">Not seen on any router.{{if .Data.FindNote}} {{.Data.FindNote}}{{end}}</p>{{end}}{{end}}</div>
+<div class="card"><b>Unassigned ONTs with a MAC address</b>{{if .Data.Rows}}<table><tr><th>MAC</th><th>Serial</th><th>Model</th><th>Router</th><th>Status</th></tr>{{range .Data.Rows}}<tr><td><a href="/admin/settings/equipment/find?mac={{.E.MAC}}">{{.E.MAC}}</a></td><td>{{.E.Serial}}</td><td>{{.E.Model}}</td><td>{{.Site}}</td><td>{{.E.Status}}</td></tr>{{end}}</table>{{else}}<p class="muted">None.</p>{{end}}</div>
+{{template "afoot" .}}{{end}}
 
 {{define "admin_tools"}}{{template "ahead" .}}{{template "set_tabs" .}}
-{{if not .Data.Sites}}<div class="card muted">No connected building yet. Tools run on a building's router.</div>{{else}}
-<p class="muted">Ping and traceroute run from the building's router, or from this server (then the building choice is ignored); From: router means the selected building's router. Targets must be a plain IP address or host name.</p>
+{{if not .Data.Sites}}<div class="card muted">No connected router yet. Tools run on a router's router.</div>{{else}}
+<p class="muted">Ping and traceroute run from the router's router, or from this server (then the router choice is ignored); From: router means the selected router's router. Targets must be a plain IP address or host name.</p>
 <div class="grid2">
 <div class="card"><b>Ping</b><form method="post" action="/admin/tools/ping" class="row" style="margin-top:6px"><input type="hidden" name="_csrf" value="{{.CSRF}}">
-<label>Building<select name="site">{{range .Data.Sites}}<option value="{{.ID}}"{{if eq .ID $.Data.SiteID}} selected{{end}}>{{.Name}}</option>{{end}}</select></label><label>From<select name="from"><option value="router"{{if ne $.Data.From "server"}} selected{{end}}>router</option><option value="server"{{if eq $.Data.From "server"}} selected{{end}}>this server</option></select></label><label>Target<input name="target" value="8.8.8.8" autocomplete="off"></label><button>Ping</button></form></div>
+<label>Router<select name="site">{{range .Data.Sites}}<option value="{{.ID}}"{{if eq .ID $.Data.SiteID}} selected{{end}}>{{.Name}}</option>{{end}}</select></label><label>From<select name="from"><option value="router"{{if ne $.Data.From "server"}} selected{{end}}>router</option><option value="server"{{if eq $.Data.From "server"}} selected{{end}}>this server</option></select></label><label>Target<input name="target" value="8.8.8.8" autocomplete="off"></label><button>Ping</button></form></div>
 <div class="card"><b>Traceroute</b><form method="post" action="/admin/tools/traceroute" class="row" style="margin-top:6px"><input type="hidden" name="_csrf" value="{{.CSRF}}">
-<label>Building<select name="site">{{range .Data.Sites}}<option value="{{.ID}}"{{if eq .ID $.Data.SiteID}} selected{{end}}>{{.Name}}</option>{{end}}</select></label><label>From<select name="from"><option value="router"{{if ne $.Data.From "server"}} selected{{end}}>router</option><option value="server"{{if eq $.Data.From "server"}} selected{{end}}>this server</option></select></label><label>Target<input name="target" value="8.8.8.8" autocomplete="off"></label><button>Trace</button></form></div>
+<label>Router<select name="site">{{range .Data.Sites}}<option value="{{.ID}}"{{if eq .ID $.Data.SiteID}} selected{{end}}>{{.Name}}</option>{{end}}</select></label><label>From<select name="from"><option value="router"{{if ne $.Data.From "server"}} selected{{end}}>router</option><option value="server"{{if eq $.Data.From "server"}} selected{{end}}>this server</option></select></label><label>Target<input name="target" value="8.8.8.8" autocomplete="off"></label><button>Trace</button></form></div>
 </div>
 {{with .Data.Result}}<div class="card"><b>{{.Tool}}</b> {{.Target}} <span class="muted">on {{.Site}}, {{eat .Ran}}</span>
 {{if .Err}}<p class="bad">{{.Err}}</p>{{end}}
 {{if .Hops}}<table><tr><th class="n">Hop</th><th>Address</th><th class="n">Loss</th><th class="n">Sent</th><th class="n">Last</th><th class="n">Avg</th><th class="n">Best</th><th class="n">Worst</th></tr>{{range .Hops}}<tr><td class="n">{{.N}}</td><td>{{.Address}}</td><td class="n">{{.Loss}}</td><td class="n">{{.Sent}}</td><td class="n">{{.Last}}</td><td class="n">{{.Avg}}</td><td class="n">{{.Best}}</td><td class="n">{{.Worst}}</td></tr>{{end}}</table>{{end}}
 {{if .Output}}<pre class="out">{{.Output}}</pre>{{end}}</div>{{end}}
-<div class="card"><b>Router console</b><p class="muted">One plain RouterOS command, such as <code>/ip address print where interface=ether1</code>. No scripting: <code>; [ ] { } $ :</code> and quotes with those inside are refused. Read-only commands (print, get, monitor ... once, export, ping, tool traceroute) run at once; print always shows one line per item with secret values hidden. add, set, remove, enable, disable, reset-counters, reboot and shutdown need the building name and your password (the router itself refuses reboot and shutdown). Users, scripts, the scheduler, services, certificates, WireGuard changes, files and secrets are never run. Every submission is logged (command with secrets masked, outcome, size; never the output).</p>
+<div class="card"><b>Router console</b><p class="muted">One plain RouterOS command, such as <code>/ip address print where interface=ether1</code>. No scripting: <code>; [ ] { } $ :</code> and quotes with those inside are refused. Read-only commands (print, get, monitor ... once, export, ping, tool traceroute) run at once; print always shows one line per item with secret values hidden. add, set, remove, enable, disable, reset-counters, reboot and shutdown need the router name and your password (the router itself refuses reboot and shutdown). Users, scripts, the scheduler, services, certificates, WireGuard changes, files and secrets are never run. Every submission is logged (command with secrets masked, outcome, size; never the output).</p>
 <form method="post" action="/admin/tools/console"><input type="hidden" name="_csrf" value="{{.CSRF}}">
-<div class="row"><label>Building<select name="site">{{range .Data.Sites}}<option value="{{.ID}}"{{if eq .ID $.Data.SiteID}} selected{{end}}>{{.Name}}</option>{{end}}</select></label><label style="flex:1">Command<input name="cmd" value="{{.Data.Cmd}}" style="width:100%;font-family:monospace" placeholder="/ip/dhcp-server/lease/print" autocomplete="off"></label></div>
-<div class="row" style="margin-top:8px"><label>To change something: type the building name<input name="confirm_site" autocomplete="off"></label><label>Current admin password<input type="password" name="current_password" autocomplete="current-password"></label><button>Run</button></div></form></div>{{end}}
-{{template "afoot"}}{{end}}
+<div class="row"><label>Router<select name="site">{{range .Data.Sites}}<option value="{{.ID}}"{{if eq .ID $.Data.SiteID}} selected{{end}}>{{.Name}}</option>{{end}}</select></label><label style="flex:1">Command<input name="cmd" value="{{.Data.Cmd}}" style="width:100%;font-family:monospace" placeholder="/ip/dhcp-server/lease/print" autocomplete="off"></label></div>
+<div class="row" style="margin-top:8px"><label>To change something: type the router name<input name="confirm_site" autocomplete="off"></label><label>Current admin password<input type="password" name="current_password" autocomplete="current-password"></label><button>Run</button></div></form></div>{{end}}
+{{template "afoot" .}}{{end}}

@@ -44,7 +44,7 @@
 <label>Role<select name="role">{{range .Data.Roles}}<option{{if eq . "operator"}} selected{{end}}>{{.}}</option>{{end}}</select></label>
 <label>Password for them (12 or more)<input type="password" name="password" autocomplete="new-password" required></label>
 <label>Your password<input type="password" name="current_password" autocomplete="current-password" required></label><label>Authenticator code<input type="text" name="totp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" size="9" required></label><button>Create</button></form>
-<p class="muted">Viewer reads. Operator also records payments and edits customers and accounts. Owner also manages settings, buildings' router set-up, users and national IDs. A setup code is shown once; they use it at their first sign-in.</p></div>
+<p class="muted">Viewer reads. Operator also records payments and edits customers and accounts. Owner also manages settings, routers' router set-up, users and national IDs. A setup code is shown once; they use it at their first sign-in.</p></div>
 
 <h3>Audit log</h3>
 <div class="tw"><table><tr><th>Time</th><th>Who</th><th>From</th><th>What</th></tr>
