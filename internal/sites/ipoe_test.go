@@ -61,10 +61,14 @@ func TestJoinStageIsJoinOnly(t *testing.T) {
 	if !strings.Contains(out, "private-key=") || !strings.Contains(out, got.RESTPass) || !strings.Contains(out, "stage: join") {
 		t.Fatal("join stage lacks its keys")
 	}
-	for _, bad := range []string{"/ip/hotspot/profile", "/ip/dhcp-server add", "/ip/pool", "walled-garden", "/tool/fetch", "/interface/bridge"} {
+	for _, bad := range []string{"/ip/hotspot/profile", "/ip/dhcp-server add", "/ip/pool", "walled-garden", "/interface/bridge", "traffic-flow"} {
 		if strings.Contains(out, bad) {
 			t.Errorf("join-only script touches %s", bad)
 		}
+	}
+	// The only fetch is the report to the server.
+	if strings.Count(out, "/tool/fetch") != 2 || !strings.Contains(out, "/report\"") {
+		t.Error("join-only script may fetch only to POST its report (success path and error path)")
 	}
 	// The stage's command is its own file.
 	if !strings.Contains(out, `/file remove [find where name="ftn-join.rsc"]`) {

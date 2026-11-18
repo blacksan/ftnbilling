@@ -173,6 +173,7 @@ func (m *Manager) ConsumeJoinForce(token, userAgent, from string, noCheck bool, 
 		return nil, "", ErrJoinInvalid
 	}
 	if m.cfg.JoinRequireMikrotikUA && !routerUserAgent(userAgent) {
+		m.noteRefusedUA(token, userAgent) // a valid token turned away for its User-Agent shows on the building page
 		return nil, "", ErrJoinInvalid
 	}
 	if !strings.HasPrefix(token, stagePrefix(stage)) || (stagePrefix(stage) == "" && (strings.HasPrefix(token, "cut.") || strings.HasPrefix(token, "cln."))) {
@@ -224,6 +225,8 @@ func (m *Manager) ConsumeJoinForce(token, userAgent, from string, noCheck bool, 
 			return ErrJoinInvalid
 		}
 		if stage == StageCutover || stage == StageCleanup {
+			stageROS.Store(site.ID, ROSVersionFromUA(userAgent)) // read by renderStage (see joinreport.go)
+			defer stageROS.Delete(site.ID)
 			return m.renderLaterStage(d, site, stage, now, from, noCheck, force, &script, &siteID)
 		}
 		priv, pub, err := wg.GenerateKeypair()
@@ -243,12 +246,13 @@ func (m *Manager) ConsumeJoinForce(token, userAgent, from string, noCheck bool, 
 			}
 			site.TunnelIP = ip
 		}
+		m.refused.clear(site.ID)
 		site.Join.UsedAt, site.Join.UsedFrom = now, from
 		site.JoinedAt = time.Time{} // the next successful ping marks it joined again
 		script, err = RenderJoinScript(ScriptInput{
 			Site: ApplyDefaults(m.cfg, site), PrivateKey: priv, RESTPass: pass, ServerPub: m.cfg.WGPublicKey,
 			Endpoint: m.cfg.WGEndpoint, WGSubnet: m.pfx, PublicBase: m.cfg.PublicBaseURL, PublicIP: m.cfg.PublicIP, Generated: now, NoCheck: noCheck,
-			Stage: stage,
+			Stage: stage, ROSVersion: ROSVersionFromUA(userAgent), Token: token,
 		})
 		if err != nil {
 			return fmt.Errorf("could not render the join script: %w", err)
@@ -303,6 +307,10 @@ type SiteStatus struct {
 	RESTOK       bool       `json:"rest_ok"`
 	RESTErr      string     `json:"rest_err,omitempty"`
 	Joined       bool       `json:"joined"`
+	// RefusedUA / RefusedAt: a fetch with this building's valid join token was
+	// turned away because its User-Agent is not a RouterOS fetch's.
+	RefusedUA string    `json:"refused_ua,omitempty"`
+	RefusedAt time.Time `json:"refused_at,omitempty"`
 }
 
 // TokenStateOf classifies a stored token.

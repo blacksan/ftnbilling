@@ -20,7 +20,7 @@ import (
 // router's users, or any service other than www.
 const (
 	// StageJoin brings the router to the server (WireGuard, tunnel firewall,
-	// REST user, traffic flow). No customer is affected.
+	// REST user, cutover kit). No customer is affected.
 	StageJoin = "join"
 	// StageCutover switches the flats from the hotspot to server-managed IPoE.
 	StageCutover = "cutover"
@@ -84,14 +84,13 @@ type stageData struct {
 	RollbackSource, TickSource      string
 	TickLen                         int
 	WaitNote                        string
+	ArpKinds                        []string // interface menus whose arp mode the switch changes
 }
 
-var stageFuncs = template.FuncMap{"rq": rq, "fw": fw}
-
 var (
-	ipoeJoinTmpl    = template.Must(template.New("ipoe_join").Funcs(stageFuncs).Option("missingkey=error").Parse(ipoeJoinSrc))
-	ipoeCutoverTmpl = template.Must(template.New("ipoe_cutover").Funcs(stageFuncs).Option("missingkey=error").Parse(ipoeCutoverSrc))
-	ipoeCleanupTmpl = template.Must(template.New("ipoe_cleanup").Funcs(stageFuncs).Option("missingkey=error").Parse(ipoeCleanupSrc))
+	ipoeJoinTmpl    = parseScript("ipoe_join", ipoeJoinSrc)
+	ipoeCutoverTmpl = parseScript("ipoe_cutover", ipoeCutoverSrc)
+	ipoeCleanupTmpl = parseScript("ipoe_cleanup", ipoeCleanupSrc)
 )
 
 // fwOn is fw for another table (the NAT table): the same guard, the same
@@ -173,6 +172,15 @@ func renderStage(in ScriptInput) ([]byte, error) {
 		CustomerNetwork: plan.Network, Gateway: plan.Gateway, GatewayCIDR: plan.GatewayIP, PoolFrom: plan.PoolFrom, PoolTo: plan.PoolTo,
 		OLTInterface: s.OLTInterface, WANList: s.WANList, HotspotServer: s.HotspotServer, HotspotProfile: HotspotProf,
 		PublicBase: strings.TrimRight(in.PublicBase, "/"), PublicIP: in.PublicIP, NetflowPort: 2055, NoCheck: in.NoCheck,
+		Token: in.Token, ROSVersion: in.ROSVersion, HTTPSBase: strings.HasPrefix(in.PublicBase, "https://"),
+	}
+	d.ReportPost = reportPostLine(d.PublicBase, in.Token, d.HTTPSBase, in.NoCheck)
+	d.fillKit(4, s.HotspotServer)
+	if in.ROSVersion == "" {
+		if v, ok := stageROS.Load(s.ID); ok {
+			in.ROSVersion = v.(string)
+		}
+		d.ROSVersion = in.ROSVersion
 	}
 	var tmpl *template.Template
 	switch in.Stage {
@@ -210,20 +218,21 @@ func renderStage(in ScriptInput) ([]byte, error) {
 		d.RollbackSource = rqs(rollbackBase(s.HotspotServer))
 		d.TickSource = rqs(tickSource())
 		d.TickLen = len(timerPrefix)
+		d.ArpKinds = []string{"bridge", "vlan", "ethernet"}
 		d.Filter, d.NAT = ipoeRules(plan, in.PublicIP, s.RESTPort)
 		tmpl = ipoeCutoverTmpl
 	case StageCleanup:
 		d.IsolateRule, d.BlockRestRule = isolateRule(), blockRestRule(s.RESTPort)
 		tmpl = ipoeCleanupTmpl
 	}
-	var b bytes.Buffer
-	if err := tmpl.Execute(&b, d); err != nil {
+	out, err := execScript(tmpl, in.ROSVersion, d)
+	if err != nil {
 		return nil, err
 	}
-	if bytes.Contains(b.Bytes(), []byte("{{")) || bytes.Contains(b.Bytes(), []byte("<no value>")) {
+	if bytes.Contains(out, []byte("{{")) || bytes.Contains(out, []byte("<no value>")) {
 		return nil, errors.New("join script: unrendered template text left in the output")
 	}
-	return b.Bytes(), nil
+	return out, nil
 }
 
 func isolateRule() string {

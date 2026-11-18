@@ -165,6 +165,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/portal", http.StatusFound) })
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /j/{token}", s.joinScript)
+	mux.HandleFunc("POST /j/{token}/report", s.joinReport)
 	s.portalRoutes(mux)
 	s.routerFileRoutes(mux)
 	s.callbackRoutes(mux)
