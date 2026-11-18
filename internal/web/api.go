@@ -279,6 +279,10 @@ func bearer(r *http.Request) string {
 }
 
 func (s *Server) idempotent(w http.ResponseWriter, r *http.Request, c *apiCtx, h apiFunc) {
+	if idemExempt(r) { // the answer holds a one-time secret: never stored, never replayed
+		h(w, r, c)
+		return
+	}
 	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	if key == "" {
 		h(w, r, c)

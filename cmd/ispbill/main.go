@@ -77,6 +77,8 @@ func run(log *slog.Logger) error {
 		OnJoined: func(siteID string) { svc.MarkProfilesDirty(siteID) },
 	})
 	svc = billing.NewService(st, mgr, log)
+	mgr.SetProvisioner(svc)
+	// TODO(merge): mgr.SetJobs(mgr.Jobs()) once W9's sites.ProvisionJobs / SetJobs is on this branch.
 	if err := svc.SetDataKey(cfg.DataKey); err != nil {
 		return fmt.Errorf("DATA_KEY: %w", err)
 	}

@@ -777,6 +777,21 @@ func (e *Engine) sendLocked(status, rule, building, detail, dedupe string, at ti
 	}
 }
 
+// Announce sends a one-off notice about a router (a setup job's outcome) to
+// the admins' WhatsApp and email targets, through the same channels and
+// templates as an alert. dedupe keeps a retried call from sending twice (an
+// empty dedupe is never deduplicated). A mute does not hold a notice back:
+// it reports something that happened once, not a condition.
+func (e *Engine) Announce(siteID, text, dedupe string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	d := ""
+	if dedupe != "" {
+		d = "announce:" + dedupe
+	}
+	e.sendLocked("NOTICE", "Router setup", e.siteName(siteID), text, d, e.now(), siteID)
+}
+
 // TestMessage is the message the Test button sends on one channel (never deduped).
 func (e *Engine) TestMessage(channel string) (notify.Message, bool) {
 	e.mu.Lock()

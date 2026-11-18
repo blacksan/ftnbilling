@@ -61,6 +61,8 @@ type Manager struct {
 
 	chk          checksState   // cache of the setup checks (checks.go)
 	autoFixDelay time.Duration // wait after the first answer before the post-join fixes (runtime.go)
+
+	prov provMgr // router provisioning job (provision_job.go)
 }
 
 // SetForeignIPs lets the billing service tell the cutover which addresses the
@@ -124,6 +126,7 @@ func (m *Manager) Start(ctx context.Context) {
 		m.startLocked(s)
 	}
 	m.reloadMu.Unlock()
+	m.resumeProvisioning()
 	if addr := m.cfg.NetflowAddr; addr != "" && !strings.EqualFold(addr, "off") && !m.cfg.RouterMock {
 		m.wg.Add(1)
 		go func() {

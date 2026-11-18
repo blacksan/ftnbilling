@@ -243,11 +243,18 @@ func (s *Server) apiAccountCreate(w http.ResponseWriter, r *http.Request, c *api
 		Tenant string `json:"tenant"`
 		Phone  string `json:"phone"`
 		Notes  string `json:"notes"`
+		// Extended body (v4): one form for the whole customer.
+		PackageID string `json:"package_id"`
+		Activate  bool   `json:"activate"`
+		Note      string `json:"note"`
 	}
 	if !decode(w, r, &req, false) {
 		return
 	}
 	fields := map[string]string{}
+	if req.Activate && req.PackageID == "" {
+		fields["package_id"] = "choose a package to activate"
+	}
 	if strings.TrimSpace(req.SiteID) == "" {
 		fields["site_id"] = "choose a router"
 	} else if !s.siteExists(req.SiteID) {
@@ -264,7 +271,12 @@ func (s *Server) apiAccountCreate(w http.ResponseWriter, r *http.Request, c *api
 		validationErr(w, fields)
 		return
 	}
-	a, err := s.svc.CreateAccount(billing.AccountInput{SiteID: req.SiteID, Flat: req.Flat, MAC: mac, Tenant: req.Tenant, Phone: req.Phone, Notes: req.Notes})
+	note := req.Note
+	if note == "" {
+		note = req.Notes
+	}
+	a, _, err := s.svc.CreateCustomer(r.Context(), billing.AddCustomerInput{SiteID: req.SiteID, Flat: req.Flat, MAC: mac, Tenant: req.Tenant, Phone: req.Phone,
+		PackageID: req.PackageID, Activate: req.Activate, Note: note})
 	if err != nil {
 		s.billingErr(w, err, mac)
 		return
