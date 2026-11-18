@@ -60,7 +60,12 @@ class SetupViewModelsTest {
         routes["GET /api/v1/routers/s1"] = ok("""{"id":"s1","name":"Kilimani","access_mode":"hotspot"}""")
     }
 
-    @After fun tearDown() = server.shutdown()
+    @After fun tearDown() {
+        // Let responses still in flight land while the test Main dispatcher exists, so nothing leaks into the next test.
+        Thread.sleep(300)
+        main.dispatcher.scheduler.advanceUntilIdle()
+        server.shutdown()
+    }
 
     private fun ok(body: String) = MockResponse().setBody(body)
 
