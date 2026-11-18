@@ -396,7 +396,6 @@ Address = $WG_SERVER_IP/${WG_SUBNET#*/}
 ListenPort = $WG_PORT
 MTU = 1380
 PrivateKey = $(wg genkey)
-PostUp = $SBIN/$APP-wg-sync
 WGEOF
       )
     fi
@@ -454,6 +453,16 @@ AccuracySec=5s
 
 [Install]
 WantedBy=timers.target
+WGEOF
+  # Peers are re-applied after wg0 comes up by a systemd drop-in, not by a
+  # wg-quick PostUp hook: on Ubuntu 26.04 AppArmor confines wg-quick and refuses
+  # to run the helper ("Permission denied"). Older installs had the PostUp line.
+  if [ "$DRY" != 1 ] && grep -q "^PostUp = $SBIN/$APP-wg-sync" "$WG_CONF" 2>/dev/null; then
+    sed -i "\\#^PostUp = $SBIN/$APP-wg-sync\$#d" "$WG_CONF"
+  fi
+  writef 644 root:root /etc/systemd/system/wg-quick@$WG_IF.service.d/$APP.conf <<WGEOF
+[Service]
+ExecStartPost=$SBIN/$APP-wg-sync
 WGEOF
   run systemctl daemon-reload
   try systemctl enable wg-quick@$WG_IF
