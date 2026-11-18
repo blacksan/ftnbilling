@@ -149,7 +149,7 @@ EOF
   if [ "$noqr" = 0 ]; then
     if command -v "$QR" >/dev/null 2>&1; then
       echo
-      echo "Scan this with the WireGuard app (Add tunnel > Create from QR code):"
+      echo "Scan with FTN Admin or the WireGuard app (Add tunnel > Create from QR code):"
       "$QR" -t ansiutf8 <"$out" || echo "(could not draw the QR code; import the file instead)"
     else
       echo "(qrencode is not installed; import the file above instead)"
