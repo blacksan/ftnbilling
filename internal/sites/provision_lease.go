@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"ispbill/internal/routeros"
 	"ispbill/internal/store"
 )
 
@@ -43,6 +44,18 @@ func (t ProvTiming) leaseGrace() time.Duration {
 		return leaseGraceDefault
 	}
 	return t.LeaseGrace
+}
+func (t ProvTiming) leaseSweep() time.Duration {
+	if t.LeaseSweep <= 0 {
+		return time.Minute
+	}
+	return t.LeaseSweep
+}
+func (t ProvTiming) countdown() time.Duration {
+	if t.Countdown <= 0 {
+		return KitArmTicks * 30 * time.Second
+	}
+	return t.Countdown
 }
 func (t ProvTiming) leaseCap() time.Duration {
 	if t.LeaseCap <= 0 {
@@ -130,17 +143,23 @@ func parseROSDuration(v string) (time.Duration, bool) {
 
 func leaseKey(siteID string) string { return "site." + siteID + ".prov_lease" }
 
-func (m *Manager) loadLeaseOrig(siteID string) map[string]string {
+// leaseRec is what is kept of an old DHCP server before its lease time is shortened.
+type leaseRec struct {
+	Lease string `json:"lease"`
+	Iface string `json:"iface"` // the customer interface it served: the writer's scope when the time is put back
+}
+
+func (m *Manager) loadLeaseOrig(siteID string) map[string]leaseRec {
 	var raw string
 	m.st.View(func(d *store.Data) { raw = d.Settings[leaseKey(siteID)].Value })
-	out := map[string]string{}
+	out := map[string]leaseRec{}
 	if raw != "" {
 		_ = json.Unmarshal([]byte(raw), &out)
 	}
 	return out
 }
 
-func (m *Manager) saveLeaseOrig(siteID string, v map[string]string) {
+func (m *Manager) saveLeaseOrig(siteID string, v map[string]leaseRec) {
 	raw := ""
 	if len(v) > 0 {
 		b, _ := json.Marshal(v)
@@ -168,22 +187,31 @@ func (j *jobCtl) stepLeases() (string, error) {
 	short := j.tm.leaseShort()
 	shortD, _ := parseROSDuration(short)
 	orig := j.m.loadLeaseOrig(j.siteID)
+	recs := map[string]leaseRec{}
+	for k, v := range orig {
+		recs[k] = v
+	}
 	names := map[string]bool{}
 	var longest time.Duration
 	for _, r := range dh {
 		names[r["name"]] = true
 		cur := r["lease-time"]
-		if _, kept := orig[r["name"]]; !kept && cur != short {
+		if _, kept := recs[r["name"]]; !kept && cur != short {
 			if cur == "" {
 				cur = "10m" // the RouterOS default
 			}
-			orig[r["name"]] = cur
+			recs[r["name"]] = leaseRec{Lease: cur, Iface: r["interface"]}
 		}
-		if d, ok := parseROSDuration(orig[r["name"]]); ok && d > longest {
+		if d, ok := parseROSDuration(recs[r["name"]].Lease); ok && d > longest {
 			longest = d
 		}
 	}
-	j.m.saveLeaseOrig(j.siteID, orig)
+	// a lease longer than the job is willing to wait is the operator's to shorten: nothing is changed yet
+	if longest > j.tm.leaseCap() {
+		return "", fail(JobNeedsAction, "the old DHCP lease time is %s, longer than the %s this set-up can wait for. Shorten the old DHCP lease time to 60 minutes or less, wait for it to take effect, then run the set-up again",
+			longest.Round(time.Second), j.tm.leaseCap().Round(time.Second))
+	}
+	j.m.saveLeaseOrig(j.siteID, recs)
 	j.job.LongestLeaseSec = int(longest.Seconds())
 	j.save()
 	// what is running now: the longest time any bound lease has left
@@ -238,34 +266,113 @@ func (j *jobCtl) stepLeases() (string, error) {
 	return fmt.Sprintf("lease time of %d old server(s) set to %s, waited %s for the running leases to renew", len(dh), short, wait.Round(time.Second)), nil
 }
 
-// restoreLeases puts the old servers' lease times back (best effort; the setting stays until it worked).
-func (j *jobCtl) restoreLeases(ctx context.Context) {
+// restoreLeases puts the old servers' lease times back. The writer's scope is taken from what was saved
+// (the interface each server served), not from the job: a rollback request or the startup sweep has no
+// customer interface of its own. The setting stays until every server is back.
+func (j *jobCtl) restoreLeases(ctx context.Context) bool {
 	orig := j.m.loadLeaseOrig(j.siteID)
 	if len(orig) == 0 {
-		return
+		return true
 	}
 	if j.w == nil {
 		j.newWriter()
 	}
 	rows, err := j.rt.Rows(ctx, "/ip/dhcp-server", nil)
 	if err != nil {
-		return
+		return false
 	}
 	ok := true
 	for _, r := range rows {
-		want, has := orig[r["name"]]
-		if !has {
+		rec, has := orig[r["name"]]
+		if !has || r["lease-time"] == rec.Lease {
 			continue
 		}
-		if r["lease-time"] == want {
-			continue
+		if rec.Iface != "" && r["interface"] != rec.Iface {
+			continue // not the server we shortened any more
 		}
-		if err := j.w.set(ctx, "/ip/dhcp-server", r, map[string]string{"lease-time": want}); err != nil {
+		w := *j.w
+		w.sc.iface = r["interface"]
+		if err := w.set(ctx, "/ip/dhcp-server", r, map[string]string{"lease-time": rec.Lease}); err != nil {
 			ok = false
-			j.log("could not put the lease time of %s back to %s: %v", r["name"], want, err)
+			j.log("could not put the lease time of %s back to %s: %v", r["name"], rec.Lease, err)
 		}
 	}
 	if ok {
 		j.m.saveLeaseOrig(j.siteID, nil)
+	}
+	return ok
+}
+
+// ---- the sweep ----------------------------------------------------------------------------------
+
+// leaseSweeper puts lease times back when no job is around to do it (a rollback request, a restart,
+// a shutdown, an unreachable router, a rollback that took too long to be seen). It retries with a backoff.
+func (m *Manager) leaseSweeper(ctx context.Context) {
+	defer m.wg.Done()
+	for {
+		m.SweepLeases(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(m.timing().leaseSweep()):
+		}
+	}
+}
+
+// SweepLeases runs one pass: every building with saved lease times and no job running gets them restored.
+func (m *Manager) SweepLeases(ctx context.Context) {
+	var ids []string
+	m.st.View(func(d *store.Data) {
+		for id, s := range d.Sites {
+			if !s.Removed && d.Settings[leaseKey(id)].Value != "" {
+				ids = append(ids, id)
+			}
+		}
+	})
+	for _, id := range ids {
+		if ctx.Err() != nil {
+			return
+		}
+		m.sweepLeases(ctx, id)
+	}
+}
+
+func (m *Manager) sweepLeases(ctx context.Context, id string) {
+	m.prov.mu.Lock()
+	if m.prov.runs[id] != nil || time.Now().Before(m.prov.leaseNext[id]) {
+		m.prov.mu.Unlock()
+		return
+	}
+	m.prov.mu.Unlock()
+	var site store.Site
+	m.st.View(func(d *store.Data) { site = d.Sites[id] })
+	rt := m.Router(id)
+	j := &jobCtl{m: m, ctx: ctx, siteID: id, o: ProvOptions{Trigger: "lease-sweep", Actor: ActorSystem}, tm: m.timing(), rt: rt, release: func() {}}
+	j.site = m.Effective(site)
+	j.insp, _ = rt.(routeros.Inspector)
+	j.plan, _ = PlanSubnet(j.site.CustomerSubnet)
+	j.newWriter()
+	c, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	ok := j.restoreLeases(c)
+	m.prov.mu.Lock()
+	if m.prov.leaseNext == nil {
+		m.prov.leaseNext, m.prov.leaseTry = map[string]time.Time{}, map[string]int{}
+	}
+	if ok {
+		delete(m.prov.leaseNext, id)
+		delete(m.prov.leaseTry, id)
+	} else {
+		n := m.prov.leaseTry[id] + 1
+		m.prov.leaseTry[id] = n
+		back := 30 * time.Second << min(n, 5)
+		m.prov.leaseNext[id] = time.Now().Add(back)
+	}
+	m.prov.mu.Unlock()
+	if ok {
+		_ = m.st.Update(func(d *store.Data) error {
+			d.AddEvent(store.Event{Time: m.now(), SiteID: id, Kind: "audit", Msg: "router setup: the old DHCP lease times were put back"})
+			return nil
+		})
 	}
 }

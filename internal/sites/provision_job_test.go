@@ -228,7 +228,7 @@ func (a *announced) all() string           { a.mu.Lock(); defer a.mu.Unlock(); r
 func fastTiming() ProvTiming {
 	return ProvTiming{Poll: 3 * time.Millisecond, WaitRouter: 300 * time.Millisecond, Backup: 600 * time.Millisecond, Arm: 600 * time.Millisecond,
 		Evidence: 400 * time.Millisecond, OnlineWindow: 10 * time.Minute, JoinWindow: 30 * time.Minute, Rollback: 1500 * time.Millisecond,
-		LeaseShort: "1s", LeaseGrace: 20 * time.Millisecond, LeaseCap: 3 * time.Second}
+		LeaseShort: "1s", LeaseGrace: 20 * time.Millisecond, LeaseCap: 20 * time.Second, LeaseSweep: 20 * time.Millisecond, Countdown: 600 * time.Millisecond}
 }
 
 type provRig struct {

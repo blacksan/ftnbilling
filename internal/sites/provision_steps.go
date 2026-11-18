@@ -389,6 +389,7 @@ func (j *jobCtl) rearm() error {
 		}
 	}
 	j.job.DeadlineAt = j.m.now().Add(KitArmTicks * 30 * time.Second)
+	j.armDeadline = time.Now().Add(j.tm.countdown())
 	j.save()
 	return nil
 }
@@ -1125,33 +1126,67 @@ func (j *jobCtl) stepTelemetry() (string, error) {
 
 // ---- verify (release plan A1) -----------------------------------------------------------------
 
-// evidence reads what the A1 rule needs.
+// evidenceCall gives every router read its own time limit: one slow answer must not starve the reads after it.
+func (j *jobCtl) evidenceCall(f func(ctx context.Context)) {
+	c, cancel := context.WithTimeout(j.ctx, 6*time.Second)
+	defer cancel()
+	f(c)
+}
+
+// evidence reads what the A1 rule needs. A read that times out or fails leaves its part unproven
+// ("unknown"): the job keeps polling until the window ends, it is never a verdict by itself.
 func (j *jobCtl) evidence(required []flatRow) (ProvEvidence, bool) {
 	ev := ProvEvidence{FlatsRequired: len(required)}
-	pc, cancel := context.WithTimeout(j.ctx, 8*time.Second)
-	defer cancel()
-	ev.TunnelUp = j.rt.Ping(pc) == nil
+	unknown := func(what string) { ev.Unknown = append(ev.Unknown, what) }
+	pinged := false
+	j.evidenceCall(func(c context.Context) { pinged = j.rt.Ping(c) == nil })
+	ev.TunnelUp = pinged
 	if ev.TunnelUp {
-		if r, err := j.rt.PingHost(pc, ServerTunnelIP(j.m.pfx), 3); err == nil && r.Received == 0 {
-			ev.TunnelUp = false
-		}
-		if r, err := j.rt.PingHost(pc, "1.1.1.1", 3); err == nil && r.Received > 0 {
-			ev.InternetOK = true
-		}
+		j.evidenceCall(func(c context.Context) {
+			if r, err := j.rt.PingHost(c, ServerTunnelIP(j.m.pfx), 2); err == nil && r.Received == 0 {
+				ev.TunnelUp = false
+			} else if err != nil {
+				unknown("the ping to the server")
+			}
+		})
+		j.evidenceCall(func(c context.Context) {
+			if r, err := j.rt.PingHost(c, "1.1.1.1", 2); err == nil && r.Received > 0 {
+				ev.InternetOK = true
+			} else if err != nil {
+				unknown("the ping to the internet")
+			}
+		})
 		// the customers' own path: a ping that leaves from the customer gateway address
 		if sp, ok := j.rt.(routeros.SourcePinger); ok && j.plan.Gateway != "" {
-			if r, err := sp.PingFrom(pc, "1.1.1.1", j.plan.Gateway, 3); err == nil && r.Received > 0 {
-				ev.CustomerPath = true
-			}
+			j.evidenceCall(func(c context.Context) {
+				if r, err := sp.PingFrom(c, "1.1.1.1", j.plan.Gateway, 2); err == nil && r.Received > 0 {
+					ev.CustomerPath = true
+				} else if err != nil {
+					unknown("the ping from the customer network")
+				}
+			})
 		}
+	} else {
+		unknown("the tunnel")
 	}
 	servingOK := false
-	if rows, err := j.rt.Rows(pc, "/ip/dhcp-server", map[string]string{"name": billing.DHCPServerName}); err == nil && len(rows) > 0 && !rowDisabled(rows[0]) {
-		servingOK = true
-	}
+	j.evidenceCall(func(c context.Context) {
+		if rows, err := j.rt.Rows(c, "/ip/dhcp-server", map[string]string{"name": billing.DHCPServerName}); err == nil && len(rows) > 0 && !rowDisabled(rows[0]) {
+			servingOK = true
+		} else if err != nil {
+			unknown("the DHCP server")
+		}
+	})
 	var leases []routeros.Row
-	if ls, err := j.rt.Rows(pc, "/ip/dhcp-server/lease", nil); err == nil {
-		leases = ls
+	leasesRead := false
+	j.evidenceCall(func(c context.Context) {
+		if ls, err := j.rt.Rows(c, "/ip/dhcp-server/lease", nil); err == nil {
+			leases, leasesRead = ls, true
+		} else {
+			unknown("the leases")
+		}
+	})
+	if leasesRead {
 		for _, f := range required {
 			bound := false
 			for _, l := range leases {
@@ -1166,20 +1201,34 @@ func (j *jobCtl) evidence(required []flatRow) (ProvEvidence, bool) {
 			}
 		}
 	}
-	base := servingOK && ev.TunnelUp && ev.InternetOK && ev.CustomerPath && ev.FlatsBound == ev.FlatsRequired
+	base := servingOK && ev.TunnelUp && ev.InternetOK && ev.CustomerPath && leasesRead && ev.FlatsBound == ev.FlatsRequired
 	if base { // the dearer reads only once everything cheap holds
-		ev.ConnSeen = len(required) == 0 || j.connectionSeen(pc, required)
-		ev.DNSOK, ev.OLTOK = j.dnsAndOLT()
+		ev.ConnSeen = len(required) == 0
+		if !ev.ConnSeen {
+			j.evidenceCall(func(c context.Context) {
+				seen, err := j.connectionSeen(c, required)
+				ev.ConnSeen = seen
+				if err != nil {
+					unknown("the connection table")
+				}
+			})
+		}
+		var dnsErr bool
+		ev.DNSOK, ev.OLTOK, dnsErr = j.dnsAndOLT()
+		if dnsErr {
+			unknown("the DNS and fibre port checks")
+		}
 	}
 	pass := base && ev.ConnSeen && ev.DNSOK && ev.OLTOK
 	return ev, pass
 }
 
 // connectionSeen: one of the flats has a connection through the router to a public address that was answered.
-func (j *jobCtl) connectionSeen(ctx context.Context, required []flatRow) bool {
-	rows, err := j.rt.Rows(ctx, "/ip/firewall/connection", nil)
+// Only the fields it needs are read. err is set when the table could not be read (the answer is then unknown).
+func (j *jobCtl) connectionSeen(ctx context.Context, required []flatRow) (bool, error) {
+	rows, err := j.rt.Rows(ctx, "/ip/firewall/connection", map[string]string{".proplist": "src-address,dst-address,seen-reply,replied,repl-packets,repl-bytes"})
 	if err != nil {
-		return false
+		return false, err
 	}
 	ips := map[string]bool{}
 	for _, f := range required {
@@ -1191,10 +1240,10 @@ func (j *jobCtl) connectionSeen(ctx context.Context, required []flatRow) bool {
 			continue
 		}
 		if yes(r["seen-reply"]) || yes(r["replied"]) || atoiRow(r["repl-packets"]) > 0 || atoiRow(r["repl-bytes"]) > 0 {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func atoiRow(v string) int { n, _ := strconv.Atoi(strings.TrimSpace(v)); return n }
@@ -1214,17 +1263,21 @@ func publicAddr(h string) bool {
 
 // dnsAndOLT: customers can use the router's DNS (the allow-remote-requests switch and the customer DNS rule,
 // both checked on the router now), and the OLT port is not stuck in a bridge.
-func (j *jobCtl) dnsAndOLT() (dnsOK, oltOK bool) {
+func (j *jobCtl) dnsAndOLT() (dnsOK, oltOK, unread bool) {
 	c, cancel := context.WithTimeout(j.ctx, 20*time.Second)
 	defer cancel()
 	if j.insp != nil {
-		if r, err := j.insp.One(c, "/ip/dns"); err != nil || !yes(r["allow-remote-requests"]) {
-			return false, false
+		r, err := j.insp.One(c, "/ip/dns")
+		if err != nil {
+			return false, false, true
+		}
+		if !yes(r["allow-remote-requests"]) {
+			return false, false, false
 		}
 	}
 	cs, err := j.m.Checks(c, j.siteID, true)
 	if err != nil {
-		return false, false
+		return false, false, true
 	}
 	if it, ok := cs.Item(CheckCustDNS); ok && it.Status == StatusOK {
 		dnsOK = true
@@ -1233,7 +1286,7 @@ func (j *jobCtl) dnsAndOLT() (dnsOK, oltOK bool) {
 	if it, ok := cs.Item(CheckOLT); ok && it.Status != StatusOK && it.Status != StatusInfo {
 		oltOK = false
 	}
-	return dnsOK, oltOK
+	return dnsOK, oltOK, false
 }
 
 func (ev ProvEvidence) text() string {
@@ -1258,6 +1311,9 @@ func (ev ProvEvidence) text() string {
 	}
 	if ev.CustomerPath && ev.FlatsBound == ev.FlatsRequired && ev.DNSOK && !ev.OLTOK {
 		b = append(b, "the fibre port is stuck in a bridge")
+	}
+	if len(ev.Unknown) > 0 {
+		b = append(b, "could not be read in time: "+strings.Join(ev.Unknown, ", "))
 	}
 	if len(b) == 0 {
 		return "ftn-dhcp is not serving"
@@ -1296,12 +1352,20 @@ func (j *jobCtl) stepVerify() (string, error) {
 	// never make a restart roll a confirmed router back.
 	j.job.Armed = false
 	j.save()
+	// keep trying until the kit's own countdown would have run out
+	dl := j.armDeadline
+	if dl.IsZero() {
+		dl = time.Now().Add(j.tm.countdown())
+	}
 	var last error
-	for try := 0; try < 3; try++ {
+	for {
 		c, cancel := context.WithTimeout(j.ctx, 10*time.Second)
 		last = j.disarm(c)
 		cancel()
 		if last == nil {
+			break
+		}
+		if time.Now().After(dl) {
 			break
 		}
 		select {
@@ -1311,8 +1375,9 @@ func (j *jobCtl) stepVerify() (string, error) {
 		}
 	}
 	if last != nil {
-		// no rollback is asked for: the evidence held. The router's own timer may still fire.
-		return "", &failure{state: JobFailed, unreachable: true, msg: fmt.Sprintf("the evidence held but the rollback markers could not be removed (%v): the router may roll back by itself", shortErr(last))}
+		// The markers could not be removed before the kit's countdown ended, so the router has rolled itself back
+		// (or is about to). The server follows it: hotspot mode, bypass rows, and the operators are told.
+		return "", j.assumeRolledBack(fmt.Sprintf("the evidence held but the rollback markers could not be removed (%v)", shortErr(last)))
 	}
 	rc, rcancel := context.WithTimeout(j.ctx, 15*time.Second)
 	j.restoreLeases(rc)
@@ -1331,6 +1396,21 @@ func (j *jobCtl) stepVerify() (string, error) {
 }
 
 // ---- rollback ---------------------------------------------------------------------------------
+
+// assumeRolledBack is the end of a keep decision that could not be carried out: the markers outlived the kit's
+// countdown, so the router's own timer has gone back to the old setup. The server's side is put back to match.
+func (j *jobCtl) assumeRolledBack(reason string) *failure {
+	if j.job.Kind == KindMigrate {
+		j.m.revertToHotspotMode(j.siteID)
+	}
+	if p := j.m.provisioner(); p != nil && j.job.Kind == KindMigrate {
+		p.SetHotspotBypass(j.siteID, true)
+	}
+	j.job.Armed = false
+	msg := reason + ": the router's own timer rolls it back to its old setup"
+	j.m.announce(j.siteID, fmt.Sprintf("Router %s: %s. Paying flats are on the hotspot with bypass so nobody loses internet.", j.site.Name, msg), j.dedupe("rolled_back"))
+	return &failure{state: JobRolledBack, unreachable: true, msg: msg}
+}
 
 // rollbackTail follows a rollback the marker set off: it waits until the router
 // has gone back, then puts the server's side back (hotspot mode, bypass rows)
@@ -1518,13 +1598,27 @@ func (m *Manager) RollbackNow(siteID, actor string) error {
 		m.prov.mu.Unlock()
 		close(run.done)
 	}
+	// The job is stopped now. Look again: it may have decided to keep the change while we waited.
 	prev, _ := m.ProvJobOf(siteID)
 	j.job = prev
+	armed2, undo2, err := kitMarkers(c, rt)
+	if err != nil {
+		release()
+		return err
+	}
+	kept := !prev.StartedAt.IsZero() && !prev.Armed && (prev.State == JobVerifying || prev.State == JobLive)
+	if len(armed2) == 0 || len(undo2) == 0 || kept {
+		if kept && (len(armed2) > 0 || len(undo2) > 0) {
+			_ = j.disarm(c) // the keep decision was made: finish removing the markers it left
+		}
+		release()
+		return ErrNothingToRollBack
+	}
 	if j.job.StartedAt.IsZero() {
 		j.job.StartedAt = m.now()
 		j.job.Steps = newSteps("")
 	}
-	j.job.Armed = true // the markers exist: setNow only modifies the armed row
+	j.job.Armed = true // the armed row exists (just read): setNow only changes its comment
 	if err := j.setNow(c); err != nil {
 		release()
 		return err

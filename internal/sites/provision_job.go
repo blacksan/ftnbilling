@@ -108,6 +108,7 @@ type ProvEvidence struct {
 	DNSOK         bool     `json:"dns_ok"`           // customers can ask the router for DNS
 	ConnSeen      bool     `json:"connection_seen"`  // a required flat has a replied connection to the internet
 	OLTOK         bool     `json:"olt_ok"`
+	Unknown       []string `json:"unknown,omitempty"` // reads that timed out or failed in the last poll: keep polling, not a verdict
 	FlatsRequired int      `json:"flats_required"`
 	FlatsBound    int      `json:"flats_bound"`
 	Missing       []string `json:"missing,omitempty"`
@@ -151,6 +152,8 @@ type ProvTiming struct {
 	LeaseShort   string        // lease time given to the old DHCP servers before the switch ("" = 1m)
 	LeaseGrace   time.Duration // slack on the lease waits and the evidence window ("" = 1 minute)
 	LeaseCap     time.Duration // the longest the job waits for old leases (0 = 65 minutes)
+	LeaseSweep   time.Duration // how often lease times are put back when no job is around (0 = 1 minute)
+	Countdown    time.Duration // the kit's countdown after the switch (0 = 15 minutes)
 }
 
 // DefaultProvTiming is the production timing.
@@ -181,6 +184,9 @@ type provMgr struct {
 	announce func(siteID, text, dedupe string)
 	tm       ProvTiming
 	tmSet    bool
+	// lease restore backoff, per building
+	leaseNext map[string]time.Time
+	leaseTry  map[string]int
 }
 
 // SetProvisioner connects the billing service (reconcile lock, reconcile, bypass rows).
@@ -297,6 +303,32 @@ func (m *Manager) SetupBusy(siteID string) bool {
 	return ok
 }
 
+// BeginReboot takes the router's run slot for a reboot: while it is held no setup job can start (StartProvision
+// and RollbackNow see a running job), and it fails when a job is already running. Call end when the reboot call is over.
+func (m *Manager) BeginReboot(siteID string) (end func(), ok bool) {
+	m.prov.mu.Lock()
+	defer m.prov.mu.Unlock()
+	if m.prov.runs == nil {
+		m.prov.runs = map[string]*provRun{}
+	}
+	if m.prov.runs[siteID] != nil {
+		return nil, false
+	}
+	run := &provRun{cancel: func() {}, done: make(chan struct{}), state: "rebooting"}
+	m.prov.runs[siteID] = run
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.prov.mu.Lock()
+			if m.prov.runs[siteID] == run {
+				delete(m.prov.runs, siteID)
+			}
+			m.prov.mu.Unlock()
+			close(run.done)
+		})
+	}, true
+}
+
 // ProvOptions says how a job starts.
 type ProvOptions struct {
 	Trigger     string // join | run | migrate | restart
@@ -384,6 +416,8 @@ type jobCtl struct {
 	checks  Checks
 	// flats staged for a migration
 	flats []flatRow
+	// armDeadline is real time: when the kit's countdown after the switch runs out
+	armDeadline time.Time
 	// hold-related
 	hold bool
 }

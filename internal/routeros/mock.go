@@ -32,6 +32,8 @@ type Mock struct {
 	failPaths  map[string]error
 	failWrites map[string]error
 	custDown   bool
+	lastQ      map[string]map[string]string
+	failReads  map[string]error
 	writes     int // successful AddRow/SetRow/RemoveRow calls since the last ResetWrites
 }
 
@@ -251,6 +253,9 @@ func cleanPath(p string) string { return "/" + strings.Trim(strings.TrimSpace(p)
 
 func rowMatches(r, query Row) bool {
 	for k, v := range query {
+		if strings.HasPrefix(k, ".") { // .proplist and the like shape the answer, they do not filter rows
+			continue
+		}
 		if !strings.EqualFold(r[k], v) {
 			return false
 		}
@@ -273,6 +278,13 @@ func (m *Mock) Rows(_ context.Context, path string, query map[string]string) ([]
 	if err := m.pathErrLocked(path); err != nil {
 		return nil, err
 	}
+	if err := m.failReads[cleanPath(path)]; err != nil {
+		return nil, err
+	}
+	if m.lastQ == nil {
+		m.lastQ = map[string]map[string]string{}
+	}
+	m.lastQ[cleanPath(path)] = query
 	var out []Row
 	for _, r := range m.tables[cleanPath(path)] {
 		if rowMatches(r, query) {
@@ -423,4 +435,25 @@ func (m *Mock) SeedLive() {
 	m.SeedRow("/interface/bridge/host", Row{"mac-address": "3C:07:54:00:00:09", "on-interface": "sfp-sfpplus1", "bridge": "br-hotspot", "local": "false"})
 	m.SeedRow("/queue/simple", Row{"name": "ftn-K7Q2MX", "target": "10.5.50.60/32", "max-limit": "20000000/20000000", "bytes": "1000/5000", "rate": "0/0", "comment": "ftn:acct:K7Q2MX Flat 3B"})
 	m.SeedRow("/queue/simple", Row{"name": "ftn-P4R8TN", "target": "10.5.50.61/32", "max-limit": "2000000/2000000", "bytes": "0/0", "rate": "0/0", "comment": "ftn:acct:P4R8TN Flat 10A"})
+}
+
+// LastQuery is the query of the last Rows call on path (tests: was a proplist asked for).
+func (m *Mock) LastQuery(path string) map[string]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastQ[cleanPath(path)]
+}
+
+// SetReadFail makes only the reads (Rows) of path fail with err, writes keep working. nil removes it.
+func (m *Mock) SetReadFail(path string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err == nil {
+		delete(m.failReads, cleanPath(path))
+		return
+	}
+	if m.failReads == nil {
+		m.failReads = map[string]error{}
+	}
+	m.failReads[cleanPath(path)] = err
 }
