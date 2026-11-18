@@ -112,14 +112,6 @@ type CheckSummary struct {
 	CutoverReady bool `json:"cutover_ready"`
 }
 
-// JoinReport is the router's own account of its last join (setting
-// site.<id>.join_report, written by the report endpoint).
-type JoinReport struct {
-	At    time.Time `json:"at"`
-	OK    bool      `json:"ok"`
-	Lines []string  `json:"lines"`
-}
-
 // Checks is the answer of GET /sites/{id}/checks.
 type Checks struct {
 	SiteID      string       `json:"site_id"`
@@ -1452,29 +1444,14 @@ func evalUnseen(e *evalCtx, it *CheckItem) {
 
 // ---- the pass -----------------------------------------------------------------------------------
 
-// loadJoinReport reads setting site.<id>.join_report: one line per entry,
-// failures are lines of the form "N section: error".
+// loadJoinReport returns the router's own account of its last join (the
+// report endpoint's stored text, parsed by JoinReport in joinreport.go).
 func (m *Manager) loadJoinReport(siteID string) *JoinReport {
-	var jr *JoinReport
-	m.st.View(func(d *store.Data) {
-		s, ok := d.Settings["site."+siteID+".join_report"]
-		if !ok || strings.TrimSpace(s.Value) == "" {
-			return
-		}
-		jr = &JoinReport{At: s.UpdatedAt, OK: true, Lines: []string{}}
-		for _, l := range strings.Split(strings.ReplaceAll(s.Value, "\r", ""), "\n") {
-			if l = strings.TrimSpace(l); l != "" {
-				jr.Lines = append(jr.Lines, l)
-				if failLine.MatchString(l) {
-					jr.OK = false
-				}
-			}
-		}
-	})
-	return jr
+	if r, ok := m.JoinReport(siteID); ok {
+		return &r
+	}
+	return nil
 }
-
-var failLine = regexp.MustCompile(`^\d+\s+[A-Za-z0-9_./-]+:\s`)
 
 func summarize(items []CheckItem) CheckSummary {
 	var s CheckSummary

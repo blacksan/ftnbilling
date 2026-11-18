@@ -498,11 +498,12 @@ func TestChecksJoinReport(t *testing.T) {
 	}
 	f.st.Update(func(d *store.Data) error {
 		k := "site." + s.ID + ".join_report"
-		d.Settings[k] = store.Setting{Key: k, Value: "1 wireguard: ok\n7 traffic-flow: failure: no such item\n", UpdatedAt: f.now}
+		// The stored format written by the report endpoint (joinreport.go).
+		d.Settings[k] = store.Setting{Key: k, Value: "at=" + f.now.UTC().Format(time.RFC3339) + " ok=false ros=7.25.1\n7 traffic-flow: failure: no such item\n", UpdatedAt: f.now}
 		return nil
 	})
 	jr := get(t, f, s.ID, true).JoinReport
-	if jr == nil || jr.OK || len(jr.Lines) != 2 || !jr.At.Equal(f.now) {
+	if jr == nil || jr.OK || len(jr.Lines) != 1 || !jr.At.Equal(f.now.UTC().Truncate(time.Second)) || jr.ROS != "7.25.1" {
 		t.Fatalf("%+v", jr)
 	}
 }
