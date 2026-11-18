@@ -133,6 +133,9 @@ func TestCLICommands(t *testing.T) {
 	if out, err := run("migrate"); err != nil || !strings.Contains(out, "schema version") {
 		t.Fatalf("migrate: %q %v", out, err)
 	}
+	if out, err := run("migrate", "-check"); err != nil || !strings.Contains(out, "schema version") {
+		t.Fatalf("migrate -check: %q %v", out, err)
+	}
 	out, err := run("import-json")
 	if err != nil || !strings.Contains(out, "format 3") || !strings.Contains(out, "applied payments") {
 		t.Fatalf("import-json: %q %v", out, err)

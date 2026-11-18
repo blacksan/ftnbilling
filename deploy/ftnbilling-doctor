@@ -9,7 +9,7 @@
 # It only reads; it changes nothing.
 #
 # Test/override variables (all optional): FTN_ENV_FILE, FTN_DATA, FTN_BIN,
-# FTN_BACKUP_DIR, FTN_HEALTH_URL.
+# FTN_BACKUP_DIR, FTN_HEALTH_URL, FTN_ADMIN_URL (default <PUBLIC_BASE_URL>/admin/login).
 set -u -o pipefail
 
 APP=ftnbilling
@@ -81,14 +81,14 @@ if have rclone; then
   fi
 fi
 if [ -x "$BIN" ]; then pass "app binary" "$BIN"; else fail "app binary" "$BIN missing or not executable"; fi
-for s in ftnbilling-wg-sync ftnbilling-backup ftnbilling-admin-peer ftnbilling-admin-reset ftnbilling-doctor; do
+for s in ftnbilling-wg-sync ftnbilling-backup ftnbilling-admin-reset ftnbilling-doctor; do
   if [ -x "/usr/local/sbin/$s" ]; then pass "tool: $s" ""; else fail "tool: $s" "/usr/local/sbin/$s missing"; fi
 done
 [ -r "$(dirname "$ENVF")/VERSION" ] && pass "installed version" "$(head -1 "$(dirname "$ENVF")/VERSION")"
 
 # ------------------------------------------------------------------ services
 section "Services and timers"
-for u in $APP caddy wg-quick@wg0 wg-quick@wg-admin; do
+for u in $APP caddy wg-quick@wg0; do
   if unit_active "$u"; then pass "service: $u" "active"; else fail "service: $u" "not running (journalctl -u $u -n 30)"; fi
 done
 if [ -n "$DBURL" ]; then
@@ -119,12 +119,17 @@ fi
 # ------------------------------------------------------------------ ports
 section "Ports"
 if have ss; then
-  if listening tcp 8080; then pass "port tcp/8080" "app listening"; else fail "port tcp/8080" "nothing listening (is $APP running?)"; fi
+  if listening tcp 8080; then
+    # The app must be reachable only through Caddy: every listener on 8080 is loopback.
+    wide=$(ss -H -ltn 2>/dev/null | awk '{print $4}' | grep -E '[:.]8080$' | grep -Ev '^(127\.0\.0\.1|\[::1\]):8080$' || true)
+    if [ -z "$wide" ]; then pass "app bound to loopback" "tcp/8080 on 127.0.0.1 only"
+    else fail "app bound to loopback" "tcp/8080 is also open on: $(printf '%s' "$wide" | tr '\n' ' ')(set LISTEN_ADDR=127.0.0.1:8080 and restart $APP)"; fi
+  else fail "port tcp/8080" "nothing listening (is $APP running?)"; fi
   for p in 80 443; do
     if listening tcp "$p"; then pass "port tcp/$p" "caddy listening"; else fail "port tcp/$p" "nothing listening"; fi
   done
   if listening udp 51820; then pass "port udp/51820" "wg0 (routers)"; else fail "port udp/51820" "wg0 not listening"; fi
-  if listening udp 51821; then pass "port udp/51821" "wg-admin (you)"; else fail "port udp/51821" "wg-admin not listening"; fi
+  if listening udp 51821; then fail "port udp/51821" "something listens here: the old admin VPN should be gone (sudo systemctl disable --now wg-quick@wg-admin)"; else pass "port udp/51821" "nothing listening (the old admin VPN is gone)"; fi
   if listening udp 2055; then pass "port udp/2055" "NetFlow"; else warn "port udp/2055" "NetFlow not listening"; fi
   if listening tcp 5432; then fail "port tcp/5432" "Postgres is listening on TCP; it must only use its local socket"; else pass "port tcp/5432" "no Postgres TCP listener"; fi
 else
@@ -148,7 +153,9 @@ if [ -n "$DBURL" ]; then
   if [ -x "$BIN" ]; then
     out=$(asapp env DATABASE_URL="$DBURL" DATA_DIR="$DATA" "$BIN" migrate -check 2>&1); rc=$?
     if [ $rc -eq 0 ]; then
-      pass "migrations current" "$(printf '%s' "$out" | head -1)"
+      pass "schema version" "$(printf '%s' "$out" | head -1)"
+    elif printf '%s' "$out" | grep -q 'not the latest'; then
+      warn "schema version" "$(printf '%s' "$out" | head -1) (run the installer, or: sudo -u $APP $BIN migrate)"
     elif printf '%s' "$out" | grep -q 'flag provided but not defined'; then
       out=$(asapp env DATABASE_URL="$DBURL" DATA_DIR="$DATA" "$BIN" db-check 2>&1); rc=$?
       if [ $rc -eq 0 ]; then
@@ -157,8 +164,14 @@ if [ -n "$DBURL" ]; then
         fail "database readable (db-check)" "$(printf '%s' "$out" | head -1)"
       fi
     else
-      fail "migrations current" "$(printf '%s' "$out" | head -1)"
+      fail "schema version" "$(printf '%s' "$out" | head -1)"
     fi
+    # Flats that share a MAC address are not provisioned until fixed.
+    out=$(asapp env DATABASE_URL="$DBURL" DATA_DIR="$DATA" "$BIN" db-check -json 2>&1) || out=""
+    mc=$(printf '%s' "$out" | sed -n 's/.*"mac_conflicts" *: *\([0-9][0-9]*\).*/\1/p' | head -1)
+    if [ -z "$mc" ]; then :
+    elif [ "$mc" -gt 0 ]; then warn "MAC conflicts" "$mc open flat(s) share a MAC with another flat or have a malformed one; list: sudo -u $APP $BIN db-check (fix them in Admin > Devices)"
+    else pass "MAC conflicts" "none"; fi
   fi
   if [ -f /etc/systemd/system/postgresql@.service.d/ftnbilling-oom.conf ] || ls /etc/systemd/system/postgresql*.service.d/*oom*.conf >/dev/null 2>&1; then
     pass "postgres OOM protection" "OOMScoreAdjust drop-in present"
@@ -198,7 +211,7 @@ if [ -n "$DBURL" ] && [ -x "$BIN" ] && [ -r "$ENVF" ]; then
   else
     warn "settings check" "$(printf '%s' "$sc" | head -1)"
   fi
-  [ "$QUIET" = 1 ] || echo "      Locked out of the admin?  sudo $APP-admin-reset   (or --generate for a new random password)"
+  [ "$QUIET" = 1 ] || echo "      Locked out of the admin?  sudo $APP-admin-reset   (--generate: new password, --setup-code: one-time code, --reset-totp: new authenticator)"
 else
   warn "settings check" "needs the PostgreSQL database and the app binary; skipped"
 fi
@@ -225,7 +238,22 @@ if have curl; then
     fi
   fi
 fi
-if [ -n "$(envval ADMIN_ALLOW_CIDR)" ]; then pass "ADMIN_ALLOW_CIDR" "$(envval ADMIN_ALLOW_CIDR)"; else pass "ADMIN_ALLOW_CIDR" "not set: app default 10.98.0.0/24"; fi
+# The admin is public: its sign-in page must answer over https.
+base=$(envval PUBLIC_BASE_URL)
+aurl=${FTN_ADMIN_URL:-${base%/}/admin/login}
+case "$aurl" in
+  https://*)
+    if have curl; then
+      code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$aurl" 2>/dev/null || true)
+      case "$code" in
+        200) pass "admin sign-in page" "$aurl answers 200" ;;
+        404) warn "admin sign-in page" "$aurl answers 404: this program is older than the new sign-in (update it with the installer)" ;;
+        ""|000) fail "admin sign-in page" "no answer from $aurl (DNS, Caddy or the app?)" ;;
+        *) fail "admin sign-in page" "$aurl answers HTTP $code, expected 200" ;;
+      esac
+    fi ;;
+  *) warn "admin sign-in page" "not checked: PUBLIC_BASE_URL is not https (set DOMAIN=... and re-run the installer)" ;;
+esac
 case "$(envval PUBLIC_BASE_URL)" in
   https://*) pass "public URL" "$(envval PUBLIC_BASE_URL)";;
   *) warn "public URL" "$(envval PUBLIC_BASE_URL) is not HTTPS: M-Pesa and router join commands need DOMAIN=...";;
@@ -241,11 +269,8 @@ fi
 # ------------------------------------------------------------------ wireguard
 section "WireGuard"
 if have wg; then
-  for i in wg0 wg-admin; do
-    if wg show "$i" >/dev/null 2>&1; then pass "interface $i" "up"; else fail "interface $i" "down or missing (systemctl status wg-quick@$i)"; fi
-  done
-  n=$(wg show wg-admin peers 2>/dev/null | grep -c . || true)
-  if [ "${n:-0}" -ge 1 ]; then pass "admin devices" "$n"; else fail "admin devices" "none: you cannot open the admin. Run: sudo ftnbilling-admin-peer add <name>"; fi
+  if wg show wg0 >/dev/null 2>&1; then pass "interface wg0" "up"; else fail "interface wg0" "down or missing (systemctl status wg-quick@wg0)"; fi
+  if wg show wg-admin >/dev/null 2>&1; then warn "old admin VPN" "interface wg-admin is still up: sudo systemctl disable --now wg-quick@wg-admin (or re-run the installer)"; fi
   n=$(wg show wg0 peers 2>/dev/null | grep -c . || true)
   pass "router tunnels (wg0 peers)" "${n:-0}"
 else
@@ -261,12 +286,11 @@ if have ufw; then
   if printf '%s' "$st" | grep -q '^Status: active'; then
     pass "ufw" "active"
     printf '%s' "$st" | grep -Eq 'Default: deny \(incoming\)' && pass "ufw default" "deny incoming" || fail "ufw default" "incoming is not denied by default"
-    for r in '51820/udp' '51821/udp' '80/tcp' '443/tcp'; do
+    for r in '51820/udp' '80/tcp' '443/tcp'; do
       printf '%s' "$st" | grep -Eq "^$r +ALLOW" && pass "ufw allow $r" "" || fail "ufw allow $r" "rule missing"
     done
-    printf '%s' "$st" | grep -Eq '8080/tcp +on wg-admin +ALLOW' && pass "ufw wg-admin -> :8080" "allowed" || warn "ufw wg-admin -> :8080" "rule not found in 'ufw status' (format differs?)"
     if printf '%s' "$st" | grep -Eq '^8080(/tcp)? +ALLOW +Anywhere'; then fail "ufw :8080 public" "port 8080 is open to everyone"; else pass "ufw :8080 public" "not open to the internet"; fi
-    printf '%s' "$st" | grep -Eq 'on wg-admin.*DENY FWD|DENY FWD.*wg-admin' && pass "ufw wg-admin no routing" "route deny" || warn "ufw wg-admin no routing" "route deny rule not found in 'ufw status'"
+    if printf '%s' "$st" | grep -Eq 'wg-admin|51821'; then warn "ufw old admin VPN rules" "rules for udp/51821 or wg-admin remain (re-run the installer to remove them)"; else pass "ufw old admin VPN rules" "none"; fi
   else
     fail "ufw" "not active (the server is unprotected; re-run the installer)"
   fi

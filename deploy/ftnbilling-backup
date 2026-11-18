@@ -41,7 +41,6 @@ DATA=$ROOT/var/lib/$APP
 ETC=$ROOT/etc/$APP
 ENVF=$ETC/$APP.env
 WGCONF=$ROOT/etc/wireguard/wg0.conf
-WGADMINCONF=$ROOT/etc/wireguard/wg-admin.conf
 CADDYF=$ROOT/etc/caddy/Caddyfile
 SRC=$ROOT/opt/$APP/src
 LOCALDIR=$ROOT/var/backups/$APP/weekly
@@ -457,7 +456,6 @@ cmd_run() {
   done
   [ -d "$ETC" ] && cp -a "$ETC/." "$top/etc-$APP/"
   [ -f "$WGCONF" ] && cp -a "$WGCONF" "$top/wireguard/"
-  [ -f "$WGADMINCONF" ] && cp -a "$WGADMINCONF" "$top/wireguard/"
   [ -f "$CADDYF" ] && cp -a "$CADDYF" "$top/caddy/"
 
   dburl=$(envval DATABASE_URL)
@@ -568,10 +566,9 @@ Nothing on this server was changed. To put it back, step by step:
   2. Billing data:          sudo cp -a $dir/data/. /var/lib/$APP/
                             sudo chown -R $APP:$APP /var/lib/$APP
   3. Settings:              sudo cp -a $dir/etc-$APP/. /etc/$APP/
-  4. WireGuard (same keys, so routers and your admin devices keep working):
+  4. WireGuard (same key, so the routers keep working):
                             sudo cp -a $dir/wireguard/wg0.conf /etc/wireguard/wg0.conf
-                            sudo cp -a $dir/wireguard/wg-admin.conf /etc/wireguard/wg-admin.conf
-                            sudo systemctl restart wg-quick@wg0 wg-quick@wg-admin
+                            sudo systemctl restart wg-quick@wg0
   5. Caddy (optional):      sudo cp -a $dir/caddy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
   6. PostgreSQL (only if the folder contains database.dump; the installer has
      already made the empty database and role, DATABASE_URL is in the env file):

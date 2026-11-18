@@ -26,6 +26,7 @@ func runDBCommand(cmd string, args []string, getenv func(string) string, out io.
 	outPath := fs.String("out", "", "output file (export-json)")
 	asJSON := fs.Bool("json", false, "machine-readable output (db-check)")
 	against := fs.String("against", "", "database URL to compare with (db-check)")
+	check := fs.Bool("check", false, "only report the schema version, change nothing; fails when it is not the latest (migrate)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("%s: %w\n\n%s", cmd, err, usage)
 	}
@@ -40,6 +41,22 @@ func runDBCommand(cmd string, args []string, getenv func(string) string, out io.
 	}
 	switch cmd {
 	case "migrate":
+		if *check {
+			b, err := pgstore.Open(ctx, *url, pgstore.Options{NoLock: true, NoMigrate: true})
+			if err != nil {
+				return err
+			}
+			defer b.Close()
+			have, err := b.AppliedVersion(ctx)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "database is at schema version %d (this program: %d)\n", have, pgstore.SchemaVersion())
+			if have != pgstore.SchemaVersion() {
+				return fmt.Errorf("the schema is not the latest: run the installer, or: ispbill migrate")
+			}
+			return nil
+		}
 		b, err := pgstore.Open(ctx, *url, pgstore.Options{NoLock: true})
 		if err != nil {
 			return err
