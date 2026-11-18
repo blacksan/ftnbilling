@@ -3,6 +3,7 @@ package routeros
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 )
@@ -188,6 +189,15 @@ func (m *Mock) Execute(_ context.Context, cmd string) (string, error) {
 		return "name: mock-router", nil
 	case c == "system resource print":
 		return "uptime: 3d4h5m\nversion: 7.20 (stable)\ncpu-load: 3%\nboard-name: mock", nil
+	case strings.HasPrefix(c, "ping "):
+		host := strings.Fields(c)[1]
+		var b strings.Builder
+		b.WriteString("  SEQ HOST                                     SIZE TTL TIME       STATUS\n")
+		for i, ms := range []string{"4ms512us", "4ms388us", "5ms101us", "4ms447us"} {
+			fmt.Fprintf(&b, "    %d %-40s   56 117 %-10s\n", i, host, ms)
+		}
+		b.WriteString("    sent=4 received=4 packet-loss=0% min-rtt=4ms388us avg-rtt=4ms612us max-rtt=5ms101us")
+		return b.String(), nil
 	case c == "ip address print":
 		return "0 address=10.5.50.1/24 interface=bridge-hotspot\n1 address=10.99.0.2/22 interface=wg-ftn", nil
 	}

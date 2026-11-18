@@ -166,7 +166,7 @@
 <label>New password (12 or more characters)<input type="password" name="new_password" autocomplete="new-password"></label>
 <label>New password again<input type="password" name="confirm_password" autocomplete="new-password"></label><button>Change password</button></form>
 {{else}}<p class="bad">Saving settings and passwords here needs DATA_KEY in the environment file. Add it and restart once.</p>{{end}}
-<p class="muted">Locked out? On the server run <code>ispbill admin-reset-password</code>.</p></div>
+<p class="muted">Locked out? On the server run <code>sudo ftnbilling-admin-reset</code> (add <code>--generate</code> for a new random password).</p></div>
 <div class="grid2">
 <div class="card"><b>Lifecycle rules</b><table>
 <tr><td>Reminder before expiry</td><td>{{if .Data.Policy.ReminderDays}}{{.Data.Policy.ReminderDays}} days before (plans longer than that){{else}}off{{end}} <code>REMINDER_DAYS</code></td></tr>

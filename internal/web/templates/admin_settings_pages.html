@@ -28,7 +28,7 @@
 {{template "set_form" (dict "P" . "Fields" .Data.Fields "Action" "/admin/settings/mpesa")}}
 <div class="grid2">
 <div class="card"><b>Callback URLs</b>
-<table><tr><td>STK result</td><td><code>{{.Data.URLStk}}</code></td></tr><tr><td>C2B validation</td><td><code>{{.Data.URLVal}}</code></td></tr><tr><td>C2B confirmation</td><td><code>{{.Data.URLConf}}</code></td></tr></table>
+<div class="cbu"><small class="muted">STK result</small><code>{{.Data.URLStk}}</code><small class="muted">C2B validation</small><code>{{.Data.URLVal}}</code><small class="muted">C2B confirmation</small><code>{{.Data.URLConf}}</code></div>
 {{if not .Data.Revealed}}<form method="post" action="/admin/settings/mpesa/urls" class="row" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Current admin password<input type="password" name="current_password" autocomplete="current-password"></label><button>Show with token</button></form>{{end}}
 <form method="post" action="/admin/settings/mpesa/rotate-token" class="row" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Current admin password<input type="password" name="current_password" autocomplete="current-password"></label><button>{{if .Data.HasToken}}Replace the token{{else}}Create a token{{end}}</button></form>
 <p class="muted">The token is part of the URL so only Safaricom can post payments. After replacing it, register the URLs again.</p></div>
