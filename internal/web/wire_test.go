@@ -474,7 +474,12 @@ func TestFixECreateCustomerKeepsNotesAndWhatsApp(t *testing.T) {
 
 func TestFixEMapGeoLinkSurvivesTemplateEscaping(t *testing.T) {
 	m, site, _ := uiRig(t)
-	m.st.Update(func(d *store.Data) error { x := d.Sites[site]; x.Lat, x.Lng = -1.2864, 36.8172; d.Sites[site] = x; return nil })
+	m.st.Update(func(d *store.Data) error {
+		x := d.Sites[site]
+		x.Lat, x.Lng = -1.2864, 36.8172
+		d.Sites[site] = x
+		return nil
+	})
 	if h := m.adminGet(t, "/admin/map"); !strings.Contains(h, `href="geo:-1.286400,36.817200"`) {
 		t.Error("geo link missing or blanked on the map page")
 	}
