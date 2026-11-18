@@ -23,7 +23,7 @@ type mapRouter struct {
 	Flats      int
 	Online     int
 	HasGeo     bool
-	GeoLink    string
+	GeoLink    template.URL
 	Accounts   int
 	Tunnel     string
 	StateClass string
@@ -95,7 +95,7 @@ func (s *Server) adminMap(w http.ResponseWriter, r *http.Request) {
 		mr.HasGeo = st.Lat != 0 || st.Lng != 0
 		if mr.HasGeo {
 			geo++
-			mr.GeoLink = fmt.Sprintf("geo:%.6f,%.6f", st.Lat, st.Lng)
+			mr.GeoLink = template.URL(fmt.Sprintf("geo:%.6f,%.6f", st.Lat, st.Lng)) // floats only, so safe to trust
 		}
 		if mr.State == "down" {
 			down++
