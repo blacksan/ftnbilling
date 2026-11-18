@@ -101,6 +101,7 @@ func (s *Service) DeleteAccount(ctx context.Context, id, confirm string) error {
 		now := s.now()
 		delete(d.Accounts, id)
 		a.ClosedAt = now
+		a.IP = "" // closing frees the flat's address (and its MAC: closed accounts are outside the uniqueness rule)
 		d.ClosedAccounts[id] = a
 		closeTenancyLocked(d, id, now)
 		for k, e := range d.Equipment {
@@ -211,6 +212,15 @@ func (s *Service) MoveAccount(ctx context.Context, id, toSiteID string) error {
 		s.enqueueLocked(d, a, true, "account moved away")
 		a.SiteID = toSiteID
 		a.IP = "" // an address belongs to one building; the new one allocates its own
+		if IPoE(to) {
+			pl, err := s.PlanFor(to)
+			if err != nil {
+				return err
+			}
+			if a.IP, err = FreeIPLocked(d, toSiteID, pl); err != nil {
+				return err
+			}
+		}
 		a.RouterActive = false
 		d.Accounts[id] = a
 		delete(d.Devices, store.DeviceKey(toSiteID, a.MAC))

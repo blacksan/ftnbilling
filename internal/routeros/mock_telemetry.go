@@ -95,6 +95,15 @@ func (m *Mock) SimpleQueues(context.Context) ([]SimpleQueue, error) {
 		out = append(out, SimpleQueue{Name: "<hotspot-" + user + ">", Target: m.active[user] + "/32", MaxA: cap, MaxB: cap,
 			RateA: cap / 20, RateB: int64(float64(cap) * (0.2 + 0.75*m.tel().rng.Float64()))})
 	}
+	// Queues written through the row API (the IPoE reconciler's ftn-<code>).
+	for _, r := range m.tables["/queue/simple"] {
+		q := SimpleQueue{Name: r["name"], Target: r["target"], Comment: r["comment"]}
+		q.MaxA, q.MaxB = splitPair(r["max-limit"])
+		q.RateA, q.RateB = splitPair(r["rate"])
+		up, down := splitPair(r["bytes"])
+		q.BytesUp, q.BytesDown = uint64(up), uint64(down)
+		out = append(out, q)
+	}
 	return out, nil
 }
 

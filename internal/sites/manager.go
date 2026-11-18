@@ -149,7 +149,7 @@ func (m *Manager) collectorConfig(s store.Site) metrics.Config {
 		WAN: s.WANInterface, OLT: s.OLTInterface, WANCapMbps: s.WANCapMbps, OLTCapMbps: s.OLTCapMbps, FUPTB: s.FUPTB,
 		PingTargets: m.cfg.PingTargets, Subnet: subnet.Masked(),
 		FlowEvery: m.cfg.FlowEvery, PortEvery: m.cfg.PortEvery, PingEvery: m.cfg.PingEvery, DNSEvery: m.cfg.DNSEvery, SaveEvery: m.cfg.SaveEvery,
-		NetflowAddr: m.cfg.NetflowAddr, SiteID: s.ID,
+		NetflowAddr: m.cfg.NetflowAddr, SiteID: s.ID, IPoE: billing.IPoE(s),
 	}
 	if m.cfg.RouterMock {
 		c.NetflowAddr = "off" // the fake router sends no traffic-flow

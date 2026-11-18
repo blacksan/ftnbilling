@@ -248,8 +248,21 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 			Tenant: cleanText(in.Tenant, 60), Phone: phone, Notes: cleanText(in.Notes, 300), WhatsApp: wa,
 			HSPass: RandomSecret(16), CreatedAt: s.now(),
 		}
+		if st := d.Sites[in.SiteID]; IPoE(st) {
+			// An IPoE flat gets its fixed address now, and the router a task.
+			pl, err := s.PlanFor(st)
+			if err != nil {
+				return err
+			}
+			if a.IP, err = FreeIPLocked(d, in.SiteID, pl); err != nil {
+				return err
+			}
+		}
 		d.Accounts[a.ID] = a
 		delete(d.Devices, store.DeviceKey(a.SiteID, mac))
+		if IPoE(d.Sites[in.SiteID]) {
+			s.enqueueLocked(d, a, false, "account created")
+		}
 		return nil
 	})
 	if err == nil {
@@ -398,6 +411,7 @@ func (s *Service) NoteDevice(siteID, mac, ip, source string) {
 			dev = store.Device{SiteID: siteID, MAC: mac, FirstSeen: now}
 		}
 		dev.LastSeen, dev.Hits = now, dev.Hits+1
+		dev.Vendor = Vendor(mac)
 		if ip != "" {
 			dev.IP = ip
 		}
@@ -423,31 +437,23 @@ func (s *Service) HotspotHosts(ctx context.Context, siteID string) ([]routeros.H
 	return s.router(siteID).Hosts(ctx)
 }
 
-// RefreshHosts pulls unauthorised hotspot hosts from the router into the list.
-func (s *Service) RefreshHosts(ctx context.Context, siteID string) error {
-	hosts, err := s.router(siteID).Hosts(ctx)
-	if err != nil {
-		return err
-	}
-	for _, h := range hosts {
-		if h.Authorized || h.Bypassed {
-			continue
-		}
-		mac, err := NormalizeMAC(h.MAC)
-		if err != nil {
-			continue
-		}
-		s.NoteDevice(siteID, mac, h.Address, "hotspot-host")
-	}
-	return nil
-}
-
-// DismissDevice removes a MAC from the unregistered list.
+// DismissDevice removes a MAC from the unregistered list. A device the
+// reconciler keeps seeing (source dhcp or arp) is kept as a dismissed marker
+// so it does not come back every minute; one that opens the portal again does.
 func (s *Service) DismissDevice(siteID, mac string) error {
+	if m, err := NormalizeMAC(mac); err == nil {
+		mac = m
+	}
 	return s.st.Update(func(d *store.Data) error {
 		key := store.DeviceKey(siteID, mac)
-		if _, ok := d.Devices[key]; !ok {
+		dev, ok := d.Devices[key]
+		if !ok {
 			return store.ErrNoChange
+		}
+		if dev.Source == "dhcp" || dev.Source == "arp" {
+			dev.Source, dev.Online = SourceDismissed, false
+			d.Devices[key] = dev
+			return nil
 		}
 		delete(d.Devices, key)
 		return nil

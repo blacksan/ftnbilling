@@ -27,6 +27,7 @@ type Mock struct {
 	// tables holds the generic rows (Rows, AddRow...): path -> rows in order.
 	tables map[string][]Row
 	nextID int
+	writes int // successful AddRow/SetRow/RemoveRow calls since the last ResetWrites
 }
 
 func NewMock() *Mock {
@@ -287,6 +288,7 @@ func (m *Mock) AddRow(_ context.Context, path string, body map[string]string) (s
 		m.tables = map[string][]Row{}
 	}
 	m.nextID++
+	m.writes++
 	r := copyRow(body)
 	r[RowID] = fmt.Sprintf("*%X", m.nextID)
 	p := cleanPath(path)
@@ -303,6 +305,7 @@ func (m *Mock) SetRow(_ context.Context, path, id string, diff map[string]string
 	}
 	for _, r := range m.tables[cleanPath(path)] {
 		if r[RowID] == id {
+			m.writes++
 			for k, v := range diff {
 				if k != RowID {
 					r[k] = v
@@ -325,12 +328,21 @@ func (m *Mock) RemoveRow(_ context.Context, path, id string) error {
 	rows := m.tables[p]
 	for i, r := range rows {
 		if r[RowID] == id {
+			m.writes++
 			m.tables[p] = append(rows[:i:i], rows[i+1:]...)
 			return nil
 		}
 	}
 	return nil
 }
+
+// Writes is the number of row writes (add, set, remove) that changed
+// something since the last ResetWrites: tests use it to prove a second
+// reconcile pass does nothing.
+func (m *Mock) Writes() int { m.mu.Lock(); defer m.mu.Unlock(); return m.writes }
+
+// ResetWrites zeroes the write counter.
+func (m *Mock) ResetWrites() { m.mu.Lock(); m.writes = 0; m.mu.Unlock() }
 
 // Table returns copies of every row of path in order (tests and the UI).
 func (m *Mock) Table(path string) []Row {
