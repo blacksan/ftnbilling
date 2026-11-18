@@ -123,7 +123,10 @@ type provState struct {
 	started time.Time       // first pass, the baseline of "not seen for 24 h"
 	foreign map[string]bool // addresses of the router's own static leases, from the last pass
 	sawOn   bool            // ftn-dhcp has been seen enabled by this server
-	run     sync.Mutex      // one pass at a time per building
+	// routerUsers: normalised MAC -> the hotspot session, user or binding that
+	// holds it on the router, from the last refreshDevices.
+	routerUsers map[string]string
+	run         sync.Mutex // one pass at a time per building
 }
 
 type acctSnap struct {

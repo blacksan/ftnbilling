@@ -56,6 +56,9 @@ type Manager struct {
 	stray atomic.Uint64 // NetFlow datagrams from unknown sources
 
 	foreignIPs atomic.Pointer[func(string) map[string]bool] // set by billing.NewService
+
+	chk          checksState   // cache of the setup checks (checks.go)
+	autoFixDelay time.Duration // wait after the first answer before the post-join fixes (runtime.go)
 }
 
 // SetForeignIPs lets the billing service tell the cutover which addresses the
@@ -82,7 +85,8 @@ func New(o Options) *Manager {
 	if now == nil {
 		now = time.Now
 	}
-	m := &Manager{cfg: o.Cfg, st: o.Store, dir: o.Dir, log: o.Log, opt: o, now: now, pfx: pfx.Masked(), rts: map[string]*Runtime{}}
+	m := &Manager{cfg: o.Cfg, st: o.Store, dir: o.Dir, log: o.Log, opt: o, now: now, pfx: pfx.Masked(), rts: map[string]*Runtime{},
+		autoFixDelay: 20 * time.Second}
 	if o.Cfg.RouterMock {
 		m.mock = routeros.NewMock()
 	}

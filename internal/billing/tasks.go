@@ -282,6 +282,15 @@ func (s *Service) Sweep(ctx context.Context) {
 				}
 			}
 			s.RunSiteTasks(ctx, id)
+			// A hotspot building has no reconcile pass: read its devices here
+			// (best effort, read only) so the unregistered list stays current.
+			if st, ok := s.site(id); ok && (st.Mode == store.SiteModeEnv || !st.JoinedAt.IsZero()) {
+				dctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+				defer cancel()
+				if err := s.refreshDevices(dctx, st); err != nil {
+					s.log.Debug("device refresh failed", "site", id, "err", err)
+				}
+			}
 		}()
 	}
 	wg.Wait()

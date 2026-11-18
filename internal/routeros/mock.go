@@ -25,9 +25,12 @@ type Mock struct {
 	ExecOut func(cmd string) (string, error)
 	leases  []Lease
 	// tables holds the generic rows (Rows, AddRow...): path -> rows in order.
-	tables map[string][]Row
-	nextID int
-	writes int // successful AddRow/SetRow/RemoveRow calls since the last ResetWrites
+	tables    map[string][]Row
+	nextID    int
+	singles   map[string]Row // singleton objects for One (see inspect.go)
+	calls     []CallRecord
+	failPaths map[string]error
+	writes    int // successful AddRow/SetRow/RemoveRow calls since the last ResetWrites
 }
 
 func NewMock() *Mock {
@@ -265,8 +268,8 @@ func copyRow(r Row) Row {
 func (m *Mock) Rows(_ context.Context, path string, query map[string]string) ([]Row, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.fail != nil {
-		return nil, m.fail
+	if err := m.pathErrLocked(path); err != nil {
+		return nil, err
 	}
 	var out []Row
 	for _, r := range m.tables[cleanPath(path)] {
@@ -281,8 +284,8 @@ func (m *Mock) Rows(_ context.Context, path string, query map[string]string) ([]
 func (m *Mock) AddRow(_ context.Context, path string, body map[string]string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.fail != nil {
-		return "", m.fail
+	if err := m.pathErrLocked(path); err != nil {
+		return "", err
 	}
 	if m.tables == nil {
 		m.tables = map[string][]Row{}
@@ -300,8 +303,8 @@ func (m *Mock) AddRow(_ context.Context, path string, body map[string]string) (s
 func (m *Mock) SetRow(_ context.Context, path, id string, diff map[string]string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.fail != nil {
-		return m.fail
+	if err := m.pathErrLocked(path); err != nil {
+		return err
 	}
 	for _, r := range m.tables[cleanPath(path)] {
 		if r[RowID] == id {
@@ -321,8 +324,8 @@ func (m *Mock) SetRow(_ context.Context, path, id string, diff map[string]string
 func (m *Mock) RemoveRow(_ context.Context, path, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.fail != nil {
-		return m.fail
+	if err := m.pathErrLocked(path); err != nil {
+		return err
 	}
 	p := cleanPath(path)
 	rows := m.tables[p]
