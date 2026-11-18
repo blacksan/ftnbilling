@@ -24,6 +24,9 @@ type Mock struct {
 	// ExecOut, when set, answers Execute instead of the built-in samples.
 	ExecOut func(cmd string) (string, error)
 	leases  []Lease
+	// tables holds the generic rows (Rows, AddRow...): path -> rows in order.
+	tables map[string][]Row
+	nextID int
 }
 
 func NewMock() *Mock {
@@ -234,4 +237,115 @@ func (m *Mock) Leases(_ context.Context, mac string) ([]Lease, error) {
 		}
 	}
 	return out, nil
+}
+
+// ---- generic rows: in-memory tables ----------------------------------------
+
+func cleanPath(p string) string { return "/" + strings.Trim(strings.TrimSpace(p), "/") }
+
+func rowMatches(r, query Row) bool {
+	for k, v := range query {
+		if !strings.EqualFold(r[k], v) {
+			return false
+		}
+	}
+	return true
+}
+
+func copyRow(r Row) Row {
+	c := make(Row, len(r))
+	for k, v := range r {
+		c[k] = v
+	}
+	return c
+}
+
+// Rows returns copies of the rows of path that match query.
+func (m *Mock) Rows(_ context.Context, path string, query map[string]string) ([]Row, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fail != nil {
+		return nil, m.fail
+	}
+	var out []Row
+	for _, r := range m.tables[cleanPath(path)] {
+		if rowMatches(r, query) {
+			out = append(out, copyRow(r))
+		}
+	}
+	return out, nil
+}
+
+// AddRow appends a row with a new .id (*1, *2...).
+func (m *Mock) AddRow(_ context.Context, path string, body map[string]string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fail != nil {
+		return "", m.fail
+	}
+	if m.tables == nil {
+		m.tables = map[string][]Row{}
+	}
+	m.nextID++
+	r := copyRow(body)
+	r[RowID] = fmt.Sprintf("*%X", m.nextID)
+	p := cleanPath(path)
+	m.tables[p] = append(m.tables[p], r)
+	return r[RowID], nil
+}
+
+// SetRow changes the given properties of one row (404 if there is none).
+func (m *Mock) SetRow(_ context.Context, path, id string, diff map[string]string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fail != nil {
+		return m.fail
+	}
+	for _, r := range m.tables[cleanPath(path)] {
+		if r[RowID] == id {
+			for k, v := range diff {
+				if k != RowID {
+					r[k] = v
+				}
+			}
+			return nil
+		}
+	}
+	return &APIError{Status: 404, Message: "Not Found", Detail: "no such item"}
+}
+
+// RemoveRow deletes one row; a missing row is not an error.
+func (m *Mock) RemoveRow(_ context.Context, path, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fail != nil {
+		return m.fail
+	}
+	p := cleanPath(path)
+	rows := m.tables[p]
+	for i, r := range rows {
+		if r[RowID] == id {
+			m.tables[p] = append(rows[:i:i], rows[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
+
+// Table returns copies of every row of path in order (tests and the UI).
+func (m *Mock) Table(path string) []Row {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []Row
+	for _, r := range m.tables[cleanPath(path)] {
+		out = append(out, copyRow(r))
+	}
+	return out
+}
+
+// SeedRow puts a row into a table as if it had been there before ispbill
+// (a foreign row: tests of drift and conflicts).
+func (m *Mock) SeedRow(path string, r Row) string {
+	id, _ := m.AddRow(context.Background(), path, r)
+	return id
 }

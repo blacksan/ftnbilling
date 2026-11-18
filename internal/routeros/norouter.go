@@ -38,3 +38,12 @@ func (noRouter) Traceroute(context.Context, string, int) ([]Hop, error) {
 	return nil, ErrNoRouter
 }
 func (noRouter) Leases(context.Context, string) ([]Lease, error) { return nil, ErrNoRouter }
+
+func (noRouter) Rows(context.Context, string, map[string]string) ([]Row, error) {
+	return nil, ErrNoRouter
+}
+func (noRouter) AddRow(context.Context, string, map[string]string) (string, error) {
+	return "", ErrNoRouter
+}
+func (noRouter) SetRow(context.Context, string, string, map[string]string) error { return ErrNoRouter }
+func (noRouter) RemoveRow(context.Context, string, string) error                 { return ErrNoRouter }
