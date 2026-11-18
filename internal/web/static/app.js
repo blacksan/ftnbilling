@@ -136,6 +136,24 @@
     });
   }
 
+  // askName is ask() with the router name typed to enable the button; it resolves to the typed name, or null.
+  function askName(title, text, yes, name) {
+    return new Promise(function (resolve) {
+      var want = name || ($("[data-setup]") || {getAttribute: function () { return ""; }}).getAttribute("data-name") || "";
+      var d = el("dialog", "modal"), f = el("div", "mcard");
+      var h = el("header"); h.appendChild(el("h2", "", title)); f.appendChild(h);
+      f.appendChild(el("p", "", text));
+      var inp = el("input"); inp.placeholder = want; inp.autocomplete = "off"; inp.setAttribute("aria-label", "Router name"); inp.setAttribute("data-confirm-name", ""); f.appendChild(inp);
+      var ft = el("footer"), n = el("button", "btn ghost", "Cancel"), y = el("button", "btn danger", yes || "Confirm");
+      n.type = y.type = "button"; y.disabled = true; ft.appendChild(n); ft.appendChild(y); f.appendChild(ft); d.appendChild(f); doc.body.appendChild(d);
+      function done(v) { d.close(); d.remove(); resolve(v); }
+      inp.addEventListener("input", function () { y.disabled = inp.value.trim() !== want; });
+      n.onclick = function () { done(null); }; y.onclick = function () { done(inp.value.trim()); };
+      d.addEventListener("cancel", function () { done(null); });
+      d.showModal(); inp.focus();
+    });
+  }
+
   /* ---- copy buttons ------------------------------------------------------------------ */
   doc.addEventListener("click", function (e) {
     var b = e.target.closest("[data-copy],[data-copy-from]"); if (!b) return;
@@ -464,8 +482,8 @@
           jobBox.appendChild(ol);
         }
         var act = el("div", "row"); act.style.marginTop = "12px";
-        if (!isOwner) { if (j.state === "ready" || na.kind === "migrate" || na.kind === "retry") jobBox.appendChild(el("p", "muted", "Only an owner can start or roll back a set-up.")); return; }
-        if (na.kind === "retry" && j.join && j.join.state !== "waiting" && j.state !== "waiting_router") {
+        if (!isOwner) { if (j.state === "ready" || na.kind === "migrate" || na.kind === "retry" || na.kind === "fix") jobBox.appendChild(el("p", "muted", "Only an owner can start or roll back a set-up.")); return; }
+        if ((na.kind === "retry" || na.kind === "fix") && j.state !== "waiting_router" && j.state !== "rolling_back") {
           var rn = el("button", "btn", "Run set-up"); rn.type = "button"; rn.onclick = function () { rn.disabled = true; postJob("run", { id: rid }); }; act.appendChild(rn);
         }
         if (na.kind === "migrate" || j.state === "ready") {
@@ -481,7 +499,7 @@
         }
         if (ROLLBACK_STATES[j.state]) {
           var rb = el("button", "btn danger", "Roll back now"); rb.type = "button";
-          rb.onclick = function () { ask("Roll back now?", "The router goes back to how it was before the switch within about 30 seconds.", "Roll back").then(function (y) { if (y) postJob("rollback", { id: rid }, "Rolling back."); }); };
+          rb.onclick = function () { askName("Roll back now?", "The router goes back to how it was before the switch within about 30 seconds. Type the router name to confirm.", "Roll back").then(function (nm) { if (nm != null) postJob("rollback", { id: rid, confirm_name: nm }, "Rolling back."); }); };
           act.appendChild(rb);
         }
         if (act.childNodes.length) jobBox.appendChild(act);

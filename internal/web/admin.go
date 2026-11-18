@@ -361,18 +361,31 @@ func (s *Server) createCustomer(ctx context.Context, in customerForm) (store.Acc
 	if n, err := billing.NormalizeMAC(in.MAC); err == nil {
 		mac = n
 	}
+	// billing uses Note for both the account note and the activation note; the
+	// customer's note is set on the account afterwards so the two stay apart.
+	note := in.Notes
+	if in.Activate {
+		note = "activated on create"
+	}
 	a, rs, err := s.svc.CreateCustomer(ctx, billing.AddCustomerInput{SiteID: in.SiteID, Flat: in.Flat, Tenant: in.Tenant, Phone: in.Phone, MAC: mac,
-		PackageID: in.PackageID, Activate: in.Activate, Note: in.Notes})
-	if err != nil {
-		if a.ID != "" {
-			err = fmt.Errorf("the account was created but could not be activated: %w", err)
+		PackageID: in.PackageID, Activate: in.Activate, Note: note})
+	if a.ID != "" {
+		if in.Activate && in.Notes != "" {
+			_ = s.svc.UpdateAccount(a.ID, a.Flat, a.Tenant, a.Phone, in.Notes)
 		}
-		return a, rs, err
+		if in.WhatsApp != "" || in.WASame {
+			_ = s.svc.SetWhatsApp(a.ID, in.WhatsApp, in.WASame, false)
+		}
+		a, _ = s.svc.GetAccount(a.ID)
 	}
-	if in.WhatsApp != "" || in.WASame {
-		_ = s.svc.SetWhatsApp(a.ID, in.WhatsApp, in.WASame, false)
+	if err != nil && a.ID != "" {
+		if in.Activate && billing.AccountState(a, s.svc.Now()) != billing.StateActive {
+			err = fmt.Errorf("the account was created but could not be activated: %w", err)
+		} else {
+			err = fmt.Errorf("the account was created, but: %w", err)
+		}
 	}
-	return a, rs, nil
+	return a, rs, err
 }
 
 // routerStateJSON says what the router side of one account looks like:

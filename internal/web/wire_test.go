@@ -434,3 +434,48 @@ func TestWireOutageNoticeReturnsToRouters(t *testing.T) {
 		t.Fatalf("%d %q", resp.StatusCode, loc)
 	}
 }
+
+func TestFixERollbackNeedsTheTypedNameAndFixCanRunAgain(t *testing.T) {
+	r, _ := liveRig(t)
+	src, err := os.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(src)
+	for _, want := range []string{`postJob("rollback", { id: rid, confirm_name: nm }`, "askName(", `na.kind === "fix"`, `postJob("run"`} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js lacks %q", want)
+		}
+	}
+	if code, j := r.postJSON(t, "/admin/routers/setup/rollback", url.Values{"id": {r.A.ID}}); code != 422 || j["error"] == nil {
+		t.Fatalf("rollback without a name: %d %v", code, j)
+	}
+	if code, _ := r.postJSON(t, "/admin/routers/setup/rollback", url.Values{"id": {r.A.ID}, "confirm_name": {"Alpha"}}); code == 422 {
+		t.Fatalf("rollback with the name was refused as a name mismatch")
+	}
+	if h := r.adminGet(t, "/admin/tools"); strings.Contains(h, "need the router name and your password (the router itself") {
+		t.Error("stale console help")
+	}
+}
+
+func TestFixECreateCustomerKeepsNotesAndWhatsApp(t *testing.T) {
+	m, s, _ := ipoeApp(t, nil)
+	pkg := m.pkgID("Monthly 20 Mbps")
+	code, j := m.postJSON(t, "/admin/accounts/create", url.Values{"site": {s.ID}, "flat": {"Flat N1"}, "package": {pkg}, "mac": {"AA:BB:CC:00:00:91"}, "activate": {"1"}, "notes": {"gate code 4411"}, "whatsapp": {"0722000999"}})
+	if code != 201 {
+		t.Fatalf("%d %v", code, j)
+	}
+	var notes, wa string
+	m.st.View(func(d *store.Data) { a := d.Accounts[j["id"].(string)]; notes, wa = a.Notes, a.WhatsApp })
+	if notes != "gate code 4411" || wa == "" {
+		t.Fatalf("notes %q whatsapp %q", notes, wa)
+	}
+}
+
+func TestFixEMapGeoLinkSurvivesTemplateEscaping(t *testing.T) {
+	m, site, _ := uiRig(t)
+	m.st.Update(func(d *store.Data) error { x := d.Sites[site]; x.Lat, x.Lng = -1.2864, 36.8172; d.Sites[site] = x; return nil })
+	if h := m.adminGet(t, "/admin/map"); !strings.Contains(h, `href="geo:-1.286400,36.817200"`) {
+		t.Error("geo link missing or blanked on the map page")
+	}
+}
