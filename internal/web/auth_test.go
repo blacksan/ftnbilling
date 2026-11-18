@@ -14,11 +14,19 @@ import (
 // attempt posts the login form as client ip (through X-Forwarded-For) and
 // returns the status and body. The login CSRF cookie is fetched once per rig.
 func (r *setRig) attempt(ip, user, pass string) (int, string, http.Header) {
+	return r.attemptWith(ip, user, pass)
+}
+
+// attemptWith is attempt that also sends cookies (a known-browser cookie).
+func (r *setRig) attemptWith(ip, user, pass string, extra ...*http.Cookie) (int, string, http.Header) {
 	lc := r.loginCookie()
 	form := url.Values{"username": {user}, "password": {pass}, "_csrf": {lc.Value}}
 	req, _ := http.NewRequest("POST", r.ts.URL+"/admin/login", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(lc)
+	for _, c := range extra {
+		req.AddCookie(c)
+	}
 	if ip != "" {
 		req.Header.Set("X-Forwarded-For", ip)
 	}
@@ -150,27 +158,6 @@ func TestPerAddressLockout(t *testing.T) {
 	}
 }
 
-// Guessing at one account from many addresses blocks strangers for that
-// account, while an address that signed in as it lately keeps working.
-func TestPerAccountLockoutSparesKnownAddress(t *testing.T) {
-	r := newSetRig(t)
-	signInFrom(t, r.ts, r.srv, r.st, r.who, "198.51.100.1") // a full sign-in trusts the address
-	// The 30 failures needed to trip the account limit also hit the global limit
-	// for unknown addresses; so use few addresses: 2 failures each from 5 of them.
-	for i := 0; i < 10; i++ {
-		ip := "192.0.2." + string(rune('1'+i/2))
-		if c, _, _ := r.attempt(ip, "admin", "wrong-password-x"); c != 401 {
-			t.Fatalf("guess %d: %d", i, c)
-		}
-	}
-	if c, _, _ := r.attempt("192.0.2.99", "admin", pw); c != 429 {
-		t.Fatalf("a stranger after 10 failures on the account: %d", c)
-	}
-	if c, _, _ := r.attempt("198.51.100.1", "admin", pw); c != 303 {
-		t.Fatalf("the known address was locked out: %d", c)
-	}
-}
-
 // An unknown user and a wrong password look the same, and cost the same checks.
 func TestNoUserEnumeration(t *testing.T) {
 	r := newSetRig(t)
@@ -194,19 +181,5 @@ func TestNoUserEnumeration(t *testing.T) {
 	}
 	if evals.Load() != 2 {
 		t.Fatalf("an unknown user must still cost a password check: %d checks", evals.Load())
-	}
-}
-
-// The global limit must not lock the owner out: an address that signed in
-// before is exempt; a stranger waits.
-func TestGlobalLimitDoesNotLockOwnerOut(t *testing.T) {
-	r := newSetRig(t)
-	signInFrom(t, r.ts, r.srv, r.st, r.who, "127.0.0.7")
-	r.srv.AuthInjectFailures("127.0.0.9", 40)
-	if c, _, _ := r.attempt("127.0.0.7", "admin", pw); c != 303 {
-		t.Fatalf("a known address was blocked by the global limit: %d", c)
-	}
-	if c, _, _ := r.attempt("127.0.0.50", "admin", "wrong-password-x"); c != 429 {
-		t.Fatalf("a stranger guessing should wait under the global limit: %d", c)
 	}
 }

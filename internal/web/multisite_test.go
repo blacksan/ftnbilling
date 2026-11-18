@@ -38,6 +38,9 @@ type multi struct {
 	*app
 	mocks map[string]*routeros.Mock
 	logs  *syncBuf
+
+	alertMu sync.Mutex
+	alerts  []string // security alerts the owners would have got
 }
 
 func (m *multi) addSite(t *testing.T, name string) store.Site {
@@ -101,6 +104,7 @@ func newMultiOps(t *testing.T, mut func(*config.Config), mkOps func(cfg config.C
 	}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
+	srv.SetSecurityAlertSink(func(msg string) { m.alertMu.Lock(); m.alerts = append(m.alerts, msg); m.alertMu.Unlock() })
 	m.app = &app{ts: ts, st: st, svc: svc, mgr: mgr, srv: srv, cl: &http.Client{CheckRedirect: noRedirect}}
 	m.owner = seedUser(t, srv, st, "admin", store.RoleOwner, pw)
 	m.br = signIn(t, ts, srv, st, m.owner)
@@ -435,4 +439,10 @@ func TestHealthzCountsBuildings(t *testing.T) {
 	if r.StatusCode != 200 || !strings.Contains(b, `"sites_total":1`) || !strings.Contains(b, `"router_ok"`) {
 		t.Fatalf("healthz %d %s", r.StatusCode, b)
 	}
+}
+
+func (m *multi) gotAlerts() []string {
+	m.alertMu.Lock()
+	defer m.alertMu.Unlock()
+	return append([]string(nil), m.alerts...)
 }

@@ -84,6 +84,7 @@ func seedUser(t testing.TB, srv *web.Server, st *store.Store, name, role, pass s
 type browser struct {
 	Cookie *http.Cookie
 	CSRF   string
+	Known  *http.Cookie // the known-browser cookie the full sign-in handed out
 }
 
 var noRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -150,11 +151,17 @@ func signInFrom(t testing.TB, ts *httptest.Server, srv *web.Server, st *store.St
 	if sc == nil {
 		t.Fatal("the session id did not rotate after the code")
 	}
+	var known *http.Cookie
+	for _, c := range r.Cookies() {
+		if strings.HasSuffix(c.Name, "ftn_kb") && c.Value != "" {
+			known = c
+		}
+	}
 	sess, _, ok = srv.Auth().Session(sc.Value)
 	if !ok || !sess.MFA {
 		t.Fatal("not fully signed in")
 	}
-	return &browser{Cookie: sc, CSRF: sess.CSRF}
+	return &browser{Cookie: sc, CSRF: sess.CSRF, Known: known}
 }
 
 func sessionCookie(r *http.Response) *http.Cookie {

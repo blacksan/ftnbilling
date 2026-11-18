@@ -346,14 +346,9 @@ func TestAPIRefreshRotationReuseGraceAndRevoke(t *testing.T) {
 	}
 	third := tokens{str(x.JSON(t), "access_token"), str(x.JSON(t), "refresh_token"), first.DeviceID}
 	// After the grace period the old token means theft: the device is revoked, new tokens included.
-	if err := r.st.Update(func(d *store.Data) error {
-		dv := d.APIDevices[first.DeviceID]
-		dv.RefreshRotatedAt = time.Now().Add(-authn.RefreshGrace - time.Minute)
-		d.APIDevices[first.DeviceID] = dv
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
+	// (The clock of the sign-in service moves on: rewriting the stored time would look like a stale write.)
+	skip := authn.RefreshGrace + time.Minute
+	r.srv.Auth().SetClock(func() time.Time { return time.Now().Add(skip) })
 	// The grace window is measured from the last rotation, so rotate once more then age it.
 	_ = third
 	if x := refresh(first.Refresh); x.Status != 401 || x.errCode(t) != "token_revoked" {

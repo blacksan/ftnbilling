@@ -147,15 +147,17 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		s.loginFail(w, r, p, http.StatusUnauthorized, genericLoginError)
 		return
 	}
-	att, out := s.auth.begin(ip, name)
+	u, exists := s.authn.UserByName(name)
+	att, out := s.auth.begin(ip, name, s.knownID(r, u.ID))
 	if !out.ok {
 		s.tooMany(w, r, "admin_login", p, ip, out)
 		return
 	}
-	u, exists := s.authn.UserByName(name)
-	good, busy := s.auth.password(u, exists, pass)
+	pause(r, out.delay)
+	good, busy := s.auth.password(u, exists, pass, out.known)
 	if busy {
-		att.end(false, false)
+		// A stranger who keeps the slot busy pays for it like a wrong password.
+		att.end(!out.known, false)
 		s.tooMany(w, r, "admin_login", p, ip, outcome{busy: true, wait: 2 * time.Second})
 		return
 	}
@@ -171,6 +173,13 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	}
 	// Password right; the second factor is still to come, so the books stay as they were.
 	att.end(false, false)
+	if !s.auth.halfAllowed(u.ID, ip, out.known) {
+		s.tooMany(w, r, "admin_login", p, ip, outcome{limited: true, wait: loginWindow / 3})
+		return
+	}
+	if !out.known {
+		s.passwordAccepted(u, ip)
+	}
 	// A new session id on every login: nothing set before it carries over.
 	if c, err := r.Cookie(s.sessionCookieName()); err == nil {
 		s.authn.DeleteSession(authn.HashToken(c.Value))
@@ -216,19 +225,29 @@ func (s *Server) totpPost(w http.ResponseWriter, r *http.Request) {
 		s.render(w, "admin_totp", p)
 		return
 	}
-	att, out := s.auth.begin(ip, u.Username)
+	att, out := s.auth.begin(ip, u.Username, s.knownID(r, u.ID))
 	if !out.ok {
 		s.tooMany(w, r, "admin_totp", p, ip, out)
 		return
 	}
+	pause(r, out.delay)
 	var err error
 	if rec != "" {
 		err = s.authn.UseRecoveryCode(u.ID, rec, ip)
 	} else {
-		err = s.authn.VerifyTOTP(u.ID, code)
+		err = s.authn.VerifyTOTPFrom(u.ID, code, ip)
 	}
 	if err != nil {
-		att.end(!errors.Is(err, store.ErrUnavailable), false)
+		att.end(errors.Is(err, authn.ErrBadCode), false)
+		if errors.Is(err, authn.ErrTOTPBackoff) || errors.Is(err, authn.ErrTOTPLocked) {
+			p.Error = "Too many wrong codes. Wait a while and try again, or use a recovery code."
+			if errors.Is(err, authn.ErrTOTPLocked) {
+				p.Error = "Too many wrong codes. Only a recovery code signs in now."
+			}
+			w.WriteHeader(http.StatusTooManyRequests)
+			s.render(w, "admin_totp", p)
+			return
+		}
 		if errors.Is(err, authn.ErrBadCode) {
 			p.Error = "That code is not right."
 			if rec != "" {
@@ -248,6 +267,7 @@ func (s *Server) totpPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setSessionCookie(w, val)
+	s.rememberBrowser(w, r, u.ID)
 	s.authn.AuditNow(u.Username, ip, "signed in to the admin pages")
 	http.Redirect(w, r, orDefault(nextParam(r), "/admin"), http.StatusSeeOther)
 }
@@ -310,11 +330,12 @@ func (s *Server) enrolPost(w http.ResponseWriter, r *http.Request) {
 	u, _ := userOf(r)
 	p := s.authPage(r)
 	p.CSRF, p.Username = sess.CSRF, u.Username
-	att, out := s.auth.begin(ip, u.Username)
+	att, out := s.auth.begin(ip, u.Username, "")
 	if !out.ok {
 		s.tooMany(w, r, "admin_enrol", p, ip, out)
 		return
 	}
+	pause(r, out.delay)
 	codes, err := s.authn.ConfirmEnrol(u.ID, r.PostFormValue("code"), u.Username, ip)
 	if err != nil {
 		att.end(errors.Is(err, authn.ErrBadCode), false)
@@ -339,6 +360,7 @@ func (s *Server) enrolPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setSessionCookie(w, val)
+	s.rememberBrowser(w, r, u.ID)
 	p.Done, p.Codes = true, codes
 	p.CSRF = nsess.CSRF
 	s.render(w, "admin_enrol", p)

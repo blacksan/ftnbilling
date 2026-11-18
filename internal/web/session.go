@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"ispbill/internal/authn"
 	"ispbill/internal/store"
@@ -43,6 +44,49 @@ func (s *Server) cookie(name, value string, maxAge int) *http.Cookie {
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, value string) {
 	http.SetCookie(w, s.cookie(s.sessionCookieName(), value, 0))
+}
+
+// The known-browser cookie (see authn/known.go): set after a full sign-in,
+// read at the next one so the owner is never shut out by strangers' failures.
+func (s *Server) knownCookieName() string {
+	if s.secureCookies() {
+		return "__Host-ftn_kb"
+	}
+	return "ftn_kb"
+}
+
+func (s *Server) setKnownCookie(w http.ResponseWriter, value string) {
+	http.SetCookie(w, s.cookie(s.knownCookieName(), value, int(authn.KnownLife/time.Second)))
+}
+
+// knownID is the known id of the request's known-browser cookie when it
+// belongs to userID, else "" (a stranger).
+func (s *Server) knownID(r *http.Request, userID string) string {
+	c, err := r.Cookie(s.knownCookieName())
+	if err != nil || userID == "" {
+		return ""
+	}
+	return s.knownValueID(c.Value, userID)
+}
+
+func (s *Server) knownValueID(value, userID string) string {
+	if value == "" || userID == "" || s.authn.KnownUser(value) != userID {
+		return ""
+	}
+	return authn.KnownID(value)
+}
+
+// rememberBrowser marks the browser as known after a full sign-in: a fresh
+// value, or a longer life for the one it has.
+func (s *Server) rememberBrowser(w http.ResponseWriter, r *http.Request, userID string) {
+	if c, err := r.Cookie(s.knownCookieName()); err == nil && s.authn.KnownUser(c.Value) == userID {
+		s.authn.RenewKnown(c.Value)
+		s.setKnownCookie(w, c.Value)
+		return
+	}
+	if v, err := s.authn.IssueKnown(userID); err == nil {
+		s.setKnownCookie(w, v)
+	}
 }
 
 func (s *Server) clearSessionCookie(w http.ResponseWriter) {

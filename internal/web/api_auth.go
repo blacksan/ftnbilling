@@ -23,7 +23,8 @@ type apiLoginReq struct {
 	Password     string       `json:"password"`
 	TOTP         string       `json:"totp"`
 	RecoveryCode string       `json:"recovery_code"`
-	SetupCode    string       `json:"setup_code"` // reserved: enrolment is done on the web page
+	SetupCode    string       `json:"setup_code"`  // reserved: enrolment is done on the web page
+	KnownToken   string       `json:"known_token"` // from an earlier login answer: this phone signed in fully before
 	Device       apiDeviceReq `json:"device"`
 }
 
@@ -44,8 +45,11 @@ func tokenJSON(t authn.Tokens, u store.AdminUser) map[string]any {
 }
 
 // apiLogin signs a phone in. The password and the second factor come in one
-// request. A correct password without a code counts as a failed attempt, so the
-// password cannot be tested separately from the authenticator at no cost.
+// request. A correct password without a code counts as a failed attempt (and so
+// does a correct password for a user who has not enrolled), so the password
+// cannot be tested separately from the authenticator at no cost. A phone that
+// signed in fully before sends back the known_token it was given; with it,
+// strangers' failed guesses at the account never refuse or slow this phone.
 func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 	if s.fromTunnel(r) {
 		http.NotFound(w, r)
@@ -72,7 +76,8 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := realIP(r)
-	att, out := s.auth.begin(ip, name)
+	u, exists := s.authn.UserByName(name)
+	att, out := s.auth.begin(ip, name, s.knownValueID(req.KnownToken, u.ID))
 	if !out.ok {
 		if out.limited {
 			s.auth.auditBlocked(ip, time.Now())
@@ -80,10 +85,10 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 		rateLimited(w, out.wait, false)
 		return
 	}
-	u, exists := s.authn.UserByName(name)
-	good, busy := s.auth.password(u, exists, req.Password)
+	pause(r, out.delay)
+	good, busy := s.auth.password(u, exists, req.Password, out.known)
 	if busy {
-		att.end(false, false)
+		att.end(!out.known, false)
 		rateLimited(w, 2*time.Second, true)
 		return
 	}
@@ -109,10 +114,18 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 	if rec != "" {
 		err = s.authn.UseRecoveryCode(u.ID, rec, ip)
 	} else {
-		err = s.authn.VerifyTOTP(u.ID, code)
+		err = s.authn.VerifyTOTPFrom(u.ID, code, ip)
 	}
 	if err != nil {
 		att.end(errors.Is(err, authn.ErrBadCode), false)
+		if errors.Is(err, authn.ErrTOTPBackoff) || errors.Is(err, authn.ErrTOTPLocked) {
+			if errors.Is(err, authn.ErrTOTPLocked) {
+				apiErr(w, http.StatusUnauthorized, codeTOTPInvalid, "Too many wrong codes. Only a recovery code signs in now.", map[string]any{"recovery_code_required": true})
+				return
+			}
+			rateLimited(w, authn.TOTPBackoff(u.TOTPFails), false)
+			return
+		}
 		if errors.Is(err, authn.ErrBadCode) {
 			apiErr(w, http.StatusUnauthorized, codeTOTPInvalid, "That code is not right or was already used.", nil)
 			return
@@ -132,7 +145,16 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, tokenJSON(tok, u))
+	out2 := tokenJSON(tok, u)
+	// The phone keeps this value and sends it back as known_token at its next
+	// sign-in, so strangers' failed guesses never lock the owner's phone out.
+	if id := s.knownValueID(req.KnownToken, u.ID); id != "" {
+		s.authn.RenewKnown(req.KnownToken)
+		out2["known_token"] = req.KnownToken
+	} else if v, err := s.authn.IssueKnown(u.ID); err == nil {
+		out2["known_token"] = v
+	}
+	writeJSON(w, http.StatusOK, out2)
 }
 
 func (s *Server) apiRefresh(w http.ResponseWriter, r *http.Request) {

@@ -11,7 +11,7 @@ import (
 // RecoveryCodeCount is how many single-use codes enrolment hands out.
 const RecoveryCodeCount = 10
 
-// A recovery code is 10 characters from a 32-letter alphabet (50 bits), shown
+// A recovery code is 10 characters from a 31-character alphabet (about 49.5 bits), shown
 // as xxxxx-xxxxx. They are random and long, so a plain SHA-256 is enough to
 // store them (there is nothing to brute-force); comparison is constant time.
 const recAlphabet = "abcdefghjkmnpqrstuvwxyz23456789"

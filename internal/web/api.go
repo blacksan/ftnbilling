@@ -138,7 +138,10 @@ type idemStore struct {
 
 func newIdemStore() *idemStore { return &idemStore{m: map[string]*idemEntry{}} }
 
-const idemMax = 20000
+const (
+	idemMax       = 20000
+	idemPerDevice = 500 // one phone cannot fill the table for the others
+)
 
 // begin returns the entry for key and whether the caller owns it (must run the
 // call and finish it); otherwise the caller waits on e.done and replays.
@@ -147,6 +150,9 @@ func (s *idemStore) begin(key, fp string, now time.Time) (e *idemEntry, owner bo
 	defer s.mu.Unlock()
 	if old, ok := s.m[key]; ok && now.Sub(old.at) < idemTTL {
 		return old, false
+	}
+	if dev, _, ok := strings.Cut(key, "|"); ok {
+		s.capDevice(dev+"|", now)
 	}
 	if len(s.m) >= idemMax {
 		for k, v := range s.m {
@@ -161,6 +167,34 @@ func (s *idemStore) begin(key, fp string, now time.Time) (e *idemEntry, owner bo
 	e = &idemEntry{fp: fp, done: make(chan struct{}), at: now}
 	s.m[key] = e
 	return e, true
+}
+
+// capDevice makes room for one more entry of the device whose keys start with
+// prefix: expired ones go first, then the oldest.
+func (s *idemStore) capDevice(prefix string, now time.Time) {
+	n := 0
+	for k, v := range s.m {
+		if strings.HasPrefix(k, prefix) {
+			if now.Sub(v.at) >= idemTTL {
+				delete(s.m, k)
+			} else {
+				n++
+			}
+		}
+	}
+	for ; n >= idemPerDevice; n-- {
+		oldest, ok := "", false
+		var at time.Time
+		for k, v := range s.m {
+			if strings.HasPrefix(k, prefix) && (!ok || v.at.Before(at)) {
+				oldest, at, ok = k, v.at, true
+			}
+		}
+		if !ok {
+			return
+		}
+		delete(s.m, oldest)
+	}
 }
 
 func (s *idemStore) drop(key string, e *idemEntry) {

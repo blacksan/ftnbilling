@@ -16,6 +16,8 @@ var (
 	ErrNoDataKey        = errors.New("DATA_KEY is not set: two-factor secrets cannot be stored")
 	ErrNoUser           = errors.New("no such user")
 	ErrBadCode          = errors.New("that code is not right")
+	ErrTOTPBackoff      = errors.New("too many wrong codes; wait before trying again")
+	ErrTOTPLocked       = errors.New("too many wrong codes; only a recovery code works now")
 	ErrAlreadyEnrolled  = errors.New("two-factor sign-in is already set up")
 	ErrNotEnrolled      = errors.New("two-factor sign-in is not set up")
 	ErrTokenExpired     = errors.New("the access token has expired")
@@ -40,6 +42,9 @@ const (
 	touchEvery        = 60 * time.Second
 	revokedKeep       = 30 * 24 * time.Hour
 	maxSessionsPerUse = 20
+
+	// MaxHalfSessions is how many password-only sessions one user may have open.
+	MaxHalfSessions = 3
 )
 
 // Service holds the sign-in state of the admin pages and the app.
@@ -51,6 +56,9 @@ type Service struct {
 	// audit writes an audit event. The server uses d.AddEvent; the command
 	// line tools send it to stderr instead (see SetAudit).
 	audit func(d *store.Data, e store.Event)
+
+	// onAlert tells the owners about a security event (see SetAlert).
+	onAlert func(msg string)
 
 	mu    sync.Mutex
 	touch map[string]time.Time // session or device id -> last write of last_seen
@@ -82,6 +90,17 @@ func (s *Service) Now() time.Time { return s.now() }
 // SetAudit replaces the audit writer (the CLI cannot add event rows while the
 // service runs on the same database: it would collide with its event numbers).
 func (s *Service) SetAudit(fn func(d *store.Data, e store.Event)) { s.audit = fn }
+
+// SetAlert installs the function that carries a security alert to the owners
+// (the server wires it to the WhatsApp/e-mail outbox).
+func (s *Service) SetAlert(fn func(msg string)) { s.onAlert = fn }
+
+// Alert sends msg through the alert hook, if there is one.
+func (s *Service) Alert(msg string) {
+	if s.onAlert != nil {
+		s.onAlert(msg)
+	}
+}
 
 // HasDataKey reports whether TOTP secrets can be stored.
 func (s *Service) HasDataKey() bool { return s.box != nil }
@@ -241,6 +260,8 @@ func (s *Service) SetPassword(userID, passHash, actor, ip, keepSession string) e
 		now := s.now()
 		u.PassHash, u.PassChangedAt, u.UpdatedAt = passHash, now, now
 		d.AdminUsers[userID] = u
+		// A setup code issued for the old password must not outlive it.
+		delete(d.Settings, errSetupCodeSetting+userID)
 		s.revokeAllLocked(d, userID, keepSession, "password changed")
 		s.Audit(d, actor, ip, "password changed for "+u.Username+"; other sign-ins ended", "", "")
 		return nil
@@ -403,14 +424,67 @@ func (s *Service) ConfirmEnrol(userID, code, actor, ip string) (recovery []strin
 	return
 }
 
+// Wrong authenticator codes are counted per user in the database. From
+// totpBackoffAfter wrong codes in a row the user's codes are refused for a
+// while (doubling, up to an hour); from totpLockAfter only a recovery code
+// signs in, and a good recovery code starts the count again.
+const (
+	totpBackoffAfter = 5
+	totpLockAfter    = 10
+	totpDecay        = 24 * time.Hour // a count below the lock fades after this long without a wrong code
+)
+
+// TOTPBackoff is how long a user with n wrong codes in a row must wait since the last one.
+func TOTPBackoff(n int) time.Duration {
+	if n < totpBackoffAfter {
+		return 0
+	}
+	d := 30 * time.Second << uint(n-totpBackoffAfter)
+	if d > time.Hour || d <= 0 {
+		d = time.Hour
+	}
+	return d
+}
+
+// TOTPState reports the user's failure state: how many wrong codes, whether only a
+// recovery code works now, and how long until codes are tried again.
+func (s *Service) TOTPState(u store.AdminUser) (fails int, recoveryOnly bool, wait time.Duration) {
+	fails = u.TOTPFails
+	if fails >= totpLockAfter {
+		return fails, true, 0
+	}
+	if fails > 0 && s.now().Sub(u.TOTPFailAt) > totpDecay {
+		return 0, false, 0
+	}
+	if w := TOTPBackoff(fails) - s.now().Sub(u.TOTPFailAt); w > 0 {
+		return fails, false, w
+	}
+	return fails, false, 0
+}
+
 // VerifyTOTP checks a code for an enrolled user. A code works once: the step
 // it matched is stored, and the same or an older step is refused afterwards.
-func (s *Service) VerifyTOTP(userID, code string) error {
-	var bad bool
+func (s *Service) VerifyTOTP(userID, code string) error { return s.VerifyTOTPFrom(userID, code, "") }
+
+// VerifyTOTPFrom is VerifyTOTP that also names the client address for the audit trail.
+// It returns ErrBadCode for a wrong code, ErrTOTPBackoff while the user waits
+// and ErrTOTPLocked when only a recovery code is accepted.
+func (s *Service) VerifyTOTPFrom(userID, code, ip string) error {
+	var bad error
+	var alert string
 	err := s.st.Update(func(d *store.Data) error {
 		u, ok := d.AdminUsers[userID]
 		if !ok || !Enrolled(u) {
-			bad = true
+			bad = ErrBadCode
+			return store.ErrNoChange
+		}
+		fails, recoveryOnly, wait := s.TOTPState(u)
+		if recoveryOnly {
+			bad = ErrTOTPLocked
+			return store.ErrNoChange
+		}
+		if wait > 0 {
+			bad = ErrTOTPBackoff
 			return store.ErrNoChange
 		}
 		sec, err := s.openSecret(u)
@@ -419,10 +493,20 @@ func (s *Service) VerifyTOTP(userID, code string) error {
 		}
 		step, ok := MatchTOTP(sec, code, s.now(), u.TOTPLastStep)
 		if !ok {
-			bad = true
-			return store.ErrNoChange
+			fails++
+			u.TOTPFails, u.TOTPFailAt = fails, s.now()
+			d.AdminUsers[userID] = u
+			bad = ErrBadCode
+			if fails == totpBackoffAfter || fails == totpLockAfter {
+				alert = itoa(fails) + " wrong authenticator codes in a row for " + u.Username
+				if fails == totpLockAfter {
+					alert += "; only a recovery code signs in now"
+				}
+				s.Audit(d, u.Username, ip, alert, "", "")
+			}
+			return nil
 		}
-		u.TOTPLastStep = step
+		u.TOTPLastStep, u.TOTPFails, u.TOTPFailAt = step, 0, time.Time{}
 		d.AdminUsers[userID] = u
 		return nil
 	})
@@ -432,10 +516,10 @@ func (s *Service) VerifyTOTP(userID, code string) error {
 	if err != nil {
 		return err
 	}
-	if bad {
-		return ErrBadCode
+	if alert != "" && s.onAlert != nil {
+		s.onAlert(alert + " (from " + ip + ")")
 	}
-	return nil
+	return bad
 }
 
 // UseRecoveryCode spends one recovery code (single use).
@@ -456,6 +540,7 @@ func (s *Service) UseRecoveryCode(userID, code, ip string) error {
 		rest = append(rest, u.RecoveryCodes[:i]...)
 		rest = append(rest, u.RecoveryCodes[i+1:]...)
 		u.RecoveryCodes, u.UpdatedAt = rest, s.now()
+		u.TOTPFails, u.TOTPFailAt = 0, time.Time{}
 		d.AdminUsers[userID] = u
 		s.Audit(d, u.Username, ip, "recovery code used by "+u.Username+" ("+itoa(len(rest))+" left)", "", "")
 		return nil
@@ -514,6 +599,7 @@ func (s *Service) ResetTOTP(userID, actor, ip, keepSession string) error {
 			return ErrNoUser
 		}
 		u.TOTPSecretEnc, u.TOTPConfirmedAt, u.TOTPLastStep, u.RecoveryCodes, u.UpdatedAt = "", time.Time{}, 0, nil, s.now()
+		u.TOTPFails, u.TOTPFailAt = 0, time.Time{}
 		d.AdminUsers[userID] = u
 		s.revokeAllLocked(d, userID, keepSession, "two-factor reset")
 		s.Audit(d, actor, ip, "two-factor sign-in reset for "+u.Username, "", "")

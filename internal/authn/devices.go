@@ -22,6 +22,19 @@ type Tokens struct {
 	DeviceID       string
 }
 
+// refreshHistory is how many older refresh hashes a device remembers.
+const refreshHistory = 5
+
+func olderHas(list []string, h string) bool {
+	found := false
+	for _, o := range list { // no early exit: the time does not tell which matched
+		if hashEq(h, o) {
+			found = true
+		}
+	}
+	return found
+}
+
 func (s *Service) issueLocked(dev *store.APIDevice, now time.Time) Tokens {
 	acc := newToken(accessPrefix, dev.ID)
 	ref := newToken(refreshPrefix, dev.ID)
@@ -61,7 +74,7 @@ func (s *Service) LoginDevice(userID string, info DeviceInfo, ip string) (Tokens
 		dev.Name, dev.Model = clip(info.Name, 80), clip(info.Model, 80)
 		dev.Platform, dev.AppVersion = clip(info.Platform, 20), clip(info.AppVersion, 40)
 		dev.AbsoluteExpiresAt = now.Add(RefreshAbsolute)
-		dev.RefreshPrevHash, dev.RefreshRotatedAt = "", time.Time{}
+		dev.RefreshPrevHash, dev.RefreshOlder, dev.RefreshRotatedAt = "", nil, now
 		dev.LastIP, dev.LastSeenAt = ip, now
 		tok = s.issueLocked(&dev, now)
 		d.APIDevices[dev.ID] = dev
@@ -99,6 +112,12 @@ func (s *Service) Refresh(refreshToken, ip string) (Tokens, store.APIDevice, sto
 		}
 		switch {
 		case hashEq(h, x.RefreshHash):
+			if x.RefreshPrevHash != "" {
+				x.RefreshOlder = append(x.RefreshOlder, x.RefreshPrevHash)
+				if n := len(x.RefreshOlder); n > refreshHistory {
+					x.RefreshOlder = append([]string(nil), x.RefreshOlder[n-refreshHistory:]...)
+				}
+			}
 			x.RefreshPrevHash, x.RefreshRotatedAt = x.RefreshHash, now
 		case hashEq(h, x.RefreshPrevHash) && now.Sub(x.RefreshRotatedAt) <= RefreshGrace:
 			// A retry after a lost response: new pair, same previous token.
@@ -107,7 +126,15 @@ func (s *Service) Refresh(refreshToken, ip string) (Tokens, store.APIDevice, sto
 			s.Audit(d, u.Username, ip, "app device "+id+" revoked: an old refresh token was used again", "", "")
 			result = ErrTokenRevoked
 			return nil
+		case olderHas(x.RefreshOlder, h):
+			// A token from before the previous one: only a copy can still hold it.
+			s.revokeDeviceLocked(d, id, x, now, "refresh token used twice")
+			s.Audit(d, u.Username, ip, "app device "+id+" revoked: an old refresh token was used again", "", "")
+			result = ErrTokenRevoked
+			return nil
 		default:
+			// Not a token this device ever had: a guess. Revoking would let
+			// anyone who knows a device id sign that phone out.
 			result = ErrTokenRevoked
 			return store.ErrNoChange
 		}

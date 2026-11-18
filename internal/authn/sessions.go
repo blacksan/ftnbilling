@@ -39,7 +39,7 @@ func (s *Service) CreateSession(userID, ip, ua string, mfa bool) (value string, 
 			return ErrNoUser
 		}
 		s.pruneLocked(d)
-		s.capLocked(d, userID)
+		s.capLocked(d, userID, mfa)
 		value, sess = s.newSession(d, userID, ip, ua, mfa, time.Time{})
 		return nil
 	})
@@ -160,6 +160,7 @@ func (s *Service) revokeAllLocked(d *store.Data, userID, keep, reason string) in
 			n++
 		}
 	}
+	n += s.revokeKnownLocked(d, userID)
 	now := s.now()
 	for id, x := range d.APIDevices {
 		if x.UserID == userID && x.RevokedAt.IsZero() {
@@ -185,19 +186,26 @@ func (s *Service) pruneLocked(d *store.Data) {
 	}
 }
 
-// capLocked keeps one user from filling the table: past the cap the oldest go.
-func (s *Service) capLocked(d *store.Data, userID string) {
+// capLocked keeps one user from filling the table. Half sessions (password
+// accepted, second factor pending) are capped on their own and only ever evict
+// other half sessions, so somebody who knows the password cannot push the
+// owner's real sessions out by logging in again and again.
+func (s *Service) capLocked(d *store.Data, userID string, mfa bool) {
 	var mine []store.AdminSession
 	for _, x := range d.AdminSessions {
-		if x.UserID == userID {
+		if x.UserID == userID && x.MFA == mfa {
 			mine = append(mine, x)
 		}
 	}
-	if len(mine) < maxSessionsPerUse {
+	limit := maxSessionsPerUse
+	if !mfa {
+		limit = MaxHalfSessions
+	}
+	if len(mine) < limit {
 		return
 	}
 	sort.Slice(mine, func(i, j int) bool { return mine[i].LastSeenAt.Before(mine[j].LastSeenAt) })
-	for _, x := range mine[:len(mine)-maxSessionsPerUse+1] {
+	for _, x := range mine[:len(mine)-limit+1] {
 		delete(d.AdminSessions, x.ID)
 	}
 }

@@ -39,6 +39,15 @@ type setRig struct {
 	cl   *http.Client
 	br   *browser
 	who  *who
+
+	alertMu sync.Mutex
+	alerts  []string // security alerts the owners would have got
+}
+
+func (r *setRig) gotAlerts() []string {
+	r.alertMu.Lock()
+	defer r.alertMu.Unlock()
+	return append([]string(nil), r.alerts...)
 }
 
 func newSetRig(t *testing.T) *setRig {
@@ -74,6 +83,7 @@ func newSetRig(t *testing.T) *setRig {
 	r := &setRig{ts: ts, srv: srv, st: st, m: m, mp: mp, rt: mgr.MockRouter(),
 		cl: &http.Client{CheckRedirect: noRedirect}}
 	st.View(func(d *store.Data) { r.site = d.Sites[envID] })
+	srv.SetSecurityAlertSink(func(msg string) { r.alertMu.Lock(); r.alerts = append(r.alerts, msg); r.alertMu.Unlock() })
 	r.who = seedUser(t, srv, st, "admin", store.RoleOwner, pw)
 	r.br = signIn(t, ts, srv, st, r.who)
 	r.csrf = r.br.CSRF
@@ -124,15 +134,15 @@ func TestSecurityPasswordFlow(t *testing.T) {
 		t.Fatalf("the password changed anyway: %d", c)
 	}
 	// Too short, and not matching.
-	_, msg, _ = r.post("/admin/security/password", url.Values{"current_password": {pw}, "new_password": {"short"}, "confirm_password": {"short"}})
+	_, msg, _ = r.post("/admin/security/password", url.Values{"current_password": {pw}, "new_password": {"short"}, "confirm_password": {"short"}, "totp": {r.who.Code(t, r.st)}})
 	if !strings.HasPrefix(msg, "Error") {
 		t.Fatalf("short password accepted: %q", msg)
 	}
-	_, msg, _ = r.post("/admin/security/password", url.Values{"current_password": {pw}, "new_password": {longPW}, "confirm_password": {longPW + "x"}})
+	_, msg, _ = r.post("/admin/security/password", url.Values{"current_password": {pw}, "new_password": {longPW}, "confirm_password": {longPW + "x"}, "totp": {r.who.Code(t, r.st)}})
 	if !strings.HasPrefix(msg, "Error") {
 		t.Fatalf("mismatch accepted: %q", msg)
 	}
-	code, msg, _ = r.post("/admin/security/password", url.Values{"current_password": {pw}, "new_password": {longPW}, "confirm_password": {longPW}})
+	code, msg, _ = r.post("/admin/security/password", url.Values{"current_password": {pw}, "new_password": {longPW}, "confirm_password": {longPW}, "totp": {r.who.Code(t, r.st)}})
 	if code != 303 || strings.HasPrefix(msg, "Error") {
 		t.Fatalf("password change: %d %q", code, msg)
 	}

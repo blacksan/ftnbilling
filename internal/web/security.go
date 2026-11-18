@@ -104,8 +104,8 @@ func (s *Server) securityBack(w http.ResponseWriter, r *http.Request, msg string
 func (s *Server) securityPassword(w http.ResponseWriter, r *http.Request) {
 	u, _ := userOf(r)
 	sess, _ := sessOf(r)
-	if !s.checkPassword(r, r.PostFormValue("current_password")) {
-		s.securityBack(w, r, "Error: the current password is missing or wrong")
+	if msg := s.confirm(r, true); msg != "" {
+		s.securityBack(w, r, "Error: "+msg)
 		return
 	}
 	pw, again := r.PostFormValue("new_password"), r.PostFormValue("confirm_password")
@@ -133,21 +133,10 @@ func (s *Server) securityPassword(w http.ResponseWriter, r *http.Request) {
 // enough to read the codes.
 func (s *Server) securityRecovery(w http.ResponseWriter, r *http.Request) {
 	u, _ := userOf(r)
-	if !s.checkPassword(r, r.PostFormValue("current_password")) {
-		s.securityBack(w, r, "Error: the current password is missing or wrong")
+	if msg := s.confirm(r, true); msg != "" {
+		s.securityBack(w, r, "Error: "+msg)
 		return
 	}
-	att, out := s.auth.begin(realIP(r), u.Username)
-	if !out.ok {
-		s.securityBack(w, r, "Error: too many attempts, wait a few minutes")
-		return
-	}
-	if err := s.authn.VerifyTOTP(u.ID, r.PostFormValue("code")); err != nil {
-		att.end(errors.Is(err, authn.ErrBadCode), false)
-		s.securityBack(w, r, "Error: the authenticator code is not right")
-		return
-	}
-	att.end(false, false)
 	codes, err := s.authn.RegenerateRecoveryCodes(u.ID, u.Username, realIP(r))
 	if err != nil {
 		s.securityBack(w, r, "Error: "+err.Error())
@@ -200,8 +189,8 @@ func (s *Server) userByID(id string) (store.AdminUser, bool) { return s.authn.Us
 
 func (s *Server) securityUserCreate(w http.ResponseWriter, r *http.Request) {
 	me, _ := userOf(r)
-	if !s.checkPassword(r, r.PostFormValue("current_password")) {
-		s.securityBack(w, r, "Error: your current password is missing or wrong")
+	if msg := s.confirm(r, true); msg != "" {
+		s.securityBack(w, r, "Error: "+msg)
 		return
 	}
 	name, role, pw := strings.TrimSpace(r.PostFormValue("username")), r.PostFormValue("role"), r.PostFormValue("password")
@@ -242,8 +231,8 @@ func (s *Server) securityUserEnable(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) setDisabled(w http.ResponseWriter, r *http.Request, disabled bool) {
 	me, _ := userOf(r)
-	if !s.checkPassword(r, r.PostFormValue("current_password")) {
-		s.securityBack(w, r, "Error: your current password is missing or wrong")
+	if msg := s.confirm(r, true); msg != "" {
+		s.securityBack(w, r, "Error: "+msg)
 		return
 	}
 	t, ok := s.userByID(r.PostFormValue("id"))
@@ -260,8 +249,8 @@ func (s *Server) setDisabled(w http.ResponseWriter, r *http.Request, disabled bo
 
 func (s *Server) securityUserRole(w http.ResponseWriter, r *http.Request) {
 	me, _ := userOf(r)
-	if !s.checkPassword(r, r.PostFormValue("current_password")) {
-		s.securityBack(w, r, "Error: your current password is missing or wrong")
+	if msg := s.confirm(r, true); msg != "" {
+		s.securityBack(w, r, "Error: "+msg)
 		return
 	}
 	t, ok := s.userByID(r.PostFormValue("id"))
@@ -279,8 +268,8 @@ func (s *Server) securityUserRole(w http.ResponseWriter, r *http.Request) {
 func (s *Server) securityUserReset2FA(w http.ResponseWriter, r *http.Request) {
 	me, _ := userOf(r)
 	sess, _ := sessOf(r)
-	if !s.checkPassword(r, r.PostFormValue("current_password")) {
-		s.securityBack(w, r, "Error: your current password is missing or wrong")
+	if msg := s.confirm(r, true); msg != "" {
+		s.securityBack(w, r, "Error: "+msg)
 		return
 	}
 	t, ok := s.userByID(r.PostFormValue("id"))

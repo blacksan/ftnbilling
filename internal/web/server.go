@@ -66,6 +66,7 @@ type Server struct {
 	setm      *settings.Manager // nil = environment configuration only
 	auth      *adminAuth
 	authn     *authn.Service
+	alertSink func(string) // tests: take security alerts instead of the outbox
 	idem      *idemStore
 	refreshRL *limiter // /api/v1/auth/refresh by client address
 
@@ -91,6 +92,7 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 		a, _ = authn.New(st, nil, cfg.BrandName)
 	}
 	s.authn = a
+	a.SetAlert(s.securityAlert)
 	s.idem = newIdemStore()
 	s.refreshRL = newLimiter(30, time.Minute)
 	funcs := template.FuncMap{
@@ -335,6 +337,36 @@ type limiter struct {
 	hits map[string][]time.Time
 }
 
+const limiterCap = 5000
+
+// evictLocked drops the keys that were quiet the longest (never all of them,
+// which would hand every busy client a fresh allowance).
+func (l *limiter) evictLocked(now time.Time) {
+	type kv struct {
+		k string
+		t time.Time
+	}
+	all := make([]kv, 0, len(l.hits))
+	for k, ts := range l.hits {
+		last := time.Time{}
+		if len(ts) > 0 {
+			last = ts[len(ts)-1]
+		}
+		if now.Sub(last) >= l.win {
+			delete(l.hits, k)
+			continue
+		}
+		all = append(all, kv{k, last})
+	}
+	if len(l.hits) <= limiterCap {
+		return
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].t.Before(all[j].t) })
+	for _, x := range all[:len(all)-limiterCap*9/10] {
+		delete(l.hits, x.k)
+	}
+}
+
 func newLimiter(n int, win time.Duration) *limiter {
 	return &limiter{n: n, win: win, hits: map[string][]time.Time{}}
 }
@@ -354,8 +386,8 @@ func (l *limiter) allow(key string) bool {
 		return false
 	}
 	l.hits[key] = append(keep, now)
-	if len(l.hits) > 5000 { // crude bound on memory
-		l.hits = map[string][]time.Time{key: l.hits[key]}
+	if len(l.hits) > limiterCap {
+		l.evictLocked(now)
 	}
 	return true
 }
