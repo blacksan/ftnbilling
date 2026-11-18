@@ -512,9 +512,16 @@ remove_legacy_admin_vpn() {
     if systemctl is-active --quiet "wg-quick@$old" 2>/dev/null; then found=1; fi
   fi
   [ ! -e "$SBIN/$APP-admin-peer" ] || found=1
+  if [ "$DRY" != 1 ] && ip link show "$old" >/dev/null 2>&1; then found=1; fi
   [ "$found" = 1 ] || return 0
   dir=/root/ftnbilling-removed-$(date +%F)
   note "retiring the old admin VPN ($old); the router tunnel $WG_IF is not touched"
+  # Stop it while its config still exists: wg-quick needs the file to take the
+  # interface down. If that fails (or the file is already gone), delete the link.
+  try systemctl disable --now "wg-quick@$old"
+  if [ "$DRY" != 1 ] && ip link show "$old" >/dev/null 2>&1; then
+    try ip link delete "$old"
+  fi
   if [ "$DRY" = 1 ]; then
     printf '    [dry-run] archive the old admin VPN config and device files to %s (mode 700)\n' "$dir"
   else
@@ -525,7 +532,6 @@ remove_legacy_admin_vpn() {
       note "archived $f -> $dir/"
     done
   fi
-  try systemctl disable --now "wg-quick@$old"
   run rm -rf "/etc/systemd/system/wg-quick@$old.service.d"
   run rm -f "$SBIN/$APP-admin-peer"
   run systemctl daemon-reload
