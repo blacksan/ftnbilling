@@ -104,6 +104,14 @@ Supersedes the `GET /unregistered` row above. `GET /unregistered?site=&online=` 
 - `GET /sites/{id}/qoe?period=24h|7d|30d` maps to the collector's day/week/month windows; any other value is 400.
 - Access tokens last 15 min (`ftna_...`); refresh tokens `ftnr_...` slide 30 days, 90 days absolute. Cookies are never read on `/api/v1`. `/api/v1` answers 404 to the routers' WireGuard subnet.
 
+## Addendum K: sign-in hardening (v3)
+
+- `POST /auth/login` accepts an optional `known_token` and returns one (`known_token`) on success. Store it with the refresh token and send it back at every login. A phone that presents a valid `known_token` is never refused or slowed by strangers' failed guesses at the account. Without it a login can be refused only per client address (429, IPv6 grouped by /64); when many failures hit the account it is answered more slowly instead. The value is revoked by a password change, a 2FA reset, "sign out everywhere", or disabling the user.
+- After 5 wrong authenticator codes in a row for a user, further codes are refused for a growing wait (429 `rate_limited`, `Retry-After`). After 10, 401 `totp_invalid` with `details.recovery_code_required: true`: only `recovery_code` works, and a good one resets the count. The counter is stored in the database.
+- A refresh token older than the previous one (any of the last 5 the device had) that is presented again revokes the device (`token_revoked`); a token the device never had changes nothing.
+- Idempotency keys are capped at 500 per device (the oldest go first).
+
 ## Changes
 - v1 (2026-11-18): first version (W0).
 - v2 (2026-11-18): W1 server. Adds addendum J (see above): refresh returns `user`, payment status `matched`, customer/events shapes, `suggested_account`, 202 refresh, 429 details, idempotent replay semantics, `GET /audit` cursor, `cash` method.
+- v3 (2026-11-18): W1 review fixes: addendum K (`known_token`, TOTP back-off and lock, refresh history, idempotency cap). Additive only.

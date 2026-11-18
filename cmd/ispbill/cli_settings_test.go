@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -264,7 +266,80 @@ func TestResetNotesRestart(t *testing.T) {
 	}
 	var pg bytes.Buffer
 	restartNote(&pg, config.Config{DatabaseURL: "postgres://x"})
-	if !strings.Contains(pg.String(), "RESTART REQUIRED") {
-		t.Fatalf("no restart notice for Postgres: %s", pg.String())
+	if !strings.Contains(pg.String(), "systemctl start ftnbilling") {
+		t.Fatalf("no start notice for Postgres: %s", pg.String())
+	}
+}
+
+// -setup-code works on a fresh database, before the service ever started: the
+// owner is made from ADMIN_PASS (or the old admin.pass_hash setting) as main does.
+func TestSetupCodeBeforeFirstStart(t *testing.T) {
+	dir := t.TempDir()
+	env := cliEnv(dir)
+	out, err := cli(t, env, "admin-reset-password", "-setup-code")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	code := printedSetupCode(out)
+	if code == "" {
+		t.Fatalf("no code: %s", out)
+	}
+	au, _ := openAuth(t, dir, env)
+	u, ok := au.Owner()
+	if !ok || u.Username != "admin" || !settings.VerifyPassword(u.PassHash, "from-the-env-file-123") || !au.CheckSetupCode(u.ID, code) {
+		t.Fatalf("owner after -setup-code: %+v %v", u, ok)
+	}
+	// With the old Settings-page password stored, that is the password.
+	dir2 := t.TempDir()
+	env2 := cliEnv(dir2)
+	hash, _ := settings.HashPasswordCost("old-ui-password-1", 1000)
+	s2, err := store.Open(dir2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2.Update(func(d *store.Data) error {
+		d.Settings["admin.pass_hash"] = store.Setting{Key: "admin.pass_hash", Value: hash, UpdatedAt: time.Now()}
+		return nil
+	})
+	s2.Close()
+	if out, err := cli(t, env2, "admin-reset-password", "-setup-code"); err != nil || printedSetupCode(out) == "" {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	au2, _ := openAuth(t, dir2, env2)
+	if u2, _ := au2.Owner(); !settings.VerifyPassword(u2.PassHash, "old-ui-password-1") {
+		t.Fatal("the stored admin.pass_hash was not used")
+	}
+	// No usable password anywhere: a clear error, nothing created.
+	fresh := cliEnv(t.TempDir())
+	weak := func(k string) string {
+		if k == "ADMIN_PASS" {
+			return ""
+		}
+		return fresh(k)
+	}
+	if _, err := cli(t, weak, "admin-reset-password", "-setup-code"); err == nil || !strings.Contains(err.Error(), "ADMIN_PASS") {
+		t.Fatalf("want an ADMIN_PASS error, got %v", err)
+	}
+}
+
+func TestJSONRefusesWhileServiceRuns(t *testing.T) {
+	dir := t.TempDir()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })}
+	go srv.Serve(ln)
+	defer srv.Close()
+	env := func(k string) string {
+		if k == "LISTEN_ADDR" {
+			return ln.Addr().String()
+		}
+		return cliEnv(dir)(k)
+	}
+	for _, args := range [][]string{{"admin-reset-password", "-generate"}, {"admin-status", "-json"}} {
+		if _, err := cli(t, env, args...); err == nil || !strings.Contains(err.Error(), "running") {
+			t.Fatalf("%v while the service runs: %v", args, err)
+		}
 	}
 }

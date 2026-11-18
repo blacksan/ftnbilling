@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -18,9 +19,13 @@ import (
 	"ispbill/internal/store"
 )
 
-// runSettingsCommand runs admin-reset-password and settings-check. With
-// Postgres they work while the service runs (they touch settings rows only).
-// The JSON file has no lock, so there they refuse while the service answers.
+// runSettingsCommand runs admin-reset-password, admin-status and settings-check.
+// Changes to the sign-in (admin-reset-password) are refused while the service
+// answers, on either database: the running service keeps its own copy of the
+// users, sessions and phones in memory and would write it back over the change.
+// Use deploy/ftnbilling-admin-reset, which stops the service, runs this, and
+// starts it again. The read-only commands work on Postgres while it runs; the
+// JSON file has no lock, so there they refuse too.
 func runSettingsCommand(cmd string, args []string, getenv func(string) string, out io.Writer) error {
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -41,6 +46,9 @@ func runSettingsCommand(cmd string, args []string, getenv func(string) string, o
 	defer cancel()
 	var st *store.Store
 	if cfg.DatabaseURL != "" {
+		if cmd == "admin-reset-password" && serviceAnswers(cfg.ListenAddr) {
+			return errServiceRunning
+		}
 		st, err = openPostgresShared(ctx, cfg)
 	} else {
 		if serviceAnswers(cfg.ListenAddr) {
@@ -86,7 +94,7 @@ func runSettingsCommand(cmd string, args []string, getenv func(string) string, o
 		return nil
 
 	case "admin-reset-password":
-		return adminReset(au, cfg, out, resetOpts{user: *userName, generate: *generate, setupCode: *setupCode,
+		return adminReset(au, st, cfg, out, resetOpts{user: *userName, generate: *generate, setupCode: *setupCode,
 			resetTOTP: *resetTOTP, revoke: *revoke})
 
 	case "settings-check":
@@ -115,16 +123,15 @@ func runSettingsCommand(cmd string, args []string, getenv func(string) string, o
 	return fmt.Errorf("unknown command %q", cmd)
 }
 
+var errServiceRunning = errors.New("the service is running, so this change would be undone: it keeps its own copy of the sign-in data " +
+	"and writes it back. Run `sudo ftnbilling-admin-reset ...` instead: it stops the service, makes the change and starts the service again")
+
 // restartNote tells the admin the running service has not seen the change.
 // With Postgres the service keeps working but still honours the old password
 // until it restarts (it remembers verified logins for 12 hours); with the JSON
 // file the service was stopped, and must be started again.
 func restartNote(out io.Writer, cfg config.Config) {
-	if cfg.DatabaseURL != "" {
-		fmt.Fprintln(out, "\nRESTART REQUIRED: the running service still accepts the old password until it restarts:\n  sudo systemctl restart ftnbilling\n(deploy/ftnbilling-admin-reset does this for you.)")
-		return
-	}
-	fmt.Fprintln(out, "\nStart the service again: sudo systemctl start ftnbilling")
+	fmt.Fprintln(out, "\nStart the service again: sudo systemctl start ftnbilling (deploy/ftnbilling-admin-reset does this for you)")
 }
 
 // serviceAnswers reports whether something answers /healthz on the listen address.
@@ -161,11 +168,20 @@ type resetOpts struct {
 // password back to ADMIN_PASS; -generate sets a random one. The other flags
 // leave the password alone. Every change signs all browsers and phones out
 // (the running service has to be restarted to see it, see restartNote).
-func adminReset(au *authn.Service, cfg config.Config, out io.Writer, o resetOpts) error {
+func adminReset(au *authn.Service, st *store.Store, cfg config.Config, out io.Writer, o resetOpts) error {
 	only := o.setupCode || o.resetTOTP || o.revoke
 	setPass := o.generate || !only
 	var u store.AdminUser
 	var ok bool
+	if !o.generate {
+		// A fresh server has no owner until main creates one at first start;
+		// make it the same way, so -setup-code works before the first start.
+		if _, has := au.Owner(); !has {
+			if err := seedOwner(au, st, cfg, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+				return err
+			}
+		}
+	}
 	if o.user != "" {
 		u, ok = au.UserByName(o.user)
 		if !ok {
@@ -230,7 +246,7 @@ func adminReset(au *authn.Service, cfg config.Config, out io.Writer, o resetOpts
 		case err != nil:
 			return err
 		default:
-			fmt.Fprintf(out, "\nsetup code (valid 14 days, works once, for the enrol page after the password):\n\n  %s\n", code)
+			fmt.Fprintf(out, "\nsetup code (valid 14 days; it stops working when the authenticator app is set up. Type it at sign-in, after the password):\n\n  %s\n", code)
 		}
 	}
 	restartNote(out, cfg)
