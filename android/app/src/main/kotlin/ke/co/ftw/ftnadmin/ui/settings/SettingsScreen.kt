@@ -4,6 +4,8 @@ import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -33,6 +35,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -196,14 +199,23 @@ fun SettingsScreen(onBack: () -> Unit) {
 
 private fun Modifier.height2(): Modifier = this.fillMaxWidth().padding(vertical = 8.dp)
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DeviceRow(d: DeviceSession, revoking: Boolean, onRevoke: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(d.name.ifBlank { d.model.ifBlank { "Unknown device" } }, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
-                if (d.current) StatusChip("This phone", Tone.Good)
-                if (d.revokedAt != null) StatusChip("Revoked", Tone.Bad)
+            Text(
+                d.name.ifBlank { d.model.ifBlank { "Unknown device" } },
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (d.current || d.revokedAt != null) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (d.current) StatusChip("This phone", Tone.Good)
+                    if (d.revokedAt != null) StatusChip("Revoked", Tone.Bad)
+                }
             }
             Text(
                 "Last seen ${formatAge(d.lastSeenAt)}${if (d.lastIp.isNotBlank()) " from ${d.lastIp}" else ""}",
@@ -216,8 +228,9 @@ private fun DeviceRow(d: DeviceSession, revoking: Boolean, onRevoke: () -> Unit)
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (d.revokedAt == null) {
-            if (revoking) LoadingSpinner(Modifier.padding(8.dp)) else TextButton(onClick = onRevoke) { Text(if (d.current) "Sign out" else "Revoke") }
+        // The current phone is signed out with the Account "Sign out" button.
+        if (d.revokedAt == null && !d.current) {
+            if (revoking) LoadingSpinner(Modifier.padding(8.dp)) else TextButton(onClick = onRevoke) { Text("Revoke", maxLines = 1, softWrap = false) }
         }
     }
 }
@@ -235,8 +248,8 @@ private fun Header(text: String) {
 @Composable
 private fun Row2(label: String, value: String) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
-        Text(value, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 16.dp))
+        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(0.4f, fill = false))
+        Text(value, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium, textAlign = androidx.compose.ui.text.style.TextAlign.End, modifier = Modifier.weight(0.6f).padding(start = 16.dp))
     }
 }
 

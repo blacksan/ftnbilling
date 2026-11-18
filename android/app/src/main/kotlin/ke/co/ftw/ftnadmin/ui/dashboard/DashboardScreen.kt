@@ -2,6 +2,9 @@ package ke.co.ftw.ftnadmin.ui.dashboard
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,6 +21,10 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -79,17 +86,14 @@ private fun DashboardContent(
     ) {
         staleError?.let { Text("Could not refresh: $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
 
-        // Things that need the operator's attention come first.
+        // Things that need the operator's attention come first. Equal-height tiles in a row;
+        // stacked at large font scales so labels never get squeezed.
         val attention = listOf(
-            Triple("New devices", d.unregisteredDevices, onNewDevices),
-            Triple("Unmatched payments", d.unmatchedPayments, onUnmatchedPayments),
-            Triple("Open alerts", d.openAlerts, onAlerts),
+            AttentionItem("New devices", "New devices", d.unregisteredDevices, onNewDevices),
+            AttentionItem("Unmatched", "Unmatched payments", d.unmatchedPayments, onUnmatchedPayments),
+            AttentionItem("Alerts", "Open alerts", d.openAlerts, onAlerts),
         )
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            attention.forEach { (label, n, click) ->
-                AttentionTile(label, n, click, Modifier.weight(1f))
-            }
-        }
+        AttentionTiles(attention)
 
         SectionCard("Revenue") {
             LabeledValue("Today", formatKes(d.revenue.todayKes))
@@ -109,9 +113,8 @@ private fun DashboardContent(
             }
         }
         SectionCard("Network") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatusChip("${d.sitesOnline} of ${d.sitesTotal} buildings online", if (d.sitesOnline == d.sitesTotal) Tone.Good else Tone.Warn)
-            }
+            val (text, tone) = networkStatus(d.sitesOnline, d.sitesTotal)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { StatusChip(text, tone) }
             LabeledValue("Router tasks waiting", d.pendingRouterTasks.toString())
         }
         Text(
@@ -122,20 +125,45 @@ private fun DashboardContent(
     }
 }
 
+internal data class AttentionItem(val label: String, val description: String, val count: Int, val onClick: () -> Unit)
+
+/** Pill text and colour for the network card: green only when every building is online. */
+internal fun networkStatus(online: Int, total: Int): Pair<String, Tone> = when {
+    total == 0 -> "No buildings yet" to Tone.Neutral
+    online >= total -> "All $total buildings online" to Tone.Good
+    online == 0 -> "0 of $total buildings online" to Tone.Bad
+    else -> "$online of $total buildings online" to Tone.Bad
+}
+
 @Composable
-private fun AttentionTile(label: String, count: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val hot = count > 0
+internal fun AttentionTiles(items: List<AttentionItem>) {
+    if (LocalDensity.current.fontScale > LARGE_FONT_SCALE) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items.forEach { AttentionTile(it, Modifier.fillMaxWidth()) }
+        }
+    } else {
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items.forEach { AttentionTile(it, Modifier.weight(1f).fillMaxHeight()) }
+        }
+    }
+}
+
+private const val LARGE_FONT_SCALE = 1.3f
+
+@Composable
+private fun AttentionTile(item: AttentionItem, modifier: Modifier = Modifier) {
+    val hot = item.count > 0
     Card(
-        onClick = onClick,
-        modifier = modifier,
+        onClick = item.onClick,
+        modifier = modifier.semantics { contentDescription = "${item.description}: ${item.count}" },
         colors = CardDefaults.cardColors(
             containerColor = if (hot) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
             contentColor = if (hot) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
         ),
     ) {
         Column(Modifier.padding(12.dp).fillMaxWidth()) {
-            Text(count.toString(), style = MaterialTheme.typography.headlineMedium)
-            Text(label, style = MaterialTheme.typography.labelMedium)
+            Text(item.count.toString(), style = MaterialTheme.typography.headlineMedium, maxLines = 1)
+            Text(item.label, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

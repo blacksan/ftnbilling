@@ -53,6 +53,8 @@ import ke.co.ftw.ftnadmin.domain.NewDevice
 import ke.co.ftw.ftnadmin.ui.common.AccountPicker
 import ke.co.ftw.ftnadmin.ui.common.AppTopBar
 import ke.co.ftw.ftnadmin.ui.common.CenteredLoading
+import ke.co.ftw.ftnadmin.ui.common.ChipLabel
+import ke.co.ftw.ftnadmin.ui.common.ChipRow
 import ke.co.ftw.ftnadmin.ui.common.EmptyState
 import ke.co.ftw.ftnadmin.ui.common.ErrorState
 import ke.co.ftw.ftnadmin.ui.common.Loadable
@@ -155,9 +157,9 @@ private fun DeviceSheetContent(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(sheet.tab == SheetTab.Attach, { vm.setTab(SheetTab.Attach) }, label = { Text("Attach to account") })
-                FilterChip(sheet.tab == SheetTab.Create, { vm.setTab(SheetTab.Create) }, label = { Text("Create account") })
+            ChipRow(horizontalPadding = 0.dp) {
+                FilterChip(sheet.tab == SheetTab.Attach, { vm.setTab(SheetTab.Attach) }, label = { ChipLabel("Attach to account") })
+                FilterChip(sheet.tab == SheetTab.Create, { vm.setTab(SheetTab.Create) }, label = { ChipLabel("Create account") })
             }
             when (sheet.tab) {
                 SheetTab.Attach -> {

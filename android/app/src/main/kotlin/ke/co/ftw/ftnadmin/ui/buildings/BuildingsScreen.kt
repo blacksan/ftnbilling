@@ -34,6 +34,8 @@ import ke.co.ftw.ftnadmin.domain.Qoe
 import ke.co.ftw.ftnadmin.domain.Site
 import ke.co.ftw.ftnadmin.ui.common.AppTopBar
 import ke.co.ftw.ftnadmin.ui.common.CenteredLoading
+import ke.co.ftw.ftnadmin.ui.common.ChipLabel
+import ke.co.ftw.ftnadmin.ui.common.ChipRow
 import ke.co.ftw.ftnadmin.ui.common.EmptyState
 import ke.co.ftw.ftnadmin.ui.common.ErrorState
 import ke.co.ftw.ftnadmin.ui.common.LabeledValue
@@ -80,7 +82,7 @@ private fun SiteRow(s: Site, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(s.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                Text(s.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f).padding(end = 8.dp))
                 StatusChip(if (s.online) "Online" else "Offline", if (s.online) Tone.Good else Tone.Bad)
             }
             Text(
@@ -165,8 +167,8 @@ private fun SiteSummary(s: Site) {
 @Composable
 private fun QoeSection(qoe: Loadable<Qoe>, period: String, onPeriod: (String) -> Unit) {
     SectionCard("Quality of experience") {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            QOE_PERIODS.forEach { p -> FilterChip(selected = period == p, onClick = { onPeriod(p) }, label = { Text(p) }) }
+        ChipRow(horizontalPadding = 0.dp) {
+            QOE_PERIODS.forEach { p -> FilterChip(selected = period == p, onClick = { onPeriod(p) }, label = { ChipLabel(p) }) }
         }
         when (qoe) {
             Loadable.Loading -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { LoadingSpinner() }
@@ -219,7 +221,7 @@ private fun OntRow(o: Ont, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Flat ${o.flat}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+                Text("Flat ${o.flat}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, modifier = Modifier.weight(1f).padding(end = 8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (o.suspendedOnRouter) StatusChip("Walled", Tone.Bad)
                     StatusChip(

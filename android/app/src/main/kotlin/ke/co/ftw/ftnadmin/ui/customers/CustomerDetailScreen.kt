@@ -146,10 +146,11 @@ fun CustomerDetailScreen(id: String, user: UserInfo, onBack: () -> Unit, onOpenO
     DetailDialogs(ui, vm, onOpenOther)
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SummaryCard(a: Account) {
     SectionCard("Flat ${a.flat}${if (a.floor.isNotBlank()) ", floor ${a.floor}" else ""}") {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             StatusChip(accountStateLabel(a), accountTone(a))
             if (a.macConflict) StatusChip("Not provisioned", Tone.Bad)
         }
@@ -162,6 +163,7 @@ private fun SummaryCard(a: Account) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DeviceCard(a: Account) {
     SectionCard("ONT and router") {
@@ -170,7 +172,7 @@ private fun DeviceCard(a: Account) {
         a.router?.let { r ->
             LabeledValue("Lease", r.leaseStatus)
             LabeledValue("Last seen", formatAge(r.lastSeen))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 StatusChip(if (r.inSync) "In sync" else "Out of sync", if (r.inSync) Tone.Good else Tone.Warn)
                 if (r.pendingTask) StatusChip("Update queued", Tone.Neutral)
                 if (r.suspendedOnRouter) StatusChip("Walled on router", Tone.Bad)

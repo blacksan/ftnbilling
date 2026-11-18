@@ -42,6 +42,8 @@ import ke.co.ftw.ftnadmin.domain.Payment
 import ke.co.ftw.ftnadmin.ui.common.AccountPicker
 import ke.co.ftw.ftnadmin.ui.common.AppTopBar
 import ke.co.ftw.ftnadmin.ui.common.CenteredLoading
+import ke.co.ftw.ftnadmin.ui.common.ChipLabel
+import ke.co.ftw.ftnadmin.ui.common.ChipRow
 import ke.co.ftw.ftnadmin.ui.common.EmptyState
 import ke.co.ftw.ftnadmin.ui.common.ErrorState
 import ke.co.ftw.ftnadmin.ui.common.LoadingSpinner
@@ -85,9 +87,9 @@ fun PaymentsScreen(user: UserInfo, onSettings: () -> Unit, initialFilter: Paymen
         },
     ) { inner ->
         Column(Modifier.padding(inner).fillMaxSize()) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ChipRow(Modifier.padding(vertical = 8.dp)) {
                 PaymentFilter.entries.forEach { f ->
-                    FilterChip(selected = ui.filter == f, onClick = { vm.setFilter(f) }, label = { Text(f.label) })
+                    FilterChip(selected = ui.filter == f, onClick = { vm.setFilter(f) }, label = { ChipLabel(f.label) })
                 }
             }
             if (ui.totals.count > 0) {
@@ -128,7 +130,7 @@ private fun PaymentRow(p: Payment, canAssign: Boolean, onAssign: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(formatKes(p.amountKes), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                Text(formatKes(p.amountKes), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, modifier = Modifier.weight(1f).padding(end = 8.dp))
                 StatusChip(
                     p.status.replaceFirstChar { it.uppercase() }.ifBlank { "Unknown" },
                     when (p.status) {

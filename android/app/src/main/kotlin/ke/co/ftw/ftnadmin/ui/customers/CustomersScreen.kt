@@ -34,6 +34,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import ke.co.ftw.ftnadmin.domain.Account
 import ke.co.ftw.ftnadmin.ui.common.AppTopBar
 import ke.co.ftw.ftnadmin.ui.common.CenteredLoading
+import ke.co.ftw.ftnadmin.ui.common.ChipLabel
+import ke.co.ftw.ftnadmin.ui.common.ChipRow
 import ke.co.ftw.ftnadmin.ui.common.EmptyState
 import ke.co.ftw.ftnadmin.ui.common.ErrorState
 import ke.co.ftw.ftnadmin.ui.common.LoadingSpinner
@@ -89,16 +91,13 @@ fun CustomersScreen(onSettings: () -> Unit, onOpen: (String) -> Unit) {
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             )
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                FilterChip(selected = ui.stateFilter == null, onClick = { vm.onStateFilter(null) }, label = { Text("All") })
-                ACCOUNT_STATES.forEach { s ->
+            ChipRow {
+                FilterChip(selected = ui.stateFilter == null, onClick = { vm.onStateFilter(null) }, label = { ChipLabel("All") })
+                ACCOUNT_STATES.forEach { st ->
                     FilterChip(
-                        selected = ui.stateFilter == s,
-                        onClick = { vm.onStateFilter(if (ui.stateFilter == s) null else s) },
-                        label = { Text(s.replaceFirstChar { it.uppercase() }) },
+                        selected = ui.stateFilter == st,
+                        onClick = { vm.onStateFilter(if (ui.stateFilter == st) null else st) },
+                        label = { ChipLabel(st.replaceFirstChar { it.uppercase() }) },
                     )
                 }
             }
@@ -137,7 +136,7 @@ fun AccountRow(a: Account, onClick: () -> Unit) {
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Flat ${a.flat}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                Text("Flat ${a.flat}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(end = 8.dp))
                 StatusChip(accountStateLabel(a), accountTone(a))
             }
             val who = listOf(a.tenant, a.phone).filter { it.isNotBlank() }.joinToString(" - ")

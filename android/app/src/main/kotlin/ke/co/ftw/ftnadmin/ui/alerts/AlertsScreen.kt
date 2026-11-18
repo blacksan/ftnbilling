@@ -113,7 +113,7 @@ private fun AlertCard(a: Alert, muted: Boolean, canMute: Boolean, onMute: () -> 
     Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(a.label.ifBlank { a.rule }, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+                Text(a.label.ifBlank { a.rule }, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f).padding(end = 8.dp))
                 if (muted) StatusChip("Muted", Tone.Neutral) else StatusChip(a.state.ifBlank { "open" }, Tone.Warn)
             }
             if (a.siteName.isNotBlank()) Text(a.siteName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)

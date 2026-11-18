@@ -2,6 +2,7 @@ package ke.co.ftw.ftnadmin.ui.common
 
 import android.app.KeyguardManager
 import android.content.Context
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -102,13 +103,13 @@ fun SectionCard(title: String, modifier: Modifier = Modifier, content: @Composab
 @Composable
 fun LabeledValue(label: String, value: String, modifier: Modifier = Modifier) {
     Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(0.45f, fill = false))
         Text(
             value.ifBlank { "-" },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface,
             textAlign = TextAlign.End,
-            modifier = Modifier.padding(start = 16.dp),
+            modifier = Modifier.weight(0.55f).padding(start = 16.dp),
         )
     }
 }
@@ -130,6 +131,8 @@ fun StatusChip(text: String, tone: Tone, modifier: Modifier = Modifier) {
         Text(
             text,
             style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            softWrap = false,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
         )
     }
@@ -168,5 +171,29 @@ fun AppTopBar(
                 }
             }
         },
+    )
+}
+
+
+/** Label for a chip: always one line, so a chip never wraps letter by letter in a tight row. */
+@Composable
+fun ChipLabel(text: String) {
+    Text(text, maxLines = 1, softWrap = false)
+}
+
+/** Horizontally scrollable chip row. Chips keep their natural width and never shrink. */
+@Composable
+fun ChipRow(
+    modifier: Modifier = Modifier,
+    horizontalPadding: androidx.compose.ui.unit.Dp = 16.dp,
+    content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit,
+) {
+    Row(
+        modifier.fillMaxWidth()
+            .horizontalScroll(androidx.compose.foundation.rememberScrollState())
+            .padding(horizontal = horizontalPadding),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        content = content,
     )
 }
