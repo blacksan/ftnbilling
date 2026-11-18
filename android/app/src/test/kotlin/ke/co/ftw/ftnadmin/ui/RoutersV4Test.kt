@@ -69,7 +69,12 @@ class RoutersV4Test {
         api = ApiClient.create(server.url("/").toString(), sessions)
     }
 
-    @After fun tearDown() = server.shutdown()
+    @After fun tearDown() {
+        // Let responses still in flight land while the test Main dispatcher exists, so nothing leaks into the next test.
+        Thread.sleep(300)
+        main.dispatcher.scheduler.advanceUntilIdle()
+        server.shutdown()
+    }
 
     private fun ok(body: String, code: Int = 200) = MockResponse().setResponseCode(code).setBody(body)
 

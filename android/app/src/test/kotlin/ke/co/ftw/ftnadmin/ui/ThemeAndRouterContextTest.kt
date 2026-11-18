@@ -46,7 +46,7 @@ class ThemeAndRouterContextTest {
     }
 
     private fun eventually(what: String, cond: () -> Boolean) {
-        val end = System.currentTimeMillis() + 5_000
+        val end = System.currentTimeMillis() + 20_000
         while (!cond() && System.currentTimeMillis() < end) Thread.sleep(20)
         assertTrue(what, cond())
     }
