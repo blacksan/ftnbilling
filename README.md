@@ -94,16 +94,46 @@ ROUTER_MOCK=true TEST_MODE=true ADMIN_PASS=change-me DATA_DIR=/tmp/ispbill \
 ```
 Open http://127.0.0.1:8080/admin (user `admin`), create an account with MAC `AA:BB:CC:DD:EE:01`, then http://127.0.0.1:8080/portal?mac=AA:BB:CC:DD:EE:01&ip=10.5.50.20 and tap "Test payment" (it completes after about 3 s). A different MAC shows the "not registered" page. `ROUTER_MOCK=true` uses an in-memory fake router, so nothing is sent anywhere. Screenshots of the pages are in `dist/screenshots/`.
 
+## Many buildings (multi-site)
+
+One server can bill many buildings. Each building is a MikroTik router with
+its own hotspot and a `Site` record. Account codes are global (they are the
+Paybill account numbers); ONT MACs and flat labels only have to be unique
+inside a building. Packages are shared, and each building can hide a plan or
+give it a different price (Admin, Buildings, the building page). Prices must
+stay unique inside a building because Paybill payments are matched by amount.
+The admin has a building switcher in the top bar (`All buildings` or one) and
+list pages gain a Building column when all are shown. An account can be moved
+to another building from its page.
+
+Routers join over WireGuard with a one-time command from the admin: see
+[deploy/README.md](deploy/README.md) for the server setup (WireGuard, firewall,
+the root-run peer sync script, optional Tailscale) and for the join flow. The
+design target is about 40 buildings and 1500 flats on a 1 vCPU / 1 GB VPS.
+
+Upgrading from the single-router version needs no admin action: the data file
+is converted (the old one is kept as `ispbill.json.v2.bak`), and a server with
+`ROUTER_URL`/`ROUTER_PASS` (or the container on the router) gets one building
+called "Main building" that keeps working from the environment settings.
+`routeros/setup.rsc` and `internal/web/routerfiles/remote.rsc` are the legacy
+one-router setup; new buildings use the join command.
+
+The extra settings are `WG_PUBLIC_KEY`, `WG_ENDPOINT` (default `PUBLIC_IP:51820`),
+`WG_SUBNET` (`10.99.0.0/22`), `WG_DUMP_PATH`, `JOIN_TOKEN_TTL` (`30m`),
+`ALLOW_INSECURE_JOIN` (bench tests only), `JOIN_REQUIRE_MIKROTIK_UA` (`true`)
+and `SITE_NAME` (renames the legacy building once). `ROUTER_PASS` is only needed
+while a legacy building exists.
+
 ## Configuration (environment variables)
 
 | Variable | Default | Notes |
 |---|---|---|
 | `LISTEN_ADDR` | `:8080` | |
-| `DATA_DIR` | `/data` | holds `ispbill.json` and `metrics.json` |
+| `DATA_DIR` | `/data` | holds `ispbill.json` and the `metrics/` folder (one file per building) |
 | `BRAND_NAME` | `Fast Tech Net` | |
 | `TEST_MODE` | `false` | enables the Test payment button |
 | `ROUTER_URL` | `http://172.17.0.1` | `setup.rsc` sets `http://172.17.0.1:8081` |
-| `ROUTER_USER` / `ROUTER_PASS` | `ispbill` / required | PASS not needed with `ROUTER_MOCK` |
+| `ROUTER_USER` / `ROUTER_PASS` | `ispbill` / | legacy single-router mode only (the "Main building"); not needed on a server that only uses join commands |
 | `ROUTER_MOCK` | `false` | fake router |
 | `HOTSPOT_SERVER` | `hotspot1` | |
 | `ADMIN_USER` / `ADMIN_PASS` | `admin` / required | app refuses to start if PASS is empty or `admin` |
@@ -114,13 +144,13 @@ Open http://127.0.0.1:8080/admin (user `admin`), create an account with MAC `AA:
 | `MPESA_CALLBACK_TOKEN` | | optional: callbacks must carry `?t=<token>` |
 | `REMINDER_DAYS` | `3` | days before expiry for the reminder event (0 = off) |
 | `REMINDER_ON_EXPIRY` | `true` | log an event when an account expires |
-| `WAN_INTERFACE` / `OLT_INTERFACE` | `ether1` / `sfp-sfpplus1` | for the ports charts |
+| `WAN_INTERFACE` / `OLT_INTERFACE` | `ether1` / `sfp-sfpplus1` | for the ports charts; these layout settings (with the two capacity values, `FUP_TB`, `CUSTOMER_SUBNET`) apply to the legacy building only. Join-command buildings have them on their own page |
 | `WAN_CAPACITY_MBPS` / `OLT_CAPACITY_MBPS` | `500` / `10000` | |
 | `FUP_TB` | `15` | monthly fair-use figure used for the projection |
-| `NETFLOW_ADDR` | `:2055` | UDP listen address for NetFlow v5 |
+| `NETFLOW_ADDR` | `:2055` | UDP listen address for NetFlow v5; one socket for all buildings, told apart by tunnel source address |
 | `CUSTOMER_SUBNET` | `10.5.50.0/24` | flows from here are attributed to flats |
 | `QOE_PING_TARGETS` | `8.8.8.8,1.1.1.1` | comma separated |
-| `METRICS_FLOW_EVERY`, `METRICS_PORT_EVERY`, `METRICS_PING_EVERY`, `METRICS_DNS_EVERY`, `METRICS_SAVE_EVERY` | `60s`, `30s`, `60s`, `60s`, `5m` | Go durations, at least 1s |
+| `METRICS_FLOW_EVERY`, `METRICS_PORT_EVERY`, `METRICS_PING_EVERY`, `METRICS_DNS_EVERY`, `METRICS_SAVE_EVERY` | `60s`, `30s`, `60s`, `60s`, `15m` | Go durations, at least 1s |
 
 ## Topology
 
@@ -186,13 +216,13 @@ STK Push uses the account code as AccountReference; Daraja usually also sends a 
 
 ## Backup
 
-Everything important is in `ispbill.json` under the mounted data folder (`usb1/ispbill-data`); `metrics.json` is history that is nice to keep but can be lost. Copy both off the USB stick regularly (`/file` download, scp, or a scheduled `/tool/fetch` upload). Restore by putting them back and restarting the container. Writes are atomic, so a live copy is consistent.
+Everything important is in `ispbill.json` under the data folder (`usb1/ispbill-data` for the container); the `metrics/` folder is history that is nice to keep but can be lost. The VPS installer backs both up (see deploy/README.md). Copy both off the USB stick regularly (`/file` download, scp, or a scheduled `/tool/fetch` upload). Restore by putting them back and restarting the container. Writes are atomic, so a live copy is consistent.
 
 ## Known limitations
 
 - **Not tested on a real RouterOS device, a real Daraja account or a real OLT.** The REST calls follow the RouterOS 7 documentation; the first real run may need small fixes, especially container, hotspot and traffic-flow settings in `setup.rsc` and the exact field names RouterOS returns for hosts, queues and `/system/health`.
 - JSON file storage: fine for a building, not for thousands of users. All data is held in memory.
-- One router, one hotspot server. Each account is locked to one MAC (the ONT WAN); `shared-users=1`. Flat isolation relies on the OLT configuration, which this project cannot check.
+- One router and one hotspot server per building. Each account is locked to one MAC (the ONT WAN); `shared-users=1`. Flat isolation relies on the OLT configuration, which this project cannot check.
 - No refunds on the router side, no pro-rata upgrades, no SMS or receipts (reminders are log events only).
 - Daraja callbacks are unsigned. Use `MPESA_CALLBACK_TOKEN` and, if you can, restrict the source IPs.
 - The portal is plain HTTP inside the building. The admin UI has no login rate limit and no HTTPS; keep it off the open internet and block `/admin` from the hotspot network.

@@ -1,103 +1,103 @@
-# Online billing server (VPS + Tailscale)
+# Online billing server for many buildings (VPS + WireGuard)
 
-The same app that runs as a container on the RB5009 can run on a VPS instead.
-The router keeps doing the hotspot; the VPS does billing, the portal and the
-admin pages.
+One VPS runs billing, the tenant portal and the admin pages for every building.
+Each building keeps its own MikroTik router doing the hotspot. Routers join a
+private WireGuard network at the VPS; the VPS reaches each router's REST API
+through its tunnel address.
 
 ```
- Flats ── ONT ── OLT ── RB5009 (hotspot, no public IP) ── Safaricom ── internet
-                           │  Tailscale container 172.17.0.3                │
-                           │   ◄── tailnet: VPS → 172.17.0.1:8081 (REST) ──►│ VPS
-                           │                                                │  ftnbilling :8080
-                           └── phones (walled garden) ── https://DOMAIN ───►│  Caddy :80/:443
-                           └── NetFlow UDP 2055 ───────────────────────────►│
+ Building A router ──┐                                 ┌─ ftnbilling :8080 (admin: SSH tunnel / Tailscale)
+ Building B router ──┼── WireGuard udp/51820 ──► VPS ──┤  Caddy :80/:443  (public portal, M-Pesa callbacks)
+ Building C router ──┘   10.99.0.0/22, wg0             └─ NetFlow udp/2055 on 10.99.0.1 (tunnel only)
+ phones ── https://DOMAIN/portal?site=<id> ─────────────► Caddy
 ```
 
 | Path | How |
 |---|---|
-| VPS → router REST API (create users, log flats in, read counters) | Tailscale. The router has no public IP, so the VPS reaches `172.17.0.1:8081` through the `ftn-router` subnet route. |
-| Phones → portal | Public internet, `https://DOMAIN/portal`. The hotspot walled garden lets unpaid phones reach only the VPS IP. |
-| Router → NetFlow | Public internet, UDP 2055. This is needed because Tailscale on RouterOS 7.20 runs in userspace mode and cannot carry traffic *from* the router. |
-| You → admin | Tailscale only: `http://ftn-billing:8080/admin`. Caddy refuses `/admin` from the internet. |
+| VPS to router REST API | Over the tunnel, to the router's tunnel address (`10.99.0.x:8081`). The router allows REST only from `10.99.0.1`. |
+| Phones to portal | Public internet, `https://DOMAIN/portal?site=<building id>`. The hotspot walled garden lets unpaid phones reach only the VPS. |
+| Router to NetFlow | Through the tunnel, to `10.99.0.1:2055`. The server tells buildings apart by the tunnel source address. |
+| You to admin | Not published. Use an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 you@VPS`) or, if you like, Tailscale. Caddy refuses `/admin` from the internet, and the app refuses it from the tunnel subnet. |
 
-Because the portal is now public, the server only trusts a `mac`/`ip` pair
-that the router currently has in `/ip/hotspot/host` (`VERIFY_HOTSPOT_HOST=true`).
-Someone outside the building who guesses a flat's MAC gets the neutral "open
-this page from the WiFi login" page.
+Design size: about 40 buildings and 1500 flats on a 1 vCPU / 1 GB VPS. The
+service runs with `GOMEMLIMIT=600MiB GOGC=50`.
+
+The portal is public, so the server trusts a `mac`/`ip` pair only if that
+building's router currently lists it in `/ip/hotspot/host`. This check is
+always on for WireGuard buildings. Someone outside the building who guesses a
+flat's MAC gets the neutral "open this page from the WiFi login" page.
 
 ## 1. Before you start
 
-1. **VPS:** Ubuntu 22.04/24.04 or Debian 12, with 1 vCPU and 1 GB RAM. Any Nairobi or EU provider works.
-2. **Domain (recommended):** add an A record, e.g. `billing.yourdomain.co.ke`, pointing to the VPS IP. You need it for HTTPS, and M-Pesa callbacks need HTTPS.
-3. **Tailscale:** at https://login.tailscale.com/admin/settings/keys create **two** auth keys, one for the VPS and one for the router. "Reusable" is not needed. Turn on "Pre-approved" if your tailnet uses device approval.
-4. **GitHub token:** the repo is private, so the VPS needs a token to download it. In GitHub, go to Settings → Developer settings → Fine-grained tokens. Give it access to `blacksan/ftnbilling` only, with **Contents: Read-only**.
+1. **VPS:** Ubuntu 22.04/24.04 or Debian 12, 1 vCPU and 1 GB RAM, with a kernel that has WireGuard (any current one does).
+2. **Domain:** an A record such as `billing.yourdomain.co.ke` pointing to the VPS. HTTPS is required for M-Pesa and for the router join command (the join script carries the router's keys, so it is never served over plain HTTP).
+3. **GitHub token:** the repo is private. Create a fine-grained token for `blacksan/ftnbilling` with **Contents: Read-only**.
+4. **Routers:** RouterOS 7 with the NTP client on, and the hotspot and fetch features enabled: `/system/device-mode/update hotspot=yes fetch=yes` (confirm as the router asks).
 
 ## 2. Install on the VPS (one line)
 
 ```bash
-GH=github_pat_xxx; curl -fsSL -H "Authorization: Bearer $GH" https://raw.githubusercontent.com/blacksan/ftnbilling/main/deploy/install.sh | sudo GH_TOKEN=$GH TS_AUTHKEY=tskey-auth-VPSKEY ROUTER_PASS='router-api-pass' DOMAIN=billing.yourdomain.co.ke bash
+GH=github_pat_xxx; curl -fsSL -H "Authorization: Bearer $GH" https://raw.githubusercontent.com/blacksan/ftnbilling/main/deploy/install.sh | sudo GH_TOKEN=$GH DOMAIN=billing.yourdomain.co.ke bash
 ```
-
-Leave out `DOMAIN=...` to run on `http://<VPS IP>` for now.
 
 The installer does the following:
-- Installs Go and builds the app from this repo.
-- Installs it as the `ftnbilling` systemd service, with data in `/var/lib/ftnbilling` and settings in `/etc/ftnbilling/ftnbilling.env`.
-- Joins Tailscale as `ftn-billing` with `--accept-routes`.
-- Sets up Caddy as the public proxy, with automatic HTTPS when you give `DOMAIN`.
-- Sets up the ufw firewall: SSH, 80, 443 and UDP 2055 are open; everything else is reachable only over Tailscale.
-- Adds daily backups to `/var/backups/ftnbilling`, kept for 30 days.
+- Installs Go and builds the app; runs it as the `ftnbilling` systemd service (data in `/var/lib/ftnbilling`, settings in `/etc/ftnbilling/ftnbilling.env`, `GOMEMLIMIT=600MiB GOGC=50`).
+- Installs `wireguard-tools` and creates `wg0` (`10.99.0.1/22`, UDP 51820, MTU 1380). The server private key is generated once and stays in `/etc/wireguard/wg0.conf`; it is never regenerated. The app only gets the public key (`WG_PUBLIC_KEY`).
+- Installs `/usr/local/sbin/ftnbilling-wg-sync`, run as root by a systemd path unit when the app changes `/var/lib/ftnbilling/wg/apply`. It validates `peers.conf` (only `[Peer]`, a 44-character `PublicKey`, and a single `/32` `AllowedIPs` inside the subnet; no symlinks, no files over 256 KB) and then runs `wg syncconf`. The app is not root and cannot do anything else to the interface.
+- Installs a timer that writes `wg show wg0 dump` (handshakes) to `/run/ftnbilling/wg0.dump` every minute, so the admin can show whether a tunnel is up.
+- Sets up Caddy (automatic HTTPS with `DOMAIN`).
+- Sets up ufw: SSH, 80, 443 and UDP 51820 are open. On `wg0` only UDP 2055 to `10.99.0.1` is allowed; all other input and all routing from `wg0` is denied. The public UDP 2055 rule is removed (kept on an old install that still has `ROUTER_URL`, because its router sends NetFlow over the internet).
+- Adds daily backups to `/var/backups/ftnbilling`: `ispbill.json`, `outbox.json`, `alerts.json`, `fleet.json` for 30 days, and the `metrics/` folder weekly for 4 weeks.
+- Warns if `net.ipv4.ip_forward` is 1 on the server.
+- Tailscale is optional: it is only set up if you pass `TS_AUTHKEY=...` or it is already running. Otherwise the installer prints the SSH tunnel line.
 
-At the end it prints the admin password and the router commands.
+At the end it prints the admin password and what to do next.
 
-**Upgrading:** run the same line again; the Tailscale key is not needed. Data and settings are kept.
+**Upgrading:** run the same line again. Data, settings and the WireGuard key are kept. A v2 data file is converted to the new format on first start; the old file is kept as `ispbill.json.v2.bak`.
 
-## 3. Connect the router (one paste)
+## 3. Add a building
 
-Use a terminal on the RB5009 (WAN up, USB stick mounted as `usb1`):
+1. Open the admin and go to **Buildings, Add building**. Give the name; the router layout defaults suit a standard install (hotspot server `hotspot1`, WAN `ether1`, OLT port `sfp-sfpplus1`).
+2. On the building page press **Make the join command**. It is shown once, works once, and expires after 30 minutes.
+3. Paste it in the router's terminal (WinBox, New Terminal). The router downloads its setup script, creates its own WireGuard key (the private key never reaches the server), brings the tunnel up, restricts REST to the server, sends NetFlow through the tunnel, installs the hotspot pages for that building and whitelists the VPS in the walled garden.
+4. The building page switches to "Connected" when the tunnel is up and the REST API answers.
 
-```
-:global tskey "tskey-auth-ROUTERKEY"
-/tool/fetch url="https://billing.yourdomain.co.ke/routeros/remote.rsc" dst-path=ftn-remote.rsc
-/import ftn-remote.rsc
-```
+If the router's clock is wrong or it has no certificate store, the page offers a fallback command with `check-certificate=no`.
 
-The script does the following:
-- Starts a Tailscale container at 172.17.0.3, pulled from Docker Hub.
-- Lets that container (and only it) use the REST API.
-- Downloads hotspot login pages that point at the online portal.
-- Whitelists the VPS IP in the walled garden.
-- Sends NetFlow to the VPS.
-- **Stops the local ispbill container**, so two billing servers never fight over the hotspot users.
+The script moves WebFig off port 80 (the hotspot uses it). Keep WinBox or SSH to reach the router.
 
-Then, at https://login.tailscale.com/admin/machines:
-- **ftn-router** → ⋯ → *Edit route settings* → approve **172.17.0.1/32**.
-- **ftn-router** and **ftn-billing** → ⋯ → *Disable key expiry*.
+A building that is "paused" in the admin gets no collection and no router changes, and tenants cannot buy there.
 
 ## 4. Check
 
-- On the VPS, `curl -s localhost:8080/healthz` should show `"router_ok":true`.
-- On your laptop, joined to the same tailnet, open `http://ftn-billing:8080/admin`.
-- On a phone on the building WiFi, the sign-in page should open the online portal.
+- `curl -s localhost:8080/healthz` on the VPS shows `sites_total`, `sites_online` and `router_ok`.
+- `wg show wg0` on the VPS lists one peer per joined building.
+- The building page shows the router, the WireGuard handshake and the portal URL.
+- A phone on that building's WiFi should open the online portal.
 
 | Symptom | Fix |
 |---|---|
-| `router_ok:false` | Is the route approved? Run `tailscale status` on the VPS: ftn-router must be online. On the router, `/container/print` should show tailscale running. Check `ROUTER_PASS`. |
-| Phone shows a DNS or connection error instead of the portal | Check that the walled garden has the VPS IP: `/ip/hotspot/walled-garden/ip/print`. Check that the domain resolves. |
-| Portal says "open this page from the WiFi login" on a building phone | The router's hotspot host table must list the phone's MAC/IP: `/ip/hotspot/host/print`. |
-| No "Services" charts | Check `/ip/traffic-flow/target/print` (VPS IP, port 2055) and `ufw status`. |
+| Join command refused | `PUBLIC_BASE_URL` must start with `https://` (set `DOMAIN` and re-run the installer). For a bench test only, `ALLOW_INSECURE_JOIN=true`. |
+| Router says 404 for the join link | The command was used, expired or cancelled. Make a new one. A chat or browser preview also fetches links; the server ignores clients that do not identify as MikroTik, so paste into the terminal, not a chat. |
+| Tunnel never comes up | UDP 51820 must reach the VPS (`ufw status`, provider firewall). `WG_ENDPOINT` in the env file must be the VPS public address. Check `wg show wg0`. |
+| Tunnel up but the router is "not reachable" | The router firewall must accept `10.99.0.1` to port 8081 (the join script adds this). Re-run the join command to rebuild it. |
+| Phone shows an error instead of the portal | Check `/ip/hotspot/walled-garden/ip/print` on the router and that the domain resolves. |
+| Portal says "open this page from the WiFi login" | The router's host table must list the phone: `/ip/hotspot/host/print`. |
+| No traffic charts | Check `/ip/traffic-flow/target/print` (should be `10.99.0.1:2055`). The admin Settings page counts NetFlow packets from unknown sources. |
 
-## Going back to the router container
+## Legacy: one router with the app in a container, or ROUTER_URL
 
-On the router:
-1. Set the local container to start on boot and start it: `/container/set [find comment=ispbill] start-on-boot=yes` and `/container/start [find comment=ispbill]`.
-2. Re-upload the original `routeros/hotspot` pages.
-3. Remove the walled-garden entry `ftn: online portal`.
+An install that already has `ROUTER_URL`/`ROUTER_PASS` in its settings keeps
+working with no change: its data becomes a building called "Main building"
+(legacy mode, configured by the environment). The old files `routeros/setup.rsc`
+and `internal/web/routerfiles/remote.rsc` (Tailscale container setup) are
+legacy; new buildings use the join command instead.
 
-## Moving data
+To move such a building onto WireGuard, add a new building, run its join
+command on that router, then move the accounts to it (account page, Move to
+another building) and remove the old one.
 
-The two servers do not share data. To move flats and payments from the router to the VPS:
-1. Stop both apps.
-2. Copy `usb1/ispbill-data/ispbill.json` from the router (Winbox → Files → drag to your PC) to `/var/lib/ftnbilling/ispbill.json` on the VPS.
-3. Run `chown ftnbilling: /var/lib/ftnbilling/ispbill.json`.
-4. Run `systemctl start ftnbilling`.
+## Moving data between servers
+
+Stop both apps, copy `/var/lib/ftnbilling/ispbill.json` (and `metrics/` if you
+want the history), `chown ftnbilling:` it and start the service.
