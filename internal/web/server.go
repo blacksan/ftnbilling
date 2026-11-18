@@ -68,7 +68,8 @@ type Server struct {
 	authn     *authn.Service
 	alertSink func(string) // tests: take security alerts instead of the outbox
 	idem      *idemStore
-	refreshRL *limiter // /api/v1/auth/refresh by client address
+	refreshRL *limiter    // /api/v1/auth/refresh by client address
+	reboots   rebootGuard // one router reboot per 10 minutes per router (api_live.go)
 
 	onlineMu sync.Mutex
 	online   map[string]onlineEntry

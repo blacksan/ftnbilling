@@ -364,3 +364,37 @@ func (m *Mock) SeedRow(path string, r Row) string {
 	id, _ := m.AddRow(context.Background(), path, r)
 	return id
 }
+
+// SeedLive fills the read paths the live router views use (see sites/live.go)
+// with one plausible RB5009: its identity, health, interfaces with byte
+// counters, addresses, two flats' leases, ARP, bridge hosts and per-flat
+// queues. It only adds rows; call it on a mock that has none of these tables.
+// Counters can then be moved with SetRow(path, id, ...) to produce a rate.
+func (m *Mock) SeedLive() {
+	m.SeedOne("/system/resource", Row{"uptime": "3d4h5m6s", "version": "7.25.1 (stable)", "board-name": "RB5009UG+S+", "architecture-name": "arm64",
+		"cpu-count": "4", "cpu-load": "7", "free-memory": "805306368", "total-memory": "1073741824", "free-hdd-space": "900000000", "total-hdd-space": "1073741824"})
+	m.SeedOne("/system/routerboard", Row{"routerboard": "true", "model": "RB5009UG+S+IN", "serial-number": "HF1234ABCDE", "firmware-type": "al64dr"})
+	m.SeedRow("/system/health", Row{"name": "temperature", "value": "41", "type": "C"})
+	m.SeedRow("/system/health", Row{"name": "cpu-temperature", "value": "47", "type": "C"})
+	for _, r := range []Row{
+		{"name": "ether1", "type": "ether", "running": "true", "disabled": "false", "mac-address": "78:9A:18:00:00:01", "mtu": "1500", "rx-byte": "1000000", "tx-byte": "200000", "comment": "WAN", "last-link-up-time": "2026-11-15 08:00:00"},
+		{"name": "sfp-sfpplus1", "type": "ether", "running": "true", "disabled": "false", "mac-address": "78:9A:18:00:00:02", "mtu": "1500", "rx-byte": "300000", "tx-byte": "2000000", "comment": "OLT"},
+		{"name": "ether5", "type": "ether", "running": "false", "disabled": "false", "mac-address": "78:9A:18:00:00:06", "mtu": "1500", "rx-byte": "0", "tx-byte": "0"},
+		{"name": "br-hotspot", "type": "bridge", "running": "true", "disabled": "false", "mac-address": "78:9A:18:00:00:07", "mtu": "1500", "rx-byte": "300000", "tx-byte": "2000000"},
+		{"name": "wg-ftn", "type": "wg", "running": "true", "disabled": "false", "mtu": "1380", "rx-byte": "5000", "tx-byte": "9000"},
+	} {
+		m.SeedRow("/interface", r)
+	}
+	m.SeedRow("/ip/address", Row{"address": "10.5.50.1/24", "network": "10.5.50.0", "interface": "br-hotspot", "disabled": "false"})
+	m.SeedRow("/ip/address", Row{"address": "192.168.100.2/24", "network": "192.168.100.0", "interface": "ether1", "disabled": "false"})
+	m.SeedRow("/ip/address", Row{"address": "10.99.0.2/22", "network": "10.99.0.0", "interface": "wg-ftn", "disabled": "false"})
+	m.SeedRow("/ip/dhcp-server/lease", Row{"address": "10.5.50.60", "mac-address": "AA:BB:CC:DD:EE:01", "host-name": "Brians-iPhone", "status": "bound", "server": "ftn-dhcp", "last-seen": "12s", "comment": "ftn:acct:K7Q2MX Flat 3B"})
+	m.SeedRow("/ip/dhcp-server/lease", Row{"address": "10.5.50.61", "mac-address": "AA:BB:CC:DD:EE:02", "status": "waiting", "server": "ftn-dhcp", "comment": "ftn:acct:P4R8TN Flat 10A"})
+	m.SeedRow("/ip/dhcp-server/lease", Row{"address": "10.5.50.15", "mac-address": "3C:07:54:00:00:09", "host-name": "guest-laptop", "status": "bound", "server": "ftn-dhcp", "dynamic": "true", "last-seen": "40s"})
+	m.SeedRow("/ip/arp", Row{"address": "10.5.50.60", "mac-address": "AA:BB:CC:DD:EE:01", "interface": "br-hotspot", "complete": "true", "dynamic": "false"})
+	m.SeedRow("/ip/arp", Row{"address": "10.5.50.15", "mac-address": "3C:07:54:00:00:09", "interface": "br-hotspot", "complete": "true", "dynamic": "true"})
+	m.SeedRow("/interface/bridge/host", Row{"mac-address": "AA:BB:CC:DD:EE:01", "on-interface": "sfp-sfpplus1", "bridge": "br-hotspot", "local": "false"})
+	m.SeedRow("/interface/bridge/host", Row{"mac-address": "3C:07:54:00:00:09", "on-interface": "sfp-sfpplus1", "bridge": "br-hotspot", "local": "false"})
+	m.SeedRow("/queue/simple", Row{"name": "ftn-K7Q2MX", "target": "10.5.50.60/32", "max-limit": "20000000/20000000", "bytes": "1000/5000", "rate": "0/0", "comment": "ftn:acct:K7Q2MX Flat 3B"})
+	m.SeedRow("/queue/simple", Row{"name": "ftn-P4R8TN", "target": "10.5.50.61/32", "max-limit": "2000000/2000000", "bytes": "0/0", "rate": "0/0", "comment": "ftn:acct:P4R8TN Flat 10A"})
+}

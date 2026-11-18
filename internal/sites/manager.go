@@ -61,6 +61,7 @@ type Manager struct {
 
 	chk          checksState   // cache of the setup checks (checks.go)
 	autoFixDelay time.Duration // wait after the first answer before the post-join fixes (runtime.go)
+	live         liveState     // live router views and the provisioning job hook (live.go)
 }
 
 // SetForeignIPs lets the billing service tell the cutover which addresses the
