@@ -89,7 +89,7 @@ func TestJoinScriptContentRules(t *testing.T) {
 		`address=10.99.0.2 network=10.99.0.1 interface=wg-ftn`,
 		`allowed-address=10.99.0.1/32 persistent-keepalive=25s`,
 		`endpoint-address=203.0.113.10 endpoint-port=51820`,
-		`policy=read,write,test,sensitive,rest-api`,
+		`policy=read,write,test,sensitive,api,rest-api`,
 		`/ip/service set www port=8081 disabled=no address=10.99.0.1/32`,
 		`:if ([:len [/ip/firewall/filter find where dynamic=no]] > 0)`,
 		`place-before=([/ip/firewall/filter find where dynamic=no]->0)`,

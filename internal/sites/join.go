@@ -69,6 +69,15 @@ func (m *Manager) MintJoin(siteID string) (token string, expires time.Time, err 
 
 // stagePrefix binds a token to its stage: a cutover command cannot be made to
 // run the join (which rotates the router's keys), nor the other way round.
+// routerUserAgent reports whether a request comes from RouterOS /tool fetch.
+// RouterOS 7 sends "User-Agent: RouterOS <version>"; RouterOS 6 sent
+// "Mikrotik/6.x Fetch". The check only stops link previewers and browsers
+// from burning a one-time token; it is not authentication.
+func routerUserAgent(ua string) bool {
+	ua = strings.ToLower(strings.TrimSpace(ua))
+	return strings.HasPrefix(ua, "routeros") || strings.HasPrefix(ua, "mikrotik")
+}
+
 func stagePrefix(stage string) string {
 	switch stage {
 	case StageCutover:
@@ -163,7 +172,7 @@ func (m *Manager) ConsumeJoinForce(token, userAgent, from string, noCheck bool, 
 	if token == "" || len(token) > 128 {
 		return nil, "", ErrJoinInvalid
 	}
-	if m.cfg.JoinRequireMikrotikUA && !strings.HasPrefix(strings.ToLower(userAgent), "mikrotik") {
+	if m.cfg.JoinRequireMikrotikUA && !routerUserAgent(userAgent) {
 		return nil, "", ErrJoinInvalid
 	}
 	if !strings.HasPrefix(token, stagePrefix(stage)) || (stagePrefix(stage) == "" && (strings.HasPrefix(token, "cut.") || strings.HasPrefix(token, "cln."))) {
