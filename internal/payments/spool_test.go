@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"ispbill/internal/payments"
 	"ispbill/internal/store"
@@ -40,6 +42,74 @@ func TestSpoolReplayIdempotentAndOrdered(t *testing.T) {
 	}
 	if len(seen) != 3 || seen[0] != "a" || seen[1] != "b" || seen[2] != "c" {
 		t.Errorf("order %v", seen)
+	}
+}
+
+// Names start with the time, so oldest-first holds across kinds (a plain name
+// sort used to group by kind first), and spool files written by older versions
+// (<kind>-<nano>-<seq>.json) are still replayed, in time order with the new ones.
+func TestSpoolReplayOldestFirstAcrossKindsAndOldNames(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "spool")
+	sp := payments.NewSpool(dir)
+	os.MkdirAll(dir, 0o700)
+	old := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old("stk-1000000000000000001-1.json", "old-stk") // oldest
+	old("c2b-1000000000000000002-2.json", "old-c2b") // newer, sorts before "stk" by name
+	for _, b := range []struct{ kind, body string }{{"stk", "n1"}, {"c2b", "n2"}, {"stk", "n3"}, {"c2b", "n4"}} {
+		if err := sp.Put(b.kind, []byte(b.body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var seen, kinds []string
+	n, err := sp.Replay(func(k string, b []byte) error { seen, kinds = append(seen, string(b)), append(kinds, k); return nil })
+	want := []string{"old-stk", "old-c2b", "n1", "n2", "n3", "n4"}
+	wantKinds := []string{"stk", "c2b", "stk", "c2b", "stk", "c2b"}
+	if err != nil || n != 6 || strings.Join(seen, ",") != strings.Join(want, ",") || strings.Join(kinds, ",") != strings.Join(wantKinds, ",") {
+		t.Fatalf("n=%d err=%v seen=%v kinds=%v", n, err, seen, kinds)
+	}
+	if names, _ := filepath.Glob(filepath.Join(dir, "*.json")); len(names) != 0 {
+		t.Fatalf("left behind: %v", names)
+	}
+	sp.Put("c2b", []byte("x"))
+	names, _ := filepath.Glob(filepath.Join(dir, "*.json"))
+	if len(names) != 1 || !strings.HasSuffix(names[0], "-c2b.json") {
+		t.Fatalf("new name format: %v", names)
+	}
+}
+
+// A slow handler (a router push) must not block callbacks being spooled.
+func TestSpoolPutDoesNotWaitForReplayHandler(t *testing.T) {
+	sp := payments.NewSpool(filepath.Join(t.TempDir(), "spool"))
+	sp.Put("c2b", []byte("first"))
+	inHandler, release := make(chan struct{}), make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		sp.Replay(func(k string, b []byte) error { close(inHandler); <-release; return nil })
+		close(done)
+	}()
+	<-inHandler
+	put := make(chan error, 1)
+	go func() { put <- sp.Put("stk", []byte("second")) }()
+	select {
+	case err := <-put:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Put blocked behind a running Replay handler")
+	}
+	// A second Replay while one runs does not run handlers concurrently.
+	if n, err := sp.Replay(func(string, []byte) error { t.Error("concurrent replay ran a handler"); return nil }); n != 0 || err != nil {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	close(release)
+	<-done
+	if sp.Pending() != 1 {
+		t.Fatalf("pending %d, want the second body", sp.Pending())
 	}
 }
 

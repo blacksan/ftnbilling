@@ -280,7 +280,7 @@ func (s *Store) Close() error
 **Load windows (Postgres only):** orders where `status='pending' OR created_at > now()-'180 days'`, and the last 300 events. Everything else loads in full. Rows outside the window are never treated as deletes.
 
 **M-Pesa spool** (`internal/payments/spool.go`):
-- When a credit returns `ErrPersist` or `ErrUnavailable`, write the raw callback body to `DATA/spool/<kind>-<unixnano>.json` (mode 0600).
+- When a credit returns `ErrPersist` or `ErrUnavailable`, write the raw callback body to `DATA/spool/<unixnano>-<seq>-<kind>.json` (mode 0600).
 - Replay at startup and every 60 seconds while the store is healthy. Replay is idempotent because the receipt is the payment key.
 
 **Codecs** (`pgstore/tables.go`): hand-written per table (upsert SQL, args, delete, scan). Two guard tests catch a forgotten column: a reflection field-count check and a round trip with every field populated.
