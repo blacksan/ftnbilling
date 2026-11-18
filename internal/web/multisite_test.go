@@ -57,7 +57,10 @@ func (m *multi) addSite(t *testing.T, name string) store.Site {
 	return st
 }
 
-func newMulti(t *testing.T) *multi {
+func newMulti(t *testing.T) *multi { return newMultiOps(t, nil, nil) }
+
+// newMultiOps is newMulti with the Phase 2 services installed by mkOps.
+func newMultiOps(t *testing.T, mut func(*config.Config), mkOps func(cfg config.Config, st *store.Store, mgr *sites.Manager, svc *billing.Service) web.Ops) *multi {
 	t.Helper()
 	_, pub, _ := wg.GenerateKeypair()
 	cfg := config.Config{BrandName: "Building WiFi", TestMode: true, AdminUser: "admin", AdminPass: pw,
@@ -65,6 +68,9 @@ func newMulti(t *testing.T) *multi {
 		WGPublicKey: pub, WGEndpoint: "203.0.113.10:51820", WGSubnet: "10.99.0.0/22", JoinTokenTTL: 30 * time.Minute,
 		JoinRequireMikrotikUA: true, PublicBaseURL: "https://billing.example.co.ke", DataDir: t.TempDir(),
 		FlowEvery: time.Hour, PortEvery: time.Hour, PingEvery: time.Hour, DNSEvery: time.Hour, SaveEvery: time.Hour}
+	if mut != nil {
+		mut(&cfg)
+	}
 	st, _ := store.Open(cfg.DataDir)
 	logs := &syncBuf{}
 	log := slog.New(slog.NewTextHandler(logs, nil))
@@ -88,7 +94,11 @@ func newMulti(t *testing.T) *multi {
 	t.Cleanup(func() { cancel(); mgr.Wait(); svc.Wait() })
 	mp := payments.NewMpesa(payments.MpesaConfig{}, svc, st, log)
 	prov := map[string]payments.Provider{"test": &payments.Test{Enabled_: true, Delay: 30 * time.Millisecond, C: svc}, "voucher": payments.Voucher{C: svc}, "mpesa": mp}
-	ts := httptest.NewServer(web.New(cfg, st, svc, prov, mp, mgr, log).Handler())
+	srv := web.New(cfg, st, svc, prov, mp, mgr, log)
+	if mkOps != nil {
+		srv.SetOps(mkOps(cfg, st, mgr, svc))
+	}
+	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	m.app = &app{ts: ts, st: st, svc: svc, mgr: mgr,
 		cl: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}

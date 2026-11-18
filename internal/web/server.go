@@ -54,6 +54,7 @@ type Server struct {
 	rl        *limiter
 	joinRL    *limiter // /j/ by client address
 	wgNet     netip.Prefix
+	ops       Ops
 
 	onlineMu sync.Mutex
 	online   map[string]onlineEntry

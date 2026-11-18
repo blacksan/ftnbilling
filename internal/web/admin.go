@@ -65,6 +65,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	get("/admin/vouchers/print", s.adminPrintVouchers)
 	get("/admin/settings", s.adminSettings)
 	s.metricsRoutes(get, post)
+	s.opsRoutes(get, post)
 }
 
 // admin enforces basic auth and, for POST, the CSRF double-submit check.
@@ -117,6 +118,9 @@ type adminPage struct {
 	AllSites, Multi            bool
 	Next                       string // where the switcher returns to
 	Now                        string // banner clock, EAT
+	Refresh                    int    // seconds between automatic reloads, 0 = none
+	HasOps                     bool   // the fleet monitor is running
+	OpenAlerts, FailedMsgs     int    // sidebar badges
 	FlashBad                   bool
 	UnregCount, UnmatchedCount int
 	Data                       map[string]any
@@ -137,6 +141,13 @@ func (s *Server) page(r *http.Request, active string) adminPage {
 		}
 	}
 	p.Data["SiteNames"], p.Data["ShowSite"], p.Data["Scope"] = names, sc.All && sc.Multi(), sc
+	p.HasOps = s.hasOps()
+	if s.ops.Alerts != nil {
+		p.OpenAlerts = s.ops.Alerts.OpenCount(sc.ID)
+	}
+	if s.ops.Box != nil {
+		p.FailedMsgs = s.ops.Box.Counts()["failed"]
+	}
 	s.st.View(func(d *store.Data) {
 		for _, dv := range d.Devices {
 			if sc.Has(dv.SiteID) {
@@ -191,6 +202,10 @@ func countsAsRevenue(p store.Payment) bool {
 // ---- dashboard ---------------------------------------------------------------
 
 func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
+	if sc := s.scopeOf(r); sc.All && sc.Multi() && s.hasOps() {
+		http.Redirect(w, r, "/admin/fleet", http.StatusSeeOther) // many buildings: start at the fleet overview
+		return
+	}
 	p := s.page(r, "dashboard")
 	now := s.svc.Now()
 	nowE := now.In(billing.EAT)
@@ -319,6 +334,7 @@ func (s *Server) adminAccountCreate(w http.ResponseWriter, r *http.Request) {
 	a, err := s.svc.CreateAccount(billing.AccountInput{
 		Flat: r.PostFormValue("flat"), MAC: r.PostFormValue("mac"), Tenant: r.PostFormValue("tenant"),
 		Phone: r.PostFormValue("phone"), Notes: r.PostFormValue("notes"), SiteID: s.siteFor(r),
+		WhatsApp: r.PostFormValue("whatsapp"), WASamePhone: r.PostFormValue("wa_same") == "1",
 	})
 	if err != nil {
 		s.back(w, r, "/admin/accounts?mac="+url.QueryEscape(r.PostFormValue("mac"))+"&flat="+url.QueryEscape(r.PostFormValue("flat")), "Error: "+err.Error())
@@ -394,6 +410,9 @@ func (s *Server) adminAccountMove(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminAccountUpdate(w http.ResponseWriter, r *http.Request) {
 	id := r.PostFormValue("id")
 	err := s.svc.UpdateAccount(id, r.PostFormValue("flat"), r.PostFormValue("tenant"), r.PostFormValue("phone"), r.PostFormValue("notes"))
+	if err == nil {
+		err = s.svc.SetWhatsApp(id, r.PostFormValue("whatsapp"), r.PostFormValue("wa_same") == "1", r.PostFormValue("wa_optout") == "1")
+	}
 	s.back(w, r, s.accountURL(id), msgOr(err, "Details saved"))
 }
 

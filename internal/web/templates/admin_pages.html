@@ -30,6 +30,7 @@
 <label>Flat label<input name="flat" placeholder="Flat 3B" value="{{.Data.FormFlat}}" required></label>
 <label>ONT WAN MAC<input name="mac" placeholder="AA:BB:CC:DD:EE:FF" value="{{.Data.FormMAC}}" required></label>
 <label>Tenant name (optional)<input name="tenant"></label><label>Phone (optional)<input name="phone" placeholder="0712345678"></label>
+<label>WhatsApp (optional)<input name="whatsapp" placeholder="0712345678"></label><label class="muted" style="align-self:end"><input type="checkbox" name="wa_same" value="1"> same as phone</label>
 <label>Notes<input name="notes"></label><button>Create account</button></form></div>
 {{template "afoot"}}{{end}}
 
@@ -41,6 +42,9 @@
 <div class="grid2">
 <div class="card"><b>Details</b><form method="post" action="/admin/accounts/update" style="margin-top:6px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <div class="row"><label>Flat label<input name="flat" value="{{$A.Flat}}" required></label><label>Tenant<input name="tenant" value="{{$A.Tenant}}"></label><label>Phone<input name="phone" value="{{$A.Phone}}"></label></div>
+<div class="row" style="margin-top:8px"><label>WhatsApp number<input name="whatsapp" value="{{$A.WhatsApp}}" placeholder="0712345678"></label>
+<label class="muted" style="align-self:end"><input type="checkbox" name="wa_same" value="1"> same as phone</label>
+<label class="muted" style="align-self:end"><input type="checkbox" name="wa_optout" value="1"{{if $A.WAOptOut}} checked{{end}}> tenant opted out of WhatsApp messages</label></div>
 <label class="muted">Notes<br><textarea name="notes" rows="2" style="width:100%">{{$A.Notes}}</textarea></label><button>Save details</button></form></div>
 <div class="card"><b>Replace the ONT (change MAC)</b><p class="muted" style="margin:4px 0">Updates the router user and ends the session on the old ONT.</p>
 <form method="post" action="/admin/accounts/mac" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
@@ -151,7 +155,7 @@
 <div class="card"><b>Lifecycle rules</b><table>
 <tr><td>Reminder before expiry</td><td>{{if .Data.Policy.ReminderDays}}{{.Data.Policy.ReminderDays}} days before (plans longer than that){{else}}off{{end}} <code>REMINDER_DAYS</code></td></tr>
 <tr><td>Reminder on expiry</td><td>{{if .Data.Policy.ReminderOnExpiry}}on{{else}}off{{end}} <code>REMINDER_ON_EXPIRY</code></td></tr>
-<tr><td>Reminder delivery</td><td>recorded on the dashboard only (no SMS gateway yet)</td></tr>
+<tr><td>Reminder delivery</td><td>recorded on the dashboard, and sent to tenants who have a WhatsApp number when WhatsApp is set up (see Messages)</td></tr>
 <tr><td>Reconnection fee</td><td>none</td></tr>
 <tr><td>Reconnection</td><td>automatic as soon as a payment is applied</td></tr>
 <tr><td>Upgrades</td><td>take effect immediately; the new package's time is added from the current expiry</td></tr>

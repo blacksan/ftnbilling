@@ -1,0 +1,23 @@
+{{define "admin_uptime"}}{{template "ahead" .}}
+{{if .Data.None}}<div class="card">No buildings yet. <a href="/admin/sites/new">Add the first one.</a></div>{{else}}
+{{$c := .Data.Cur}}{{$days := .Data.Days}}
+<p><span class="seg"><a href="/admin/uptime?{{.Data.QS}}&amp;days=30"{{if eq $days 30}} class="on"{{end}}>30 days</a><a href="/admin/uptime?{{.Data.QS}}&amp;days=90"{{if eq $days 90}} class="on"{{end}}>90 days</a></span>
+&nbsp;<select onchange="location='/admin/uptime?days={{$days}}&amp;site='+encodeURIComponent(this.value)" aria-label="Building">{{range .Data.Sites}}<option value="{{.ID}}"{{if eq .ID $c.ID}} selected{{end}}>{{.Name}}</option>{{end}}</select></p>
+<div class="tiles">
+<div class="tile {{if eq .Data.Pct "no data yet"}}{{else}}good{{end}}">Availability, last {{$days}} days<b>{{.Data.Pct}}</b><small>share of checks the router answered</small></div>
+<div class="tile">Outages<b>{{len .Data.Outages}}</b><small>{{.Data.DownTotal}} down in total</small></div>
+</div>
+<h3>Availability by day</h3>
+<div class="card"><div class="ustrip">{{range .Data.Strip}}<i class="{{.Class}}" title="{{.Title}}"></i>{{end}}</div>
+<div class="muted">Oldest on the left, today on the right. Green 99.9% or better, light green 99%, amber 95%, red below that, grey no data.</div></div>
+<h3>Tunnel round-trip time</h3>
+<div class="card"><div class="muted">How long the server takes to reach the router's API through the WireGuard tunnel.</div>{{.Data.Chart}}</div>
+<h3>Outages</h3>
+<div class="tw"><table><tr><th>Started (EAT)</th><th>Ended (EAT)</th><th>Duration</th><th>Cause</th></tr>
+{{range .Data.Outages}}<tr><td>{{.Start}}</td><td>{{if .Open}}<span class="pill down">ongoing</span>{{else}}{{.End}}{{end}}</td><td>{{.Dur}}</td><td class="wrap">{{.Cause}}</td></tr>
+{{else}}<tr><td colspan="4">No outages in the last {{$days}} days.</td></tr>{{end}}</table></div>
+{{if gt (len .Data.All) 1}}<h3>All buildings</h3>
+<div class="tw"><table><tr><th>Building</th><th class="n">Availability</th><th class="n">Outages</th><th class="n">Time down</th><th></th></tr>
+{{range .Data.All}}<tr><td><b>{{.S.Name}}</b></td><td class="n">{{.Pct}}</td><td class="n">{{.Outages}}</td><td class="n">{{.Down}}</td><td><a href="/admin/uptime?site={{.S.ID}}&amp;days={{$days}}">details</a></td></tr>{{end}}</table></div>{{end}}
+{{end}}
+{{template "afoot"}}{{end}}

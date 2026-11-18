@@ -97,9 +97,20 @@ func run(log *slog.Logger) error {
 	wg.Add(1)
 	go func() { defer wg.Done(); svc.RunSweeper(ctx, 60*time.Second) }()
 
+	ops, err := startOps(ctx, &wg, cfg, st, svc, mgr, log)
+	if err != nil {
+		stop()
+		wg.Wait()
+		mgr.Wait()
+		svc.Wait()
+		return err
+	}
+	webSrv := web.New(cfg, st, svc, providers, mp, mgr, log)
+	webSrv.SetOps(ops)
+
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           web.New(cfg, st, svc, providers, mp, mgr, log).Handler(),
+		Handler:           webSrv.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
