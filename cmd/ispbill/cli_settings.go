@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"ispbill/internal/config"
@@ -48,14 +49,26 @@ func runSettingsCommand(cmd string, args []string, getenv func(string) string, o
 	if err != nil {
 		return err
 	}
+	if cfg.DatabaseURL != "" {
+		// The service numbers its audit events itself; a row written here
+		// would collide with its next one. Log to stderr (the journal) instead.
+		m.NoteAuditTo(func(msg string) { fmt.Fprintln(os.Stderr, "audit: "+msg+" (cli)") })
+	}
 
 	switch cmd {
 	case "admin-reset-password":
 		if !*generate {
+			// Without a usable ADMIN_PASS, removing the stored hash would leave
+			// no admin password and the service would refuse to start.
+			if err := cfg.CheckAdminPass(); err != nil {
+				return fmt.Errorf("not removing the stored admin password: ADMIN_PASS in the environment file is empty or \"admin\", "+
+					"so the service could not start without it. Use `admin-reset-password -generate` to set a new random password instead (%w)", err)
+			}
 			if err := m.ClearAdminPassword("cli"); err != nil {
 				return err
 			}
 			fmt.Fprintln(out, "the stored admin password was removed: ADMIN_PASS from the environment file works again")
+			restartNote(out, cfg)
 			return nil
 		}
 		pw, err := settings.RandomPassword()
@@ -66,6 +79,7 @@ func runSettingsCommand(cmd string, args []string, getenv func(string) string, o
 			return err
 		}
 		fmt.Fprintf(out, "the admin password was reset. Log in as %q with:\n\n  %s\n\nChange it in Settings after logging in.\n", cfg.AdminUser, pw)
+		restartNote(out, cfg)
 		return nil
 
 	case "settings-check":
@@ -91,6 +105,18 @@ func runSettingsCommand(cmd string, args []string, getenv func(string) string, o
 		return nil
 	}
 	return fmt.Errorf("unknown command %q", cmd)
+}
+
+// restartNote tells the admin the running service has not seen the change.
+// With Postgres the service keeps working but still honours the old password
+// until it restarts (it remembers verified logins for 12 hours); with the JSON
+// file the service was stopped, and must be started again.
+func restartNote(out io.Writer, cfg config.Config) {
+	if cfg.DatabaseURL != "" {
+		fmt.Fprintln(out, "\nRESTART REQUIRED: the running service still accepts the old password until it restarts:\n  sudo systemctl restart ftnbilling\n(deploy/ftnbilling-admin-reset does this for you.)")
+		return
+	}
+	fmt.Fprintln(out, "\nStart the service again: sudo systemctl start ftnbilling")
 }
 
 // serviceAnswers reports whether something answers /healthz on the listen address.

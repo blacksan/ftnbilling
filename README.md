@@ -232,7 +232,7 @@ Admin, System, **Settings** has these pages. Everything saved there applies at o
 **Admin password.** Until you set one in Settings, `ADMIN_PASS` from the environment file is the password. Once one is saved (12 or more characters, hashed with pbkdf2-sha256), the environment value stops working. Logging in is rate limited: 5 failures per 15 minutes per address and 30 overall, then HTTP 429 with `Retry-After`. If you are locked out or forgot it:
 
 ```
-sudo ftnbilling-admin-reset              # removes the saved password: ADMIN_PASS works again
+sudo ftnbilling-admin-reset              # removes the saved password: ADMIN_PASS works again (refused if ADMIN_PASS is empty or "admin")
 sudo ftnbilling-admin-reset --generate   # sets a random password and prints it once
 ```
 

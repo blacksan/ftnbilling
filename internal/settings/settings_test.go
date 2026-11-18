@@ -306,3 +306,19 @@ func TestMarkerNeedsNoAuditAndSurvivesRebuild(t *testing.T) {
 		}
 	})
 }
+
+// A command line tool sharing the database with the running service writes no
+// event rows (their numbers would collide with the service's counter).
+func TestNoteAuditToWritesNoEventRow(t *testing.T) {
+	m, st := newMgr(t, nil, testKey)
+	var notes []string
+	m.NoteAuditTo(func(s string) { notes = append(notes, s) })
+	events := func() (n int) { st.View(func(d *store.Data) { n = len(d.Events) }); return }
+	before := events()
+	if err := m.SetAdminPassword("a-long-password-123", "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if events() != before || len(notes) != 1 || !strings.Contains(notes[0], "admin.pass_hash") || strings.Contains(notes[0], "a-long-password") {
+		t.Fatalf("events %d->%d notes %q", before, events(), notes)
+	}
+}

@@ -41,6 +41,9 @@ type Manager struct {
 	env    config.Config
 	getenv func(string) string
 	now    func() time.Time
+	// note, when set, receives each audit message instead of an event row in
+	// the database (see NoteAuditTo).
+	note func(string)
 
 	snap atomic.Pointer[snapshot]
 
@@ -318,7 +321,11 @@ func (m *Manager) commit(rows []store.Setting, del []string, section string, cha
 		for _, k := range del {
 			delete(d.Settings, k)
 		}
-		d.AddEvent(store.Event{Time: now, Kind: "audit", Msg: auditMsg(section, changes, actor)})
+		if msg := auditMsg(section, changes, actor); m.note != nil {
+			m.note(msg)
+		} else {
+			d.AddEvent(store.Event{Time: now, Kind: "audit", Msg: msg})
+		}
 		return nil
 	})
 	if err != nil {
@@ -432,6 +439,13 @@ func (m *Manager) SetMarker(key, value string) error {
 
 // HasAdminPassword reports whether a password hash is stored.
 func (m *Manager) HasAdminPassword() bool { return m.snap.Load().hasPwd }
+
+// NoteAuditTo sends audit messages to fn instead of writing event rows. The
+// command line tools use it while the service runs on the same Postgres
+// database: event numbers (Event.Seq) come from the service's own counter, so
+// a second writer adding events would collide with it. The message goes to
+// stderr (the journal when run by the wrapper) instead.
+func (m *Manager) NoteAuditTo(fn func(string)) { m.note = fn }
 
 // AdminHash returns the stored hash ("" = none; the environment ADMIN_PASS
 // applies).

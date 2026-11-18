@@ -88,3 +88,51 @@ func TestSettingsCheckAndDefaultReset(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 }
+
+// The plain reset removes the stored hash; with no usable ADMIN_PASS that
+// would leave the service unable to start, so it is refused.
+func TestPlainResetRefusedWithoutUsableEnvPassword(t *testing.T) {
+	for _, envPass := range []string{"", "admin"} {
+		dir := t.TempDir()
+		env := cliEnv(dir)
+		weak := func(k string) string {
+			if k == "ADMIN_PASS" {
+				return envPass
+			}
+			return env(k)
+		}
+		var out bytes.Buffer
+		if err := runSettingsCommand("admin-reset-password", []string{"-generate"}, env, &out); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		err := runSettingsCommand("admin-reset-password", nil, weak, &out)
+		if err == nil || !strings.Contains(err.Error(), "-generate") {
+			t.Fatalf("ADMIN_PASS=%q: want a refusal pointing at -generate, got %v", envPass, err)
+		}
+		cfg, _ := config.Load(env)
+		st, _ := store.Open(dir)
+		m, _ := settings.New(st, cfg.DataKey, cfg, env)
+		kept := m.HasAdminPassword()
+		st.Close()
+		if !kept {
+			t.Fatalf("ADMIN_PASS=%q: the stored password was deleted anyway", envPass)
+		}
+	}
+}
+
+func TestResetNotesRestart(t *testing.T) {
+	env := cliEnv(t.TempDir())
+	var out bytes.Buffer
+	if err := runSettingsCommand("admin-reset-password", []string{"-generate"}, env, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "service again") {
+		t.Fatalf("no start hint for the JSON database: %s", out.String())
+	}
+	var pg bytes.Buffer
+	restartNote(&pg, config.Config{DatabaseURL: "postgres://x"})
+	if !strings.Contains(pg.String(), "RESTART REQUIRED") {
+		t.Fatalf("no restart notice for Postgres: %s", pg.String())
+	}
+}
