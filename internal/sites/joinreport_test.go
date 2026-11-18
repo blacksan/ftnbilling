@@ -1,6 +1,7 @@
 package sites
 
 import (
+	"ispbill/internal/store"
 	"strings"
 	"testing"
 	"time"
@@ -171,5 +172,21 @@ func TestJoinReportAtBothExits(t *testing.T) {
 		if strings.Contains(s, "traffic-flow") {
 			t.Errorf("stage %q: traffic flow must not be in the join script", stage)
 		}
+	}
+}
+
+func TestStoredReportFormat(t *testing.T) {
+	f := newFixture(t, nil)
+	s := f.create("Block A")
+	tok, _, _ := f.m.MintJoin(s.ID)
+	f.m.ConsumeJoinStage(tok, mt, "1.2.3.4", false, StageJoin)
+	if err := f.m.SubmitJoinReport(tok, []byte("result fail ros 7.25.1\n4 cutover kit: not allowed by device-mode\n")); err != nil {
+		t.Fatal(err)
+	}
+	var raw string
+	f.st.View(func(d *store.Data) { raw = d.Settings[JoinReportKey(s.ID)].Value })
+	want := "at=" + f.now.UTC().Format(time.RFC3339) + " ok=false ros=7.25.1\n4 cutover kit: not allowed by device-mode\n"
+	if raw != want {
+		t.Fatalf("%q want %q", raw, want)
 	}
 }

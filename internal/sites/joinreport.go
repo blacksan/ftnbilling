@@ -2,8 +2,8 @@ package sites
 
 import (
 	"crypto/subtle"
-	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -101,19 +101,50 @@ func (m *Manager) SubmitJoinReport(token string, body []byte) error {
 			return ErrReportTooLarge
 		}
 		rep := parseReport(sanitizeReport(body), now)
-		v, err := json.Marshal(rep)
-		if err != nil {
-			return err
-		}
+		v := formatStoredReport(rep)
 		k := JoinReportKey(site.ID)
 		if d.Settings == nil {
 			d.Settings = map[string]store.Setting{}
 		}
-		d.Settings[k] = store.Setting{Key: k, Value: string(v), UpdatedAt: now}
+		d.Settings[k] = store.Setting{Key: k, Value: v, UpdatedAt: now}
 		d.AddEvent(store.Event{Time: now, SiteID: site.ID, Kind: "audit", Msg: joinReportAudit(rep)})
 		return nil
 	})
 	return err
+}
+
+// The stored value is plain text, one item per line:
+//
+//	at=<RFC3339 UTC> ok=<true|false> ros=<version>
+//	<N> <section name>: <router error text>      (one per failed section; N is the section number)
+//	...
+func formatStoredReport(r JoinReport) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "at=%s ok=%t ros=%s\n", r.At.UTC().Format(time.RFC3339), r.OK, r.ROS)
+	for _, l := range r.Lines {
+		b.WriteString(l + "\n")
+	}
+	return b.String()
+}
+
+func parseStoredReport(raw string) (JoinReport, bool) {
+	lines := strings.Split(strings.TrimSpace(raw), "\n")
+	r := JoinReport{Lines: []string{}}
+	if len(lines) == 0 || !strings.HasPrefix(lines[0], "at=") {
+		return r, false
+	}
+	for _, f := range strings.Fields(lines[0]) {
+		switch k, v, _ := strings.Cut(f, "="); k {
+		case "at":
+			r.At, _ = time.Parse(time.RFC3339, v)
+		case "ok":
+			r.OK = v == "true"
+		case "ros":
+			r.ROS = v
+		}
+	}
+	r.Lines = append(r.Lines, lines[1:]...)
+	return r, true
 }
 
 func joinReportAudit(r JoinReport) string {
@@ -136,11 +167,7 @@ func (m *Manager) JoinReport(siteID string) (JoinReport, bool) {
 	if !ok {
 		return JoinReport{}, false
 	}
-	var r JoinReport
-	if json.Unmarshal([]byte(raw), &r) != nil {
-		return JoinReport{}, false
-	}
-	return r, true
+	return parseStoredReport(raw)
 }
 
 // refusals remembers, per building, the last fetch with a valid join token
