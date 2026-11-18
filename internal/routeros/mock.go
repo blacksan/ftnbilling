@@ -31,6 +31,7 @@ type Mock struct {
 	calls      []CallRecord
 	failPaths  map[string]error
 	failWrites map[string]error
+	custDown   bool
 	writes     int // successful AddRow/SetRow/RemoveRow calls since the last ResetWrites
 }
 

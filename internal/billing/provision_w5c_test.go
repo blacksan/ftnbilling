@@ -143,3 +143,33 @@ func TestCreateCustomer(t *testing.T) {
 		}
 	})
 }
+
+func TestSweepAndHotspotTaskDropExpiredBypassRows(t *testing.T) {
+	e := newEnv(t)
+	a := e.flat(t, "Flat 1", macA)
+	b := e.flat(t, "Flat 2", macB2)
+	e.pay(t, a, "1 Week", "10.5.50.30")
+	e.pay(t, b, "Monthly 20 Mbps", "10.5.50.31")
+	e.svc.SetHotspotBypass(e.site, true)
+	e.reconcile(t)
+	if n := len(e.rt.Table("/ip/hotspot/ip-binding")); n != 2 {
+		t.Fatalf("%d bypass rows", n)
+	}
+	// the week ends: the sweep alone removes Flat 1's row
+	e.now = e.now.Add(8 * 24 * time.Hour)
+	e.svc.Sweep(context.Background())
+	rows := e.rt.Table("/ip/hotspot/ip-binding")
+	if len(rows) != 1 || rows[0]["mac-address"] != macB2 {
+		t.Fatalf("%v", rows)
+	}
+	// a suspension handled by the per-account hotspot task takes the other row
+	if err := e.svc.SetSuspended(context.Background(), b.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.reconcile(context.Background(), store.Task{SiteID: e.site, AccountID: b.ID, Code: b.Code}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(e.rt.Table("/ip/hotspot/ip-binding")); n != 0 {
+		t.Fatalf("%d rows left", n)
+	}
+}

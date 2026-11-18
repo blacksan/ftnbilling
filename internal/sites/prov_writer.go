@@ -95,6 +95,34 @@ func markerAddress(list, addr string) bool {
 	return true
 }
 
+// inNetwork: addr (a plain address, a CIDR or an a-b range) lies inside the customer network.
+func inNetwork(network, addr string) bool {
+	pfx, err := netip.ParsePrefix(network)
+	if err != nil || addr == "" {
+		return false
+	}
+	one := func(x string) bool {
+		x = strings.TrimSpace(x)
+		if i := strings.IndexByte(x, '/'); i >= 0 {
+			x = x[:i]
+		}
+		a, err := netip.ParseAddr(x)
+		return err == nil && pfx.Contains(a)
+	}
+	for _, part := range strings.Split(addr, "-") {
+		if !one(part) {
+			return false
+		}
+	}
+	return true
+}
+
+// validLeaseTime: a RouterOS time value such as 1m, 30m, 1d, 1w2d or 00:10:00.
+func validLeaseTime(v string) bool {
+	_, ok := parseROSDuration(v)
+	return ok
+}
+
 func disabledOnly(diff map[string]string) bool {
 	if len(diff) != 1 {
 		return false
@@ -187,6 +215,9 @@ func (w *provWriter) allowAdd(path string, b map[string]string) error {
 		if !strings.HasPrefix(b["name"], "ftn-") || !strings.HasPrefix(b["comment"], billing.AcctPrefix) {
 			return refuse("queue %q", b["name"])
 		}
+		if !inNetwork(sc.network, b["target"]) {
+			return refuse("queue target %q is outside the customer network", b["target"])
+		}
 	case "/ip/firewall/filter", "/ip/firewall/nat":
 		return w.allowRule(path, b)
 	case "/ip/firewall/address-list":
@@ -195,6 +226,9 @@ func (w *provWriter) allowAdd(path string, b map[string]string) error {
 		}
 		if (b["list"] == billing.UnregList || b["list"] == billing.SuspendedList) && !ours(b) {
 			return refuse("address-list row without an ftn: comment")
+		}
+		if (b["list"] == billing.UnregList || b["list"] == billing.SuspendedList) && !inNetwork(sc.network, b["address"]) {
+			return refuse("address %q is outside the customer network", b["address"])
 		}
 	case "/ip/hotspot/ip-binding":
 		if b["type"] != "bypassed" || !strings.HasPrefix(b["comment"], billing.AcctPrefix) {
@@ -245,6 +279,15 @@ func (w *provWriter) allowRule(path string, b map[string]string) error {
 	return nil
 }
 
+func ruleProp(k string) bool {
+	switch k {
+	case "chain", "action", "protocol", "dst-port", "src-port", "in-interface", "out-interface", "in-interface-list", "out-interface-list",
+		"src-address", "dst-address", "src-address-list", "dst-address-list", "connection-state", "reject-with", "to-ports", "to-addresses", "comment", "disabled":
+		return true
+	}
+	return false
+}
+
 // set changes properties of one existing row; row is the row as just read.
 func (w *provWriter) set(ctx context.Context, path string, row routeros.Row, diff map[string]string) error {
 	if err := w.allowSet(path, row, diff); err != nil {
@@ -285,8 +328,11 @@ func (w *provWriter) allowSet(path string, row routeros.Row, diff map[string]str
 			}
 			return nil
 		}
+		if lt, ok := diff["lease-time"]; ok && len(diff) == 1 && validLeaseTime(lt) {
+			return nil // the shortened lease before the switch, and its restore
+		}
 		if !disabledOnly(diff) {
-			return refuse("an old DHCP server may only be disabled or enabled")
+			return refuse("an old DHCP server may only be disabled or enabled, or have its lease time changed")
 		}
 		return nil
 	case "/interface/bridge", "/interface/vlan", "/interface/ethernet":
@@ -295,8 +341,8 @@ func (w *provWriter) allowSet(path string, row routeros.Row, diff map[string]str
 		}
 		return nil
 	case "/interface/bridge/port":
-		if !sc.ports[row["interface"]] || row["interface"] == "" || len(diff) != 1 || diff["bridge"] == "" {
-			return refuse("a bridge port may only move one of this router's customer ports to another bridge")
+		if !sc.ports[row["interface"]] || row["interface"] == "" || len(diff) != 1 || diff["bridge"] == "" || diff["bridge"] != sc.bridge {
+			return refuse("a bridge port may only move one of this router's customer ports into the customer bridge")
 		}
 		return nil
 	case "/ip/hotspot/ip-binding":
@@ -304,8 +350,41 @@ func (w *provWriter) allowSet(path string, row routeros.Row, diff map[string]str
 			return refuse("a hotspot binding the server did not make")
 		}
 		return nil
-	case "/ip/pool", "/ip/dhcp-server/network", "/ip/dhcp-server/lease", "/ip/arp", "/queue/simple",
-		"/ip/firewall/filter", "/ip/firewall/nat", "/ip/address":
+	case "/ip/firewall/filter", "/ip/firewall/nat":
+		if !ours(row) {
+			return refuse("a row of %s the server did not make", path)
+		}
+		// the row as it would be after the change must still be one of the allowed rules
+		merged := map[string]string{}
+		for k, v := range row {
+			if ruleProp(k) {
+				merged[k] = v
+			}
+		}
+		for k, v := range diff {
+			merged[k] = v
+		}
+		return w.allowRule(path, merged)
+	case "/ip/address":
+		if !ours(row) {
+			return refuse("a row of %s the server did not make", path)
+		}
+		if _, has := diff["interface"]; has {
+			return refuse("an address may not move to another interface")
+		}
+		if a, has := diff["address"]; has && a != sc.gateway {
+			return refuse("an address may only be the customer gateway")
+		}
+		return nil
+	case "/queue/simple":
+		if !ours(row) && !strings.HasPrefix(row["comment"], billing.AcctPrefix) {
+			return refuse("a row of %s the server did not make", path)
+		}
+		if t, has := diff["target"]; has && !inNetwork(sc.network, t) {
+			return refuse("queue target %q is outside the customer network", t)
+		}
+		return nil
+	case "/ip/pool", "/ip/dhcp-server/network", "/ip/dhcp-server/lease", "/ip/arp":
 		if !ours(row) {
 			return refuse("a row of %s the server did not make", path)
 		}
@@ -316,6 +395,17 @@ func (w *provWriter) allowSet(path string, row routeros.Row, diff map[string]str
 		}
 		if (row["list"] == billing.UnregList || row["list"] == billing.SuspendedList) && !ours(row) {
 			return refuse("an address-list row the server did not make")
+		}
+		if l, has := diff["list"]; has && l != row["list"] {
+			return refuse("a marker row may not change its list")
+		}
+		if a, has := diff["address"]; has {
+			if !markerAddress(row["list"], a) {
+				return refuse("a marker row may not change its address")
+			}
+			if (row["list"] == billing.UnregList || row["list"] == billing.SuspendedList) && !inNetwork(sc.network, a) {
+				return refuse("address %q is outside the customer network", a)
+			}
 		}
 		return nil
 	}

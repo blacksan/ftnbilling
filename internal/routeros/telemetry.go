@@ -208,6 +208,24 @@ func (c *REST) PingHost(ctx context.Context, target string, count int) (PingResu
 	return parsePing(target, count, rows), nil
 }
 
+// SourcePinger is a client that can ping from a chosen source address (the
+// customer gateway), which proves the customers' path to the internet:
+// forwarding and masquerade, not only the router's own route.
+type SourcePinger interface {
+	PingFrom(ctx context.Context, target, src string, count int) (PingResult, error)
+}
+
+// PingFrom runs the router's ping tool with src-address set.
+func (c *REST) PingFrom(ctx context.Context, target, src string, count int) (PingResult, error) {
+	var rows []map[string]string
+	body := map[string]string{"address": target, "count": strconv.Itoa(count), "src-address": src}
+	to := time.Duration(count+8) * time.Second
+	if err := c.doT(ctx, to, http.MethodPost, "/ping", nil, body, &rows); err != nil {
+		return PingResult{}, err
+	}
+	return parsePing(target, count, rows), nil
+}
+
 // parsePing reads the per-reply rows and, when present, the summary row.
 func parsePing(target string, count int, rows []map[string]string) PingResult {
 	res := PingResult{Target: target, Sent: count}

@@ -30,7 +30,7 @@ func (s *Server) setupRoutes(h func(pattern, role string, f apiFunc)) {
 	h("GET /api/v1/routers/{id}/setup", viewer, s.apiSetup)
 	h("POST /api/v1/routers/{id}/setup/run", operator, s.apiSetupRun)
 	h("POST /api/v1/routers/{id}/setup/migrate", operator, s.apiSetupMigrate)
-	h("POST /api/v1/routers/{id}/setup/rollback", operator, s.apiSetupRollback)
+	h("POST /api/v1/routers/{id}/setup/rollback", owner, s.apiSetupRollback)
 
 	// W5 endpoints, kept as thin views over the job (aliased under /routers by h).
 	h("GET /api/v1/sites/{id}/checks", viewer, s.apiChecks)
@@ -40,7 +40,7 @@ func (s *Server) setupRoutes(h func(pattern, role string, f apiFunc)) {
 	h("GET /api/v1/sites/{id}/cutover", viewer, s.apiCutover)
 	h("POST /api/v1/sites/{id}/cutover/start", operator, s.apiCutoverStart)
 	h("POST /api/v1/sites/{id}/cutover/confirm", operator, s.apiCutoverConfirm)
-	h("POST /api/v1/sites/{id}/cutover/rollback", operator, s.apiSetupRollback)
+	h("POST /api/v1/sites/{id}/cutover/rollback", owner, s.apiSetupRollback)
 	h("POST /api/v1/sites/{id}/bench/test-flat", operator, s.apiBenchTestFlat)
 	h("POST /api/v1/sites/{id}/bench/suspend-test", operator, s.apiBenchSuspend)
 }
@@ -138,7 +138,21 @@ func (s *Server) apiSetupRollback(w http.ResponseWriter, r *http.Request, c *api
 	if !ok {
 		return
 	}
+	var req struct {
+		ConfirmName string `json:"confirm_name"`
+	}
+	if !decode(w, r, &req, false) {
+		return
+	}
+	if strings.TrimSpace(req.ConfirmName) != st.Name {
+		validationErr(w, map[string]string{"confirm_name": "type the router name to confirm"})
+		return
+	}
 	if err := s.mgr.RollbackNow(st.ID, c.user.Username); err != nil {
+		if errors.Is(err, sites.ErrNothingToRollBack) {
+			apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
+			return
+		}
 		if !s.routerFail(w, err) {
 			apiErr(w, http.StatusServiceUnavailable, codeRouterUnreachable, "The router does not answer, so it could not be told to roll back. Its own timer rolls it back if a change is waiting.", nil)
 		}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"ispbill/internal/sites"
@@ -86,6 +87,10 @@ func (s *Server) adminSetupRollback(w http.ResponseWriter, r *http.Request) {
 	st, ok := s.siteID(r)
 	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+	if strings.TrimSpace(r.PostFormValue("confirm_name")) != st.Name {
+		s.adminSetupErr(w, sites.ErrNameMismatch)
 		return
 	}
 	u, _ := userOf(r)

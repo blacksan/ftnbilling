@@ -18,17 +18,24 @@ import (
 // kitSim plays the safety kit's two scripts on a Mock: it answers a backup
 // request, ticks the armed marker, honours "now" and rolls the router back.
 type kitSim struct {
-	m           *routeros.Mock
-	mu          sync.Mutex
-	noBackup    bool // never makes the backup
-	noTick      bool // the timer never runs
-	noBound     bool // customers never get a lease on ftn-dhcp
-	ignoreNow   bool // the kit does not honour "now" (so the test can look at what the job did after it)
-	dieOnSwitch bool // the tunnel drops the moment ftn-dhcp is enabled
-	nowWrites   int  // the router's write count when the marker first said now (-1: not yet)
-	rolled      atomic.Int32
-	stop        chan struct{}
-	done        chan struct{}
+	m             *routeros.Mock
+	mu            sync.Mutex
+	noBackup      bool // never makes the backup
+	noTick        bool // the timer never runs
+	noBound       bool // customers never get a lease on ftn-dhcp
+	ignoreNow     bool // the kit does not honour "now" (so the test can look at what the job did after it)
+	dieOnSwitch   bool // the tunnel drops the moment ftn-dhcp is enabled
+	nowWrites     int  // the router's write count when the marker first said now (-1: not yet)
+	lateRenew     bool // clients renew at half of the old server's lease time after the switch
+	noConn        bool // no connection of a customer is ever answered
+	failMarkers   bool // address-list writes fail once ftn-dhcp is up (the markers cannot be removed)
+	breakDNS      bool // customers' DNS is switched off once ftn-dhcp is up
+	enabledAt     time.Time
+	delay         time.Duration
+	leaseAtSwitch string // the old server's lease time when ftn-dhcp came up
+	rolled        atomic.Int32
+	stop          chan struct{}
+	done          chan struct{}
 }
 
 func startKit(t *testing.T, m *routeros.Mock) *kitSim {
@@ -64,6 +71,7 @@ func (k *kitSim) loop() {
 func (k *kitSim) tick() {
 	k.mu.Lock()
 	noBackup, noTick, noBound, ignoreNow, die := k.noBackup, k.noTick, k.noBound, k.ignoreNow, k.dieOnSwitch
+	late, noConn, failMarkers := k.lateRenew, k.noConn, k.failMarkers
 	k.mu.Unlock()
 	ctx := context.Background()
 	al := "/ip/firewall/address-list"
@@ -109,9 +117,40 @@ func (k *kitSim) tick() {
 	if !noBound {
 		for _, d := range k.m.Table("/ip/dhcp-server") {
 			if d["name"] == billing.DHCPServerName && d["disabled"] != "true" && d["disabled"] != "yes" {
+				k.mu.Lock()
+				if k.enabledAt.IsZero() {
+					k.enabledAt = time.Now()
+					if k.breakDNS {
+						k.m.SeedOne("/ip/dns", R{"allow-remote-requests": "false"})
+					}
+					for _, o := range k.m.Table("/ip/dhcp-server") {
+						if o["name"] == "dhcp-hotspot" {
+							k.leaseAtSwitch = o["lease-time"]
+							if late {
+								if lt, ok := parseROSDuration(o["lease-time"]); ok {
+									k.delay = lt / 2
+								}
+							}
+						}
+					}
+				}
+				if k.failMarkers && k.delay < 80*time.Millisecond {
+					k.delay = 80 * time.Millisecond // the switch step is over before the clients come back
+				}
+				ready := time.Since(k.enabledAt) >= k.delay
+				k.mu.Unlock()
+				if !ready {
+					continue
+				}
 				for _, l := range k.m.Table("/ip/dhcp-server/lease") {
 					if l["server"] == billing.DHCPServerName && l["status"] != "bound" {
+						if failMarkers {
+							k.m.SetWriteFail(pathAddrList, &routeros.APIError{Status: 500, Message: "boom"})
+						}
 						_ = k.m.SetRow(ctx, "/ip/dhcp-server/lease", l[routeros.RowID], map[string]string{"status": "bound"})
+						if !noConn {
+							k.m.SeedRow("/ip/firewall/connection", routeros.Row{"src-address": l["address"] + ":50321", "dst-address": "142.250.1.1:443", "seen-reply": "true"})
+						}
 					}
 				}
 			}
@@ -188,7 +227,8 @@ func (a *announced) all() string           { a.mu.Lock(); defer a.mu.Unlock(); r
 
 func fastTiming() ProvTiming {
 	return ProvTiming{Poll: 3 * time.Millisecond, WaitRouter: 300 * time.Millisecond, Backup: 600 * time.Millisecond, Arm: 600 * time.Millisecond,
-		Evidence: 400 * time.Millisecond, OnlineWindow: 10 * time.Minute, JoinWindow: 30 * time.Minute, Rollback: 1500 * time.Millisecond}
+		Evidence: 400 * time.Millisecond, OnlineWindow: 10 * time.Minute, JoinWindow: 30 * time.Minute, Rollback: 1500 * time.Millisecond,
+		LeaseShort: "1s", LeaseGrace: 20 * time.Millisecond, LeaseCap: 3 * time.Second}
 }
 
 type provRig struct {
@@ -208,6 +248,12 @@ func migrateRig(t *testing.T) *provRig {
 	f.m.SetAnnouncer(r.ann.add)
 	f.m.SetProvTiming(fastTiming())
 	r.kit = startKit(t, m)
+	for _, d := range m.Table("/ip/dhcp-server") {
+		if d["name"] == "dhcp-hotspot" {
+			_ = m.SetRow(context.Background(), "/ip/dhcp-server", d[routeros.RowID], map[string]string{"lease-time": "2s"})
+		}
+	}
+	m.ResetWrites()
 	return r
 }
 
@@ -345,7 +391,6 @@ func TestFailureAtEachStepSetsNowAndWritesNothingMore(t *testing.T) {
 		{"firewall nat", "/ip/firewall/nat"},
 		{"firewall filter", "/ip/firewall/filter"},
 		{"switch hotspot", "/ip/hotspot"},
-		{"switch dhcp", "/ip/dhcp-server"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := migrateRig(t)
@@ -722,6 +767,7 @@ func TestRestartRules(t *testing.T) {
 	t.Run("an armed job is never resumed, it is rolled back", func(t *testing.T) {
 		r := migrateRig(t)
 		r.mock.SeedRow(pathAddrList, R{"list": KitListArmed, "address": KitArmedAddress, "comment": "4"})
+		r.mock.SeedRow(pathAddrList, R{"list": KitListUndo, "address": KitUndoAddress(1), "comment": KitUndoHotspot("hotspot1")})
 		r.m.saveJob(r.sd.ID, ProvJob{State: JobSwitching, Kind: KindMigrate, Armed: true, StartedAt: r.now})
 		r.m.resumeProvisioning()
 		deadline := time.Now().Add(3 * time.Second)
@@ -767,6 +813,7 @@ func TestRollbackNowIsIdempotentAndSetsTheMarker(t *testing.T) {
 	r := migrateRig(t)
 	r.kit.set(func(k *kitSim) { k.ignoreNow = true })
 	r.mock.SeedRow(pathAddrList, R{"list": KitListArmed, "address": KitArmedAddress, "comment": "2"})
+	r.mock.SeedRow(pathAddrList, R{"list": KitListUndo, "address": KitUndoAddress(1), "comment": KitUndoHotspot("hotspot1")})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

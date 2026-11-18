@@ -46,6 +46,11 @@ func (m *Manager) resumeProvisioning() {
 		default:
 			continue
 		}
+		confirmed := false
+		m.st.View(func(d *store.Data) { confirmed = billing.SiteMark(d, id, billing.MarkCutoverConfirmed) })
+		if confirmed && j.State != JobRollingBack { // a confirmed router is never rolled back by a restart
+			j.Armed = false
+		}
 		if !j.Armed && j.State != JobRollingBack {
 			_ = m.StartProvision(id, ProvOptions{Trigger: "restart", StartNow: j.StartNow, KeepUnknown: j.KeepUnknown, Actor: ActorSystem})
 			continue
