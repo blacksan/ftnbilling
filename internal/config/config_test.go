@@ -92,3 +92,32 @@ func TestMetricsAndLifecycleDefaults(t *testing.T) {
 		t.Fatal("negative FUP must be refused")
 	}
 }
+
+func TestNotificationSettings(t *testing.T) {
+	base := map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "1"}
+	c, err := Load(env(base))
+	if err != nil || c.SMTPPort != 587 || c.WADailyLimit != 240 || c.WAMinConfirmKES != 250 || c.WALang != "en" || c.WAAPIVersion == "" ||
+		c.EmailConfigured() || c.TelegramConfigured() || c.WhatsAppConfigured() {
+		t.Fatalf("%+v %v", c, err)
+	}
+	m := map[string]string{"SMTP_HOST": "smtp.x", "SMTP_FROM": "a@x", "SMTP_PORT": "465", "ALERT_EMAIL_TO": "a@x, b@x",
+		"TELEGRAM_BOT_TOKEN": "1:A", "TELEGRAM_CHAT_ID": "-5", "WA_TOKEN": "t", "WA_PHONE_NUMBER_ID": "99",
+		"WA_ADMIN_NUMBERS": "0712345678,+254 722 111 222", "WA_DAILY_LIMIT": "100", "WA_MIN_CONFIRM_KES": "0"}
+	for k, v := range base {
+		m[k] = v
+	}
+	c, err = Load(env(m))
+	if err != nil || !c.EmailConfigured() || !c.TelegramConfigured() || !c.WhatsAppConfigured() || c.SMTPPort != 465 ||
+		len(c.AlertEmailTo) != 2 || len(c.WAAdminNumbers) != 2 || c.WAAdminNumbers[0] != "254712345678" || c.WAAdminNumbers[1] != "254722111222" ||
+		c.WADailyLimit != 100 || c.WAMinConfirmKES != 0 {
+		t.Fatalf("%+v %v", c, err)
+	}
+	m["WA_ADMIN_NUMBERS"] = "abc"
+	if _, err := Load(env(m)); err == nil {
+		t.Fatal("bad admin number must be refused")
+	}
+	m["WA_ADMIN_NUMBERS"], m["SMTP_PORT"] = "", "x"
+	if _, err := Load(env(m)); err == nil {
+		t.Fatal("bad SMTP_PORT must be refused")
+	}
+}

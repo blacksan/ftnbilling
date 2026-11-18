@@ -76,7 +76,28 @@ type Config struct {
 	// Lifecycle (shown on the admin settings page).
 	ReminderDays     int
 	ReminderOnExpiry bool
+
+	// Notifications. Secrets live in env only; thresholds and toggles are
+	// edited on the admin Alerts page.
+	SMTPHost, SMTPUser, SMTPPass, SMTPFrom string
+	SMTPPort                               int
+	AlertEmailTo                           []string
+	TelegramToken, TelegramChatID          string
+	WAToken, WAPhoneNumberID               string
+	WAAdminNumbers                         []string // normalised 2547XXXXXXXX
+	WAAPIVersion, WALang                   string
+	WAAppSecret, WAVerifyToken             string // optional inbound webhook
+	WADailyLimit                           int    // tenant messages per day (admin alerts are exempt)
+	WAMinConfirmKES                        int    // smallest payment that gets a confirmation
 }
+
+// EmailConfigured, TelegramConfigured and WhatsAppConfigured tell which
+// notification channels have their secrets in the environment.
+func (c Config) EmailConfigured() bool { return c.SMTPHost != "" && c.SMTPFrom != "" }
+func (c Config) TelegramConfigured() bool {
+	return c.TelegramToken != "" && c.TelegramChatID != ""
+}
+func (c Config) WhatsAppConfigured() bool { return c.WAToken != "" && c.WAPhoneNumberID != "" }
 
 // Load reads the configuration using getenv (os.Getenv in production).
 func Load(getenv func(string) string) (Config, error) {
@@ -179,6 +200,43 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 	}
 	c.ReminderOnExpiry = get("REMINDER_ON_EXPIRY", "true") != "false"
+	c.SMTPHost, c.SMTPUser, c.SMTPPass, c.SMTPFrom = get("SMTP_HOST", ""), get("SMTP_USER", ""), getenv("SMTP_PASS"), get("SMTP_FROM", "")
+	c.SMTPPort = 587
+	if v := get("SMTP_PORT", ""); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 65535 {
+			errs = append(errs, errors.New("SMTP_PORT must be a port number (587 for STARTTLS, 465 for TLS)"))
+		} else {
+			c.SMTPPort = n
+		}
+	}
+	c.AlertEmailTo = splitList(get("ALERT_EMAIL_TO", ""))
+	c.TelegramToken, c.TelegramChatID = get("TELEGRAM_BOT_TOKEN", ""), get("TELEGRAM_CHAT_ID", "")
+	c.WAToken, c.WAPhoneNumberID = get("WA_TOKEN", ""), get("WA_PHONE_NUMBER_ID", "")
+	c.WAAPIVersion, c.WALang = get("WA_API_VERSION", "v23.0"), get("WA_LANG", "en")
+	c.WAAppSecret, c.WAVerifyToken = get("WA_APP_SECRET", ""), get("WA_VERIFY_TOKEN", "")
+	for _, n := range splitList(get("WA_ADMIN_NUMBERS", "")) {
+		n = strings.TrimPrefix(strings.NewReplacer(" ", "", "-", "").Replace(n), "+")
+		if len(n) == 10 && n[0] == '0' {
+			n = "254" + n[1:]
+		}
+		if len(n) < 11 || len(n) > 15 || strings.Trim(n, "0123456789") != "" {
+			errs = append(errs, fmt.Errorf("WA_ADMIN_NUMBERS: %q is not an international number like 254712345678", n))
+			continue
+		}
+		c.WAAdminNumbers = append(c.WAAdminNumbers, n)
+	}
+	c.WADailyLimit, c.WAMinConfirmKES = 240, 250
+	for k, dst := range map[string]*int{"WA_DAILY_LIMIT": &c.WADailyLimit, "WA_MIN_CONFIRM_KES": &c.WAMinConfirmKES} {
+		if v := get(k, ""); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				errs = append(errs, fmt.Errorf("%s must be a whole number, 0 or more", k))
+				continue
+			}
+			*dst = n
+		}
+	}
 	c.FlowEvery = dur("METRICS_FLOW_EVERY", 60*time.Second)
 	c.PortEvery = dur("METRICS_PORT_EVERY", 30*time.Second)
 	c.PingEvery = dur("METRICS_PING_EVERY", 60*time.Second)
@@ -217,6 +275,16 @@ func (c Config) MpesaBaseURL() string {
 		return "https://api.safaricom.co.ke"
 	}
 	return "https://sandbox.safaricom.co.ke"
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ';' || r == '\n' }) {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func parseBool(s string) bool {
