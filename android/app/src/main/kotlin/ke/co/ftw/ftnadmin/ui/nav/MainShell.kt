@@ -35,6 +35,8 @@ import androidx.navigation.navArgument
 import ke.co.ftw.ftnadmin.ui.alerts.AlertsScreen
 import ke.co.ftw.ftnadmin.ui.buildings.BuildingDetailScreen
 import ke.co.ftw.ftnadmin.ui.buildings.BuildingsScreen
+import ke.co.ftw.ftnadmin.ui.buildings.setup.CutoverScreen
+import ke.co.ftw.ftnadmin.ui.buildings.setup.SetupScreen
 import ke.co.ftw.ftnadmin.ui.customers.CustomerDetailScreen
 import ke.co.ftw.ftnadmin.ui.customers.CustomersScreen
 import ke.co.ftw.ftnadmin.ui.dashboard.DashboardScreen
@@ -53,11 +55,17 @@ object Routes {
     const val PAYMENTS_UNMATCHED = "payments/unmatched"
     const val CUSTOMER_PATTERN = "customer/{id}"
     const val BUILDING_PATTERN = "building/{id}"
+    const val SETUP_PATTERN = "building/{id}/setup"
+    const val CUTOVER_PATTERN = "building/{id}/cutover"
     const val NEW_DEVICES_PATTERN = "newdevices?site={site}"
 
     fun customer(id: String) = "customer/${Uri.encode(id)}"
 
     fun building(id: String) = "building/${Uri.encode(id)}"
+
+    fun setup(id: String) = "building/${Uri.encode(id)}/setup"
+
+    fun cutover(id: String) = "building/${Uri.encode(id)}/cutover"
 
     fun newDevices(siteId: String?) = if (siteId == null) "newdevices" else "newdevices?site=${Uri.encode(siteId)}"
 }
@@ -155,7 +163,22 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
                 onBack = { nav.popBackStack() },
                 onNewDevices = { nav.navigate(Routes.newDevices(it)) },
                 onOpenAccount = openAccount,
+                onSetup = { nav.navigate(Routes.setup(it)) },
+                onCutover = { nav.navigate(Routes.cutover(it)) },
             )
+        }
+        composable(
+            Routes.SETUP_PATTERN,
+            arguments = listOf(navArgument("id") { type = NavType.StringType }),
+        ) { e ->
+            val id = e.arguments?.getString("id").orEmpty()
+            SetupScreen(id, user, onBack = { nav.popBackStack() }, onCutover = { nav.navigate(Routes.cutover(id)) })
+        }
+        composable(
+            Routes.CUTOVER_PATTERN,
+            arguments = listOf(navArgument("id") { type = NavType.StringType }),
+        ) { e ->
+            CutoverScreen(e.arguments?.getString("id").orEmpty(), user, onBack = { nav.popBackStack() })
         }
         composable(
             Routes.NEW_DEVICES_PATTERN,

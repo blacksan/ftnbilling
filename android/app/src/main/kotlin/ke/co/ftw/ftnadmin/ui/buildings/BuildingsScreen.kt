@@ -16,6 +16,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -98,7 +99,14 @@ private fun SiteRow(s: Site, onClick: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BuildingDetailScreen(id: String, onBack: () -> Unit, onNewDevices: (String) -> Unit, onOpenAccount: (String) -> Unit) {
+fun BuildingDetailScreen(
+    id: String,
+    onBack: () -> Unit,
+    onNewDevices: (String) -> Unit,
+    onOpenAccount: (String) -> Unit,
+    onSetup: (String) -> Unit,
+    onCutover: (String) -> Unit,
+) {
     val container = LocalContainer.current
     val vm: BuildingDetailViewModel = viewModel(key = "building-$id", factory = vmFactory { BuildingDetailViewModel(id, container.sites) })
     val ui by vm.state.collectAsStateWithLifecycle()
@@ -116,6 +124,8 @@ fun BuildingDetailScreen(id: String, onBack: () -> Unit, onNewDevices: (String) 
                 ) {
                     item { SiteSummary(s.value) }
                     item { Button(onClick = { onNewDevices(id) }, modifier = Modifier.fillMaxWidth()) { Text("New devices in this building") } }
+                    item { Button(onClick = { onSetup(id) }, modifier = Modifier.fillMaxWidth()) { Text("Router setup checklist") } }
+                    item { OutlinedButton(onClick = { onCutover(id) }, modifier = Modifier.fillMaxWidth()) { Text("Cutover to IPoE") } }
                     item { QoeSection(ui.qoe, ui.period, vm::setPeriod) }
                     item { Text("ONTs", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground) }
                     when (val o = ui.onts) {

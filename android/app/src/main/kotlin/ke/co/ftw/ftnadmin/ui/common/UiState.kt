@@ -35,6 +35,10 @@ fun Throwable.userMessage(): String {
         ErrorCode.RATE_LIMITED -> e.retryAfterS?.let { "Too many attempts. Try again in $it s." } ?: "Too many attempts. Try again shortly."
         ErrorCode.FORBIDDEN_ROLE -> "Your account is not allowed to do this."
         ErrorCode.DB_UNAVAILABLE -> "The server database is unavailable. Try again in a moment."
+        ErrorCode.ROUTER_UNREACHABLE ->
+            "The server cannot reach this building's router. Check that the router is powered and the tunnel is up, then try again."
+        ErrorCode.ROUTER_REFUSED ->
+            e.routerError.let { r -> if (r.isBlank()) "The router refused the change." else "The router refused the change: $r" }
         ErrorCode.TOKEN_EXPIRED, ErrorCode.TOKEN_REVOKED -> "Your session ended. Sign in again."
         else -> e.fieldErrors.entries.firstOrNull()?.let { "${it.key}: ${it.value}" } ?: e.message
     }

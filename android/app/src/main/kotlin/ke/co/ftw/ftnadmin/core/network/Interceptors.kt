@@ -18,6 +18,9 @@ class BearerInterceptor(private val sessions: SessionManager) : Interceptor {
     }
 }
 
+/** The join command is a one-time secret: the server must never replay a stored copy of it. */
+internal fun isJoinCommandPath(segments: List<String>): Boolean = segments.lastOrNull() == "join-command"
+
 /**
  * Adds an `Idempotency-Key` to mutating calls so the server can replay the stored response if a
  * request is repeated (after a refresh retry or a flaky connection). The key is created once per
@@ -27,7 +30,9 @@ class IdempotencyInterceptor(private val newKey: () -> String = { UUID.randomUUI
     override fun intercept(chain: Interceptor.Chain): Response {
         val req = chain.request()
         val mutating = req.method == "POST" || req.method == "PUT" || req.method == "PATCH" || req.method == "DELETE"
-        if (!mutating || req.header("Idempotency-Key") != null || isAuthPath(req.url.pathSegments)) {
+        if (!mutating || req.header("Idempotency-Key") != null || isAuthPath(req.url.pathSegments) ||
+            isJoinCommandPath(req.url.pathSegments)
+        ) {
             return chain.proceed(req)
         }
         return chain.proceed(req.newBuilder().header("Idempotency-Key", newKey()).build())

@@ -26,6 +26,12 @@ object ErrorCode {
     const val RATE_LIMITED = "rate_limited"
     const val DB_UNAVAILABLE = "db_unavailable"
 
+    /** 503: the server cannot reach the building's router (tunnel down, router off). */
+    const val ROUTER_UNREACHABLE = "router_unreachable"
+
+    /** 409: the router answered but refused the change; `details.router_error` says why. */
+    const val ROUTER_REFUSED = "router_refused"
+
     /** Not from the server: no connection, timeout, TLS failure or unreadable response. */
     const val NETWORK = "network"
     const val UNKNOWN = "unknown"
@@ -65,6 +71,10 @@ class ApiError(
     /** Login: after 10 wrong authenticator codes only a recovery code is accepted (`details.recovery_code_required`). */
     val recoveryCodeRequired: Boolean
         get() = (details?.get("recovery_code_required") as? JsonPrimitive)?.booleanOrNull == true
+
+    /** For `router_refused`: the router's own error text. */
+    val routerError: String
+        get() = (details?.get("router_error") as? JsonPrimitive)?.contentOrNull.orEmpty()
 
     /** For `mac_in_use`: who owns the MAC. Null when the details are missing or malformed. */
     val macOwner: MacOwner?

@@ -131,6 +131,13 @@ private fun DeviceRow(d: NewDevice, onClick: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (d.routerUser.isNotBlank()) {
+                    Text(
+                        "Logged in on the router as ${d.routerUser}; no server account",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
             }
             IconButton(onClick = { clipboard.setText(AnnotatedString(d.mac)) }) { Icon(Icons.Default.Share, contentDescription = "Copy MAC") }
         }

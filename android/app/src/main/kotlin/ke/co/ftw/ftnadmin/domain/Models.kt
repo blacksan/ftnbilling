@@ -293,4 +293,6 @@ data class NewDevice(
     @SerialName("last_seen") val lastSeen: String? = null,
     val hits: Int = 0,
     @SerialName("suggested_account") val suggestedAccount: SuggestedAccount? = null,
+    /** Name of the router hotspot user holding this MAC when the server has no account for it. */
+    @SerialName("router_user") val routerUser: String = "",
 )

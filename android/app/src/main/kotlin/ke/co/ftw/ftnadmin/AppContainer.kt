@@ -18,6 +18,7 @@ import ke.co.ftw.ftnadmin.data.auth.DeviceInfo
 import ke.co.ftw.ftnadmin.data.dashboard.DashboardRepository
 import ke.co.ftw.ftnadmin.data.payments.PaymentsRepository
 import ke.co.ftw.ftnadmin.data.sites.NewDevicesRepository
+import ke.co.ftw.ftnadmin.data.sites.SiteSetupRepository
 import ke.co.ftw.ftnadmin.data.sites.SitesRepository
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
@@ -49,6 +50,7 @@ class AppContainer(app: Application) {
     val accounts = AccountsRepository(api)
     val payments = PaymentsRepository(api)
     val sites = SitesRepository(api)
+    val siteSetup = SiteSetupRepository(api)
     val newDevices = NewDevicesRepository(api)
     val alerts = AlertsRepository(api)
 
