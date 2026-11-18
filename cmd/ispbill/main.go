@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"ispbill/internal/authn"
 	"ispbill/internal/billing"
 	"ispbill/internal/config"
 	"ispbill/internal/metrics"
@@ -52,12 +53,15 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	defer st.Close()
-	// The admin password lives in the database once set from Settings; until
-	// then ADMIN_PASS from the environment must be usable.
-	if !hasDBAdminPass(st) {
-		if err := cfg.CheckAdminPass(); err != nil {
-			return err
-		}
+	if len(cfg.DataKey) == 0 {
+		return errors.New("DATA_KEY is not set: it seals the two-factor secrets. Generate one (openssl rand -base64 32) and put it in the environment file")
+	}
+	au, err := authn.New(st, cfg.DataKey, cfg.BrandName)
+	if err != nil {
+		return fmt.Errorf("DATA_KEY: %w", err)
+	}
+	if err := seedOwner(au, st, cfg, log); err != nil {
+		return err
 	}
 	if cfg.RouterMock {
 		log.Warn("ROUTER_MOCK=true: using an in-memory fake router")
@@ -155,6 +159,20 @@ func run(log *slog.Logger) error {
 	webSrv := web.New(cfg, st, svc, providers, mp, mgr, log)
 	webSrv.SetSettings(setm)
 	webSrv.SetOps(ops)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		tick := time.NewTicker(10 * time.Minute)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				au.Prune()
+			}
+		}
+	}()
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -189,11 +207,33 @@ func run(log *slog.Logger) error {
 	return err
 }
 
-// hasDBAdminPass reports whether a password hash is stored in the database.
-func hasDBAdminPass(st *store.Store) bool {
-	has := false
-	st.View(func(d *store.Data) { has = d.Settings["admin.pass_hash"].Value != "" })
-	return has
+// seedOwner creates the first admin owner when there is none. The password
+// comes from the admin.pass_hash setting (a password saved in the old Settings
+// page) or else from ADMIN_PASS. After that the admin_users table is the only
+// source: both are ignored.
+func seedOwner(au *authn.Service, st *store.Store, cfg config.Config, log *slog.Logger) error {
+	if _, ok := au.Owner(); ok {
+		return nil
+	}
+	var hash string
+	st.View(func(d *store.Data) { hash = d.Settings["admin.pass_hash"].Value })
+	if hash == "" {
+		if err := cfg.CheckAdminPass(); err != nil {
+			return err
+		}
+		var err error
+		if hash, err = settings.HashPassword(cfg.AdminPass); err != nil {
+			return err
+		}
+	}
+	created, err := au.SeedOwner(cfg.AdminUser, hash)
+	if err != nil {
+		return err
+	}
+	if created {
+		log.Info("admin owner created; sign in and enrol the authenticator app (ispbill admin-reset-password -setup-code prints the setup code)", "user", cfg.AdminUser)
+	}
+	return nil
 }
 
 // runnableSites lists the buildings whose router can be reached right now.
