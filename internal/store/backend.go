@@ -50,6 +50,14 @@ type EventReader interface {
 type Delta[V any] struct {
 	Upsert []V
 	Delete []string
+	// Fresh holds the keys of Upsert rows that are not in the last committed
+	// state (brand-new rows); every other upserted row is an update. A
+	// database uses it to send updates before inserts, so a partial unique
+	// index (one open tenancy per account) never sees two rows at once.
+	Fresh map[string]bool
+	// Old holds the previous version of updated rows, for tables where a
+	// backend needs it to order writes (accounts only).
+	Old map[string]V
 }
 
 // Empty reports whether the delta changes nothing.

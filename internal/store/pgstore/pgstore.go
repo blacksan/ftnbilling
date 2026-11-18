@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -301,35 +302,37 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	eqEventsC.queueDeletes(batch, cs.EquipmentEvents.Delete)
 	notesC.queueDeletes(batch, cs.Notes.Delete)
 	mark("delete")
-	sitesC.queueUpserts(batch, cs.Sites.Upsert)
+	sitesC.queueUpserts(batch, cs.Sites)
 	mark("sites")
-	packagesC.queueUpserts(batch, cs.Packages.Upsert)
+	packagesC.queueUpserts(batch, cs.Packages)
 	mark("packages")
-	customersC.queueUpserts(batch, cs.Customers.Upsert)
+	customersC.queueUpserts(batch, cs.Customers)
 	mark("customers")
-	equipmentC.queueUpserts(batch, cs.Equipment.Upsert)
+	equipmentC.queueUpserts(batch, cs.Equipment)
 	mark("equipment")
-	accountsC.queueUpserts(batch, cs.Accounts.Upsert)
+	queueAccountPrepare(batch, cs.Accounts)
 	mark("accounts")
-	tenanciesC.queueUpserts(batch, cs.Tenancies.Upsert)
+	accountsC.queueUpserts(batch, cs.Accounts)
+	mark("accounts")
+	tenanciesC.queueUpserts(batch, cs.Tenancies)
 	mark("tenancies")
-	contactsC.queueUpserts(batch, cs.Contacts.Upsert)
+	contactsC.queueUpserts(batch, cs.Contacts)
 	mark("site_contacts")
-	ordersC.queueUpserts(batch, cs.Orders.Upsert)
+	ordersC.queueUpserts(batch, cs.Orders)
 	mark("orders")
-	vouchersC.queueUpserts(batch, cs.Vouchers.Upsert)
+	vouchersC.queueUpserts(batch, cs.Vouchers)
 	mark("vouchers")
-	paymentsC.queueUpserts(batch, cs.Payments.Upsert)
+	paymentsC.queueUpserts(batch, cs.Payments)
 	mark("payments")
-	devicesC.queueUpserts(batch, cs.Devices.Upsert)
+	devicesC.queueUpserts(batch, cs.Devices)
 	mark("devices")
-	tasksC.queueUpserts(batch, cs.Tasks.Upsert)
+	tasksC.queueUpserts(batch, cs.Tasks)
 	mark("tasks")
-	eqEventsC.queueUpserts(batch, cs.EquipmentEvents.Upsert)
+	eqEventsC.queueUpserts(batch, cs.EquipmentEvents)
 	mark("equipment_events")
-	notesC.queueUpserts(batch, cs.Notes.Upsert)
+	notesC.queueUpserts(batch, cs.Notes)
 	mark("notes")
-	eventsC.queueUpserts(batch, cs.NewEvents)
+	eventsC.queueUpserts(batch, store.Delta[store.Event]{Upsert: cs.NewEvents})
 	mark("events")
 	if batch.Len() == 0 {
 		return nil
@@ -357,6 +360,30 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 		return fmt.Errorf("%w: %w", store.ErrAmbiguous, err)
 	}
 	return nil
+}
+
+// queueAccountPrepare frees the unique slots (code, open MAC per site) held by
+// accounts whose code, MAC, site or open/closed state is changing. Swapping a
+// MAC or code between two accounts, or moving a MAC from one account to a new
+// one, would otherwise collide in whatever order the rows are written. The
+// real values are written right after by the upserts; both statements are in
+// the same transaction, so nobody sees the blanks.
+func queueAccountPrepare(b *pgx.Batch, d store.Delta[store.Account]) {
+	var ids []string
+	for _, cur := range d.Upsert {
+		old, ok := d.Old[cur.ID]
+		if !ok {
+			continue
+		}
+		if old.Code != cur.Code || !strings.EqualFold(old.MAC, cur.MAC) || old.SiteID != cur.SiteID || old.ClosedAt.IsZero() != cur.ClosedAt.IsZero() {
+			ids = append(ids, cur.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	sort.Strings(ids)
+	b.Queue("UPDATE accounts SET code = '', mac = '' WHERE id = ANY($1)", ids)
 }
 
 // Events reads the full event history, newest first.

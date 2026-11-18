@@ -426,3 +426,33 @@ func TestBuildingProfileAndContacts(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// LinkCustomer closes the old open tenancy and inserts the new one in one
+// Update. On Postgres the partial unique index tenancies_one_open cannot be
+// deferred, so the order the rows are written in decides whether it works:
+// this used to fail about one time in three.
+func TestLinkCustomerToOccupiedFlatRepeatedly(t *testing.T) {
+	e := newEnv(t)
+	a := e.flat(t, "Flat 1", mac1)
+	first := e.customer(t, "First", "0711000100")
+	if err := e.svc.LinkCustomer(a.ID, first.ID, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		c := e.customer(t, "Tenant", "07110002"+string(rune('0'+i/10))+string(rune('0'+i%10)))
+		if err := e.svc.LinkCustomer(a.ID, c.ID, e.now); err != nil {
+			t.Fatalf("link %d: %v", i, err)
+		}
+	}
+	e.st.View(func(d *store.Data) {
+		open := 0
+		for _, tn := range d.Tenancies {
+			if tn.AccountID == a.ID && tn.MoveOut.IsZero() {
+				open++
+			}
+		}
+		if open != 1 || len(d.Tenancies) != 51 {
+			t.Fatalf("open tenancies %d, total %d", open, len(d.Tenancies))
+		}
+	})
+}

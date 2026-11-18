@@ -3,6 +3,7 @@ package pgstore
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -154,7 +155,21 @@ func (c *codec[V]) selectSQL(where string) string {
 	return q
 }
 
-func (c *codec[V]) queueUpserts(b *pgx.Batch, rows []V) {
+// queueUpserts queues one delta's upserts in a deterministic order: updates
+// of rows that already exist first, then inserts of brand-new rows, each group
+// sorted by key. Partial unique indexes cannot be deferred, so a row that
+// gives up a slot (closing the open tenancy) must be written before the row
+// that takes it (the new open tenancy). Go map order used to decide this.
+func (c *codec[V]) queueUpserts(b *pgx.Batch, d store.Delta[V]) {
+	rows := append([]V(nil), d.Upsert...)
+	sort.SliceStable(rows, func(i, j int) bool {
+		ki, kj := c.key(rows[i]), c.key(rows[j])
+		fi, fj := d.Fresh[ki], d.Fresh[kj]
+		if fi != fj {
+			return !fi // updates before inserts
+		}
+		return ki < kj
+	})
 	for _, r := range rows {
 		b.Queue(c.upsql, c.args(r)...)
 	}

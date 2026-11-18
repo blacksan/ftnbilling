@@ -380,3 +380,86 @@ func TestNoTCPSecretsInErrors(t *testing.T) {
 		t.Fatalf("password leaked into the error: %v", err)
 	}
 }
+
+// Partial unique indexes cannot be deferred, so Commit must write updates
+// before inserts and break swap cycles itself, whatever the Go map order.
+func TestCommitOrderingAgainstUniqueIndexes(t *testing.T) {
+	storetest.RequirePostgres(t)
+	t.Setenv("TEST_STORE", "postgres")
+	h := storetest.New(t)
+	now := time.Now()
+	const m1, m2, m3 = "AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03"
+	must := func(what string, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+	}
+	must("seed", h.Store.Update(func(d *store.Data) error {
+		d.Sites["s1"] = store.Site{ID: "s1", Name: "A", Mode: "env", CreatedAt: now}
+		d.Sites["s2"] = store.Site{ID: "s2", Name: "B", Mode: "env", CreatedAt: now}
+		d.Customers["c0"] = store.Customer{ID: "c0", Name: "C0", CreatedAt: now}
+		d.Accounts["a1"] = store.Account{ID: "a1", SiteID: "s1", Code: "AAA111", Flat: "1", MAC: m1, CreatedAt: now}
+		d.Accounts["a2"] = store.Account{ID: "a2", SiteID: "s1", Code: "BBB222", Flat: "2", MAC: m2, CreatedAt: now}
+		d.Tenancies["t0"] = store.Tenancy{ID: "t0", CustomerID: "c0", AccountID: "a1", MoveIn: now}
+		return nil
+	}))
+	// Tenancy handover, 50 times: close the open one, insert a new open one.
+	for i := 0; i < 50; i++ {
+		id := "t" + string(rune('A'+i/26)) + string(rune('a'+i%26))
+		must("handover", h.Store.Update(func(d *store.Data) error {
+			for k, tn := range d.Tenancies {
+				if tn.AccountID == "a1" && tn.MoveOut.IsZero() {
+					tn.MoveOut = now
+					d.Tenancies[k] = tn
+				}
+			}
+			d.Tenancies[id] = store.Tenancy{ID: id, CustomerID: "c0", AccountID: "a1", MoveIn: now}
+			return nil
+		}))
+	}
+	// Two accounts swap MACs and codes in one Update.
+	for i := 0; i < 20; i++ {
+		must("swap", h.Store.Update(func(d *store.Data) error {
+			a1, a2 := d.Accounts["a1"], d.Accounts["a2"]
+			a1.MAC, a2.MAC = a2.MAC, a1.MAC
+			a1.Code, a2.Code = a2.Code, a1.Code
+			d.Accounts["a1"], d.Accounts["a2"] = a1, a2
+			return nil
+		}))
+	}
+	// One account gives up its MAC and a brand-new account takes it.
+	must("hand over a MAC", h.Store.Update(func(d *store.Data) error {
+		a1 := d.Accounts["a1"]
+		old := a1.MAC
+		a1.MAC = m3
+		d.Accounts["a1"] = a1
+		d.Accounts["a3"] = store.Account{ID: "a3", SiteID: "s1", Code: "CCC333", Flat: "3", MAC: old, CreatedAt: now}
+		return nil
+	}))
+	// Closing an account frees its MAC for a new one; moving it to another site works too.
+	must("close and reuse", h.Store.Update(func(d *store.Data) error {
+		a3 := d.Accounts["a3"]
+		delete(d.Accounts, "a3")
+		a3.ClosedAt = now
+		d.ClosedAccounts["a3"] = a3
+		d.Accounts["a4"] = store.Account{ID: "a4", SiteID: "s1", Code: "DDD444", Flat: "4", MAC: a3.MAC, CreatedAt: now}
+		return nil
+	}))
+	must("move site", h.Store.Update(func(d *store.Data) error {
+		a2 := d.Accounts["a2"]
+		a2.SiteID = "s2"
+		d.Accounts["a2"] = a2
+		a4 := d.Accounts["a4"]
+		a4.SiteID = "s2"
+		a4.MAC = "aa:bb:cc:dd:ee:77"
+		d.Accounts["a4"] = a4
+		return nil
+	}))
+	// Memory and database agree after all of it.
+	h2 := h.Reopen()
+	snap := h2.Snapshot()
+	if len(snap.Accounts) != 3 || len(snap.ClosedAccounts) != 1 || len(snap.Tenancies) != 51 {
+		t.Fatalf("reloaded: %d open, %d closed accounts, %d tenancies", len(snap.Accounts), len(snap.ClosedAccounts), len(snap.Tenancies))
+	}
+}

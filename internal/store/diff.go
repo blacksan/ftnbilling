@@ -115,6 +115,12 @@ func (t tbl[V]) diff(l, s *Data, cs *ChangeSet) {
 			continue
 		}
 		out.Upsert = append(out.Upsert, nv)
+		if !ok {
+			if out.Fresh == nil {
+				out.Fresh = map[string]bool{}
+			}
+			out.Fresh[t.key(nv)] = true
+		}
 	}
 	if matched < len(shadow) {
 		for k := range shadow {
@@ -248,6 +254,17 @@ func diffAccounts(l, s *Data, cs *ChangeSet, now time.Time) {
 				continue
 			}
 			cs.Accounts.Upsert = append(cs.Accounts.Upsert, nv)
+			if !ok {
+				if cs.Accounts.Fresh == nil {
+					cs.Accounts.Fresh = map[string]bool{}
+				}
+				cs.Accounts.Fresh[k] = true
+			} else {
+				if cs.Accounts.Old == nil {
+					cs.Accounts.Old = map[string]Account{}
+				}
+				cs.Accounts.Old[k] = sv
+			}
 		}
 	}
 	each(l.Accounts, false)
