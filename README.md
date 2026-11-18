@@ -108,8 +108,8 @@ to another building from its page.
 
 Routers join over WireGuard with a one-time command from the admin: see
 [deploy/README.md](deploy/README.md) for the server setup (one command on a
-fresh VPS: PostgreSQL, Caddy, WireGuard for the routers and a separate WireGuard
-admin VPN with QR-code onboarding, firewall, backups, `ftnbilling-doctor`) and
+fresh VPS: PostgreSQL, Caddy, WireGuard for the routers, a public admin behind
+the app's own sign-in, firewall, backups, `ftnbilling-doctor`) and
 for the join flow. The
 design target is about 40 buildings and 1500 flats on a 1 vCPU / 1 GB VPS.
 
@@ -234,6 +234,9 @@ Admin, System, **Settings** has these pages. Everything saved there applies at o
 ```
 sudo ftnbilling-admin-reset              # removes the saved password: ADMIN_PASS works again (refused if ADMIN_PASS is empty or "admin")
 sudo ftnbilling-admin-reset --generate   # sets a random password and prints it once
+sudo ftnbilling-admin-reset --setup-code # a one-time code for the first sign-in / authenticator setup
+sudo ftnbilling-admin-reset --reset-totp # forget the authenticator and recovery codes
+sudo ftnbilling-admin-reset --revoke-sessions
 ```
 
 With PostgreSQL this works while the service runs (it then restarts the service). With the JSON file database, stop the service first.
