@@ -1,0 +1,353 @@
+package payments_test
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"ispbill/internal/billing"
+	"ispbill/internal/payments"
+	"ispbill/internal/routeros"
+	"ispbill/internal/store"
+)
+
+type fakeDaraja struct {
+	mu       sync.Mutex
+	oauth    int
+	stkBody  map[string]any
+	stkAuth  string
+	respCode string
+}
+
+func (f *fakeDaraja) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch r.URL.Path {
+	case "/oauth/v1/generate":
+		f.oauth++
+		u, p, _ := r.BasicAuth()
+		if u != "key" || p != "secret" || r.URL.Query().Get("grant_type") != "client_credentials" {
+			http.Error(w, "no", 401)
+			return
+		}
+		w.Write([]byte(`{"access_token":"TOK","expires_in":"3599"}`))
+	case "/mpesa/stkpush/v1/processrequest":
+		f.stkAuth = r.Header.Get("Authorization")
+		b, _ := io.ReadAll(r.Body)
+		json.Unmarshal(b, &f.stkBody)
+		code := f.respCode
+		if code == "" {
+			code = "0"
+		}
+		w.Write([]byte(`{"MerchantRequestID":"m1","CheckoutRequestID":"ws_CO_123","ResponseCode":"` + code + `","ResponseDescription":"ok"}`))
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+type rig struct {
+	svc  *billing.Service
+	st   *store.Store
+	rt   *routeros.Mock
+	mp   *payments.Mpesa
+	fd   *fakeDaraja
+	now  time.Time
+	acct store.Account
+}
+
+const ontMAC = "AA:BB:CC:DD:EE:01"
+
+func newRig(t *testing.T) *rig {
+	t.Helper()
+	fd := &fakeDaraja{}
+	srv := httptest.NewServer(fd)
+	t.Cleanup(srv.Close)
+	st, _ := store.Open(t.TempDir())
+	rt := routeros.NewMock()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc := billing.NewService(st, rt, log)
+	r := &rig{svc: svc, st: st, rt: rt, fd: fd, now: time.Date(2026, 11, 17, 21, 30, 5, 0, time.UTC)}
+	svc.SetClock(func() time.Time { return r.now })
+	svc.SeedPackages()
+	svc.SyncProfiles(context.Background())
+	a, err := svc.CreateAccount(billing.AccountInput{Flat: "Flat 3B", MAC: ontMAC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.acct = a
+	r.mp = payments.NewMpesa(payments.MpesaConfig{
+		BaseURL: srv.URL, Key: "key", Secret: "secret", Shortcode: "174379", Passkey: "PASSKEY",
+		PublicBaseURL: "https://example.org", Enabled: true,
+	}, svc, st, log)
+	r.mp.SetClock(func() time.Time { return r.now })
+	return r
+}
+
+func (r *rig) pkg(name string) store.Package {
+	var out store.Package
+	r.st.View(func(d *store.Data) {
+		for _, p := range d.Packages {
+			if p.Name == name {
+				out = p
+			}
+		}
+	})
+	return out
+}
+
+func (r *rig) expiry() (t time.Time) {
+	r.st.View(func(d *store.Data) { t = d.Accounts[r.acct.ID].ExpiresAt })
+	return
+}
+
+func (r *rig) countStatus(status string) (n int) {
+	r.st.View(func(d *store.Data) {
+		for _, p := range d.Payments {
+			if p.Status == status {
+				n++
+			}
+		}
+	})
+	return
+}
+
+func (r *rig) order(t *testing.T, pkg string) store.Order {
+	o, err := r.svc.CreateOrder(billing.OrderInput{AccountID: r.acct.ID, PackageID: r.pkg(pkg).ID, Phone: "254712345678", Method: "mpesa", MAC: ontMAC, IP: "10.5.50.20"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o
+}
+
+func stkCB(checkout string, code int, receipt string, amount int) []byte {
+	if code != 0 {
+		return []byte(`{"Body":{"stkCallback":{"MerchantRequestID":"m1","CheckoutRequestID":"` + checkout + `","ResultCode":1032,"ResultDesc":"Request cancelled by user"}}}`)
+	}
+	b, _ := json.Marshal(map[string]any{"Body": map[string]any{"stkCallback": map[string]any{
+		"MerchantRequestID": "m1", "CheckoutRequestID": checkout, "ResultCode": 0, "ResultDesc": "ok",
+		"CallbackMetadata": map[string]any{"Item": []map[string]any{
+			{"Name": "Amount", "Value": amount}, {"Name": "MpesaReceiptNumber", "Value": receipt},
+			{"Name": "TransactionDate", "Value": 20261117213000}, {"Name": "PhoneNumber", "Value": 254712345678},
+		}}}}})
+	return b
+}
+
+func TestSTKPushRequestShape(t *testing.T) {
+	r := newRig(t)
+	o := r.order(t, "1 Day")
+	ctx := context.Background()
+	if err := r.mp.Start(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	b := r.fd.stkBody
+	// 21:30:05 UTC is 00:30:05 on the 18th in EAT.
+	if b["Timestamp"] != "20261118003005" {
+		t.Errorf("timestamp %v", b["Timestamp"])
+	}
+	wantPW := base64.StdEncoding.EncodeToString([]byte("174379PASSKEY20261118003005"))
+	if b["Password"] != wantPW {
+		t.Errorf("password %v", b["Password"])
+	}
+	checks := map[string]any{
+		"BusinessShortCode": "174379", "TransactionType": "CustomerPayBillOnline", "Amount": float64(50),
+		"PartyA": "254712345678", "PartyB": "174379", "PhoneNumber": "254712345678",
+		"CallBackURL": "https://example.org/pay/cb/stk", "AccountReference": r.acct.Code,
+	}
+	for k, v := range checks {
+		if b[k] != v {
+			t.Errorf("%s = %v, want %v", k, b[k], v)
+		}
+	}
+	if strings.Contains(strings.ToLower(b["CallBackURL"].(string)), "mpesa") {
+		t.Error("callback URL contains mpesa")
+	}
+	if r.fd.stkAuth != "Bearer TOK" {
+		t.Errorf("auth %q", r.fd.stkAuth)
+	}
+	got, _ := r.svc.GetOrder(o.ID)
+	if got.CheckoutRequestID != "ws_CO_123" {
+		t.Errorf("checkout id %q", got.CheckoutRequestID)
+	}
+	r.mp.Start(ctx, r.order(t, "1 Day"))
+	if r.fd.oauth != 1 {
+		t.Errorf("oauth called %d times", r.fd.oauth)
+	}
+}
+
+func TestSTKPushRejected(t *testing.T) {
+	r := newRig(t)
+	r.fd.respCode = "1"
+	if err := r.mp.Start(context.Background(), r.order(t, "1 Day")); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestSTKCallbackPaidIdempotent(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	o := r.order(t, "1 Day")
+	r.mp.Start(ctx, o)
+	if err := r.mp.HandleSTKCallback(ctx, stkCB("ws_CO_123", 0, "RKT1ABCDEF", 50)); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := r.svc.GetOrder(o.ID)
+	if got.Status != store.OrderPaid || got.Receipt != "RKT1ABCDEF" || !got.LoggedIn {
+		t.Fatalf("%+v", got)
+	}
+	exp := r.expiry()
+	r.mp.HandleSTKCallback(ctx, stkCB("ws_CO_123", 0, "RKT1ABCDEF", 50)) // duplicate delivery
+	if !r.expiry().Equal(exp) {
+		t.Fatal("duplicate STK callback extended again")
+	}
+	r.st.View(func(d *store.Data) {
+		if len(d.Payments) != 1 {
+			t.Fatalf("ledger has %d entries", len(d.Payments))
+		}
+	})
+}
+
+func TestSTKCallbackFailureAndShortAmount(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	o := r.order(t, "1 Day")
+	r.mp.Start(ctx, o)
+	r.mp.HandleSTKCallback(ctx, stkCB("ws_CO_123", 1, "", 0))
+	if got, _ := r.svc.GetOrder(o.ID); got.Status != store.OrderFailed || got.Reason == "" {
+		t.Fatalf("%+v", got)
+	}
+	o2 := r.order(t, "1 Week")
+	r.svc.SetCheckoutID(o2.ID, "ws_CO_999")
+	r.mp.HandleSTKCallback(ctx, stkCB("ws_CO_999", 0, "RKT2ABCDEF", 100))
+	if got, _ := r.svc.GetOrder(o2.ID); got.Status == store.OrderPaid {
+		t.Fatal("underpayment must not be accepted")
+	}
+	if r.countStatus(store.PayUnmatched) != 1 {
+		t.Fatal("underpayment should be in the unmatched queue")
+	}
+}
+
+func c2b(trans, ref string, amount string) []byte {
+	b, _ := json.Marshal(map[string]any{"TransactionType": "Pay Bill", "TransID": trans, "TransAmount": amount,
+		"BusinessShortCode": "174379", "BillRefNumber": ref, "MSISDN": "254712345678", "FirstName": "Jane", "LastName": "Doe"})
+	return b
+}
+
+func TestC2BValidationAndConfirmation(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	code := r.acct.Code
+	if res := r.mp.HandleC2BValidation(c2b("T0", "NOPE12", "50.00")); res.ResultCode != "C2B00012" {
+		t.Errorf("unknown account: %+v", res)
+	}
+	if res := r.mp.HandleC2BValidation(c2b("T0", strings.ToLower(code), "50.00")); res.ResultCode != "0" {
+		t.Errorf("known code: %+v", res)
+	}
+
+	// Paying 3000 against the account code applies Monthly 40 Mbps (price match).
+	res := r.mp.HandleC2BConfirmation(ctx, c2b("TRN1ABCDEF", code, "3000.00"))
+	if res.ResultCode != "0" || res.ResultDesc != "Accepted" {
+		t.Fatalf("%+v", res)
+	}
+	want := r.now.Add(30 * 24 * time.Hour)
+	if !r.expiry().Equal(want) {
+		t.Fatalf("expiry %v want %v", r.expiry(), want)
+	}
+	if u, _ := r.rt.GetUser(code); u.Profile != "ispbill-monthly-40-mbps" || u.MAC != ontMAC {
+		t.Errorf("router user %+v", u)
+	}
+	// Redelivery is a no-op.
+	r.mp.HandleC2BConfirmation(ctx, c2b("TRN1ABCDEF", code, "3000.00"))
+	if !r.expiry().Equal(want) {
+		t.Error("duplicate confirmation extended twice")
+	}
+	if r.countStatus(store.PayUnmatched) != 0 {
+		t.Error("unexpected unmatched")
+	}
+	// Amount with no package, and unknown account: both land in the unmatched queue.
+	r.mp.HandleC2BConfirmation(ctx, c2b("TRN2ABCDEF", code, "77.00"))
+	r.mp.HandleC2BConfirmation(ctx, c2b("TRN3ABCDEF", "ZZZZZZ", "50.00"))
+	r.mp.HandleC2BConfirmation(ctx, c2b("TRN3ABCDEF", "ZZZZZZ", "50.00")) // duplicate
+	if n := r.countStatus(store.PayUnmatched); n != 2 {
+		t.Fatalf("unmatched = %d", n)
+	}
+}
+
+func TestC2BConfirmationForPendingOrderIsIdempotentWithSTK(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	o := r.order(t, "1 Day")
+	r.mp.Start(ctx, o)
+	if res := r.mp.HandleC2BValidation(c2b("T9", o.ID, "50")); res.ResultCode != "0" {
+		t.Fatal("order id should validate")
+	}
+	r.mp.HandleC2BConfirmation(ctx, c2b("RKT7ABCDEF", strings.ToUpper(o.ID), "50.00"))
+	exp := r.expiry()
+	r.mp.HandleSTKCallback(ctx, stkCB("ws_CO_123", 0, "RKT7ABCDEF", 50)) // same receipt arrives via STK
+	got, _ := r.svc.GetOrder(o.ID)
+	if got.Status != store.OrderPaid || !r.expiry().Equal(exp) || r.countStatus(store.PayUnmatched) != 0 {
+		t.Fatal("double processing")
+	}
+}
+
+// The STK result and the C2B confirmation for the same payment arrive in either order.
+func TestStkThenC2BForSameReceiptAppliesOnce(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	o := r.order(t, "1 Day")
+	r.mp.Start(ctx, o)
+	r.mp.HandleSTKCallback(ctx, stkCB("ws_CO_123", 0, "RKT8ABCDEF", 50))
+	exp := r.expiry()
+	r.mp.HandleC2BConfirmation(ctx, c2b("RKT8ABCDEF", r.acct.Code, "50.00"))
+	if !r.expiry().Equal(exp) {
+		t.Fatal("C2B for an STK payment extended twice")
+	}
+}
+
+func TestTestProviderGatedByFlag(t *testing.T) {
+	r := newRig(t)
+	off := &payments.Test{Enabled_: false, Delay: time.Millisecond, C: r.svc}
+	if off.Enabled() || off.Start(context.Background(), r.order(t, "1 Hour")) == nil {
+		t.Fatal("must refuse when disabled")
+	}
+	on := &payments.Test{Enabled_: true, Delay: 20 * time.Millisecond, C: r.svc}
+	o := r.order(t, "1 Hour")
+	on.Start(context.Background(), o)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got, _ := r.svc.GetOrder(o.ID); got.Status == store.OrderPaid {
+			time.Sleep(100 * time.Millisecond)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("test payment never completed")
+}
+
+func TestC2BLowerPlanWhileActiveGoesToUnmatched(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	code := r.acct.Code
+	r.mp.HandleC2BConfirmation(ctx, c2b("UPG1ABCDEF", code, "3000.00")) // Monthly 40
+	exp := r.expiry()
+	// 250 is the 1 Week package (10 Mbps): slower than the active plan.
+	r.mp.HandleC2BConfirmation(ctx, c2b("LOW1ABCDEF", code, "250.00"))
+	if !r.expiry().Equal(exp) {
+		t.Fatal("lower plan must not be applied")
+	}
+	if u, _ := r.rt.GetUser(code); u.Profile != "ispbill-monthly-40-mbps" {
+		t.Fatalf("profile changed to %q", u.Profile)
+	}
+	var row store.Payment
+	r.st.View(func(d *store.Data) { row = d.Payments["LOW1ABCDEF"] })
+	if row.Status != store.PayUnmatched || !strings.Contains(row.Note, "lower plan while active") || row.AccountID != r.acct.ID {
+		t.Fatalf("row: %+v", row)
+	}
+}

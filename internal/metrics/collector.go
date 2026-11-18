@@ -1,0 +1,597 @@
+package metrics
+
+import (
+	"context"
+	"log/slog"
+	"math"
+	"net/netip"
+	"strings"
+	"sync"
+	"time"
+
+	"ispbill/internal/routeros"
+)
+
+// AcctInfo is what the collector needs to know about a flat.
+type AcctInfo struct {
+	Code, Flat, Package, State string
+	SpeedMbps                  int
+}
+
+// Directory lists the flats (implemented by the billing service).
+type Directory interface{ Accounts() []AcctInfo }
+
+// Config holds the collector settings (see internal/config).
+type Config struct {
+	WAN, OLT               string
+	WANCapMbps, OLTCapMbps float64
+	FUPTB                  float64
+	PingTargets            []string
+	Subnet                 netip.Prefix
+	FlowEvery, PortEvery   time.Duration
+	PingEvery, DNSEvery    time.Duration
+	SaveEvery              time.Duration
+	NetflowAddr            string
+	Synthetic              bool // ROUTER_MOCK: generate service data from session deltas
+}
+
+// CapFraction is "at the cap" for the percent-of-time-at-cap measure.
+const CapFraction = 0.9
+
+// LiveRate is the latest rate of one flat.
+type LiveRate struct {
+	DownBps, UpBps, CapBps float64
+	Address                string
+	At                     time.Time
+}
+
+// LivePort is the latest rate of one interface.
+type LivePort struct {
+	RxBps, TxBps float64
+	Running      bool
+	At           time.Time
+}
+
+// LivePing is the latest ping result for a target.
+type LivePing struct {
+	RTTms, LossPct float64
+	At             time.Time
+}
+
+// Live is the in-memory "right now" view.
+type Live struct {
+	Flats   map[string]LiveRate
+	Ports   map[string]LivePort
+	Ping    map[string]LivePing
+	Sys     routeros.SysInfo
+	SysAt   time.Time
+	Err     map[string]string // collector name -> last error text ("" when ok)
+	ErrAt   map[string]time.Time
+	FlowAt  time.Time
+	PortsAt time.Time
+}
+
+type sessPrev struct {
+	in, out uint64
+	at      time.Time
+}
+
+type ifPrev struct {
+	rx, tx uint64
+	at     time.Time
+}
+
+type dnsInfo struct {
+	names []string
+	seen  time.Time
+}
+
+// Collector gathers samples and owns the metrics data.
+type Collector struct {
+	cfg  Config
+	rt   routeros.Telemetry
+	dir  Directory
+	log  *slog.Logger
+	path string
+	now  func() time.Time
+
+	mu       sync.Mutex
+	D        Data
+	L        Live
+	prevS    map[string]sessPrev
+	lastFlow time.Time
+	prevIf   map[string]ifPrev
+	ipCode   map[string]ipEntry
+	dns      map[netip.Addr]dnsInfo
+	failing  map[string]bool
+}
+
+type ipEntry struct {
+	code string
+	seen time.Time
+}
+
+// New loads metrics.json from dir (a corrupt file is logged and replaced).
+func New(dir string, cfg Config, rt routeros.Telemetry, d Directory, log *slog.Logger) *Collector {
+	c := &Collector{cfg: cfg, rt: rt, dir: d, log: log, path: metricsPath(dir), now: time.Now,
+		prevS: map[string]sessPrev{}, prevIf: map[string]ifPrev{}, ipCode: map[string]ipEntry{},
+		dns: map[netip.Addr]dnsInfo{}, failing: map[string]bool{}}
+	data, err := load(c.path)
+	if err != nil {
+		log.Warn("metrics.json unreadable; starting empty", "err", err)
+	}
+	c.D = data
+	c.L = Live{Flats: map[string]LiveRate{}, Ports: map[string]LivePort{}, Ping: map[string]LivePing{},
+		Err: map[string]string{}, ErrAt: map[string]time.Time{}}
+	return c
+}
+
+// SetClock overrides the clock (tests).
+func (c *Collector) SetClock(f func() time.Time) { c.now = f }
+
+// DisableNetflow turns the UDP listener off (ROUTER_MOCK).
+func (c *Collector) DisableNetflow() { c.cfg.NetflowAddr = "off" }
+
+// Config returns the settings.
+func (c *Collector) Config() Config { return c.cfg }
+
+func (c *Collector) inSubnet(a netip.Addr) bool {
+	return c.cfg.Subnet.IsValid() && c.cfg.Subnet.Contains(a)
+}
+
+func (c *Collector) codeForIP(ip string, now time.Time) string {
+	e, ok := c.ipCode[ip]
+	if !ok || now.Sub(e.seen) > 24*time.Hour {
+		return ""
+	}
+	return e.code
+}
+
+// hostsFor returns the hostnames known for an address (including CNAME sources).
+func (c *Collector) hostsFor(a netip.Addr) []string {
+	if i, ok := c.dns[a]; ok {
+		return i.names
+	}
+	return nil
+}
+
+func (c *Collector) acctMap() map[string]AcctInfo {
+	out := map[string]AcctInfo{}
+	if c.dir != nil {
+		for _, a := range c.dir.Accounts() {
+			out[a.Code] = a
+		}
+	}
+	return out
+}
+
+// ---- samplers (all take "now" so tests can drive them) -----------------------
+
+func queueFor(qs []routeros.SimpleQueue, code, addr string) (routeros.SimpleQueue, bool) {
+	lc := strings.ToLower(code)
+	for _, q := range qs {
+		if strings.Contains(strings.ToLower(q.Name), lc) {
+			return q, true
+		}
+	}
+	if addr != "" {
+		for _, q := range qs {
+			if strings.HasPrefix(q.Target, addr+"/") || q.Target == addr {
+				return q, true
+			}
+		}
+	}
+	return routeros.SimpleQueue{}, false
+}
+
+// SampleSessions turns /ip/hotspot/active counters into per-flat deltas.
+// A counter that goes down, or a session not seen before, is a reset: the new
+// value is the delta (a session first seen with a long uptime right after a
+// collector restart is only baselined, because its counters hold old traffic).
+func (c *Collector) SampleSessions(now time.Time, sessions []routeros.Session, queues []routeros.SimpleQueue) {
+	accts := c.acctMap()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	gap := c.cfg.FlowEvery
+	if !c.lastFlow.IsZero() {
+		gap = now.Sub(c.lastFlow)
+	}
+	if gap <= 0 {
+		gap = time.Second
+	}
+	c.lastFlow = now
+	type agg struct {
+		down, up           uint64
+		dt                 time.Duration
+		downBps, upBps, cp float64
+		addr               string
+		qrate              bool
+	}
+	per := map[string]*agg{}
+	seen := map[string]bool{}
+	for _, s := range sessions {
+		info, known := accts[s.User]
+		if s.User == "" || !known {
+			continue
+		}
+		key := s.User + "|" + s.ID
+		seen[key] = true
+		prev, had := c.prevS[key]
+		var dIn, dOut uint64
+		dt := gap
+		baseline := false
+		switch {
+		case had:
+			dt = now.Sub(prev.at)
+			dIn, dOut = delta(prev.in, s.BytesIn), delta(prev.out, s.BytesOut)
+		case s.Uptime > 2*gap+10*time.Second:
+			baseline = true
+		default:
+			dIn, dOut = s.BytesIn, s.BytesOut
+			if s.Uptime > 0 && s.Uptime < dt {
+				dt = s.Uptime
+			}
+		}
+		c.prevS[key] = sessPrev{in: s.BytesIn, out: s.BytesOut, at: now}
+		if baseline {
+			continue
+		}
+		if dt < time.Second {
+			dt = time.Second
+		}
+		a := per[s.User]
+		if a == nil {
+			a = &agg{addr: s.Address}
+			per[s.User] = a
+		}
+		a.down += dOut
+		a.up += dIn
+		if dt > a.dt {
+			a.dt = dt
+		}
+		a.downBps += float64(dOut) * 8 / dt.Seconds()
+		a.upBps += float64(dIn) * 8 / dt.Seconds()
+		if c.ipCode != nil && s.Address != "" {
+			c.ipCode[s.Address] = ipEntry{s.User, now}
+		}
+		if q, ok := queueFor(queues, s.User, s.Address); ok && q.MaxB > 0 {
+			a.cp = float64(q.MaxB)
+		}
+		_ = info
+	}
+	for k := range c.prevS {
+		if !seen[k] {
+			delete(c.prevS, k)
+		}
+	}
+	live := map[string]LiveRate{}
+	for code, a := range per {
+		info := accts[code]
+		capBps := a.cp
+		if capBps <= 0 {
+			capBps = float64(info.SpeedMbps) * 1e6
+		}
+		cur := LiveRate{DownBps: a.downBps, UpBps: a.upBps, CapBps: capBps, Address: a.addr, At: now}
+		if q, ok := queueFor(queues, code, a.addr); ok {
+			cur.UpBps, cur.DownBps = float64(q.RateA), float64(q.RateB) // RouterOS lists upload/download
+		}
+		live[code] = cur
+		onMin := a.dt.Minutes()
+		atCap := capBps > 0 && a.downBps >= CapFraction*capBps
+		pkD, pkU := uint64(a.downBps), uint64(a.upBps)
+		c.getAcct(code).Add(now, func(cell *Cell) {
+			cell.Down += a.down
+			cell.Up += a.up
+			cell.PkDown = maxU(cell.PkDown, pkD)
+			cell.PkUp = maxU(cell.PkUp, pkU)
+			cell.OnMin += onMin
+			if atCap {
+				cell.CapMin += onMin
+			}
+			cell.N++
+		})
+		if c.cfg.Synthetic {
+			c.syntheticServices(now, code, a.down+a.up)
+		}
+	}
+	c.L.Flats = live
+	c.L.FlowAt = now
+	for k, e := range c.ipCode {
+		if now.Sub(e.seen) > 24*time.Hour {
+			delete(c.ipCode, k)
+		}
+	}
+}
+
+func delta(prev, cur uint64) uint64 {
+	if cur < prev {
+		return cur // counter reset
+	}
+	return cur - prev
+}
+
+func (c *Collector) getAcct(code string) *Series { return getSeries(c.D.Accts, code) }
+
+// syntheticServices splits bytes over a fixed mix (ROUTER_MOCK only).
+var syntheticMix = []struct {
+	Name string
+	W    float64
+}{{"YouTube", .28}, {"Netflix", .14}, {"HTTPS (other)", .12}, {"Meta", .09}, {"TikTok", .08}, {"Google", .07},
+	{"WhatsApp", .05}, {"CDN (other)", .05}, {"Apple", .04}, {"Microsoft", .03}, {"Zoom", .02}, {"Spotify", .02}, {"Other", .01}}
+
+func (c *Collector) syntheticServices(now time.Time, code string, total uint64) {
+	days := c.D.SvcAcct[code]
+	if days == nil {
+		days = map[int64]map[string]uint64{}
+		c.D.SvcAcct[code] = days
+	}
+	k := BucketStart(TD, now)
+	if days[k] == nil {
+		days[k] = map[string]uint64{}
+	}
+	// A little per-flat variation so the top services differ between flats.
+	h := 0
+	for _, r := range code {
+		h = h*31 + int(r)
+	}
+	for i, m := range syntheticMix {
+		w := m.W * (0.6 + 0.8*float64((h>>uint(i))&7)/7)
+		b := uint64(float64(total) * w)
+		c.D.Svc.add(now, m.Name, b)
+		days[k][m.Name] += b
+	}
+}
+
+// SamplePorts records interface counters (ether*, sfp*, vlan*, bridge*).
+func (c *Collector) SamplePorts(now time.Time, ifs []routeros.Iface) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	live := map[string]LivePort{}
+	for _, f := range ifs {
+		n := f.Name
+		if !(strings.HasPrefix(n, "ether") || strings.HasPrefix(n, "sfp") || strings.HasPrefix(n, "vlan") || strings.HasPrefix(n, "bridge")) {
+			continue
+		}
+		p, had := c.prevIf[n]
+		c.prevIf[n] = ifPrev{rx: f.RxBytes, tx: f.TxBytes, at: now}
+		lp := LivePort{Running: f.Running, At: now}
+		if had && now.After(p.at) {
+			dt := now.Sub(p.at)
+			dRx, dTx := delta(p.rx, f.RxBytes), delta(p.tx, f.TxBytes)
+			rxBps, txBps := float64(dRx)*8/dt.Seconds(), float64(dTx)*8/dt.Seconds()
+			lp.RxBps, lp.TxBps = rxBps, txBps
+			c.getPort(n).Add(now, func(cell *Cell) {
+				cell.Down += dRx
+				cell.Up += dTx
+				cell.PkDown = maxU(cell.PkDown, uint64(rxBps))
+				cell.PkUp = maxU(cell.PkUp, uint64(txBps))
+				cell.N++
+			})
+			if n == c.cfg.WAN {
+				mk := MonthKey(now)
+				m := c.D.Months[mk]
+				if m == nil {
+					m = &MonthUse{}
+					c.D.Months[mk] = m
+				}
+				m.Rx += dRx
+				m.Tx += dTx
+			}
+		}
+		live[n] = lp
+	}
+	c.L.Ports = live
+	c.L.PortsAt = now
+}
+
+func (c *Collector) getPort(n string) *Series { return getSeries(c.D.Ports, n) }
+
+// SamplePing stores latency and loss for one target.
+func (c *Collector) SamplePing(now time.Time, r routeros.PingResult) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ms := float64(r.AvgRTT) / float64(time.Millisecond)
+	got := r.Received > 0
+	getSeries(c.D.Ping, r.Target).Add(now, func(cell *Cell) {
+		cell.N++
+		cell.Loss += r.LossPct
+		if got {
+			cell.RTT += ms
+			cell.RTTN++
+			cell.RTTMax = math.Max(cell.RTTMax, ms)
+		}
+	})
+	c.L.Ping[r.Target] = LivePing{RTTms: ms, LossPct: r.LossPct, At: now}
+}
+
+// SampleSystem stores router CPU and temperature.
+func (c *Collector) SampleSystem(now time.Time, si routeros.SysInfo) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.D.Sys.Add(now, func(cell *Cell) {
+		cell.N++
+		cell.CPU += float64(si.CPULoad)
+		if si.HasTemp {
+			cell.Temp += si.TempC
+			cell.TempN++
+		}
+	})
+	c.L.Sys, c.L.SysAt = si, now
+}
+
+// UpdateDNS rebuilds the IP -> hostnames map from /ip/dns/cache. Entries that
+// disappear from the cache are kept for 24 h.
+func (c *Collector) UpdateDNS(now time.Time, entries []routeros.DNSEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cname := map[string][]string{} // target -> names pointing at it
+	for _, e := range entries {
+		if strings.EqualFold(e.Type, "CNAME") {
+			t := strings.ToLower(strings.TrimSuffix(e.Data, "."))
+			cname[t] = append(cname[t], strings.ToLower(e.Name))
+		}
+	}
+	for _, e := range entries {
+		if e.Type != "A" && e.Type != "AAAA" {
+			continue
+		}
+		ip, err := netip.ParseAddr(e.Data)
+		if err != nil {
+			continue
+		}
+		name := strings.ToLower(e.Name)
+		names := []string{name}
+		frontier := []string{name}
+		for depth := 0; depth < 3; depth++ {
+			var next []string
+			for _, n := range frontier {
+				next = append(next, cname[n]...)
+			}
+			names = append(names, next...)
+			frontier = next
+		}
+		cur := c.dns[ip]
+		merged := cur.names
+		for _, n := range names {
+			dup := false
+			for _, m := range merged {
+				dup = dup || m == n
+			}
+			if !dup && len(merged) < 8 {
+				merged = append(merged, n)
+			}
+		}
+		c.dns[ip] = dnsInfo{names: merged, seen: now}
+	}
+	{
+		for k, v := range c.dns {
+			if now.Sub(v.seen) > 24*time.Hour {
+				delete(c.dns, k)
+			}
+		}
+	}
+}
+
+// ---- persistence ----------------------------------------------------------------
+
+// Save prunes and writes metrics.json atomically.
+func (c *Collector) Save() error {
+	c.mu.Lock()
+	now := c.now()
+	c.D.Prune(now)
+	c.D.SavedAt = now
+	data := c.D
+	b, err := marshal(&data)
+	c.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return writeBytes(c.path, b)
+}
+
+// ---- run loop ---------------------------------------------------------------------
+
+func (c *Collector) note(name string, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err == nil {
+		c.L.Err[name] = ""
+		if c.failing[name] {
+			c.failing[name] = false
+			c.log.Info("metrics: router reachable again", "collector", name)
+		}
+		return
+	}
+	c.L.Err[name], c.L.ErrAt[name] = err.Error(), c.now()
+	if !c.failing[name] {
+		c.failing[name] = true
+		c.log.Warn("metrics: collection failing (logged once until it recovers)", "collector", name, "err", err)
+	}
+}
+
+// Run starts the collection loops and blocks until ctx is cancelled, then saves.
+func (c *Collector) Run(ctx context.Context) {
+	var wg sync.WaitGroup
+	loop := func(every time.Duration, fn func(context.Context)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			t := time.NewTicker(every)
+			defer t.Stop()
+			fn(ctx)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					fn(ctx)
+				}
+			}
+		}()
+	}
+	to := func(f func(context.Context)) func(context.Context) {
+		return func(ctx context.Context) {
+			cx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			f(cx)
+		}
+	}
+	loop(c.cfg.FlowEvery, to(func(cx context.Context) {
+		ss, err := c.rt.ActiveSessions(cx)
+		if err != nil {
+			c.note("sessions", err)
+			return
+		}
+		qs, qerr := c.rt.SimpleQueues(cx)
+		if qerr != nil {
+			qs = nil // rates fall back to counter deltas
+		}
+		c.note("sessions", nil)
+		c.SampleSessions(c.now(), ss, qs)
+	}))
+	loop(c.cfg.PortEvery, to(func(cx context.Context) {
+		ifs, err := c.rt.Interfaces(cx)
+		c.note("ports", err)
+		if err == nil {
+			c.SamplePorts(c.now(), ifs)
+		}
+	}))
+	loop(c.cfg.PingEvery, to(func(cx context.Context) {
+		for _, t := range c.cfg.PingTargets {
+			r, err := c.rt.PingHost(cx, t, 5)
+			c.note("ping", err)
+			if err == nil {
+				c.SamplePing(c.now(), r)
+			}
+		}
+		si, err := c.rt.System(cx)
+		c.note("system", err)
+		if err == nil {
+			c.SampleSystem(c.now(), si)
+		}
+	}))
+	loop(c.cfg.DNSEvery, to(func(cx context.Context) {
+		es, err := c.rt.DNSCache(cx)
+		c.note("dns", err)
+		if err == nil {
+			c.UpdateDNS(c.now(), es)
+		}
+	}))
+	loop(c.cfg.SaveEvery, func(context.Context) {
+		if err := c.Save(); err != nil {
+			c.log.Warn("metrics save failed", "err", err)
+		}
+	})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := c.ListenNetflow(ctx, c.cfg.NetflowAddr, nil); err != nil {
+			c.log.Warn("netflow listener stopped", "addr", c.cfg.NetflowAddr, "err", err)
+		}
+	}()
+	<-ctx.Done()
+	wg.Wait()
+	if err := c.Save(); err != nil {
+		c.log.Warn("final metrics save failed", "err", err)
+	}
+}

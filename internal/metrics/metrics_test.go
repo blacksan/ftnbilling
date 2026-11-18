@@ -1,0 +1,529 @@
+package metrics
+
+import (
+	"context"
+	"encoding/binary"
+	"io"
+	"log/slog"
+	"math"
+	"net"
+	"net/netip"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"ispbill/internal/routeros"
+)
+
+type fakeDir []AcctInfo
+
+func (f fakeDir) Accounts() []AcctInfo { return f }
+
+var t0 = time.Date(2026, 11, 17, 12, 0, 0, 0, EAT)
+
+func testCfg() Config {
+	return Config{WAN: "ether1", OLT: "sfp-sfpplus1", WANCapMbps: 500, OLTCapMbps: 10000, FUPTB: 15,
+		PingTargets: []string{"8.8.8.8", "1.1.1.1"}, Subnet: netip.MustParsePrefix("10.5.50.0/24"),
+		FlowEvery: 60 * time.Second, NetflowAddr: "off"}
+}
+
+func newCol(t *testing.T) *Collector {
+	t.Helper()
+	d := fakeDir{{Code: "K7Q2MX", Flat: "Flat 3B", Package: "Monthly 20 Mbps", SpeedMbps: 20, State: "active"},
+		{Code: "P4R8TN", Flat: "Flat 10A", Package: "1 Day", SpeedMbps: 10, State: "active"}}
+	return New(t.TempDir(), testCfg(), routeros.NewMock(), d, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+func sess(user, id string, in, out uint64, up time.Duration) routeros.Session {
+	return routeros.Session{ID: id, User: user, Address: "10.5.50.20", MAC: "AA:BB:CC:DD:EE:01", BytesIn: in, BytesOut: out, Uptime: up}
+}
+
+// ---- NetFlow v5 --------------------------------------------------------------------
+
+func v5Packet(sampling uint16, recs ...[]byte) []byte {
+	h := make([]byte, 24)
+	binary.BigEndian.PutUint16(h[0:], 5)
+	binary.BigEndian.PutUint16(h[2:], uint16(len(recs)))
+	binary.BigEndian.PutUint32(h[8:], uint32(t0.Unix()))
+	binary.BigEndian.PutUint32(h[16:], 77)
+	binary.BigEndian.PutUint16(h[22:], sampling)
+	for _, r := range recs {
+		h = append(h, r...)
+	}
+	return h
+}
+
+func v5Rec(src, dst string, sport, dport uint16, proto uint8, octets uint32) []byte {
+	r := make([]byte, 48)
+	a, b := netip.MustParseAddr(src).As4(), netip.MustParseAddr(dst).As4()
+	copy(r[0:], a[:])
+	copy(r[4:], b[:])
+	binary.BigEndian.PutUint32(r[16:], octets/100+1)
+	binary.BigEndian.PutUint32(r[20:], octets)
+	binary.BigEndian.PutUint16(r[32:], sport)
+	binary.BigEndian.PutUint16(r[34:], dport)
+	r[37], r[38] = 0x18, proto
+	return r
+}
+
+func TestParseV5(t *testing.T) {
+	pkt := v5Packet(0x4000|10, v5Rec("10.5.50.20", "142.250.0.10", 51000, 443, 6, 1500), v5Rec("142.250.0.10", "10.5.50.20", 443, 51000, 6, 90000))
+	h, recs, err := ParseV5(pkt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Count != 2 || h.Sampling != 10 || h.SamplingMode != 1 || h.Sequence != 77 || h.UnixSecs != uint32(t0.Unix()) {
+		t.Fatalf("%+v", h)
+	}
+	r := recs[1]
+	if r.Src.String() != "142.250.0.10" || r.Dst.String() != "10.5.50.20" || r.SrcPort != 443 || r.DstPort != 51000 || r.Proto != 6 || r.Octets != 90000 || r.TCPFlags != 0x18 {
+		t.Fatalf("%+v", r)
+	}
+	if _, h2, _ := ParseV5(v5Packet(0, v5Rec("10.5.50.20", "1.1.1.1", 1, 53, 17, 70))); h2[0].Octets != 70 {
+		t.Fatal("record")
+	}
+	// Malformed input is rejected, never panics.
+	bad := [][]byte{nil, {1, 2, 3}, pkt[:30], append(append([]byte{}, pkt...), 0), v5Packet(0), make([]byte, 24)}
+	v9 := append([]byte{}, pkt...)
+	v9[1] = 9
+	bad = append(bad, v9)
+	for i, b := range bad {
+		if _, _, err := ParseV5(b); err == nil {
+			t.Errorf("case %d accepted", i)
+		}
+	}
+	over := v5Packet(0)
+	binary.BigEndian.PutUint16(over[2:], 31)
+	if _, _, err := ParseV5(over); err == nil {
+		t.Error("count 31 accepted")
+	}
+}
+
+func TestClassify(t *testing.T) {
+	cases := []struct {
+		hosts []string
+		proto uint8
+		port  uint16
+		want  string
+	}{
+		{[]string{"rr1---sn-abc.googlevideo.com"}, 6, 443, "YouTube"},
+		{[]string{"www.youtube.com"}, 6, 443, "YouTube"},
+		{[]string{"ipv4-c001.nflxvideo.net"}, 6, 443, "Netflix"},
+		{[]string{"g.whatsapp.net"}, 6, 443, "WhatsApp"},
+		{[]string{"scontent.xx.fbcdn.net"}, 6, 443, "Meta"},
+		{[]string{"v16.tiktokcdn.com"}, 6, 443, "TikTok"},
+		{[]string{"audio-ak.spotify.com"}, 6, 443, "Spotify"},
+		{[]string{"gsp.apple.com"}, 6, 443, "Apple"},
+		{[]string{"settings-win.data.microsoft.com"}, 6, 443, "Microsoft"},
+		{[]string{"us04web.zoom.us"}, 17, 8801, "Zoom"},
+		{[]string{"fonts.gstatic.com"}, 6, 443, "Google"},
+		{[]string{"vod.showmax.com"}, 6, 443, "Showmax"},
+		{[]string{"live.dstv.com"}, 6, 443, "DStv"},
+		{[]string{"e1234.a.akamaiedge.net"}, 6, 443, "CDN (other)"},
+		{nil, 6, 443, "HTTPS (other)"},
+		{nil, 17, 443, "HTTPS (other)"},
+		{nil, 6, 80, "HTTP"},
+		{nil, 17, 53, "DNS"},
+		{nil, 6, 53, "DNS"},
+		{nil, 17, 123, "NTP"},
+		{nil, 17, 3479, "Calls / STUN"},
+		{nil, 17, 19302, "Calls / STUN"},
+		{nil, 6, 5223, "Messaging / push"},
+		{nil, 6, 6881, "Other"},
+		{[]string{"unknown.example"}, 6, 22, "Other"},
+		// A hostname wins over the port; first matching rule wins (YouTube before Google).
+		{[]string{"youtube-ui.l.google.com"}, 6, 443, "YouTube"},
+	}
+	for _, c := range cases {
+		if got := Classify(c.hosts, c.proto, c.port); got != c.want {
+			t.Errorf("%v %d/%d = %q, want %q", c.hosts, c.proto, c.port, got, c.want)
+		}
+	}
+}
+
+func TestFlowAttributionDNSAndSampling(t *testing.T) {
+	c := newCol(t)
+	// A session maps 10.5.50.20 -> K7Q2MX.
+	c.SampleSessions(t0, []routeros.Session{sess("K7Q2MX", "*1", 0, 0, 5*time.Second)}, nil)
+	c.UpdateDNS(t0, []routeros.DNSEntry{
+		{Name: "rr1.googlevideo.com", Data: "142.250.0.10", Type: "A"},
+		{Name: "www.youtube.com", Data: "youtube-ui.l.google.com", Type: "CNAME"},
+		{Name: "youtube-ui.l.google.com", Data: "142.250.9.9", Type: "A"},
+	})
+	pkt := v5Packet(0x4000|10,
+		v5Rec("142.250.0.10", "10.5.50.20", 443, 40000, 6, 1000), // download from googlevideo, 1 in 10 sampled
+		v5Rec("10.5.50.20", "151.101.1.1", 40001, 80, 6, 200),    // upload, port-classified HTTP
+		v5Rec("10.5.50.50", "142.250.9.9", 40002, 443, 6, 500),   // unattributed client, CNAME -> YouTube
+		v5Rec("10.5.50.20", "10.5.50.99", 1, 2, 6, 99999),        // inside the subnet: ignored
+		v5Rec("8.8.8.8", "9.9.9.9", 1, 2, 6, 99999))              // not customer traffic: ignored
+	c.HandleNetflow(t0, pkt, "10.5.50.1:1234")
+	c.HandleNetflow(t0, []byte("garbage"), "x")
+	g := c.D.Svc.sum(T5, t0.Add(-time.Hour), t0.Add(time.Hour))
+	if g["YouTube"] != 1000*10+500*10 || g["HTTP"] != 200*10 || len(g) != 2 {
+		t.Fatalf("global %v", g)
+	}
+	day := c.D.SvcAcct["K7Q2MX"][BucketStart(TD, t0)]
+	if day["YouTube"] != 10000 || day["HTTP"] != 2000 {
+		t.Fatalf("per flat %v", day)
+	}
+	if c.D.NF.Flows != 3 || c.D.NF.Bad != 1 || c.D.NF.Packets != 1 {
+		t.Fatalf("%+v", c.D.NF)
+	}
+}
+
+func TestNetflowListenerOverUDP(t *testing.T) {
+	c := newCol(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := make(chan net.Addr, 1)
+	done := make(chan error, 1)
+	go func() { done <- c.ListenNetflow(ctx, "127.0.0.1:0", ready) }()
+	addr := <-ready
+	conn, err := net.Dial("udp", addr.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Write(v5Packet(0, v5Rec("10.5.50.20", "151.101.1.1", 40001, 80, 6, 1234)))
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		c.mu.Lock()
+		n := c.D.NF.Flows
+		c.mu.Unlock()
+		if n == 1 {
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("flow not received")
+}
+
+// ---- counters, deltas ---------------------------------------------------------------
+
+func total(c *Collector, code string) (down, up uint64) {
+	s := c.D.Accts[code].Sum(TD, t0.Add(-48*time.Hour), t0.Add(48*time.Hour))
+	return s.Down, s.Up
+}
+
+func TestSessionDeltasAndCounterReset(t *testing.T) {
+	c := newCol(t)
+	// New session just started: its counters count in full.
+	c.SampleSessions(t0, []routeros.Session{sess("K7Q2MX", "*1", 100, 1000, 20*time.Second)}, nil)
+	if d, u := total(c, "K7Q2MX"); d != 1000 || u != 100 {
+		t.Fatalf("new session: %d %d", d, u)
+	}
+	// Normal growth: delta.
+	c.SampleSessions(t0.Add(time.Minute), []routeros.Session{sess("K7Q2MX", "*1", 300, 5000, 80*time.Second)}, nil)
+	if d, u := total(c, "K7Q2MX"); d != 5000 || u != 300 {
+		t.Fatalf("delta: %d %d", d, u)
+	}
+	// Counter goes down (same session id): reset, delta = new value.
+	c.SampleSessions(t0.Add(2*time.Minute), []routeros.Session{sess("K7Q2MX", "*1", 50, 700, 140*time.Second)}, nil)
+	if d, u := total(c, "K7Q2MX"); d != 5700 || u != 350 {
+		t.Fatalf("reset: %d %d", d, u)
+	}
+	// A different session id for the same user (re-login): new session, full value.
+	c.SampleSessions(t0.Add(3*time.Minute), []routeros.Session{sess("K7Q2MX", "*9", 10, 200, 30*time.Second)}, nil)
+	if d, u := total(c, "K7Q2MX"); d != 5900 || u != 360 {
+		t.Fatalf("new session id: %d %d", d, u)
+	}
+	// A long-running session first seen after a collector restart is only baselined.
+	c2 := newCol(t)
+	c2.SampleSessions(t0, []routeros.Session{sess("K7Q2MX", "*1", 1<<30, 1<<33, 20*24*time.Hour)}, nil)
+	if d, _ := total(c2, "K7Q2MX"); d != 0 {
+		t.Fatalf("restart baseline counted old traffic: %d", d)
+	}
+	c2.SampleSessions(t0.Add(time.Minute), []routeros.Session{sess("K7Q2MX", "*1", 1<<30+10, 1<<33+4000, 20*24*time.Hour+time.Minute)}, nil)
+	if d, u := total(c2, "K7Q2MX"); d != 4000 || u != 10 {
+		t.Fatalf("after baseline: %d %d", d, u)
+	}
+	// Unknown users (not an account) are ignored.
+	c2.SampleSessions(t0.Add(2*time.Minute), []routeros.Session{sess("admin", "*5", 1, 1, time.Second)}, nil)
+	if _, ok := c2.D.Accts["admin"]; ok {
+		t.Fatal("non-account user recorded")
+	}
+}
+
+func TestPeakAndTimeAtCap(t *testing.T) {
+	c := newCol(t) // K7Q2MX cap = 20 Mbps
+	c.SampleSessions(t0, []routeros.Session{sess("K7Q2MX", "*1", 0, 0, 10*time.Second)}, nil)
+	// 60 s at 19 Mbps average (>= 90% of 20 Mbps).
+	bytes := uint64(19e6 / 8 * 60)
+	c.SampleSessions(t0.Add(time.Minute), []routeros.Session{sess("K7Q2MX", "*1", 0, bytes, 70*time.Second)}, nil)
+	// 60 s at 2 Mbps.
+	c.SampleSessions(t0.Add(2*time.Minute), []routeros.Session{sess("K7Q2MX", "*1", 0, bytes+uint64(2e6/8*60), 130*time.Second)}, nil)
+	s := c.D.Accts["K7Q2MX"].Sum(TD, t0.Add(-24*time.Hour), t0.Add(24*time.Hour))
+	if math.Abs(s.CapMin-1) > 0.01 || s.OnMin < 2.1 || s.OnMin > 2.3 {
+		t.Fatalf("cap minutes %.2f online %.2f", s.CapMin, s.OnMin)
+	}
+	if mb := float64(s.PkDown) / 1e6; math.Abs(mb-19) > 0.2 {
+		t.Fatalf("peak %.2f Mbps", mb)
+	}
+	// With a queue, the queue's max-limit is the cap (a 10 Mbps cap makes 2 Mbps not-at-cap but 19 at cap).
+	q := []routeros.SimpleQueue{{Name: "<hotspot-K7Q2MX>", MaxA: 5e6, MaxB: 10e6, RateA: 1e5, RateB: 8e6}}
+	c.SampleSessions(t0.Add(3*time.Minute), []routeros.Session{sess("K7Q2MX", "*1", 0, bytes+uint64(2e6/8*60)+uint64(9.5e6/8*60), 190*time.Second)}, q)
+	if live := c.L.Flats["K7Q2MX"]; live.CapBps != 10e6 || live.DownBps != 8e6 || live.UpBps != 1e5 {
+		t.Fatalf("live %+v", live)
+	}
+	s = c.D.Accts["K7Q2MX"].Sum(TD, t0.Add(-24*time.Hour), t0.Add(24*time.Hour))
+	if math.Abs(s.CapMin-2) > 0.05 {
+		t.Fatalf("cap minutes with queue %.2f", s.CapMin)
+	}
+}
+
+func TestPortsMonthAndResets(t *testing.T) {
+	c := newCol(t)
+	ifs := func(rx, tx uint64) []routeros.Iface {
+		return []routeros.Iface{{Name: "ether1", RxBytes: rx, TxBytes: tx, Running: true}, {Name: "veth-x", RxBytes: 5}, {Name: "sfp-sfpplus1", RxBytes: tx, TxBytes: rx, Running: true}}
+	}
+	c.SamplePorts(t0, ifs(1000, 100))
+	c.SamplePorts(t0.Add(30*time.Second), ifs(1000+37_500_000, 100+3_750_000)) // 10 Mbps down, 1 Mbps up
+	if lp := c.L.Ports["ether1"]; math.Abs(lp.RxBps-10e6) > 1 || math.Abs(lp.TxBps-1e6) > 1 {
+		t.Fatalf("%+v", lp)
+	}
+	if _, ok := c.L.Ports["veth-x"]; ok {
+		t.Fatal("veth must be ignored")
+	}
+	// Router reboot: counters restart from zero.
+	c.SamplePorts(t0.Add(time.Minute), ifs(500, 50))
+	m := c.D.Months[MonthKey(t0)]
+	if m.Rx != 37_500_000+500 || m.Tx != 3_750_000+50 {
+		t.Fatalf("month %+v", m)
+	}
+}
+
+// ---- buckets: rollup and pruning -------------------------------------------------------
+
+func TestBucketsRollupAndPrune(t *testing.T) {
+	var s Series
+	base := time.Date(2026, 11, 1, 0, 0, 0, 0, EAT)
+	for i := 0; i < 20*24*12; i++ { // 20 days of 5-minute samples
+		at := base.Add(time.Duration(i) * 5 * time.Minute)
+		s.Add(at, func(c *Cell) { c.Down += 100; c.N++; c.PkDown = maxU(c.PkDown, uint64(i%50)) })
+	}
+	// Rollup is consistent between tiers.
+	day := s.Sum(TD, base, base.Add(24*time.Hour))
+	hour := s.Sum(TH, base, base.Add(24*time.Hour))
+	m5 := s.Sum(T5, base, base.Add(24*time.Hour))
+	if day.Down != 288*100 || hour.Down != day.Down || m5.Down != day.Down || day.N != 288 {
+		t.Fatalf("rollup %d %d %d", day.Down, hour.Down, m5.Down)
+	}
+	if day.PkDown != 49 {
+		t.Fatalf("peak %d", day.PkDown)
+	}
+	if len(s.D1) != 20 || len(s.H1) != 480 || len(s.M5) != 5760 {
+		t.Fatalf("before prune: %d %d %d", len(s.D1), len(s.H1), len(s.M5))
+	}
+	now := base.Add(20 * 24 * time.Hour)
+	s.prune(now)
+	if len(s.M5) != 48*12 { // 48 h of 5-minute buckets
+		t.Fatalf("5-min tier %d buckets after prune", len(s.M5))
+	}
+	if len(s.H1) != 14*24 {
+		t.Fatalf("hourly tier %d buckets after prune", len(s.H1))
+	}
+	if len(s.D1) != 20 {
+		t.Fatalf("daily tier %d", len(s.D1))
+	}
+	// Daily buckets are cut at EAT midnight.
+	for k := range s.D1 {
+		if (k+3*3600)%86400 != 0 {
+			t.Fatalf("daily key %d not EAT midnight", k)
+		}
+	}
+	// 400-day retention.
+	var old Series
+	old.Add(now.Add(-401*24*time.Hour), func(c *Cell) { c.N++ })
+	old.Add(now.Add(-399*24*time.Hour), func(c *Cell) { c.N++ })
+	if empty := old.prune(now); empty || len(old.D1) != 1 {
+		t.Fatalf("daily retention: %d empty=%v", len(old.D1), empty)
+	}
+}
+
+func TestSaveLoadBoundedAndAtomic(t *testing.T) {
+	c := newCol(t)
+	c.SetClock(func() time.Time { return t0 })
+	c.SampleSessions(t0.Add(-10*24*time.Hour), []routeros.Session{sess("K7Q2MX", "*1", 0, 1000, 10*time.Second)}, nil)
+	c.SampleSessions(t0, []routeros.Session{sess("K7Q2MX", "*1", 0, 4000, 10*time.Second)}, nil)
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if es, _ := os.ReadDir(strings.TrimSuffix(c.path, "/metrics.json")); len(es) != 1 {
+		t.Fatalf("dir has %d files (temp left over?)", len(es))
+	}
+	d, err := load(c.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := d.Accts["K7Q2MX"]
+	if s == nil || len(s.M5) != 1 || len(s.D1) != 2 { // the 10-day-old 5-min bucket was pruned on write
+		t.Fatalf("loaded %+v", s)
+	}
+	if err := os.WriteFile(c.path, []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c2 := New(strings.TrimSuffix(c.path, "/metrics.json"), testCfg(), routeros.NewMock(), fakeDir{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if len(c2.D.Accts) != 0 {
+		t.Fatal("corrupt file must start empty, not crash")
+	}
+}
+
+// ---- report and charts ---------------------------------------------------------------------
+
+func TestReportEmptyAndRouterUnreachable(t *testing.T) {
+	c := newCol(t)
+	for _, p := range Periods {
+		r := c.BuildReport(p, t0)
+		if r.HasTraffic || r.MonthGB != 0 || len(r.Flags) != 4 || len(r.Flats) != 2 {
+			t.Fatalf("%s: %+v", p, r)
+		}
+		for _, f := range r.Flags {
+			if f.Level != "nodata" || f.Rule == "" {
+				t.Errorf("%s flag %+v", p, f)
+			}
+		}
+	}
+	// Charts must not panic on empty or all-NaN data.
+	LineChart(LineOpts{})
+	LineChart(LineOpts{T: []time.Time{t0}, Series: []LineSeries{{Name: "x", Vals: []float64{math.NaN()}}}})
+	LineChart(LineOpts{T: []time.Time{t0}, Series: []LineSeries{{Name: "x", Vals: []float64{0}}}, CapLine: 500})
+	BarsH(nil, ColDown, "")
+	BarsH([]BarRow{{Label: "a", Value: 0}}, ColDown, "")
+	var nanHours [24]float64
+	for i := range nanHours {
+		nanHours[i] = math.NaN()
+	}
+	if !strings.Contains(string(HourStrip(nanHours)), "No hourly data yet") {
+		t.Fatal("empty strip")
+	}
+}
+
+func TestDemoReportAndFlags(t *testing.T) {
+	c := newCol(t)
+	c.cfg.Synthetic = true
+	c.SeedDemo(t0, 35)
+	now := t0
+	r := c.BuildReport(Period7d, now)
+	if !r.HasTraffic || r.MonthGB <= 0 || r.ProjectedGB <= 0 || len(r.Services) == 0 {
+		t.Fatalf("%+v", r.Flags)
+	}
+	var down float64
+	for _, f := range r.Flats {
+		down += f.DownGB
+		if f.SharePct < 0 || f.SharePct > 100 {
+			t.Fatalf("%+v", f)
+		}
+	}
+	if down <= 0 {
+		t.Fatal("no flat usage")
+	}
+	if r.WAN.Vals["down"] == nil || len(r.WAN.T) != 7*24+1 && len(r.WAN.T) != 7*24 {
+		t.Fatalf("wan buckets %d", len(r.WAN.T))
+	}
+	// 5-minute tier covers today, daily tier the month.
+	if tr := c.BuildReport(PeriodToday, now); tr.Tier != T5 || len(tr.WAN.T) != 12*12+1 && len(tr.WAN.T) != 12*12 {
+		t.Fatalf("today buckets %d tier %v", len(tr.WAN.T), tr.Tier)
+	}
+	if mr := c.BuildReport(PeriodMonth, now); mr.Tier != TD || len(mr.WAN.T) != 17 {
+		t.Fatalf("month buckets %d", len(mr.WAN.T))
+	}
+	fr := c.BuildFlat("K7Q2MX", Period7d, now)
+	if !fr.Found || len(fr.Series.T) == 0 || len(fr.Services) == 0 {
+		t.Fatalf("%+v", fr.Row)
+	}
+	if c.BuildFlat("NOSUCH", Period7d, now).Found {
+		t.Fatal("unknown flat found")
+	}
+	if math.IsNaN(r.Busy[20]) || r.Busy[20] <= r.Busy[4] {
+		t.Fatalf("evening should be busier than 04:00: %v %v", r.Busy[20], r.Busy[4])
+	}
+	// Sorting.
+	rows := append([]FlatRow(nil), r.Flats...)
+	SortFlats(rows, "flat")
+	if rows[0].Flat != "Flat 3B" {
+		t.Fatal(rows[0].Flat)
+	}
+	SortFlats(rows, "peak")
+	if rows[0].PeakMbps < rows[1].PeakMbps {
+		t.Fatal("peak sort")
+	}
+	SortFlats(rows, "bogus-key") // falls back, no panic
+}
+
+func TestFlagsFire(t *testing.T) {
+	c := newCol(t)
+	// A flat spending most of its time at the cap.
+	for i := 0; i < 24*12; i++ {
+		at := t0.Add(-time.Duration(i) * 5 * time.Minute)
+		c.getAcct("K7Q2MX").Add(at, func(cell *Cell) { cell.Down += 1000; cell.OnMin += 5; cell.CapMin += 4; cell.N++ })
+	}
+	// WAN above 85% for several hours this week.
+	for h := 0; h < 5; h++ {
+		at := t0.Add(-time.Duration(h) * time.Hour)
+		c.getPort("ether1").Add(at, func(cell *Cell) { cell.Down += uint64(450e6 / 8 * 3600); cell.N++ })
+	}
+	// Loss.
+	for i := 0; i < 10; i++ {
+		c.SamplePing(t0.Add(-time.Duration(i)*time.Minute), routeros.PingResult{Target: "8.8.8.8", Sent: 5, Received: 4, AvgRTT: 20 * time.Millisecond, LossPct: 20})
+	}
+	// FUP: 6 TB in the first 3 days of the month projects far above 15 TB.
+	c.D.Months[MonthKey(t0)] = &MonthUse{Rx: 6e12}
+	now := time.Date(2026, 11, 4, 0, 0, 0, 0, EAT)
+	r := c.BuildReport(Period7d, now)
+	lv := map[string]Flag{}
+	for _, f := range r.Flags {
+		lv[f.Title] = f
+	}
+	if lv["WAN busy hours"].Level != "ok" { // data is at t0 (Nov 17), outside the 7 days before Nov 4
+		t.Fatalf("%+v", lv["WAN busy hours"])
+	}
+	r = c.BuildReport(Period7d, t0)
+	lv = map[string]Flag{}
+	for _, f := range r.Flags {
+		lv[f.Title] = f
+	}
+	if lv["WAN busy hours"].Level != "warn" || !strings.Contains(lv["WAN busy hours"].Text, "may feel slow") {
+		t.Errorf("%+v", lv["WAN busy hours"])
+	}
+	if lv["Flats at their speed cap"].Level != "warn" || !strings.Contains(lv["Flats at their speed cap"].Text, "Flat 3B") {
+		t.Errorf("%+v", lv["Flats at their speed cap"])
+	}
+	if lv["Packet loss"].Level != "warn" {
+		t.Errorf("%+v", lv["Packet loss"])
+	}
+	// FUP projection on Nov 4 12:00 EAT (3.5 days in): 6 TB so far.
+	c.D.Months[MonthKey(t0)] = &MonthUse{Rx: 6e12}
+	r = c.BuildReport(Period7d, time.Date(2026, 11, 4, 12, 0, 0, 0, EAT))
+	if r.ProjectedGB < 15000 || !strings.Contains(r.FUPNote, "reached on") || r.FUPWarn {
+		t.Errorf("fup: %v %q warn=%v", r.ProjectedGB, r.FUPNote, r.FUPWarn)
+	}
+	c.D.Months[MonthKey(t0)] = &MonthUse{Rx: 12.5e12, Tx: 0}
+	if r2 := c.BuildReport(Period7d, time.Date(2026, 11, 20, 0, 0, 0, 0, EAT)); !r2.FUPWarn {
+		t.Error("tile must warn above 80% of the FUP")
+	}
+	if f := r.Flags[3]; f.Level != "warn" || !strings.Contains(f.Text, "exceeded") {
+		t.Errorf("%+v", f)
+	}
+}
+
+func TestChartsProduceSVGWithPalette(t *testing.T) {
+	ts := []time.Time{t0, t0.Add(time.Hour), t0.Add(2 * time.Hour), t0.Add(3 * time.Hour)}
+	svg := string(LineChart(LineOpts{T: ts, Unit: "Mbps", CapLine: 500, CapLabel: "capacity 500", Series: []LineSeries{
+		{Name: "download", Color: ColDown, Vals: []float64{10, math.NaN(), 30, 40}}, {Name: "upload", Color: ColUp, Vals: []float64{1, 2, 3, 4}}}}))
+	for _, want := range []string{"<svg", "</svg>", "Mbps", "capacity 500", ColDown, ColUp, ColCap, "download", "upload", "viewBox"} {
+		if !strings.Contains(svg, want) {
+			t.Errorf("line chart lacks %q", want)
+		}
+	}
+	if strings.Contains(svg, "NaN") || strings.Contains(svg, "Inf") {
+		t.Error("NaN leaked into the SVG")
+	}
+	bars := string(BarsH([]BarRow{{Label: "Flat 3B <x>", Value: 5, Text: "5 GB"}}, ColDown, ""))
+	if !strings.Contains(bars, "&lt;x&gt;") || strings.Contains(bars, "<x>") {
+		t.Error("labels must be escaped")
+	}
+}

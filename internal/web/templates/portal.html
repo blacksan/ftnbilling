@@ -1,0 +1,44 @@
+{{define "portal"}}{{template "head" .}}
+{{template "brandbar" .Brand}}
+{{if not .Ctx.MAC}}
+<div class="card"><b>Open this page from the WiFi login</b>
+<p class="muted">We could not tell which connection you are on. Connect to the building WiFi and open any website, and this page will appear again.{{if .Support}} Need help? Call {{.Support}}.{{end}}</p></div>
+{{else if not .Known}}
+<div class="card"><b>This connection isn't registered yet.</b>
+<p>Please contact {{if .Support}}<b>{{.Support}}</b>{{else}}the building manager{{end}} to get your flat set up. Online payment is not possible until then.</p>
+<p class="muted">Quote this device ID: <b>{{.Ctx.MAC}}</b></p></div>
+{{else}}
+<div class="card">
+<div class="flat">{{.Acct.Flat}} · Account {{.Acct.Code}}</div>
+<p style="margin:6px 0">{{if eq .State "active"}}<span class="pill active">Active</span> until <b>{{eat .Acct.ExpiresAt}}</b><br><span class="muted">{{.Pkg.Name}} · {{left .Acct.ExpiresAt}} left</span>
+{{else if eq .State "expired"}}<span class="pill expired">Expired</span> on {{eat .Acct.ExpiresAt}}
+{{else if eq .State "suspended"}}<span class="pill suspended">Suspended</span>
+{{else}}<span class="pill new">No package yet</span>{{end}}</p>
+{{if .Suspended}}<p class="err">This account is suspended. Please contact {{if .Support}}{{.Support}}{{else}}the building manager{{end}}.</p>{{end}}
+{{if and .Active (not .LoginFailed)}}<p class="muted" style="margin:0">All devices in your flat are online.</p>{{end}}
+</div>
+{{if .Error}}<p class="err">{{.Error}}</p>{{end}}
+{{if .LoginFailed}}<div class="warn"><b>Almost there.</b> We could not connect your flat automatically.
+<form method="post" action="/portal/connect">{{template "hidden" .Ctx}}<button type="submit">Connect now</button></form></div>{{end}}
+{{if not .Suspended}}
+<form method="post" action="/portal/pay">
+{{template "hidden" .Ctx}}
+{{$sel := .Selected}}
+<h2>{{if .Active}}Add time or upgrade{{else}}Choose a package{{end}}</h2>
+{{range .Groups}}<h2>{{.Title}}</h2>
+{{range .Packages}}{{if index $.Blocked .ID}}<label class="pkg off"><input type="radio" name="package" value="{{.ID}}" disabled><b>{{.Name}}</b><small>{{dur .DurationMin}} · {{.SpeedMbps}} Mbps · {{kes .PriceKES}}</small><small class="why">Available when your current plan ends on {{$.BlockedUntil}}</small></label>{{else}}<label class="pkg"><input type="radio" name="package" value="{{.ID}}"{{if eq .ID $sel}} checked{{end}}><b>{{.Name}}</b><small>{{dur .DurationMin}} · {{.SpeedMbps}} Mbps · {{kes .PriceKES}}</small></label>{{end}}
+{{end}}{{end}}
+{{if or .Mpesa .Test}}<h2>Phone that pays (M-Pesa)</h2>
+<input type="tel" name="phone" inputmode="tel" placeholder="0712 345 678" value="{{.Phone}}" autocomplete="tel">
+{{if .Mpesa}}<button type="submit" name="method" value="mpesa">Pay with M-Pesa</button>{{end}}
+{{if .Test}}<button type="submit" name="method" value="test" class="alt">Test payment (no money)</button>{{end}}
+{{else}}<p class="muted">Online payment is not available yet. Use a voucher below{{if .Support}}, or ask {{.Support}}{{end}}.</p>{{end}}
+</form>
+<div class="card"><b>Have a voucher?</b>
+<form method="post" action="/portal/voucher">{{template "hidden" .Ctx}}
+<input type="text" name="voucher" placeholder="Voucher code" autocapitalize="characters" autocomplete="off" required>
+<button type="submit" class="grey">Redeem voucher</button></form></div>
+{{end}}
+{{end}}
+{{if and .Support .Known}}<p class="muted">Help: {{.Support}}</p>{{end}}
+{{template "foot"}}{{end}}
