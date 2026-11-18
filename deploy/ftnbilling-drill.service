@@ -1,0 +1,10 @@
+[Unit]
+Description=Fast Tech Net restore drill (newest dump into a scratch database, compared with production)
+After=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ftnbilling-backup drill
+Nice=15
+IOSchedulingClass=idle
+TimeoutStartSec=2h
