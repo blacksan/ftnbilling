@@ -34,6 +34,13 @@
 #   ROUTER_PASS   only for a legacy single-router install that still uses
 #                 ROUTER_URL/ROUTER_PASS (kept on upgrade, never added on a new one).
 #   ADMIN_PASS    a random one is generated on first install.
+#   CADDY_MPESA_IPS  optional: space- or comma-separated IPs/CIDRs. When set, Caddy
+#                 answers /pay/cb/* (the M-Pesa callbacks) only to those source
+#                 addresses and refuses everyone else with 403. Take the list from
+#                 Safaricom (Daraja support / your Paybill onboarding): the
+#                 published ranges have changed over time and are NOT hard-coded
+#                 here, because a wrong list would silently drop real payments.
+#                 Unset = no IP filter (the callback token still protects them).
 #   SUPPORT_PHONE, BRAND_NAME, PUBLIC_IP (skip auto-detection of this VPS's IPv4).
 #   WG_PORT (51820), WG_SUBNET (10.99.0.0/22), ADMIN_WG_PORT (51821),
 #   REPO (blacksan/ftnbilling), BRANCH (main), SWAP_MB (1024).
@@ -529,6 +536,13 @@ EOF
     setkv PUBLIC_IP "$PUBIP"
     [ -z "${DOMAIN:-}" ] || setkv PUBLIC_BASE_URL "$BASE"
     [ -z "${ROUTER_PASS:-}" ] || setkv ROUTER_PASS "$ROUTER_PASS"
+    # The app refuses to start with M-Pesa configured and no callback token, so
+    # an older env file without one gets one now (blank, or missing entirely).
+    # Re-register the three Daraja callback URLs with ?t=<token> afterwards.
+    if [ -z "$(envget MPESA_CALLBACK_TOKEN)" ]; then
+      setkv MPESA_CALLBACK_TOKEN "$(rand 24)"
+      warn "MPESA_CALLBACK_TOKEN was empty and has been generated; if M-Pesa is in use, re-register the callback URLs with ?t=<token> (Admin > Settings shows them)"
+    fi
     # Added once and then left alone (the key never changes; the rest is yours to edit).
     addkv WG_PUBLIC_KEY "$WG_PUB"
     addkv WG_ENDPOINT "$PUBIP:$WG_PORT"
@@ -698,14 +712,32 @@ CapabilityBoundingSet=CAP_NET_RAW
 [Install]
 WantedBy=multi-user.target
 EOF
-  local site="${DOMAIN:-:80}"
+  local site="${DOMAIN:-:80}" cbips="" cbblock=$'\t# /pay/cb/* is not limited by source address (set CADDY_MPESA_IPS to limit it).'
+  if [ -n "${CADDY_MPESA_IPS:-}" ]; then
+    cbips=$(printf '%s' "$CADDY_MPESA_IPS" | tr ',' ' ' | xargs)
+    # Only addresses reach the Caddyfile: refuse anything else instead of writing it in.
+    case "$cbips" in
+      ""|*[!0-9a-fA-F:./\ ]*) die "CADDY_MPESA_IPS must be IPs or CIDRs separated by spaces or commas, got: $CADDY_MPESA_IPS" ;;
+    esac
+    cbblock=$(printf '\t# M-Pesa callbacks only from the addresses in CADDY_MPESA_IPS (confirm them with Safaricom).\n\t@mpesa_cb_other {\n\t\tpath /pay/cb/*\n\t\tnot remote_ip %s\n\t}\n\trespond @mpesa_cb_other "Forbidden" 403\n' "$cbips")
+  fi
   writef 644 root:root /etc/caddy/Caddyfile <<EOF
 # Public side of the billing server. The admin pages are NOT published here:
 # open them over the admin VPN (WireGuard wg-admin, http://$ADM_SERVER_IP:8080/admin).
+#
+# IMPORTANT: Caddy must be the ONLY reverse proxy in front of the app. The app
+# believes the last X-Forwarded-For entry when the connection comes from
+# loopback, and Caddy (v2 default) discards any X-Forwarded-For sent by the
+# internet and writes the real client address. Do not add another local proxy
+# (nginx, a tunnel agent, a second Caddy) that forwards to 127.0.0.1:8080, and
+# do not add header_up / trusted_proxies settings here: a request that reaches
+# the app from loopback without a trustworthy X-Forwarded-For would look like
+# it came from this machine, and be treated as trusted.
 $site {
 	encode gzip
 	@admin path /admin /admin/*
 	respond @admin "Admin is not published" 403
+$cbblock
 	reverse_proxy 127.0.0.1:8080
 }
 EOF

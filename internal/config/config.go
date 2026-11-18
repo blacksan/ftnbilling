@@ -42,9 +42,9 @@ type Config struct {
 	MpesaSecret    string
 	MpesaShortcode string
 	MpesaPasskey   string
-	// MpesaCallbackToken is optional. When set, Daraja callback URLs carry
-	// ?t=<token> and callbacks without it are refused (Daraja callbacks are
-	// unsigned, so this stops forged "payments").
+	// MpesaCallbackToken is required once M-Pesa is configured (see Validate).
+	// Daraja callback URLs carry ?t=<token> and callbacks without it are
+	// refused (Daraja callbacks are unsigned, so this stops forged "payments").
 	MpesaCallbackToken string
 
 	// Multi-building (WireGuard) settings. WGPublicKey is the server's public
@@ -280,6 +280,11 @@ func (c Config) Validate() error {
 	// env-mode building exists and ROUTER_PASS is empty.
 	if c.MpesaEnv != "sandbox" && c.MpesaEnv != "production" {
 		errs = append(errs, fmt.Errorf("MPESA_ENV must be sandbox or production, got %q", c.MpesaEnv))
+	}
+	if c.MpesaKey != "" && c.MpesaSecret != "" && c.MpesaShortcode != "" && c.MpesaCallbackToken == "" {
+		errs = append(errs, errors.New("MPESA_CALLBACK_TOKEN must be set when M-Pesa is configured: Daraja callbacks are unsigned, "+
+			"so without a secret in the callback URL anyone could post a fake payment. "+
+			"Generate one (for example: openssl rand -hex 24), put it in the env file, and register the three callback URLs with ?t=<token> appended"))
 	}
 	return errors.Join(errs...)
 }

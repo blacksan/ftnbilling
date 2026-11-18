@@ -220,7 +220,7 @@ If `WA_APP_SECRET` (the app secret of your Meta app) and `WA_VERIFY_TOKEN` (any 
 | `PUBLIC_BASE_URL` | | needed for M-Pesa callbacks |
 | `MPESA_ENV` | `sandbox` | or `production` |
 | `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORTCODE`, `MPESA_PASSKEY` | | all four (with `PUBLIC_BASE_URL`) switch M-Pesa on |
-| `MPESA_CALLBACK_TOKEN` | | optional: callbacks must carry `?t=<token>` |
+| `MPESA_CALLBACK_TOKEN` | | required once the M-Pesa key, secret and shortcode are set (the app refuses to start without it): callbacks must carry `?t=<token>`. The installer generates one |
 | `REMINDER_DAYS` | `3` | days before expiry for the reminder event (0 = off) |
 | `REMINDER_ON_EXPIRY` | `true` | log an event when an account expires |
 | `WAN_INTERFACE` / `OLT_INTERFACE` | `ether1` / `sfp-sfpplus1` | for the ports charts; these layout settings (with the two capacity values, `FUP_TB`, `CUSTOMER_SUBNET`) apply to the legacy building only. Join-command buildings have them on their own page |
@@ -282,13 +282,13 @@ Admin -> Vouchers -> pick package and count (up to 500) -> "Generate and print".
 
 1. Get a Paybill/Till, then create a Daraja app at developer.safaricom.co.ke. Use the **sandbox** first (`MPESA_ENV=sandbox`, test shortcode 174379 and the passkey shown in the Daraja simulator).
 2. Make the container reachable from the internet over **HTTPS** at `PUBLIC_BASE_URL` (a public IP plus a TLS reverse proxy, or a tunnel such as Cloudflare Tunnel). The app itself speaks plain HTTP. Expose only `/pay/cb/*`, not `/admin`.
-3. Add to the env list: `MPESA_ENV`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORTCODE`, `MPESA_PASSKEY`, `PUBLIC_BASE_URL` (and optionally `MPESA_CALLBACK_TOKEN`). Restart the container. `/healthz` then shows `mpesa_enabled:true` and the portal shows "Pay with M-Pesa". Set `TEST_MODE=false`.
+3. Add to the env list: `MPESA_ENV`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORTCODE`, `MPESA_PASSKEY`, `PUBLIC_BASE_URL` and `MPESA_CALLBACK_TOKEN` (required). Restart the container. `/healthz` then shows `mpesa_enabled:true` and the portal shows "Pay with M-Pesa". Set `TEST_MODE=false`.
 4. Callback paths. Daraja rejects URLs containing "mpesa" or "safaricom", so the app uses:
    - STK Push result: `PUBLIC_BASE_URL/pay/cb/stk` (sent automatically with each push)
    - C2B validation: `PUBLIC_BASE_URL/pay/cb/c2b/validate`
    - C2B confirmation: `PUBLIC_BASE_URL/pay/cb/c2b/confirm`
 
-   If you set `MPESA_CALLBACK_TOKEN`, append `?t=<token>` to all three.
+   Append `?t=<token>` (your `MPESA_CALLBACK_TOKEN`) to all three.
 5. Register the C2B URLs once (Daraja "C2B Register URL" API, `ResponseType` Completed or Cancelled as you prefer) pointing at the two C2B paths above.
 6. Customers can then also pay the Paybill directly with the flat's account code as the account number. The app extends that account by the package whose price equals the amount. Anything it cannot match lands in Admin -> Unmatched. Keep prices unique.
 
@@ -304,7 +304,7 @@ Everything important is in `ispbill.json` under the data folder (`usb1/ispbill-d
 - JSON file storage: fine for a building, not for thousands of users. All data is held in memory.
 - One router and one hotspot server per building. Each account is locked to one MAC (the ONT WAN); `shared-users=1`. Flat isolation relies on the OLT configuration, which this project cannot check.
 - No refunds on the router side, no pro-rata upgrades, no SMS or receipts (reminders are log events, and WhatsApp messages when WhatsApp is set up).
-- Daraja callbacks are unsigned. Use `MPESA_CALLBACK_TOKEN` and, if you can, restrict the source IPs.
+- Daraja callbacks are unsigned. `MPESA_CALLBACK_TOKEN` is required. To also restrict the source IPs, run the installer with `CADDY_MPESA_IPS="<ip/cidr> ..."`; get the current Safaricom callback ranges from Safaricom (they are not hard-coded because a wrong list would drop real payments). Caddy must be the only reverse proxy in front of the app, because the app trusts `X-Forwarded-For` from loopback.
 - The portal is plain HTTP inside the building. The admin UI has no login rate limit and no HTTPS; keep it off the open internet and block `/admin` from the hotspot network.
 - Test payments count in "revenue" while `TEST_MODE=true`.
 - Metrics are estimates: see the NetFlow caveats above. The WAN figures are the router's interface counters, not the ISP's invoice.

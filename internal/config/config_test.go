@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -72,6 +73,26 @@ func TestMpesaEnabledNeedsEverything(t *testing.T) {
 	c, _ = Load(env(m))
 	if c.MpesaBaseURL() != "https://api.safaricom.co.ke" {
 		t.Fatal(c.MpesaBaseURL())
+	}
+}
+
+func TestMpesaNeedsCallbackToken(t *testing.T) {
+	m := map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "1", "MPESA_CONSUMER_KEY": "k", "MPESA_CONSUMER_SECRET": "s",
+		"MPESA_SHORTCODE": "1", "MPESA_PASSKEY": "p", "PUBLIC_BASE_URL": "https://x.example"}
+	if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "MPESA_CALLBACK_TOKEN") {
+		t.Fatalf("M-Pesa configured without a callback token must be refused, got %v", err)
+	}
+	m["MPESA_CALLBACK_TOKEN"] = "tok"
+	if c, err := Load(env(m)); err != nil || c.MpesaCallbackToken != "tok" {
+		t.Fatalf("with a token: %v", err)
+	}
+	// M-Pesa not configured: no token needed (the installer's blank Daraja settings).
+	delete(m, "MPESA_CALLBACK_TOKEN")
+	for _, k := range []string{"MPESA_CONSUMER_KEY", "MPESA_CONSUMER_SECRET", "MPESA_SHORTCODE", "MPESA_PASSKEY"} {
+		delete(m, k)
+	}
+	if _, err := Load(env(m)); err != nil {
+		t.Fatalf("no M-Pesa, no token: %v", err)
 	}
 }
 
