@@ -9,6 +9,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -153,7 +156,7 @@ fun AppTopBar(
         navigationIcon = {
             if (onBack != null) {
                 androidx.compose.material3.IconButton(onClick = onBack) {
-                    androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    androidx.compose.material3.Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                 }
             }
         },
@@ -161,7 +164,7 @@ fun AppTopBar(
             actions()
             if (onSettings != null) {
                 androidx.compose.material3.IconButton(onClick = onSettings) {
-                    androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Settings, contentDescription = "Settings")
+                    androidx.compose.material3.Icon(Icons.Default.Settings, contentDescription = "Settings")
                 }
             }
         },
