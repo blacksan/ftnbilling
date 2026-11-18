@@ -221,3 +221,23 @@ func TestSiteHelpers(t *testing.T) {
 		t.Fatal("removed site matched")
 	}
 }
+
+// A v2 file with devices but no accounts or payments used to keep the devices
+// with SiteID "", which Validate (and so a Postgres import) refused.
+func TestMigrateV2OrphanDevicesDropped(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "ispbill.json")
+	raw := `{"format":2,"devices":{"AA:BB:CC:DD:EE:02":{"mac":"AA:BB:CC:DD:EE:02","source":"portal","hits":2}}}`
+	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d, from, err := ReadJSON(p)
+	if err != nil || from != 2 {
+		t.Fatalf("ReadJSON: from %d err %v", from, err)
+	}
+	if len(d.Devices) != 0 || len(d.Sites) != 0 {
+		t.Fatalf("devices %d sites %d", len(d.Devices), len(d.Sites))
+	}
+	if problems := Validate(d); len(problems) != 0 {
+		t.Fatalf("Validate: %v", problems)
+	}
+}

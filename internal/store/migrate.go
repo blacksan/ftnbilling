@@ -17,6 +17,11 @@ var timeNow = time.Now
 func (d *Data) migrateRows(now time.Time) {
 	d.Format = 3
 	if len(d.Accounts) == 0 && len(d.Payments) == 0 {
+		// No building is created, so there is nothing to attach devices to:
+		// they are portal sightings of unregistered ONTs, with no value
+		// without accounts. Keeping them with SiteID "" would fail Validate
+		// (and make a Postgres import refuse at start-up).
+		d.Devices = map[string]Device{}
 		return
 	}
 	site := Site{ID: NewSiteID(), Name: "Main building", Mode: SiteModeEnv, HotspotServer: "hotspot1",
