@@ -87,7 +87,6 @@ type Rule struct {
 type Settings struct {
 	Rules         map[string]Rule `json:"rules"`
 	Email         bool            `json:"email"`
-	Telegram      bool            `json:"telegram"`
 	WhatsApp      bool            `json:"whatsapp"`
 	CooldownMin   int             `json:"cooldown_min"` // per key, between two "problem" messages
 	RepeatEnabled bool            `json:"repeat_enabled"`
@@ -108,7 +107,7 @@ func DefaultSettings() Settings {
 			RuleLatency: {Enabled: true, Threshold: 150, HoldMin: 10},
 			RuleOLTDown: {Enabled: true, HoldMin: 2},
 		},
-		Email: true, Telegram: true, WhatsApp: true,
+		Email: true, WhatsApp: true,
 		CooldownMin: 60, RepeatHours: 6, OutageNotice: "manual", AutoMin: 30,
 	}
 }
@@ -213,7 +212,6 @@ type Sink interface {
 // Targets are where admin messages go. A channel with no entries is skipped.
 type Targets struct {
 	Email    []string
-	Telegram []string
 	WhatsApp []string
 }
 
@@ -712,13 +710,6 @@ func (e *Engine) compose(status, rule, building, detail, dedupe string, at time.
 			out = append(out, m)
 		}
 	}
-	if set.Telegram {
-		for _, to := range tg.Telegram {
-			m := base
-			m.Channel, m.To, m.Text, m.DedupeKey = notify.ChanTelegram, to, text, dk("telegram", to)
-			out = append(out, m)
-		}
-	}
 	if set.WhatsApp {
 		for _, to := range tg.WhatsApp {
 			m := base
@@ -745,7 +736,7 @@ func (e *Engine) TestMessage(channel string) (notify.Message, bool) {
 	e.mu.Lock()
 	set := e.d.Settings
 	e.mu.Unlock()
-	set.Email, set.Telegram, set.WhatsApp = true, true, true
+	set.Email, set.WhatsApp = true, true
 	for _, m := range e.compose("PROBLEM", "Test alert", "Test building", "this is a test from the Alerts page", "", e.now(), "", set) {
 		if m.Channel == channel {
 			m.Kind = notify.KindTest

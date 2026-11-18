@@ -51,6 +51,13 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	defer st.Close()
+	// The admin password lives in the database once set from Settings; until
+	// then ADMIN_PASS from the environment must be usable.
+	if !hasDBAdminPass(st) {
+		if err := cfg.CheckAdminPass(); err != nil {
+			return err
+		}
+	}
 	if cfg.RouterMock {
 		log.Warn("ROUTER_MOCK=true: using an in-memory fake router")
 	}
@@ -177,6 +184,13 @@ func run(log *slog.Logger) error {
 		err = nil
 	}
 	return err
+}
+
+// hasDBAdminPass reports whether a password hash is stored in the database.
+func hasDBAdminPass(st *store.Store) bool {
+	has := false
+	st.View(func(d *store.Data) { has = d.Settings["admin.pass_hash"].Value != "" })
+	return has
 }
 
 // runnableSites lists the buildings whose router can be reached right now.

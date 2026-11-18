@@ -58,7 +58,7 @@ func (s *Server) adminMessages(w http.ResponseWriter, r *http.Request) {
 	p.Data["Pauses"] = s.ops.Box.Paused()
 	p.Data["WAToday"], p.Data["WALimit"] = s.ops.Box.WASentToday(), s.cfg.WADailyLimit
 	p.Data["Statuses"] = []string{"", notify.StatusQueued, notify.StatusSent, notify.StatusFailed, notify.StatusSkipped, notify.StatusCancelled}
-	p.Data["Channels"] = []string{"", notify.ChanWhatsApp, notify.ChanTelegram, notify.ChanEmail}
+	p.Data["Channels"] = []string{"", notify.ChanWhatsApp, notify.ChanEmail}
 	p.Data["Now"] = time.Now()
 	s.render(w, "admin_messages", p)
 }

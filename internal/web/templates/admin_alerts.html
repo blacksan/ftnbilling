@@ -29,7 +29,6 @@
 <div class="row" style="margin-top:12px">
 <span class="muted" style="align-self:center">Send alerts by</span>
 <label class="ck"><input type="checkbox" name="ch_email" value="1"{{if .Data.Set.Email}} checked{{end}}> email</label>
-<label class="ck"><input type="checkbox" name="ch_telegram" value="1"{{if .Data.Set.Telegram}} checked{{end}}> Telegram</label>
 <label class="ck"><input type="checkbox" name="ch_whatsapp" value="1"{{if .Data.Set.WhatsApp}} checked{{end}}> WhatsApp</label></div>
 <div class="row" style="margin-top:10px">
 <label>Cooldown per alert (minutes)<input name="cooldown" value="{{.Data.Set.CooldownMin}}" size="5"></label>

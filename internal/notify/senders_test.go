@@ -96,45 +96,6 @@ func TestWhatsAppTextSession(t *testing.T) {
 	}
 }
 
-func TestTelegramExactJSON(t *testing.T) {
-	var gotPath, gotBody string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		gotPath, gotBody = r.URL.Path, string(b)
-		w.Write([]byte(`{"ok":true,"result":{"message_id":77}}`))
-	}))
-	defer srv.Close()
-	tg := &Telegram{Token: "123:ABC", BaseURL: srv.URL}
-	id, err := tg.Send(context.Background(), Message{To: "-100200300", Text: "Kilimani is offline"})
-	if err != nil || id != "77" {
-		t.Fatalf("%q %v", id, err)
-	}
-	if gotPath != "/bot123:ABC/sendMessage" || gotBody != `{"chat_id":"-100200300","text":"Kilimani is offline"}` {
-		t.Fatalf("%s %s", gotPath, gotBody)
-	}
-}
-
-func TestTelegramErrorClassesAndTokenScrubbed(t *testing.T) {
-	for status, c := range map[int][2]bool{401: {true, false}, 403: {true, false}, 400: {false, true}, 429: {false, false}, 502: {false, false}} {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(status)
-			w.Write([]byte(`{"ok":false,"description":"nope"}`))
-		}))
-		_, err := (&Telegram{Token: "T", BaseURL: srv.URL}).Send(context.Background(), Message{To: "1", Text: "x"})
-		srv.Close()
-		if err == nil || isAuth(err) != c[0] || isPermanent(err) != c[1] {
-			t.Fatalf("%d: %v", status, err)
-		}
-	}
-	srv := httptest.NewServer(nil)
-	url := srv.URL
-	srv.Close() // connection refused: the error text contains the URL and so the token
-	_, err := (&Telegram{Token: "SECRETTOKEN", BaseURL: url}).Send(context.Background(), Message{To: "1", Text: "x"})
-	if err == nil || strings.Contains(err.Error(), "SECRETTOKEN") || isPermanent(err) || isAuth(err) {
-		t.Fatalf("%v", err)
-	}
-}
-
 // ---- SMTP against an in-test server ----------------------------------------
 
 type smtpRec struct {

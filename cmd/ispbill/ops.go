@@ -54,9 +54,6 @@ func startOps(ctx context.Context, wg *sync.WaitGroup, cfg config.Config, st *st
 	if cfg.EmailConfigured() {
 		senders[notify.ChanEmail] = &notify.SMTP{Host: cfg.SMTPHost, Port: cfg.SMTPPort, User: cfg.SMTPUser, Pass: cfg.SMTPPass, From: cfg.SMTPFrom}
 	}
-	if cfg.TelegramConfigured() {
-		senders[notify.ChanTelegram] = &notify.Telegram{Token: cfg.TelegramToken}
-	}
 	if cfg.WhatsAppConfigured() {
 		senders[notify.ChanWhatsApp] = &notify.WhatsApp{Token: cfg.WAToken, PhoneNumberID: cfg.WAPhoneNumberID, APIVersion: cfg.WAAPIVersion, Lang: cfg.WALang}
 	}
@@ -68,7 +65,7 @@ func startOps(ctx context.Context, wg *sync.WaitGroup, cfg config.Config, st *st
 	engine := alerts.New(alerts.Options{
 		Path: filepath.Join(cfg.DataDir, "alerts.json"), In: alertInputs{st, mgr, prober}, Out: box, Log: log, Lang: cfg.WALang,
 		Targets: func() alerts.Targets {
-			return alerts.Targets{Email: emailTargets(cfg), Telegram: telegramTargets(cfg), WhatsApp: waTargets(cfg)}
+			return alerts.Targets{Email: emailTargets(cfg), WhatsApp: waTargets(cfg)}
 		},
 	})
 	payHint := "M-Pesa"
@@ -113,7 +110,7 @@ func startOps(ctx context.Context, wg *sync.WaitGroup, cfg config.Config, st *st
 	if cfg.WhatsAppConfigured() {
 		run(tenant.Run) // tenant messages need the WhatsApp channel
 	}
-	log.Info("monitoring started", "email", cfg.EmailConfigured(), "telegram", cfg.TelegramConfigured(), "whatsapp", cfg.WhatsAppConfigured())
+	log.Info("monitoring started", "email", cfg.EmailConfigured(), "whatsapp", cfg.WhatsAppConfigured())
 	return web.Ops{Fleet: prober, Alerts: engine, Box: box, Tenant: tenant, Inbound: inbound}, nil
 }
 
@@ -122,13 +119,6 @@ func emailTargets(cfg config.Config) []string {
 		return nil
 	}
 	return cfg.AlertEmailTo
-}
-
-func telegramTargets(cfg config.Config) []string {
-	if !cfg.TelegramConfigured() {
-		return nil
-	}
-	return []string{cfg.TelegramChatID}
 }
 
 func waTargets(cfg config.Config) []string {

@@ -69,7 +69,6 @@ func (s *Server) channels() []chanInfo {
 	}
 	out := []chanInfo{
 		{Name: notify.ChanEmail, Label: "Email", To: mail, Configured: cfg.EmailConfigured() && len(cfg.AlertEmailTo) > 0, On: set.Email},
-		{Name: notify.ChanTelegram, Label: "Telegram", To: "chat " + maskTail(cfg.TelegramChatID), Configured: cfg.TelegramConfigured(), On: set.Telegram},
 		{Name: notify.ChanWhatsApp, Label: "WhatsApp", To: wa, Configured: cfg.WhatsAppConfigured() && len(cfg.WAAdminNumbers) > 0, On: set.WhatsApp},
 	}
 	for i := range out {
@@ -139,7 +138,7 @@ func (s *Server) adminAlertSettings(w http.ResponseWriter, r *http.Request) {
 	for _, k := range alerts.RuleOrder {
 		set.Rules[k] = alerts.Rule{Enabled: r.PostFormValue("rule_"+k+"_on") == "1", Threshold: num("rule_" + k + "_thr"), HoldMin: int(num("rule_" + k + "_hold"))}
 	}
-	set.Email, set.Telegram, set.WhatsApp = r.PostFormValue("ch_email") == "1", r.PostFormValue("ch_telegram") == "1", r.PostFormValue("ch_whatsapp") == "1"
+	set.Email, set.WhatsApp = r.PostFormValue("ch_email") == "1", r.PostFormValue("ch_whatsapp") == "1"
 	set.CooldownMin = int(num("cooldown"))
 	set.RepeatEnabled = r.PostFormValue("repeat_on") == "1"
 	set.RepeatHours = int(num("repeat_hours"))
