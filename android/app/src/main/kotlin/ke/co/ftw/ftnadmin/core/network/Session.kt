@@ -94,6 +94,9 @@ class SessionManager(private val store: TokenStore) {
         return next
     }
 
+    /** Why the user was signed out, when it was not their own doing. */
+    fun signOutReason(): String? = (_state.value as? AuthState.SignedOut)?.reason
+
     /** Forgets the tokens. [reason] is shown on the login screen. */
     fun signOut(reason: String? = null) {
         ref.set(null)

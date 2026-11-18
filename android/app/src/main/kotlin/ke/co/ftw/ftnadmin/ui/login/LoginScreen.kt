@@ -29,7 +29,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import ke.co.ftw.ftnadmin.core.network.AuthState
 import ke.co.ftw.ftnadmin.ui.common.LocalContainer
 import ke.co.ftw.ftnadmin.ui.common.SecureScreen
 import ke.co.ftw.ftnadmin.ui.common.vmFactory
@@ -38,8 +37,7 @@ import ke.co.ftw.ftnadmin.ui.common.vmFactory
 fun LoginScreen() {
     SecureScreen()
     val container = LocalContainer.current
-    val notice = (container.sessions.state.value as? AuthState.SignedOut)?.reason
-    val vm: LoginViewModel = viewModel(factory = vmFactory { LoginViewModel(container.auth, notice) })
+    val vm: LoginViewModel = viewModel(factory = vmFactory { LoginViewModel(container.auth, container.sessions.signOutReason()) })
     val state by vm.state.collectAsStateWithLifecycle()
     LoginContent(
         state = state,
