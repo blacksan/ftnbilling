@@ -44,13 +44,13 @@ func (s *Service) ChangePackage(ctx context.Context, id, pkgID string, keepTime 
 		if !keepTime {
 			how = "started fresh, until " + a.ExpiresAt.In(EAT).Format("02 Jan 15:04")
 		}
-		d.AddEvent(store.Event{Time: now, Kind: "info", AccountID: id,
+		d.AddEvent(store.Event{Time: now, SiteID: a.SiteID, Kind: "info", AccountID: id,
 			Msg: fmt.Sprintf("%s: package changed by admin %s -> %s (%s)", a.Flat, nameOr(old.Name, "none"), pkg.Name, how)})
 		s.enqueueLocked(d, a, true, "package changed")
 		return nil
 	})
 	if err == nil {
-		s.RunTasks(ctx)
+		s.runAccountSite(ctx, id)
 	}
 	return err
 }
@@ -70,12 +70,12 @@ func (s *Service) EndPlan(ctx context.Context, id string) error {
 		}
 		a.ExpiresAt = now
 		d.Accounts[id] = a
-		d.AddEvent(store.Event{Time: now, Kind: "info", AccountID: id, Msg: a.Flat + ": plan ended by admin"})
+		d.AddEvent(store.Event{Time: now, SiteID: a.SiteID, Kind: "info", AccountID: id, Msg: a.Flat + ": plan ended by admin"})
 		s.enqueueLocked(d, a, true, "plan ended")
 		return nil
 	})
 	if err == nil {
-		s.RunTasks(ctx)
+		s.runAccountSite(ctx, id)
 	}
 	return err
 }
@@ -85,6 +85,7 @@ func (s *Service) EndPlan(ctx context.Context, id string) error {
 // history is kept in the ledger; the account code is never reused.
 // confirm must equal the account code, to avoid deleting the wrong flat.
 func (s *Service) DeleteAccount(ctx context.Context, id, confirm string) error {
+	var site string
 	err := s.st.Update(func(d *store.Data) error {
 		a, ok := d.Accounts[id]
 		if !ok {
@@ -108,20 +109,22 @@ func (s *Service) DeleteAccount(ctx context.Context, id, confirm string) error {
 				d.Payments[k] = p
 			}
 		}
-		d.AddEvent(store.Event{Time: s.now(), Kind: "info", Msg: fmt.Sprintf("%s (%s, MAC %s): account deleted by admin", a.Flat, a.Code, a.MAC)})
+		d.AddEvent(store.Event{Time: s.now(), SiteID: a.SiteID, Kind: "info", Msg: fmt.Sprintf("%s (%s, MAC %s): account deleted by admin", a.Flat, a.Code, a.MAC)})
+		site = a.SiteID
 		return nil
 	})
 	if err == nil {
 		s.log.Info("account deleted", "id", id)
-		s.RunTasks(ctx)
+		s.RunSiteTasks(ctx, site)
 	}
 	return err
 }
 
-// DeletePackage hides a package everywhere and removes its router profile.
+// DeletePackage hides a package everywhere and removes its router profile
+// from every building's router (in the background).
 // It refuses while a flat still has time on it or unused vouchers exist;
 // disable it instead in that case. Past payments keep showing its name.
-func (s *Service) DeletePackage(ctx context.Context, id string) error {
+func (s *Service) DeletePackage(_ context.Context, id string) error {
 	var prof string
 	err := s.st.Update(func(d *store.Data) error {
 		p, ok := d.Packages[id]
@@ -152,9 +155,14 @@ func (s *Service) DeletePackage(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if rerr := s.rt.RemoveProfile(ctx, prof); rerr != nil {
-		s.log.Warn("could not remove router profile (harmless, remove it by hand)", "profile", prof, "err", rerr)
-	}
+	s.syncAllSites(func(ctx context.Context, siteID string) {
+		if rerr := s.router(siteID).RemoveProfile(ctx, prof); rerr != nil {
+			s.log.Warn("could not remove router profile (harmless, remove it by hand)", "site", siteID, "profile", prof, "err", rerr)
+		}
+		if err := s.SyncProfiles(ctx, siteID); err != nil {
+			s.log.Warn("profile push failed; will retry", "site", siteID, "err", err)
+		}
+	})
 	return nil
 }
 
@@ -163,4 +171,54 @@ func nameOr(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// MoveAccount moves a flat to another building: its router user is removed
+// from the old building's router and created on the new one's. The account
+// keeps its code, plan and expiry. It is refused when the new building already
+// has that MAC or flat label. Open portal orders are failed. Past payments stay
+// recorded under the building where they arrived.
+func (s *Service) MoveAccount(ctx context.Context, id, toSiteID string) error {
+	var from string
+	err := s.st.Update(func(d *store.Data) error {
+		a, ok := d.Accounts[id]
+		if !ok {
+			return ErrNotFound
+		}
+		if a.SiteID == toSiteID {
+			return store.ErrNoChange
+		}
+		to, ok := d.Sites[toSiteID]
+		if !ok || to.Removed {
+			return ErrNoSite
+		}
+		if other, ok := d.AccountByMAC(toSiteID, a.MAC); ok {
+			return fmt.Errorf("%w (%s in %s)", ErrDuplicateMAC, other.Flat, to.Name)
+		}
+		if flatTaken(d, toSiteID, a.Flat, id) {
+			return fmt.Errorf("%s already has an account for %q. Rename the flat first", to.Name, a.Flat)
+		}
+		from = a.SiteID
+		// Clean the old router, then the new one gets the user via its own task.
+		s.enqueueLocked(d, a, true, "account moved away")
+		a.SiteID = toSiteID
+		a.RouterActive = false
+		d.Accounts[id] = a
+		delete(d.Devices, store.DeviceKey(toSiteID, a.MAC))
+		for k, o := range d.Orders {
+			if o.AccountID == id && o.Status == store.OrderPending {
+				o.Status, o.Reason = store.OrderFailed, "account moved to another building"
+				d.Orders[k] = o
+			}
+		}
+		s.enqueueLocked(d, a, true, "account moved in")
+		d.AddEvent(store.Event{Time: s.now(), SiteID: toSiteID, Kind: "info", AccountID: id,
+			Msg: fmt.Sprintf("%s (%s): moved from %s to %s", a.Flat, a.Code, d.Sites[from].Name, to.Name)})
+		return nil
+	})
+	if err == nil {
+		s.RunSiteTasks(ctx, from)
+		s.RunSiteTasks(ctx, toSiteID)
+	}
+	return err
 }

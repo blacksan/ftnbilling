@@ -32,27 +32,102 @@ func (s *Service) SeedPackages() error {
 	})
 }
 
-// SyncProfiles creates/updates one router profile per package.
-func (s *Service) SyncProfiles(ctx context.Context) error {
+// SyncProfiles creates/updates one router profile per package on the
+// building's router. Every package that is not deleted is pushed, hidden or
+// not, because an admin can still assign it.
+func (s *Service) SyncProfiles(ctx context.Context, siteID string) error {
 	var pkgs []store.Package
 	s.st.View(func(d *store.Data) { pkgs = d.PackageList() })
-	s.profilesOK.Store(false)
+	state := s.state(siteID)
+	state.profilesOK.Store(false)
+	rt := s.router(siteID)
 	for _, p := range pkgs {
-		if err := s.rt.EnsureProfile(ctx, routeros.Profile{Name: p.Profile(), RateLimit: p.RateLimit(), SharedUsers: 1}); err != nil {
+		if err := rt.EnsureProfile(ctx, routeros.Profile{Name: p.Profile(), RateLimit: p.RateLimit(), SharedUsers: 1}); err != nil {
 			return fmt.Errorf("profile %s: %w", p.Profile(), err)
 		}
 	}
-	s.profilesOK.Store(true)
+	state.profilesOK.Store(true)
 	return nil
 }
 
-// SavePackage adds (ID empty) or edits a package and pushes its profile to the
-// router. The slug, and so the router profile name, never changes after creation.
+// syncAllSites marks every building's profiles as out of date and starts a
+// background sync per building (15 s limit each). It never blocks the caller.
+func (s *Service) syncAllSites(then func(ctx context.Context, siteID string)) {
+	for _, id := range s.runnableSites() {
+		s.state(id).profilesOK.Store(false)
+		s.bg.Add(1)
+		go func() {
+			defer s.bg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if then != nil {
+				then(ctx, id)
+				return
+			}
+			if err := s.SyncProfiles(ctx, id); err != nil {
+				s.log.Warn("profile push failed; will retry", "site", id, "err", err)
+			}
+		}()
+	}
+}
+
+// ErrPriceCollision is returned when two enabled packages would cost the same
+// at one building: Paybill payments are matched to a package by amount.
+var ErrPriceCollision = errors.New("two enabled packages would have the same price")
+
+// priceCollision checks that, in every building, no two enabled effective
+// packages share a price. It looks at pkgs (the candidate list) with each
+// building's overrides applied.
+func priceCollision(d *store.Data, pkgs map[string]store.Package, sites map[string]store.Site) error {
+	check := func(siteID, label string) error {
+		seen := map[int]string{}
+		for _, p := range pkgs {
+			if p.Deleted {
+				continue
+			}
+			if o, ok := sites[siteID].PkgOverrides[p.ID]; ok {
+				if o.PriceKES > 0 {
+					p.PriceKES = o.PriceKES
+				}
+				p.Disabled = p.Disabled || o.Hidden
+			}
+			if p.Disabled || p.PriceKES <= 0 {
+				continue
+			}
+			if other, dup := seen[p.PriceKES]; dup {
+				return fmt.Errorf("%w: %s and %s both cost KES %d%s. Change a price, hide one here, or disable one", ErrPriceCollision, other, p.Name, p.PriceKES, label)
+			}
+			seen[p.PriceKES] = p.Name
+		}
+		return nil
+	}
+	if err := check("", ""); err != nil {
+		return err
+	}
+	for id, st := range sites {
+		if st.Removed {
+			continue
+		}
+		if err := check(id, " at "+st.Name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SavePackage adds (ID empty) or edits a package and pushes its profile to
+// every building's router in the background. The slug, and so the router
+// profile name, never changes after creation. Saving is refused when it would
+// give two enabled packages the same price at any building.
 func (s *Service) SavePackage(ctx context.Context, p store.Package) (store.Package, error) {
 	if p.Name == "" || p.DurationMin <= 0 || p.SpeedMbps <= 0 || p.PriceKES < 0 {
 		return p, errors.New("name, duration, speed must be set and price cannot be negative")
 	}
 	err := s.st.Update(func(d *store.Data) error {
+		cand := make(map[string]store.Package, len(d.Packages)+1)
+		for k, v := range d.Packages {
+			cand[k] = v
+		}
 		if p.ID == "" {
 			p.ID = RandomID()
 			base, slug := Slugify(p.Name), ""
@@ -78,23 +153,56 @@ func (s *Service) SavePackage(ctx context.Context, p store.Package) (store.Packa
 			}
 			p.Slug, p.Sort = old.Slug, old.Sort
 		}
+		cand[p.ID] = p
+		if err := priceCollision(d, cand, d.Sites); err != nil {
+			return err
+		}
 		d.Packages[p.ID] = p
 		return nil
 	})
 	if err != nil {
 		return p, err
 	}
-	if err := s.rt.EnsureProfile(ctx, routeros.Profile{Name: p.Profile(), RateLimit: p.RateLimit(), SharedUsers: 1}); err != nil {
-		s.profilesOK.Store(false) // sweeper will retry
-		s.log.Warn("profile push failed; will retry", "profile", p.Profile(), "err", err)
-	}
+	s.syncAllSites(nil)
 	return p, nil
+}
+
+// SaveSiteOverrides replaces a building's package overrides (hidden flag and
+// price per package ID). Zero prices and no-op rows are dropped. It is refused
+// when it would give two enabled packages the same price at this building.
+func (s *Service) SaveSiteOverrides(siteID string, ov map[string]store.PkgOverride) error {
+	return s.st.Update(func(d *store.Data) error {
+		st, ok := d.Sites[siteID]
+		if !ok || st.Removed {
+			return ErrNoSite
+		}
+		clean := map[string]store.PkgOverride{}
+		for id, o := range ov {
+			if pk, ok := d.Packages[id]; !ok || pk.Deleted {
+				continue
+			}
+			if o.PriceKES < 0 {
+				return errors.New("a price cannot be negative")
+			}
+			if o.Hidden || o.PriceKES > 0 {
+				clean[id] = o
+			}
+		}
+		st.PkgOverrides = clean
+		sites := map[string]store.Site{siteID: st}
+		if err := priceCollision(d, d.Packages, sites); err != nil {
+			return err
+		}
+		d.Sites[siteID] = st
+		return nil
+	})
 }
 
 // ---- vouchers -----------------------------------------------------------
 
 // GenerateVouchers makes n unique 8-char single-use vouchers; returns the batch id.
-func (s *Service) GenerateVouchers(pkgID string, n int) (string, []store.Voucher, error) {
+// siteID "" makes vouchers that work at any building.
+func (s *Service) GenerateVouchers(pkgID, siteID string, n int) (string, []store.Voucher, error) {
 	if n < 1 || n > 500 {
 		return "", nil, errors.New("count must be between 1 and 500")
 	}
@@ -104,13 +212,18 @@ func (s *Service) GenerateVouchers(pkgID string, n int) (string, []store.Voucher
 		if p, ok := d.Packages[pkgID]; !ok || p.Deleted {
 			return ErrNotFound
 		}
+		if siteID != "" {
+			if st, ok := d.Sites[siteID]; !ok || st.Removed {
+				return ErrNoSite
+			}
+		}
 		now := s.now()
 		for len(out) < n {
 			c := RandomCode(8)
 			if _, dup := d.Vouchers[c]; dup {
 				continue
 			}
-			v := store.Voucher{Code: c, PackageID: pkgID, Batch: batch, CreatedAt: now}
+			v := store.Voucher{Code: c, SiteID: siteID, PackageID: pkgID, Batch: batch, CreatedAt: now}
 			d.Vouchers[c] = v
 			out = append(out, v)
 		}

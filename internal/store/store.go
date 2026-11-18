@@ -674,3 +674,13 @@ func (d *Data) NextTunnelIP(prefix netip.Prefix) (string, error) {
 	}
 	return "", fmt.Errorf("no free tunnel address left in %s", prefix)
 }
+
+// Runnable reports whether router work (tasks, profile sync, collection) may
+// run for the site: not removed, not paused, and, for a WireGuard site, joined
+// (the join script was fetched, so it has a key).
+func (s Site) Runnable() bool {
+	if s.Removed || s.Disabled {
+		return false
+	}
+	return s.Mode == SiteModeEnv || s.WGPublicKey != ""
+}

@@ -122,7 +122,7 @@ func TestDeletePackageRules(t *testing.T) {
 		t.Fatal("deleted a package in use")
 	}
 	hr := e.pkg("1 Hour")
-	if _, _, err := e.svc.GenerateVouchers(hr.ID, 1); err != nil {
+	if _, _, err := e.svc.GenerateVouchers(hr.ID, "", 1); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.svc.DeletePackage(ctx, hr.ID); err == nil {
@@ -132,6 +132,7 @@ func TestDeletePackageRules(t *testing.T) {
 	if err := e.svc.DeletePackage(ctx, m80.ID); err != nil {
 		t.Fatal(err)
 	}
+	e.svc.Wait()
 	if _, ok := e.rt.GetProfile(m80.Profile()); ok {
 		t.Fatal("router profile not removed")
 	}
