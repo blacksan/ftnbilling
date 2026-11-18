@@ -214,7 +214,7 @@ func TestJoinCommandStages(t *testing.T) {
 	for _, w := range []string{
 		`/tool/fetch url="https://b.example/j/TOK?stage=cutover" dst-path=ftn-cutover.rsc check-certificate=yes; :delay 1s; /import ftn-cutover.rsc`,
 		`[/system/device-mode/get fetch]`, `[/system/device-mode/get scheduler]`,
-		`/system/device-mode/update fetch=yes scheduler=yes }`,
+		`/system/device-mode/update fetch=yes scheduler=yes } }`,
 	} {
 		if !strings.Contains(got, w) {
 			t.Errorf("cutover command lacks %q:\n%s", w, got)

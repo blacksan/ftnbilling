@@ -290,14 +290,19 @@ func JoinCommandIntent(base, token string, checkCert bool, stage string, intent 
 	if hotspot && intent != IntentFresh {
 		feats = append(feats, "hotspot")
 	}
-	var conds, sets []string
-	for _, f := range feats {
-		conds = append(conds, fmt.Sprintf(`([:tostr [/system/device-mode/get %s]] ~ $o)`, f))
+	// Every feature is read once into $vN. If a read comes back empty the line says so and does NOT call
+	// update: an update that cannot finish uses one of the router's 3 unconfirmed attempts.
+	var reads, shows, conds, empties, sets []string
+	for i, f := range feats {
+		reads = append(reads, fmt.Sprintf(`:local v%d [:tostr [/system/device-mode/get %s]];`, i, f))
+		shows = append(shows, fmt.Sprintf(`" %s=" . $v%d`, f, i))
+		conds = append(conds, fmt.Sprintf(`($v%d ~ $o)`, i))
+		empties = append(empties, fmt.Sprintf(`[:len $v%d] = 0`, i))
 		sets = append(sets, f+"=yes")
 	}
-	return fmt.Sprintf(`:local o "^(true|yes)$"; :if (%s) do={ /tool/fetch url="%s/j/%s%s" dst-path=%s check-certificate=%s; :delay 1s; /import %s } else={ :put "ftn: press the router button within 5 minutes (it then reboots), then paste this same line again"; /system/device-mode/update %s }`,
-		strings.Join(conds, " && "), strings.TrimRight(base, "/"), token, q, file, chk, file,
-		strings.Join(sets, " "))
+	return fmt.Sprintf(`:local o "^(true|yes)\$"; %s :put ("ftn: device-mode" . %s); :if (%s) do={ :put "ftn: cannot read device-mode, nothing was changed" } else={ :if (%s) do={ /tool/fetch url="%s/j/%s%s" dst-path=%s check-certificate=%s; :delay 1s; /import %s } else={ :put "ftn: press the router button within 5 minutes (it then reboots), then paste this same line again"; /system/device-mode/update %s } }`,
+		strings.Join(reads, " "), strings.Join(shows, " . "), strings.Join(empties, " || "), strings.Join(conds, " && "),
+		strings.TrimRight(base, "/"), token, q, file, chk, file, strings.Join(sets, " "))
 }
 
 // NoCheckQuery is the query string of the no-certificate-check join command.

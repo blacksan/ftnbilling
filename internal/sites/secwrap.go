@@ -8,7 +8,7 @@ import (
 	"text/template"
 )
 
-var rosUARe = regexp.MustCompile(`(?i)^\s*routeros\s+(\d+\.\d+(?:\.\d+)?)`)
+var rosUARe = regexp.MustCompile(`(?i)^\s*(?:routeros\s+|mikrotik/)(\d+\.\d+(?:\.\d+)?)`)
 
 // ROSVersionFromUA reads the RouterOS version out of a /tool fetch
 // User-Agent ("RouterOS 7.25.1"). It returns "" for anything else (RouterOS 6

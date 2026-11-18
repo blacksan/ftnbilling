@@ -26,6 +26,8 @@ func (s *Server) joinReport(w http.ResponseWriter, r *http.Request) {
 	switch err := s.mgr.SubmitJoinReport(r.PathValue("token"), body); {
 	case errors.Is(err, sites.ErrJoinInvalid):
 		http.NotFound(w, r)
+	case errors.Is(err, sites.ErrReportDuplicate):
+		http.Error(w, "report already received", http.StatusConflict)
 	case errors.Is(err, sites.ErrReportTooLarge):
 		http.Error(w, "report too large", http.StatusRequestEntityTooLarge)
 	case err != nil:

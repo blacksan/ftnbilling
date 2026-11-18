@@ -37,7 +37,7 @@ func TestKitInstalledByBothJoinScripts(t *testing.T) {
 		for _, w := range []string{
 			`/system/scheduler add name=ftn-kit-timer interval=30s on-event=ftn-kit-tick`,
 			`comment="ftn: kit v1"`,
-			`:if ([:tostr [/system/device-mode/get scheduler]] ~ "^(true|yes)$") do={`,
+			`:if ([:tostr [/system/device-mode/get scheduler]] ~ "^(true|yes)\$") do={`,
 			`cutover kit: skipped, the scheduler is off in device-mode`,
 			`cutover kit NOT installed`,
 		} {
@@ -164,5 +164,58 @@ func TestCutoverRecordsRestoreLinesOnEveryRun(t *testing.T) {
 	}
 	if strings.Contains(s, ":local rbs") {
 		t.Error("the old record-at-switch path is still there")
+	}
+}
+
+var bareDollar = regexp.MustCompile(`(^|[^\\])\$["\)]`)
+
+// A "$" before a closing quote or bracket starts a variable in RouterOS: every anchor must be "\$".
+func TestNoUnescapedDollarAnchors(t *testing.T) {
+	check := func(what, s string) {
+		for _, l := range strings.Split(s, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(l), "#") {
+				continue
+			}
+			if bareDollar.MatchString(l) {
+				t.Errorf("%s: unescaped $ before a quote or bracket: %s", what, l)
+			}
+		}
+	}
+	for _, c := range []struct {
+		name string
+		in   ScriptInput
+	}{{"legacy", baseInput()}, {"join", ipoeInput(StageJoin)}, {"cutover", ipoeInput(StageCutover)}, {"cleanup", ipoeInput(StageCleanup)}} {
+		out, err := RenderJoinScript(c.in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		check(c.name, string(out))
+		if c.name == "join" {
+			tick, rb := extractKit(t, string(out))
+			check("kit tick", tick)
+			check("kit rollback", rb)
+		}
+	}
+	for _, intent := range []JoinIntent{IntentFresh, IntentServing} {
+		check("one-liner "+string(intent), JoinCommandIntent("https://b.example", "T", true, "", intent, true))
+	}
+}
+
+// Names read from the router are checked in the script before they are spliced into ftn-rollback.
+func TestCutoverValidatesNamesBeforeSplicing(t *testing.T) {
+	out, err := RenderJoinScript(ipoeInput(StageCutover))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	v := strings.Index(s, `:local okname "^[A-Za-z0-9][A-Za-z0-9._-]*\$"`)
+	sp := strings.Index(s, ":foreach h in=$hs do={ :set lines")
+	if v < 0 || sp < 0 || v > sp {
+		t.Fatalf("names must be validated before they are spliced (%d, %d)", v, sp)
+	}
+	for _, w := range []string{`$ifc ~ $okname`, `/ip/hotspot/get $h name] ~ $okname`, `/ip/dhcp-server/get $i name] ~ $okname`} {
+		if !strings.Contains(s, w) {
+			t.Errorf("no check %q", w)
+		}
 	}
 }

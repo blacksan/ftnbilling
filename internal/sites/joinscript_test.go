@@ -177,11 +177,14 @@ func TestPlanSubnet(t *testing.T) {
 func TestJoinCommand(t *testing.T) {
 	got := JoinCommand("https://b.example/", "TOK", true)
 	for _, w := range []string{
-		`:local o "^(true|yes)$"; :if (`,
-		`([:tostr [/system/device-mode/get fetch]] ~ $o) && ([:tostr [/system/device-mode/get scheduler]] ~ $o) && ([:tostr [/system/device-mode/get hotspot]] ~ $o)`,
+		`:local o "^(true|yes)\$";`,
+		`:local v0 [:tostr [/system/device-mode/get fetch]];`, `:local v2 [:tostr [/system/device-mode/get hotspot]];`,
+		`:put ("ftn: device-mode" . " fetch=" . $v0 . " scheduler=" . $v1 . " hotspot=" . $v2)`,
+		`:if ([:len $v0] = 0 || [:len $v1] = 0 || [:len $v2] = 0) do={ :put "ftn: cannot read device-mode, nothing was changed" }`,
+		`($v0 ~ $o) && ($v1 ~ $o) && ($v2 ~ $o)`,
 		`do={ /tool/fetch url="https://b.example/j/TOK" dst-path=ftn-join.rsc check-certificate=yes; :delay 1s; /import ftn-join.rsc }`,
 		`else={ :put "ftn: press the router button within 5 minutes (it then reboots), then paste this same line again"; /system/device-mode/update`,
-		`/system/device-mode/update fetch=yes scheduler=yes hotspot=yes }`,
+		`/system/device-mode/update fetch=yes scheduler=yes hotspot=yes } }`,
 	} {
 		if !strings.Contains(got, w) {
 			t.Errorf("command lacks %q:\n%s", w, got)
@@ -191,7 +194,7 @@ func TestJoinCommand(t *testing.T) {
 	if strings.Count(got, "/system/device-mode/update") != 1 || strings.Count(got, "/import") != 1 {
 		t.Error("one update, one import")
 	}
-	if long := JoinCommand("https://billing.example.co.ke", strings.Repeat("x", 43), true); len(long) > 560 {
+	if long := JoinCommand("https://billing.example.co.ke", strings.Repeat("x", 43), true); len(long) > 820 {
 		t.Errorf("the line is %d characters; keep it pasteable", len(long))
 	}
 	// No hotspot requirement for the join stage of a building that is not (yet) hotspot-mode.
@@ -200,7 +203,7 @@ func TestJoinCommand(t *testing.T) {
 	}
 	// Fresh router: fetch only, so usually no button press; serving router: the full set.
 	fresh := JoinCommandIntent("https://b.example", "T", true, StageJoin, IntentFresh, true)
-	if !strings.Contains(fresh, "get fetch") || strings.Contains(fresh, "get scheduler") || strings.Contains(fresh, "get hotspot") || !strings.Contains(fresh, "/system/device-mode/update fetch=yes }") {
+	if !strings.Contains(fresh, "get fetch") || strings.Contains(fresh, "get scheduler") || strings.Contains(fresh, "get hotspot") || !strings.Contains(fresh, "/system/device-mode/update fetch=yes } }") {
 		t.Errorf("fresh intent needs fetch only: %s", fresh)
 	}
 	serving := JoinCommandIntent("https://b.example", "TOK", true, "", IntentServing, true)

@@ -71,6 +71,9 @@ func TestJoinReportEndpoint(t *testing.T) {
 	if r.StatusCode != 204 {
 		t.Fatalf("report: %d", r.StatusCode)
 	}
+	if r2, _ := m.joinPost(token, "result ok\n"); r2.StatusCode != 409 {
+		t.Fatalf("second report: %d, want 409", r2.StatusCode)
+	}
 	rep, ok := m.mgr.JoinReport(site.ID)
 	if !ok || rep.OK || rep.ROS != "7.25.1" || len(rep.Lines) != 2 {
 		t.Fatalf("stored report %+v %v", rep, ok)

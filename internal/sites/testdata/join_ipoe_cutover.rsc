@@ -26,7 +26,7 @@
 :if ($major < 7) do={ :set abort "ftn: RouterOS 7 or newer is required"; :error $abort }
 # The rollback timer needs the scheduler. With device-mode blocking it, fail now, before anything is changed.
 # BENCH-CHECK: [/system/device-mode/get scheduler] returns a bool or "yes"/"no"; both are accepted.
-:if (!([:tostr [/system/device-mode/get scheduler]] ~ "^(true|yes)$")) do={ :set abort "ftn: device-mode does not allow the scheduler, so the rollback timer cannot be made. Nothing was changed. On the router run: /system/device-mode/update scheduler=yes (press the reset button within 5 minutes when asked; the router reboots), then run this cutover again"; :error $abort }
+:if (!([:tostr [/system/device-mode/get scheduler]] ~ "^(true|yes)\$")) do={ :set abort "ftn: device-mode does not allow the scheduler, so the rollback timer cannot be made. Nothing was changed. On the router run: /system/device-mode/update scheduler=yes (press the reset button within 5 minutes when asked; the router reboots), then run this cutover again"; :error $abort }
 :if ([/ip/dns/get allow-remote-requests] = false) do={ :set abort "ftn: the router's DNS does not answer the flats (/ip/dns allow-remote-requests is off). Turn it on first, because the DHCP server hands out the router as the resolver"; :error $abort }
 :set rbExists ([:len [/system/script/find where name="ftn-rollback"]] > 0)
 :local hs0 [/ip/hotspot/find where name="hotspot1"]
@@ -95,6 +95,12 @@
     # What the switch will change is written into the rollback script BEFORE it is changed, on every run:
     # a first run that stopped after creating the script (rbExists is then true) must not leave the lines out.
     # Each line is added only if it is not in the script yet.
+    # Names read from the router are spliced into a script that runs with the policy policy: refuse any
+    # that is not a plain name (a user with only write access can rename objects).
+    :local okname "^[A-Za-z0-9][A-Za-z0-9._-]*\$"
+    :if (!($ifc ~ $okname)) do={ :error ("ftn: interface name is not a plain name: " . $ifc) }
+    :foreach h in=$hs do={ :if (!([/ip/hotspot/get $h name] ~ $okname)) do={ :error "ftn: a hotspot server name is not a plain name" } }
+    :foreach i in=$olddhcp do={ :if (!([/ip/dhcp-server/get $i name] ~ $okname)) do={ :error "ftn: a DHCP server name is not a plain name" } }
     :local rb [/system/script/get [find where name="ftn-rollback"] source]
     :local lines ({})
     :foreach h in=$hs do={ :set lines ($lines, (":do { /ip hotspot enable [find where name=\"" . [/ip/hotspot/get $h name] . "\"] } on-error={}\n")) }
