@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Status</title>
-<meta http-equiv="refresh" content="0; url={{.Portal}}/portal/status?mac=$(mac-esc)&ip=$(ip)">
+<meta http-equiv="refresh" content="0; url={{.Portal}}/portal/status?site={{SITE}}&mac=$(mac-esc)&ip=$(ip)">
 </head>
 <body style="font-family:sans-serif;padding:16px">
-<p>Logged in as $(username). <a href="{{.Portal}}/portal/status?mac=$(mac-esc)&amp;ip=$(ip)">Check time left</a></p>
+<p>Logged in as $(username). <a href="{{.Portal}}/portal/status?site={{SITE}}&mac=$(mac-esc)&amp;ip=$(ip)">Check time left</a></p>
 <p><a href="$(link-logout)">Log out</a></p>
 </body>
 </html>

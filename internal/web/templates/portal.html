@@ -1,5 +1,5 @@
 {{define "portal"}}{{template "head" .}}
-{{template "brandbar" .Brand}}
+{{template "brandbar" .Brand}}{{if .SiteName}}<p class="muted" style="margin:0 0 4px">{{.SiteName}}</p>{{end}}
 {{if not .Ctx.MAC}}
 <div class="card"><b>Open this page from the WiFi login</b>
 <p class="muted">We could not tell which connection you are on. Connect to the building WiFi and open any website, and this page will appear again.{{if .Support}} Need help? Call {{.Support}}.{{end}}</p></div>

@@ -11,11 +11,14 @@ import (
 )
 
 // PortalCtx is the hotspot context carried through every portal step.
-type PortalCtx struct{ MAC, IP, Dst string }
+type PortalCtx struct{ Site, MAC, IP, Dst string }
 
-// ctxFrom reads and sanitises mac, ip and dst from query or form.
+// ctxFrom reads and sanitises site, mac, ip and dst from query or form.
 func ctxFrom(r *http.Request) PortalCtx {
-	c := PortalCtx{IP: strings.TrimSpace(r.FormValue("ip")), Dst: strings.TrimSpace(r.FormValue("dst"))}
+	c := PortalCtx{Site: strings.TrimSpace(r.FormValue("site")), IP: strings.TrimSpace(r.FormValue("ip")), Dst: strings.TrimSpace(r.FormValue("dst"))}
+	if len(c.Site) > 16 {
+		c.Site = ""
+	}
 	if m, err := billing.NormalizeMAC(r.FormValue("mac")); err == nil {
 		c.MAC = m
 	}
@@ -30,6 +33,7 @@ func ctxFrom(r *http.Request) PortalCtx {
 
 type portalPage struct {
 	Brand, Support string
+	SiteName       string
 	Ctx            PortalCtx
 	Known          bool // MAC belongs to an account
 	Acct           store.Account
@@ -78,14 +82,48 @@ func (s *Server) portalRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/orders/{id}", s.apiOrder)
 }
 
-// pctx is ctxFrom plus, on a public server, a check that the mac/ip really
-// is a device on the building hotspot. Unverified requests lose their MAC and
-// get the neutral "open this page from the WiFi login" page.
+// portalSite finds the building a portal request is about: the one named by
+// the request's site field, or, when that is missing or unknown, the only
+// active building if exactly one exists. With several buildings and no valid
+// site the visitor gets the neutral page.
+func (s *Server) portalSite(id string) (store.Site, bool) {
+	var out store.Site
+	found := false
+	s.st.View(func(d *store.Data) {
+		if st, ok := d.Sites[id]; ok && !st.Removed && !st.Disabled {
+			out, found = st, true
+			return
+		}
+		n := 0
+		for _, st := range d.Sites {
+			if !st.Removed && !st.Disabled {
+				out, n = st, n+1
+			}
+		}
+		found = n == 1
+	})
+	if !found {
+		return store.Site{}, false
+	}
+	return out, true
+}
+
+// pctx is ctxFrom plus the building lookup and, for a building whose host
+// guard is on (always for WireGuard buildings, and for the legacy one with
+// VERIFY_HOTSPOT_HOST), a check that the mac/ip really is a device on that
+// building's hotspot. Unverified requests lose their MAC and get the neutral
+// "open this page from the WiFi login" page. Everything is keyed by building:
+// every building uses the same customer subnet.
 func (s *Server) pctx(r *http.Request) PortalCtx {
 	pc := ctxFrom(r)
-	if s.guard != nil && pc.MAC != "" && !s.guard.ok(r.Context(), pc.MAC, pc.IP) {
-		s.log.Warn("portal: mac/ip not on the hotspot, ignored", "mac", pc.MAC, "ip", pc.IP, "remote", r.RemoteAddr)
+	site, ok := s.portalSite(pc.Site)
+	if !ok {
 		return PortalCtx{Dst: pc.Dst}
+	}
+	pc.Site = site.ID
+	if pc.MAC != "" && !s.mgr.VerifyHost(r.Context(), site.ID, pc.MAC, pc.IP) {
+		s.log.Warn("portal: mac/ip not on the hotspot, ignored", "site", site.ID, "mac", pc.MAC, "ip", pc.IP, "remote", r.RemoteAddr)
+		return PortalCtx{Site: site.ID, Dst: pc.Dst}
 	}
 	return pc
 }
@@ -100,12 +138,18 @@ func (s *Server) view(r *http.Request, errMsg, phone, selected string) portalPag
 		Error: errMsg, Phone: phone, Selected: selected,
 	}
 	p.Ctx = s.pctx(r)
+	if site, ok := s.portalSite(p.Ctx.Site); ok {
+		p.SiteName = site.Name
+		if site.SupportPhone != "" {
+			p.Support = site.SupportPhone
+		}
+	}
 	if p.Ctx.MAC == "" {
 		return p
 	}
-	a, ok := s.svc.AccountByMAC(p.Ctx.MAC)
+	a, ok := s.svc.AccountByMAC(p.Ctx.Site, p.Ctx.MAC)
 	if !ok {
-		s.svc.NoteDevice(p.Ctx.MAC, p.Ctx.IP, "portal")
+		s.svc.NoteDevice(p.Ctx.Site, p.Ctx.MAC, p.Ctx.IP, "portal")
 		return p
 	}
 	p.Known, p.Acct = true, a
@@ -114,7 +158,7 @@ func (s *Server) view(r *http.Request, errMsg, phone, selected string) portalPag
 	p.Suspended = a.Suspended
 	s.st.View(func(d *store.Data) {
 		p.Pkg = d.Packages[a.PackageID]
-		p.Groups = packageGroups(d.PackageList())
+		p.Groups = packageGroups(d.EffectivePackages(a.SiteID))
 	})
 	if p.Active {
 		p.Blocked = map[string]bool{}
@@ -160,7 +204,7 @@ func (s *Server) need(w http.ResponseWriter, r *http.Request) (store.Account, Po
 		s.render(w, "portal", s.view(r, "", "", ""))
 		return store.Account{}, pc, false
 	}
-	a, ok := s.svc.AccountByMAC(pc.MAC)
+	a, ok := s.svc.AccountByMAC(pc.Site, pc.MAC)
 	if !ok {
 		w.WriteHeader(http.StatusForbidden)
 		s.render(w, "portal", s.view(r, "", "", ""))
@@ -228,7 +272,7 @@ func (s *Server) portalVoucher(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, err := s.svc.LookupVoucher(r.FormValue("voucher"))
-	if err != nil {
+	if err != nil || (v.SiteID != "" && v.SiteID != a.SiteID) {
 		fail(http.StatusBadRequest, "That voucher is invalid or already used.")
 		return
 	}
@@ -257,7 +301,7 @@ func (s *Server) portalConnect(w http.ResponseWriter, r *http.Request) {
 		s.render(w, "portal", s.view(r, "Too many attempts. Wait a minute and try again.", "", ""))
 		return
 	}
-	s.svc.RunTasks(r.Context())
+	s.svc.RunSiteTasks(r.Context(), a.SiteID)
 	cur, _ := s.svc.GetAccount(a.ID)
 	p := s.view(r, "", "", "")
 	if s.svc.AutoLogin(r.Context(), cur, pc.IP) {
@@ -278,7 +322,7 @@ func (s *Server) portalWait(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/portal/success?order="+o.ID, http.StatusSeeOther)
 		return
 	}
-	s.render(w, "wait", map[string]any{"Brand": s.cfg.BrandName, "Order": o, "Test": o.Method == "test"})
+	s.render(w, "wait", map[string]any{"Brand": s.cfg.BrandName, "SiteName": s.siteName(o.SiteID), "Site": o.SiteID, "Order": o, "Test": o.Method == "test"})
 }
 
 func (s *Server) apiOrder(w http.ResponseWriter, r *http.Request) {
@@ -303,15 +347,21 @@ func (s *Server) portalSuccess(w http.ResponseWriter, r *http.Request) {
 	}
 	a, _ := s.svc.GetAccount(o.AccountID)
 	var pkg store.Package
-	s.st.View(func(d *store.Data) { pkg = d.Packages[a.PackageID] })
+	support := s.cfg.SupportPhone
+	s.st.View(func(d *store.Data) {
+		pkg = d.Packages[a.PackageID]
+		if sp := d.Sites[o.SiteID].SupportPhone; sp != "" {
+			support = sp
+		}
+	})
 	// The logged-in flag is set shortly after payment; re-check now so the page is right.
 	logged := o.LoggedIn
 	if !logged && o.IP != "" && strings.EqualFold(o.MAC, a.MAC) {
 		logged = s.svc.AutoLogin(r.Context(), a, o.IP)
 	}
 	s.render(w, "success", map[string]any{
-		"Brand": s.cfg.BrandName, "Acct": a, "Pkg": pkg, "LoggedIn": logged, "Dst": o.Dst,
-		"Support": s.cfg.SupportPhone, "MAC": o.MAC, "IP": o.IP, "Expires": a.ExpiresAt,
+		"Brand": s.cfg.BrandName, "SiteName": s.siteName(o.SiteID), "Site": o.SiteID, "Acct": a, "Pkg": pkg, "LoggedIn": logged, "Dst": o.Dst,
+		"Support": support, "MAC": o.MAC, "IP": o.IP, "Expires": a.ExpiresAt,
 	})
 }
 
@@ -321,3 +371,9 @@ func jsonStr(s string) string {
 }
 
 var _ = time.Second
+
+// siteName returns a building's name ("" if unknown).
+func (s *Server) siteName(id string) (name string) {
+	s.st.View(func(d *store.Data) { name = d.Sites[id].Name })
+	return
+}

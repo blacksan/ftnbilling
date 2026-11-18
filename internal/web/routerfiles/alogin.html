@@ -9,6 +9,6 @@ $(if link-redirect)<meta http-equiv="refresh" content="1; url=$(link-redirect)">
 <body style="font-family:sans-serif;padding:16px">
 <p><b>You are connected.</b></p>
 $(if link-redirect)<p><a href="$(link-redirect)">Continue</a></p>$(endif)
-<p><a href="{{.Portal}}/portal/status?mac=$(mac-esc)">Check time left</a></p>
+<p><a href="{{.Portal}}/portal/status?site={{SITE}}&mac=$(mac-esc)">Check time left</a></p>
 </body>
 </html>

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"net/netip"
 	"os"
 	"os/signal"
 	"sync"
@@ -18,7 +17,7 @@ import (
 	"ispbill/internal/config"
 	"ispbill/internal/metrics"
 	"ispbill/internal/payments"
-	"ispbill/internal/routeros"
+	"ispbill/internal/sites"
 	"ispbill/internal/store"
 	"ispbill/internal/web"
 )
@@ -40,14 +39,20 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	var rt routeros.Client
 	if cfg.RouterMock {
-		rt = routeros.NewMock()
 		log.Warn("ROUTER_MOCK=true: using an in-memory fake router")
-	} else {
-		rt = routeros.NewREST(cfg.RouterURL, cfg.RouterUser, cfg.RouterPass)
 	}
-	svc := billing.NewService(st, rt, log)
+	if _, err := sites.Bootstrap(cfg, st, log); err != nil {
+		return err
+	}
+
+	var svc *billing.Service
+	mgr := sites.New(sites.Options{
+		Cfg: cfg, Store: st, Log: log,
+		Dir:      func(siteID string) metrics.Directory { return svc.Directory(siteID) },
+		OnJoined: func(siteID string) { svc.MarkProfilesDirty(siteID) },
+	})
+	svc = billing.NewService(st, mgr, log)
 	svc.SetPolicy(billing.Policy{ReminderDays: cfg.ReminderDays, ReminderOnExpiry: cfg.ReminderOnExpiry})
 	if err := svc.SeedPackages(); err != nil {
 		return err
@@ -56,11 +61,21 @@ func run(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
 
-	syncCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	if err := svc.SyncProfiles(syncCtx); err != nil {
-		log.Warn("router profile sync failed; the sweeper will retry", "err", err)
+	mgr.Start(ctx)
+	// Push the speed profiles to every building's router in the background, so
+	// one unreachable building does not delay start-up. The sweeper retries.
+	var wg sync.WaitGroup
+	for _, id := range runnableSites(st) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			syncCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+			if err := svc.SyncProfiles(syncCtx, id); err != nil {
+				log.Warn("router profile sync failed; the sweeper will retry", "site", id, "err", err)
+			}
+		}()
 	}
-	cancel()
 
 	mp := payments.NewMpesa(payments.MpesaConfig{
 		BaseURL: cfg.MpesaBaseURL(), Key: cfg.MpesaKey, Secret: cfg.MpesaSecret, Shortcode: cfg.MpesaShortcode,
@@ -78,26 +93,13 @@ func run(log *slog.Logger) error {
 	log.Info("starting", "listen", cfg.ListenAddr, "data", cfg.DataDir, "router_mock", cfg.RouterMock,
 		"test_mode", cfg.TestMode, "mpesa_enabled", cfg.MpesaEnabled(), "mpesa_env", cfg.MpesaEnv)
 
-	subnet, _ := netip.ParsePrefix(cfg.CustomerSubnet)
-	col := metrics.New(cfg.DataDir, metrics.Config{
-		WAN: cfg.WANInterface, OLT: cfg.OLTInterface, WANCapMbps: cfg.WANCapacityMbps, OLTCapMbps: cfg.OLTCapacityMbps,
-		FUPTB: cfg.FUPTB, PingTargets: cfg.PingTargets, Subnet: subnet.Masked(),
-		FlowEvery: cfg.FlowEvery, PortEvery: cfg.PortEvery, PingEvery: cfg.PingEvery, DNSEvery: cfg.DNSEvery, SaveEvery: cfg.SaveEvery,
-		NetflowAddr: cfg.NetflowAddr, Synthetic: cfg.RouterMock,
-	}, rt, svc.Directory(), log)
-	if cfg.RouterMock {
-		col.DisableNetflow() // the fake router sends no traffic-flow
-	}
-
-	var wg sync.WaitGroup
 	svc.ResyncAll()
-	wg.Add(2)
+	wg.Add(1)
 	go func() { defer wg.Done(); svc.RunSweeper(ctx, 60*time.Second) }()
-	go func() { defer wg.Done(); col.Run(ctx) }()
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           web.New(cfg, st, svc, providers, mp, col, log).Handler(),
+		Handler:           web.New(cfg, st, svc, providers, mp, mgr, log).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -110,6 +112,8 @@ func run(log *slog.Logger) error {
 	case err := <-errc:
 		stop()
 		wg.Wait()
+		mgr.Wait()
+		svc.Wait()
 		return err
 	case <-ctx.Done():
 	}
@@ -118,8 +122,23 @@ func run(log *slog.Logger) error {
 	defer shCancel()
 	err = srv.Shutdown(shCtx)
 	wg.Wait()
+	mgr.Wait()
+	svc.Wait()
 	if errors.Is(err, http.ErrServerClosed) {
 		err = nil
 	}
 	return err
+}
+
+// runnableSites lists the buildings whose router can be reached right now.
+func runnableSites(st *store.Store) []string {
+	var ids []string
+	st.View(func(d *store.Data) {
+		for _, s := range d.SiteList() {
+			if s.Runnable() {
+				ids = append(ids, s.ID)
+			}
+		}
+	})
+	return ids
 }

@@ -20,7 +20,7 @@ func remoteApp(t *testing.T) *app {
 func TestRouterFiles(t *testing.T) {
 	a := remoteApp(t)
 	code, b := a.portal(t, "/routeros/hotspot/login.html")
-	if code != 200 || !strings.Contains(b, "https://billing.example.co.ke/portal?mac=$(mac-esc)") || strings.Contains(b, "172.17.0.2") {
+	if code != 200 || !strings.Contains(b, "https://billing.example.co.ke/portal?site="+a.site+"&mac=$(mac-esc)") || strings.Contains(b, "172.17.0.2") {
 		t.Fatalf("login.html %d %s", code, b)
 	}
 	code, b = a.portal(t, "/routeros/remote.rsc")
@@ -34,7 +34,7 @@ func TestRouterFiles(t *testing.T) {
 
 func TestPublicPortalNeedsHotspotHost(t *testing.T) {
 	a := remoteApp(t)
-	acct, err := a.svc.CreateAccount(billing.AccountInput{Flat: "Flat 9Z", MAC: "AA:BB:CC:DD:EE:09"})
+	acct, err := a.svc.CreateAccount(billing.AccountInput{SiteID: a.site, Flat: "Flat 9Z", MAC: "AA:BB:CC:DD:EE:09"})
 	if err != nil {
 		t.Fatal(err)
 	}

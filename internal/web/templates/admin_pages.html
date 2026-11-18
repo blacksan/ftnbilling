@@ -1,3 +1,4 @@
+{{define "sitepick"}}{{if .Site}}<input type="hidden" name="site" value="{{.Site}}">{{else}}<label>Building<select name="site" required><option value="">Choose a building</option>{{range .Sites}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>{{end}}{{end}}
 {{define "admin_dashboard"}}{{template "ahead" .}}
 {{if .Data.TestMode}}<p class="bad"><b>TEST_MODE is on:</b> test payments grant free access.</p>{{end}}
 <div class="tiles">
@@ -9,8 +10,8 @@
 <div class="tile">M-Pesa (Daraja)<b>{{if .Data.Mpesa}}enabled{{else}}off{{end}}</b><small>manual entry: <a href="/admin/payments/record">Record M-Pesa payment</a></small></div>
 </div>
 <h3>Pending router actions</h3>
-{{if .Data.Tasks}}<div class="tw"><table><tr><th>Flat code</th><th>What</th><th>Tries</th><th>Next try (EAT)</th><th>Last error</th></tr>
-{{range .Data.Tasks}}<tr><td><b>{{.Code}}</b></td><td>{{.Reason}}{{if .Kick}} (+ end session){{end}}</td><td>{{.Attempts}}</td><td>{{eat .NextTry}}</td><td class="bad">{{.LastErr}}</td></tr>{{end}}</table></div>
+{{if .Data.Tasks}}<div class="tw"><table><tr>{{if .Data.ShowSite}}<th>Building</th>{{end}}<th>Flat code</th><th>What</th><th>Tries</th><th>Next try (EAT)</th><th>Last error</th></tr>
+{{$d := .}}{{range .Data.Tasks}}<tr>{{if $d.Data.ShowSite}}<td>{{index $d.Data.SiteNames .SiteID}}</td>{{end}}<td><b>{{.Code}}</b></td><td>{{.Reason}}{{if .Kick}} (+ end session){{end}}</td><td>{{.Attempts}}</td><td>{{eat .NextTry}}</td><td class="bad">{{.LastErr}}</td></tr>{{end}}</table></div>
 <p class="muted">These are retried automatically with growing waits (5 s up to 5 min) until the router accepts them. They survive a restart.</p>
 {{else}}<p class="ok">None. The router is up to date.</p>{{end}}
 <h3>Lifecycle notes</h3>
@@ -20,12 +21,12 @@
 {{template "afoot"}}{{end}}
 
 {{define "admin_accounts"}}{{template "ahead" .}}
-<div class="tw"><table><tr><th>Flat</th><th>Account code</th><th>ONT MAC</th><th>Tenant</th><th>Package</th><th>Valid until (EAT)</th><th>Status</th></tr>
-{{range .Data.Rows}}<tr><td><a href="/admin/accounts/view?code={{.A.Code}}"><b>{{.A.Flat}}</b></a></td><td><code>{{.A.Code}}</code></td><td>{{.A.MAC}}</td><td>{{.A.Tenant}}{{if .A.Phone}} <span class="muted">{{.A.Phone}}</span>{{end}}</td>
+{{$d := .}}<div class="tw"><table><tr>{{if .Data.ShowSite}}<th>Building</th>{{end}}<th>Flat</th><th>Account code</th><th>ONT MAC</th><th>Tenant</th><th>Package</th><th>Valid until (EAT)</th><th>Status</th></tr>
+{{range .Data.Rows}}<tr>{{if $d.Data.ShowSite}}<td>{{index $d.Data.SiteNames .A.SiteID}}</td>{{end}}<td><a href="/admin/accounts/view?code={{.A.Code}}"><b>{{.A.Flat}}</b></a></td><td><code>{{.A.Code}}</code></td><td>{{.A.MAC}}</td><td>{{.A.Tenant}}{{if .A.Phone}} <span class="muted">{{.A.Phone}}</span>{{end}}</td>
 <td>{{.Pkg.Name}}</td><td>{{if not .A.ExpiresAt.IsZero}}{{eat .A.ExpiresAt}}{{end}}</td><td><span class="pill {{.State}}">{{.State}}</span></td></tr>
-{{else}}<tr><td colspan="7">No accounts yet. Add the first flat below, or create one from <a href="/admin/devices">Unregistered devices</a>.</td></tr>{{end}}</table></div>
+{{else}}<tr><td colspan="8">No accounts yet. Add the first flat below, or create one from <a href="/admin/devices">Unregistered devices</a>.</td></tr>{{end}}</table></div>
 <div class="card"><b>Add a flat</b> <span class="muted">The account code is generated and cannot be changed. It is the M-Pesa Paybill account number.</span>
-<form method="post" action="/admin/accounts/create" class="row" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<form method="post" action="/admin/accounts/create" class="row" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{.CSRF}}">{{template "sitepick" .}}
 <label>Flat label<input name="flat" placeholder="Flat 3B" value="{{.Data.FormFlat}}" required></label>
 <label>ONT WAN MAC<input name="mac" placeholder="AA:BB:CC:DD:EE:FF" value="{{.Data.FormMAC}}" required></label>
 <label>Tenant name (optional)<input name="tenant"></label><label>Phone (optional)<input name="phone" placeholder="0712345678"></label>
@@ -33,7 +34,7 @@
 {{template "afoot"}}{{end}}
 
 {{define "admin_account"}}{{template "ahead" .}}{{$A := .Data.A}}<h2>{{$A.Flat}} <small class="muted">Account {{$A.Code}}</small> <span class="pill {{.Data.State}}">{{.Data.State}}</span></h2>
-<p><a href="/admin/accounts">&larr; all accounts</a> &middot; <a href="/admin/metrics/flat?code={{$A.Code}}">usage</a> &middot; <a href="/admin/payments/record?account={{$A.Code}}">record an M-Pesa payment</a></p>
+<p>{{if .Multi}}<span class="muted">Building: <b>{{.Data.AcctSite}}</b></span> &middot; {{end}}<a href="/admin/accounts">&larr; all accounts</a> &middot; <a href="/admin/metrics/flat?code={{$A.Code}}">usage</a> &middot; <a href="/admin/payments/record?account={{$A.Code}}">record an M-Pesa payment</a></p>
 <div class="tiles"><div class="tile">Package<b style="font-size:19px">{{if .Data.Pkg.Name}}{{.Data.Pkg.Name}}{{else}}none{{end}}</b>{{if .Data.Pkg.Name}}<small>{{.Data.Pkg.SpeedMbps}} Mbps</small>{{end}}</div>
 <div class="tile">Valid until<b style="font-size:19px">{{if $A.ExpiresAt.IsZero}}-{{else}}{{eat $A.ExpiresAt}}{{end}}</b>{{if not $A.ExpiresAt.IsZero}}<small>{{left $A.ExpiresAt}} left</small>{{end}}</div>
 <div class="tile">ONT MAC<b style="font-size:19px">{{$A.MAC}}</b><small>router user: {{if $A.RouterActive}}present{{else}}none{{end}}</small></div></div>
@@ -58,6 +59,9 @@
 <div class="card danger"><b class="bad">Delete account</b><p class="muted" style="margin:4px 0">Removes the flat and its router user. Payments stay in the ledger. Type the account code <b>{{$A.Code}}</b> to confirm.</p>
 <form method="post" action="/admin/accounts/delete" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <input name="confirm" placeholder="type code" size="8" required autocomplete="off" style="text-transform:uppercase"><button>Delete account</button></form></div></div>
+{{if .Data.MoveTo}}<div class="card"><b>Move to another building</b><p class="muted" style="margin:4px 0">Removes the router user here and creates it in the new building. Its ONT must be on the new building's network. Past payments keep their old building. Type the account code <b>{{$A.Code}}</b> to confirm.</p>
+<form method="post" action="/admin/accounts/move" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
+<label>New building<select name="to">{{range .Data.MoveTo}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label><input name="confirm" placeholder="type code" size="8" required autocomplete="off" style="text-transform:uppercase"><button>Move account</button></form></div>{{end}}
 <h3>Payments for this flat</h3>
 <div class="tw"><table><tr><th>Paid (EAT)</th><th>Code</th><th>Method</th><th class="n">Amount</th><th>Package</th><th>Status</th><th>Note</th></tr>
 {{$d := .}}{{range .Data.Payments}}<tr><td>{{eat .PaidAt}}</td><td>{{.Key}}</td><td>{{.Method}}</td><td class="n">{{.AmountKES}}</td><td>{{(pkgOf $d.Data.PkgMap .PackageID).Name}}</td><td><span class="pill {{.Status}}">{{.Status}}</span></td><td>{{.Note}}</td></tr>
@@ -67,21 +71,21 @@
 {{define "admin_devices"}}{{template "ahead" .}}
 <p class="muted">MACs that opened the portal, or that the hotspot has seen, without a matching account. Each flat's ONT shows up as one MAC. Create an account for it, or attach it to an existing account (an ONT swap).</p>
 {{if .Data.HostErr}}<p class="bad">Could not read hotspot hosts from the router: {{.Data.HostErr}}</p>{{end}}
-<div class="tw"><table><tr><th>MAC</th><th>Last IP</th><th>Last seen (EAT)</th><th>Seen</th><th>Source</th><th>Create account</th><th>Attach to existing</th><th></th></tr>
-{{$d := .}}{{range .Data.Devices}}{{$mac := .MAC}}<tr><td><b>{{.MAC}}</b></td><td>{{.IP}}</td><td>{{eat .LastSeen}}</td><td>{{.Hits}}x</td><td>{{.Source}}</td>
-<td><form class="row" method="post" action="/admin/devices/create"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="mac" value="{{$mac}}"><input name="flat" placeholder="Flat 3B" required size="9"><button>Create account for this MAC</button></form></td>
-<td><form class="row" method="post" action="/admin/devices/attach"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="mac" value="{{$mac}}"><select name="account">{{range $d.Data.Accounts}}<option value="{{.ID}}">{{.Flat}} ({{.Code}})</option>{{end}}</select><button>Attach</button></form></td>
-<td><form class="i" method="post" action="/admin/devices/dismiss"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="mac" value="{{$mac}}"><button>Dismiss</button></form></td></tr>
-{{else}}<tr><td colspan="8">None. Every device that opened the portal has an account.</td></tr>{{end}}</table></div>
+<div class="tw"><table><tr>{{if .Data.ShowSite}}<th>Building</th>{{end}}<th>MAC</th><th>Last IP</th><th>Last seen (EAT)</th><th>Seen</th><th>Source</th><th>Create account</th><th>Attach to existing</th><th></th></tr>
+{{$d := .}}{{range .Data.Devices}}{{$mac := .MAC}}{{$dsite := .SiteID}}<tr>{{if $d.Data.ShowSite}}<td>{{index $d.Data.SiteNames .SiteID}}</td>{{end}}<td><b>{{.MAC}}</b></td><td>{{.IP}}</td><td>{{eat .LastSeen}}</td><td>{{.Hits}}x</td><td>{{.Source}}</td>
+<td><form class="row" method="post" action="/admin/devices/create"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$dsite}}"><input type="hidden" name="mac" value="{{$mac}}"><input name="flat" placeholder="Flat 3B" required size="9"><button>Create account for this MAC</button></form></td>
+<td><form class="row" method="post" action="/admin/devices/attach"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="mac" value="{{$mac}}"><select name="account">{{range $d.Data.Accounts}}{{if eq .SiteID $dsite}}<option value="{{.ID}}">{{.Flat}} ({{.Code}})</option>{{end}}{{end}}</select><button>Attach</button></form></td>
+<td><form class="i" method="post" action="/admin/devices/dismiss"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$dsite}}"><input type="hidden" name="mac" value="{{$mac}}"><button>Dismiss</button></form></td></tr>
+{{else}}<tr><td colspan="9">None. Every device that opened the portal has an account.</td></tr>{{end}}</table></div>
 <p class="muted">Attaching changes that account's ONT MAC to this device and ends the old session.</p>
 {{template "afoot"}}{{end}}
 
 {{define "admin_payments"}}{{template "ahead" .}}
 <p><span class="seg"><a href="/admin/payments"{{if not .Data.Status}} class="on"{{end}}>All</a><a href="/admin/payments?status=applied"{{if eq .Data.Status "applied"}} class="on"{{end}}>Applied</a><a href="/admin/payments?status=unmatched"{{if eq .Data.Status "unmatched"}} class="on"{{end}}>Unmatched</a><a href="/admin/payments?status=refunded"{{if eq .Data.Status "refunded"}} class="on"{{end}}>Refunded</a><a href="/admin/payments?status=ignored"{{if eq .Data.Status "ignored"}} class="on"{{end}}>Ignored</a></span>
 &nbsp; <a href="/admin/payments.csv">Download CSV</a> &middot; <a href="/admin/payments/record">Record M-Pesa payment</a></p>
-<div class="tw"><table><tr><th>Paid (EAT)</th><th>Transaction code</th><th>Method</th><th class="n">KES</th><th>Flat</th><th>Package</th><th>Payer</th><th>Status</th><th>Note</th></tr>
-{{range .Data.Rows}}<tr><td>{{eat .P.PaidAt}}</td><td>{{.P.Key}}</td><td>{{.P.Method}}</td><td class="n">{{.P.AmountKES}}</td><td>{{if .A.Code}}<a href="/admin/accounts/view?code={{.A.Code}}">{{.A.Flat}}</a>{{else}}{{.P.BillRef}}{{end}}</td><td>{{.Pkg.Name}}</td><td>{{.P.Phone}} {{.P.Name}}</td><td><span class="pill {{.P.Status}}">{{.P.Status}}</span></td><td>{{.P.Note}}</td></tr>
-{{else}}<tr><td colspan="9">No payments yet.</td></tr>{{end}}</table></div>
+<div class="tw"><table><tr>{{if .Data.ShowSite}}<th>Building</th>{{end}}<th>Paid (EAT)</th><th>Transaction code</th><th>Method</th><th class="n">KES</th><th>Flat</th><th>Package</th><th>Payer</th><th>Status</th><th>Note</th></tr>
+{{$d := .}}{{range .Data.Rows}}<tr>{{if $d.Data.ShowSite}}<td>{{index $d.Data.SiteNames .P.SiteID}}</td>{{end}}<td>{{eat .P.PaidAt}}</td><td>{{.P.Key}}</td><td>{{.P.Method}}</td><td class="n">{{.P.AmountKES}}</td><td>{{if .A.Code}}<a href="/admin/accounts/view?code={{.A.Code}}">{{.A.Flat}}</a>{{else}}{{.P.BillRef}}{{end}}</td><td>{{.Pkg.Name}}</td><td>{{.P.Phone}} {{.P.Name}}</td><td><span class="pill {{.P.Status}}">{{.P.Status}}</span></td><td>{{.P.Note}}</td></tr>
+{{else}}<tr><td colspan="10">No payments yet.</td></tr>{{end}}</table></div>
 {{template "afoot"}}{{end}}
 
 {{define "admin_record"}}{{template "ahead" .}}
@@ -100,25 +104,25 @@
 
 {{define "admin_unmatched"}}{{template "ahead" .}}
 <p class="muted">Money that arrived but could not be applied: an account number that matches no flat, or an amount that matches no package. Assign each to a flat and package, or mark it refunded or ignored with a note.</p>
-{{$d := .}}<div class="tw"><table><tr><th>Paid (EAT)</th><th>Code</th><th class="n">KES</th><th>Payer</th><th>Typed account</th><th>Why</th><th>Decide</th></tr>
-{{range .Data.Open}}<tr><td>{{eat .P.PaidAt}}</td><td>{{.P.Key}}</td><td class="n">{{.P.AmountKES}}</td><td>{{.P.Phone}} {{.P.Name}}</td><td>{{.P.BillRef}}</td><td>{{.P.Note}}</td>
+{{$d := .}}<div class="tw"><table><tr>{{if .Data.ShowSite}}<th>Building</th>{{end}}<th>Paid (EAT)</th><th>Code</th><th class="n">KES</th><th>Payer</th><th>Typed account</th><th>Why</th><th>Decide</th></tr>
+{{range .Data.Open}}<tr>{{if $d.Data.ShowSite}}<td>{{index $d.Data.SiteNames .P.SiteID}}</td>{{end}}<td>{{eat .P.PaidAt}}</td><td>{{.P.Key}}</td><td class="n">{{.P.AmountKES}}</td><td>{{.P.Phone}} {{.P.Name}}</td><td>{{.P.BillRef}}</td><td>{{.P.Note}}</td>
 <td><form class="row" method="post" action="/admin/unmatched/assign"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="key" value="{{.P.Key}}">{{$pa := .P.AccountID}}{{$amt := .P.AmountKES}}
 <select name="account">{{range $d.Data.Accounts}}<option value="{{.ID}}"{{if eq .ID $pa}} selected{{end}}>{{.Flat}} ({{.Code}})</option>{{end}}</select>
 <select name="package">{{range $d.Data.Pkgs}}<option value="{{.ID}}"{{if eq .PriceKES $amt}} selected{{end}}>{{.Name}} ({{kes .PriceKES}})</option>{{end}}</select>
 <input name="note" placeholder="note"><button>Assign</button></form>
 <form class="row" method="post" action="/admin/unmatched/resolve" style="margin-top:4px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="key" value="{{.P.Key}}"><input name="note" placeholder="note (required for your records)">
 <button name="status" value="refunded">Mark refunded</button><button name="status" value="ignored">Ignore</button></form></td></tr>
-{{else}}<tr><td colspan="7">Nothing waiting.</td></tr>{{end}}</table></div>
+{{else}}<tr><td colspan="8">Nothing waiting.</td></tr>{{end}}</table></div>
 {{if .Data.Done}}<h3>Decided</h3><div class="tw"><table><tr><th>Paid (EAT)</th><th>Code</th><th class="n">KES</th><th>Payer</th><th>Status</th><th>Note</th></tr>
 {{range .Data.Done}}<tr><td>{{eat .P.PaidAt}}</td><td>{{.P.Key}}</td><td class="n">{{.P.AmountKES}}</td><td>{{.P.Phone}} {{.P.Name}}</td><td><span class="pill {{.P.Status}}">{{.P.Status}}</span></td><td>{{.P.Note}}</td></tr>{{end}}</table></div>{{end}}
 {{template "afoot"}}{{end}}
 
 {{define "admin_orders"}}{{template "ahead" .}}
 <p class="muted">Checkouts started from the portal. A pending or failed order can be marked paid by hand if you saw the money; it is then recorded in the ledger as MANUAL-&lt;order&gt;. Prefer "Record M-Pesa payment" so the real transaction code is kept.</p>
-<div class="tw"><table><tr><th>Time (EAT)</th><th>Order</th><th>Flat</th><th>Payer</th><th>Package</th><th class="n">KES</th><th>Method</th><th>Status</th><th>Receipt</th><th></th></tr>
-{{$d := .}}{{range .Data.Orders}}<tr><td>{{eat .CreatedAt}}</td><td>{{.ID}}</td><td>{{(acctOf $d.Data.AcctMap .AccountID).Flat}}</td><td>{{.Phone}}</td><td>{{(pkgOf $d.Data.PkgMap .PackageID).Name}}</td><td class="n">{{.AmountKES}}</td><td>{{.Method}}</td><td>{{.Status}}{{if .Reason}}: {{.Reason}}{{end}}</td><td>{{.Receipt}}</td>
+<div class="tw"><table><tr>{{if .Data.ShowSite}}<th>Building</th>{{end}}<th>Time (EAT)</th><th>Order</th><th>Flat</th><th>Payer</th><th>Package</th><th class="n">KES</th><th>Method</th><th>Status</th><th>Receipt</th><th></th></tr>
+{{$d := .}}{{range .Data.Orders}}<tr>{{if $d.Data.ShowSite}}<td>{{index $d.Data.SiteNames .SiteID}}</td>{{end}}<td>{{eat .CreatedAt}}</td><td>{{.ID}}</td><td>{{(acctOf $d.Data.AcctMap .AccountID).Flat}}</td><td>{{.Phone}}</td><td>{{(pkgOf $d.Data.PkgMap .PackageID).Name}}</td><td class="n">{{.AmountKES}}</td><td>{{.Method}}</td><td>{{.Status}}{{if .Reason}}: {{.Reason}}{{end}}</td><td>{{.Receipt}}</td>
 <td>{{if ne .Status "paid"}}<form class="i" method="post" action="/admin/orders/markpaid"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><button>Mark paid</button></form>{{end}}</td></tr>
-{{else}}<tr><td colspan="10">No orders yet.</td></tr>{{end}}</table></div>{{template "afoot"}}{{end}}
+{{else}}<tr><td colspan="11">No orders yet.</td></tr>{{end}}</table></div>{{template "afoot"}}{{end}}
 
 {{define "admin_packages"}}{{template "ahead" .}}
 <p class="muted">Changing speed updates the router profile. Disabled packages are hidden from the portal; flats that already have one keep it. Keep prices unique: Paybill payments are matched to a package by amount. Delete only works when no flat has time left on the package and no unused vouchers exist; otherwise tick Disabled.</p>
@@ -134,12 +138,12 @@
 {{template "afoot"}}{{end}}
 
 {{define "admin_vouchers"}}{{template "ahead" .}}
-<div class="card"><form method="post" action="/admin/vouchers/generate" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<div class="card"><form method="post" action="/admin/vouchers/generate" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}">{{if .Site}}<input type="hidden" name="site" value="{{.Site}}">{{else}}<label>Building<select name="site"><option value="">Any building</option>{{range .Sites}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>{{end}}
 <label>Package<select name="package">{{range .Data.Pkgs}}<option value="{{.ID}}">{{.Name}} ({{kes .PriceKES}})</option>{{end}}</select></label>
 <label>Count<input name="count" type="number" min="1" max="500" value="10" style="width:80px"></label> <button>Generate and print</button></form></div>
-<div class="tw"><table><tr><th>Code</th><th>Package</th><th>Batch</th><th>Status</th></tr>
-{{$d := .}}{{range .Data.Vouchers}}<tr><td><b>{{.Code}}</b></td><td>{{(pkgOf $d.Data.PkgMap .PackageID).Name}}</td><td><a href="/admin/vouchers/print?batch={{.Batch}}">{{.Batch}}</a></td><td>{{if .Used}}used {{eat .UsedAt}}{{else}}unused{{end}}</td></tr>
-{{else}}<tr><td colspan="4">No vouchers yet.</td></tr>{{end}}</table></div>{{template "afoot"}}{{end}}
+<div class="tw"><table><tr><th>Code</th><th>Building</th><th>Package</th><th>Batch</th><th>Status</th></tr>
+{{$d := .}}{{range .Data.Vouchers}}<tr><td><b>{{.Code}}</b></td><td>{{if .SiteID}}{{index $d.Data.SiteNames .SiteID}}{{else}}any{{end}}</td><td>{{(pkgOf $d.Data.PkgMap .PackageID).Name}}</td><td><a href="/admin/vouchers/print?batch={{.Batch}}">{{.Batch}}</a></td><td>{{if .Used}}used {{eat .UsedAt}}{{else}}unused{{end}}</td></tr>
+{{else}}<tr><td colspan="5">No vouchers yet.</td></tr>{{end}}</table></div>{{template "afoot"}}{{end}}
 
 {{define "admin_settings"}}{{template "ahead" .}}
 <p class="muted">Read-only. These values come from the container's environment variables (see README). Change them in the router's env list and restart the container.</p>
@@ -160,14 +164,21 @@
 <tr><td>C2B validation URL</td><td><code>{{.Data.CBVal}}</code></td></tr>
 <tr><td>C2B confirmation URL</td><td><code>{{.Data.CBConf}}</code></td></tr>
 <tr><td>Support phone shown</td><td>{{if .Data.Support}}{{.Data.Support}}{{else}}not set (SUPPORT_PHONE){{end}}</td></tr></table></div>
-<div class="card"><b>Router and metrics</b><table>
-<tr><td>Router API</td><td>{{if .Data.Cfg.RouterMock}}fake router (ROUTER_MOCK){{else}}{{.Data.Cfg.RouterURL}}{{end}}</td></tr>
-<tr><td>Hotspot server</td><td>{{.Data.Cfg.HotspotServer}}</td></tr>
-<tr><td>WAN / OLT interface</td><td>{{.Data.Cfg.WANInterface}} / {{.Data.Cfg.OLTInterface}}</td></tr>
-<tr><td>WAN capacity</td><td>{{f0 .Data.Cfg.WANCapacityMbps}} Mbps</td></tr>
-<tr><td>Fair-use limit (FUP_TB)</td><td>{{f0 .Data.Cfg.FUPTB}} TB per month</td></tr>
-<tr><td>NetFlow listener</td><td>{{.Data.Cfg.NetflowAddr}}, customer subnet {{.Data.Cfg.CustomerSubnet}}</td></tr>
-<tr><td>Ping targets</td><td>{{range .Data.Cfg.PingTargets}}{{.}} {{end}}</td></tr></table></div></div>
+<div class="card"><b>Router connections</b><table>
+<tr><td>Buildings</td><td>each building has its own router and settings: <a href="/admin/sites">Buildings</a></td></tr>
+<tr><td>WireGuard endpoint</td><td>{{if .Data.WGEndpoint}}{{.Data.WGEndpoint}}{{else}}not set{{end}} <code>WG_ENDPOINT</code></td></tr>
+<tr><td>Tunnel subnet</td><td>{{.Data.WGSubnet}} <code>WG_SUBNET</code></td></tr>
+<tr><td>Join command lifetime</td><td>{{.Data.JoinTTL}} <code>JOIN_TOKEN_TTL</code></td></tr>
+<tr><td>NetFlow listener</td><td>{{.Data.Cfg.NetflowAddr}}{{if .Data.Stray}}, {{.Data.Stray}} packets from unknown sources dropped{{end}}</td></tr>
+<tr><td>Ping targets</td><td>{{range .Data.Cfg.PingTargets}}{{.}} {{end}}</td></tr></table></div>
+{{with .Data.Env}}<div class="card"><b>Legacy building: {{.Name}}</b><p class="muted" style="margin:4px 0">Connected by this server's environment variables (ROUTER_URL, ROUTER_USER, ...). Its layout comes from them too.</p><table>
+<tr><td>Router API</td><td>{{if $.Data.Cfg.RouterMock}}fake router (ROUTER_MOCK){{else}}{{$.Data.Cfg.RouterURL}}{{end}}</td></tr>
+<tr><td>Hotspot server</td><td>{{.HotspotServer}}</td></tr>
+<tr><td>WAN / OLT interface</td><td>{{.WANInterface}} / {{.OLTInterface}}</td></tr>
+<tr><td>WAN capacity</td><td>{{f0 .WANCapMbps}} Mbps</td></tr>
+<tr><td>Fair-use limit (FUP_TB)</td><td>{{f0 .FUPTB}} TB per month</td></tr>
+<tr><td>Customer subnet</td><td>{{.CustomerSubnet}}</td></tr></table></div>{{end}}
+</div>
 {{template "afoot"}}{{end}}
 
 {{define "admin_print"}}<!doctype html><html><head><meta charset="utf-8"><title>Vouchers {{.Batch}}</title><style>
