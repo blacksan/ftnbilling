@@ -316,7 +316,8 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	if err != nil {
 		return run, fmt.Errorf("reading DHCP servers: %w", err)
 	}
-	arp, arpErr := rt.Rows(ctx, pathARP, nil) // best effort: only feeds the device list
+	hotspots, _ := rt.Rows(ctx, "/ip/hotspot", nil) // best effort: tells a rollback from a cutover that has not happened yet
+	arp, arpErr := rt.Rows(ctx, pathARP, nil)       // best effort: only feeds the device list
 	if arpErr != nil {
 		arp = nil
 	}
@@ -364,16 +365,35 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 		// nothing is written (writes could disturb the flats' working leases).
 		run.Waiting, pd.ops = true, nil
 		note = DHCPServerName + " is disabled on the router: waiting for the cutover (or the router rolled back); nothing was written"
-		ps.mu.Lock()
-		rolledBack = ps.sawOn
-		ps.mu.Unlock()
+		// A rollback is: this server saw ftn-dhcp serving, it is off now, and a
+		// hotspot server on its interface is on again. (Off before the cutover,
+		// or off with no hotspot back, is only waiting.)
+		seen := false
+		s.st.View(func(d *store.Data) { seen = SiteMark(d, siteID, MarkCutoverSeen) })
+		hsOn := false
+		for _, h := range hotspots {
+			if h["interface"] == ftn["interface"] && h["disabled"] != "true" && h["disabled"] != "yes" {
+				hsOn = true
+			}
+		}
+		rolledBack = seen && hsOn
 		if rolledBack {
 			note = "the router rolled back to the hotspot (" + DHCPServerName + " is disabled); IPoE handling was switched off for this building"
 		}
 	default:
 		ps.mu.Lock()
+		first := !ps.sawOn
 		ps.sawOn = true
 		ps.mu.Unlock()
+		if first {
+			_ = s.st.Update(func(d *store.Data) error {
+				if SiteMark(d, siteID, MarkCutoverSeen) {
+					return store.ErrNoChange
+				}
+				SetSiteMarkLocked(d, siteID, MarkCutoverSeen, true, now)
+				return nil
+			})
+		}
 	}
 
 	var firstErr error
@@ -786,6 +806,7 @@ func (s *Service) revertToHotspot(siteID string) {
 		}
 		st.AccessMode = store.AccessHotspot
 		d.Sites[siteID] = st
+		ClearCutoverMarks(d, siteID)
 		d.AddEvent(store.Event{Time: s.now(), SiteID: siteID, Kind: "audit", Msg: "the router rolled back to the hotspot (" + DHCPServerName + " is disabled): access mode set back to hotspot"})
 		changed = true
 		return nil

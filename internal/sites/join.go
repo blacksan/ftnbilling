@@ -181,12 +181,21 @@ func (m *Manager) ConsumeJoinForce(token, userAgent, from string, noCheck bool, 
 				}
 			}
 		})
+		confirmed := false
+		m.st.View(func(d *store.Data) { confirmed = sid != "" && billing.SiteMark(d, sid, billing.MarkCutoverConfirmed) })
+		if confirmed {
+			return nil, "", fmt.Errorf("%w: already cut over (the cutover was confirmed); changes are applied by the server now. Run it again only if you mean to (force)", ErrCannotRender)
+		}
 		if sid != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			unseen, uerr := m.UnseenEntitled(ctx, sid)
+			unmanaged, merr := m.UnmanagedDevices(ctx, sid)
 			cancel()
 			if uerr != nil {
 				return nil, "", fmt.Errorf("%w: could not read the router's leases to check the flats (%v); fix the connection or force the cutover", ErrCannotRender, uerr)
+			}
+			if merr == nil && len(unmanaged) > 0 {
+				return nil, "", fmt.Errorf("%w: the router has devices the server does not know, which would be cut off: %s. Check them, or force the cutover (they are then copied as static entries)", ErrCannotRender, strings.Join(unmanaged, "; "))
 			}
 			if len(unseen) > 0 {
 				return nil, "", fmt.Errorf("%w: these paying flats have not been seen on the router (no lease or ARP entry with their MAC), so they would lose service: %s. Fix their MAC, or force the cutover", ErrCannotRender, strings.Join(unseen, "; "))
@@ -206,7 +215,7 @@ func (m *Manager) ConsumeJoinForce(token, userAgent, from string, noCheck bool, 
 			return ErrJoinInvalid
 		}
 		if stage == StageCutover || stage == StageCleanup {
-			return m.renderLaterStage(d, site, stage, now, from, noCheck, &script, &siteID)
+			return m.renderLaterStage(d, site, stage, now, from, noCheck, force, &script, &siteID)
 		}
 		priv, pub, err := wg.GenerateKeypair()
 		if err != nil {

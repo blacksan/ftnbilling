@@ -45,6 +45,9 @@ type ScriptInput struct {
 	Stage string
 	// Observe: the cutover leaves the unregistered range unwalled and suspends nobody.
 	Observe bool
+	// Force: the admin chose to cut over although the preflight found paying
+	// flats not seen or devices the server does not know; the script then keeps them.
+	Force bool
 	// Accounts are the flats the cutover script writes (static lease and
 	// queue each), rendered from the accounts table.
 	Accounts []LeaseSeed

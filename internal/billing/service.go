@@ -85,7 +85,13 @@ type Service struct {
 }
 
 func NewService(st *store.Store, rs RouterSource, log *slog.Logger) *Service {
-	return &Service{st: st, routers: rs, log: log, now: time.Now, policy: DefaultPolicy()}
+	svc := &Service{st: st, routers: rs, log: log, now: time.Now, policy: DefaultPolicy()}
+	if h, ok := rs.(interface {
+		SetForeignIPs(func(siteID string) map[string]bool)
+	}); ok {
+		h.SetForeignIPs(svc.foreignIPs) // the cutover script's address allocation avoids the router's own static leases
+	}
+	return svc
 }
 
 // SetClock overrides the clock (tests).

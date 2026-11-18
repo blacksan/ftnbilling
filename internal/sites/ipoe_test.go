@@ -3,6 +3,7 @@ package sites
 import (
 	"context"
 	"errors"
+	"ispbill/internal/billing"
 	"strings"
 	"testing"
 	"time"
@@ -319,4 +320,110 @@ func TestJoinCommandForce(t *testing.T) {
 	if !strings.Contains(got, `/j/T?stage=cutover&force=1"`) {
 		t.Fatal(got)
 	}
+}
+
+func (f *fixture) startedRouter(siteID string) *routeros.Mock {
+	f.t.Helper()
+	f.start()
+	f.m.Reload(siteID)
+	f.m.Router(siteID)
+	return f.mocks[siteID]
+}
+
+// After Confirm cutover the server applies changes; the cutover cannot be re-rendered without force.
+func TestCutoverAfterConfirmIsRefusedUnlessForced(t *testing.T) {
+	f := newFixture(t, nil)
+	s := f.joined("Block A")
+	f.m.SetAccessMode(s.ID, store.AccessIPoE)
+	mock := f.startedRouter(s.ID)
+	mock.SeedRow("/ip/dhcp-server", routeros.Row{"name": "ftn-dhcp", "disabled": "false"})
+	if err := f.m.ConfirmCutover(context.Background(), s.ID); err != nil {
+		t.Fatal(err)
+	}
+	tok, _, _ := f.m.MintJoinStage(s.ID, StageCutover)
+	_, _, err := f.m.ConsumeJoinForce(tok, mt, "x", false, StageCutover, false)
+	if !errors.Is(err, ErrCannotRender) || !strings.Contains(err.Error(), "already cut over") {
+		t.Fatalf("%v", err)
+	}
+	if got := f.site(s.ID); !got.Join.UsedAt.IsZero() {
+		t.Fatal("a refusal keeps the token")
+	}
+	if _, _, err := f.m.ConsumeJoinForce(tok, mt, "x", true, StageCutover, true); err != nil {
+		t.Fatalf("forced: %v", err)
+	}
+	// Going back to hotspot clears the mark.
+	for _, r := range mock.Table("/ip/dhcp-server") {
+		mock.SetRow(context.Background(), "/ip/dhcp-server", r[".id"], map[string]string{"disabled": "true"})
+	}
+	if err := f.m.SetAccessMode(s.ID, store.AccessHotspot); err != nil {
+		t.Fatal(err)
+	}
+	f.st.View(func(d *store.Data) {
+		if billing.SiteMark(d, s.ID, billing.MarkCutoverConfirmed) {
+			t.Fatal("the mark must be cleared")
+		}
+	})
+}
+
+// Devices the server does not know stop the cutover; forcing it renders the script that keeps them.
+func TestCutoverRefusesUnmanagedDevices(t *testing.T) {
+	f := newFixture(t, nil)
+	s := f.joined("Block A")
+	f.m.SetAccessMode(s.ID, store.AccessIPoE)
+	mock := f.startedRouter(s.ID)
+	// Both paying flats' MACs are present; an OLT management address has an ARP entry and no lease; an AP has a static lease on the old server.
+	mock.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": "AA:BB:CC:DD:EE:01", "address": "10.5.50.23", "status": "bound", "dynamic": "true"})
+	mock.SeedRow("/ip/arp", routeros.Row{"mac-address": "00:19:3E:00:00:01", "address": "10.5.50.5", "interface": "br-hotspot"})
+	mock.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": "00:19:3E:00:00:02", "address": "10.5.50.6", "dynamic": "false", "server": "dhcp-hotspot"})
+	mock.SeedRow("/ip/arp", routeros.Row{"mac-address": "00:19:3E:00:00:03", "address": "192.168.99.7", "interface": "ether9"}) // other network: not ours
+	got, err := f.m.UnmanagedDevices(context.Background(), s.ID)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("%v %v", got, err)
+	}
+	tok, _, _ := f.m.MintJoinStage(s.ID, StageCutover)
+	_, _, err = f.m.ConsumeJoinForce(tok, mt, "x", false, StageCutover, false)
+	if !errors.Is(err, ErrCannotRender) || !strings.Contains(err.Error(), "00:19:3E:00:00:01") || !strings.Contains(err.Error(), "00:19:3E:00:00:02") || strings.Contains(err.Error(), "00:19:3E:00:00:03") {
+		t.Fatalf("%v", err)
+	}
+	if _, _, err := f.m.ConsumeJoinForce(tok, mt, "x", false, StageCutover, true); err != nil {
+		t.Fatalf("forced: %v", err)
+	}
+}
+
+func TestSetAccessModeFailsClosedWhenTheRouterIsUnreachable(t *testing.T) {
+	f := newFixture(t, nil)
+	s := f.joined("Block A")
+	f.m.SetAccessMode(s.ID, store.AccessIPoE)
+	mock := f.startedRouter(s.ID)
+	mock.SetFail(errors.New("timeout"))
+	if err := f.m.SetAccessMode(s.ID, store.AccessHotspot); !errors.Is(err, ErrRouterUnknown) {
+		t.Fatalf("%v", err)
+	}
+	if f.site(s.ID).AccessMode != store.AccessIPoE {
+		t.Fatal("must stay")
+	}
+	if err := f.m.SetAccessModeForce(s.ID, store.AccessHotspot, true); err != nil {
+		t.Fatalf("override: %v", err)
+	}
+	// Observe and ipoe never need the router.
+	mock.SetFail(errors.New("timeout"))
+	if err := f.m.SetAccessMode(s.ID, store.AccessIPoEObserve); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The cutover's address allocation avoids the router's own static leases (hook set by billing.NewService).
+func TestCutoverAvoidsForeignStaticLeaseAddresses(t *testing.T) {
+	f := newFixture(t, nil)
+	s := f.joined("Block A")
+	f.m.SetAccessMode(s.ID, store.AccessIPoE)
+	f.m.SetForeignIPs(func(string) map[string]bool { return map[string]bool{"10.5.50.60": true} })
+	if _, err := f.consume(s.ID, StageCutover); err != nil {
+		t.Fatal(err)
+	}
+	f.st.View(func(d *store.Data) {
+		if got := d.Accounts["a1"].IP; got != "10.5.50.61" {
+			t.Fatalf("the router's own lease holds .60: got %s", got)
+		}
+	})
 }

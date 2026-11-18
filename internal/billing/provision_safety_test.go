@@ -51,6 +51,15 @@ func TestIPoERollbackIsDetectedAndStopsIPoE(t *testing.T) {
 		e.rt.SetRow(context.Background(), "/ip/dhcp-server", r[".id"], map[string]string{"disabled": "true"})
 	}
 	e.rt.ResetWrites()
+	// ftn-dhcp is off but no hotspot is back on: that is not (yet) a rollback.
+	e.reconcile(t)
+	if got := siteMode(e, e.site); got != store.AccessIPoE || e.svc.ProvisionStatus(e.site).RolledBack {
+		t.Fatal("off without a hotspot back is only waiting")
+	}
+	// The mark survives a restart of this server: it is in the store, not in memory.
+	e.svc.prov(e.site).sawOn = false
+	e.rt.SeedRow("/ip/hotspot", routeros.Row{"name": "hotspot1", "interface": "br-hotspot", "disabled": "false"})
+	e.rt.ResetWrites()
 	e.reconcile(t)
 	if e.rt.Writes() != 0 {
 		t.Fatal("wrote after a rollback")
@@ -62,6 +71,11 @@ func TestIPoERollbackIsDetectedAndStopsIPoE(t *testing.T) {
 	if got := siteMode(e, e.site); got != store.AccessHotspot {
 		t.Fatalf("mode after rollback: %s", got)
 	}
+	e.st.View(func(d *store.Data) {
+		if SiteMark(d, e.site, MarkCutoverSeen) {
+			t.Fatal("the rollout marks are cleared by the revert")
+		}
+	})
 }
 
 // Only dynamic leases on ftn-dhcp are removed to make room for a static one.

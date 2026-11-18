@@ -95,14 +95,16 @@
 {{if not .Data.Env}}<div class="card"><b>Access mode: server-driven IPoE</b>
 <p class="muted" style="margin:4px 0">Mode is <b>{{.Data.Mode}}</b>. <i>hotspot</i>: tenants log in on the router's hotspot (the old way). <i>ipoe_observe</i>: the server gives each flat a fixed address and speed queue, but suspends nobody. <i>ipoe</i>: unpaid flats are walled to the payment page.</p>
 <form method="post" action="/admin/sites/mode" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
-<label>Mode<select name="mode">{{range seq "hotspot" "ipoe_observe" "ipoe"}}<option{{if eq . $.Data.Mode}} selected{{end}}>{{.}}</option>{{end}}</select></label><button>Switch mode</button></form>
+<label>Mode<select name="mode">{{range seq "hotspot" "ipoe_observe" "ipoe"}}<option{{if eq . $.Data.Mode}} selected{{end}}>{{.}}</option>{{end}}</select></label><label class="muted"><input type="checkbox" name="override" value="1"> router unreachable: switch anyway</label><button>Switch mode</button></form>
 {{if .Data.IPoE}}
 {{with .Data.Prov}}<p style="margin-top:8px"><span class="pill {{if .InSync}}active{{else}}expired{{end}}">{{if .InSync}}router in sync{{else}}router not in sync{{end}}</span>
 <span class="muted">last pass {{if .LastRunAt.IsZero}}never{{else}}{{eat .LastRunAt}}{{end}} &middot; {{.Drift}} differences &middot; {{.PendingOps}} writes pending{{if .Repaired}} &middot; {{.Repaired}} rows repaired last pass{{end}}{{if .WouldSuspend}} &middot; {{.WouldSuspend}} flats would be suspended in ipoe mode{{end}}</span></p>
 {{if .Note}}<p class="muted">{{.Note}}</p>{{end}}{{if .LastError}}<p class="bad">Last error: {{.LastError}}</p>{{end}}
 {{if .ForeignConflicts}}<p class="bad">Rows on the router that the server does not own and will not touch:</p><ul>{{range .ForeignConflicts}}<li>{{.}}</li>{{end}}</ul>{{end}}{{end}}
-{{if or .Data.Unseen .Data.UnseenErr}}<div class="card danger"><b class="bad">The cutover command was not made</b>
+{{if or .Data.Unseen .Data.UnseenErr .Data.Unmanaged .Data.AlreadyCutOver}}<div class="card danger"><b class="bad">The cutover command was not made</b>
 {{if .Data.UnseenErr}}<p>The router could not be read to check the flats: {{.Data.UnseenErr}}</p>{{end}}
+{{if .Data.AlreadyCutOver}}<p>This building was already cut over and confirmed. Changes are applied by the server now; running the cutover again only refreshes the router's objects.</p>{{end}}
+{{if .Data.Unmanaged}}<p>The router has devices the server does not know. The cutover puts the flats' network on reply-only ARP, so these would stop working unless they are copied as static entries (a forced cutover does that):</p><ul>{{range .Data.Unmanaged}}<li>{{.}}</li>{{end}}</ul>{{end}}
 {{if .Data.Unseen}}<p>These paying flats have not been seen on the router (no lease or ARP entry with their MAC), so they would lose service:</p><ul>{{range .Data.Unseen}}<li>{{.}}</li>{{end}}</ul>{{end}}
 <p class="muted">Fix their MACs (Unregistered devices) and try again, or cut over anyway.</p>
 <form method="post" action="/admin/sites/script"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="stage" value="cutover"><input type="hidden" name="force" value="1"><button>Cut over anyway</button></form></div>{{end}}
@@ -113,6 +115,7 @@
 <form method="post" action="/admin/sites/script"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="stage" value="join"><button>Join only command</button></form>
 <form method="post" action="/admin/sites/script"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="stage" value="cutover"><button>Cut over command</button></form>
 <form method="post" action="/admin/sites/script"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="stage" value="cleanup"><button>Cleanup command</button></form></div>
+<p class="muted">After a cutover, a flat that was moved out of the .10-.59 range gets its new address when its ONT renews: reboot those ONTs.</p>
 <p class="muted">Order: join only (tunnel and API, nothing else changes), adopt leases, observe for a few days, then the cut over command at a quiet hour with someone on site. Cleanup removes the old hotspot objects once the cutover is confirmed.</p>
 {{else}}<form method="post" action="/admin/sites/script" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="stage" value="join"><button>Join only command</button> <span class="muted">connects the router to the server without changing how tenants connect</span></form>{{end}}</div>{{end}}
 

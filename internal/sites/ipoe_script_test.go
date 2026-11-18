@@ -51,7 +51,7 @@ func TestIPoEStagesCommentEverythingAndStayOffTheWAN(t *testing.T) {
 				continue
 			}
 			for _, bad := range []string{"/ip/route", "/ip/service disable", "/interface/ethernet", "/ip/dhcp-client", "/interface/bridge/port", "/user/remove", "/ip/firewall/connection", "/system/reset", "/system/reboot"} {
-				if strings.Contains(tl, bad) && !(bad == "/interface/ethernet" && strings.Contains(tl, "$ifc") || (bad == "/interface/ethernet" && strings.Contains(tl, "$e->0"))) {
+				if strings.Contains(tl, bad) && !(bad == "/interface/ethernet" && strings.Contains(tl, "$ifc") || (bad == "/interface/ethernet" && strings.Contains(tl, "$eth->0"))) {
 					t.Errorf("%s: touches %q: %s", stage, bad, tl)
 				}
 			}
@@ -81,7 +81,7 @@ func TestCutoverStageOrderAndSafety(t *testing.T) {
 	s := string(out)
 	// The plan's order: backup, safety net, discovery, objects, firewall, switch, checks.
 	last := -1
-	for _, m := range []string{"cutover 1/7", "/ip/hotspot/get ($hs->0) interface", "cutover 2/7", "/system/backup/save", "/export file=ftn-pre-ipoe", "cutover 3/7", "ftn-rollback-timer", "cutover 4/7", "ftn-unreg", "authoritative=yes add-arp=yes disabled=yes", "cutover 5/7", "cutover 6/7", ":set switched true", "/ip/hotspot disable", "/ip/dhcp-server enable", "cutover 7/7", "/ping 1.1.1.1", "/ping 10.99.0.1"} {
+	for _, m := range []string{"cutover 1/7", "/ip/hotspot/get ($hs0->0) interface", "cutover 2/7", "/system/backup/save", "/export file=ftn-pre-ipoe", "cutover 3/7", "interval=1m on-event=ftn-rollback-tick", "cutover 4/7", "ftn-unreg", "authoritative=yes add-arp=yes disabled=yes", "cutover 5/7", "cutover 6/7", ":set switched true", "/ip/hotspot disable", "/ip/dhcp-server enable", "cutover 7/7", "/ping 1.1.1.1", "/ping 10.99.0.1"} {
 		i := strings.Index(s, m)
 		if i < 0 {
 			t.Fatalf("script lacks %q", m)
@@ -93,7 +93,7 @@ func TestCutoverStageOrderAndSafety(t *testing.T) {
 	}
 	for _, want := range []string{
 		`/ip/dhcp-server/lease add address=10.5.50.60 mac-address=AA:BB:CC:DD:EE:01 server=ftn-dhcp comment="ftn:acct:K7Q2MX Flat 3B"`,
-		`/queue/simple add name=ftn-K7Q2MX target=10.5.50.60/32 max-limit=20M/20M comment="ftn:acct:K7Q2MX Flat 3B"`,
+		`/queue/simple add name=ftn-K7Q2MX target=10.5.50.60/32 max-limit=20M/20M disabled=yes comment="ftn:acct:K7Q2MX Flat 3B"`,
 		`comment="ftn:acct:P4R8TN Flat \"10A\" \$x"`, // quoting survives
 		`/ip/firewall/address-list add list=ftn-suspended address=10.5.50.61 disabled=yes`,
 		`/ip/firewall/address-list enable [find where list="ftn-suspended"`,
@@ -119,17 +119,15 @@ func TestCutoverStageOrderAndSafety(t *testing.T) {
 	}
 	// B2: the old DHCP servers are found by interface in any state and the rollback is only created when absent.
 	for _, want := range []string{
-		`:local olddhcp [/ip/dhcp-server/find where interface=$ifc and name!="ftn-dhcp"]`,
-		`:if ([:len [/system/script/find where name="ftn-rollback"]] = 0) do={`,
+		`:set olddhcp [/ip/dhcp-server/find where interface=$ifc and name!="ftn-dhcp"]`, // a re-run takes them in any state
+		`:set rbExists ([:len [/system/script/find where name="ftn-rollback"]] > 0)`,
 		`:if ([:typeof [:find $rb $l]] = "nil")`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("cutover lacks %q", want)
 		}
 	}
-	if strings.Contains(s, `interface=$ifc and disabled=no`) {
-		t.Error("old servers must be found regardless of their state")
-	}
+
 	if strings.Count(s, `/system/script remove [find where name="ftn-rollback"]`) != 0 {
 		t.Error("the rollback script must never be rebuilt")
 	}
@@ -172,7 +170,7 @@ func TestCutoverStageOrderAndSafety(t *testing.T) {
 		t.Error("self-removal on both exits")
 	}
 	// The rollback script comes from the discovered names and every line is guarded.
-	if rb := rollbackBase("hotspot1"); !strings.Contains(rb, `/ip hotspot enable [find where name="hotspot1"]`) || strings.Count(rb, "on-error={}") != 6 {
+	if rb := rollbackBase("hotspot1"); !strings.Contains(rb, `/ip hotspot enable [find where name="hotspot1"]`) || strings.Count(rb, "on-error={}") != 10 {
 		t.Fatalf("rollback script: %s", rb)
 	}
 	if strings.Index(rollbackBase("h"), "disable [find where name=\"ftn-dhcp\"]") > strings.Index(rollbackBase("h"), "hotspot enable") {
@@ -237,5 +235,88 @@ func TestCleanupKeepsIsolationAndRESTBlock(t *testing.T) {
 	}
 	if !strings.Contains(s, "in-interface=$ifc out-interface=$ifc") {
 		t.Fatal("isolation must be per customer interface")
+	}
+}
+
+// Running the cutover twice (the script is one paste, so this is read from its text):
+// everything a first run records is guarded so that a second run cannot overwrite it.
+func TestCutoverRunTwiceIsSafe(t *testing.T) {
+	out, err := RenderJoinScript(ipoeInput(StageCutover))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	// The rollback script, and the record of the old servers, are written only when it did not exist.
+	i := strings.Index(s, "/system/script add name=ftn-rollback policy")
+	if i < 0 || !strings.Contains(s[:i], ":if (!$rbExists) do={") || strings.LastIndex(s[:i], ":if (!$rbExists) do={") < strings.LastIndex(s[:i], ":if (!$confirmed) do={") {
+		t.Fatal("the rollback script must be created only when absent (and never when confirmed)")
+	}
+	j := strings.Index(s, "/system/script set [find where name=\"ftn-rollback\"] source=$rb")
+	if j < i || strings.Contains(s[i:j], "}\n    /system/script remove") {
+		t.Fatal("the old servers are appended inside the first-run block")
+	}
+	// A re-run must not record "arp=reply-only" as the value to restore (B1): only when different,
+	// and only when no line for this interface exists yet (a prefix match, not the whole line).
+	if strings.Count(s, `$cur != "reply-only" && [:len $rbs] > 0 && [:typeof [:find $rbs $pre]] = "nil"`) != 3 {
+		t.Fatal("bridge, vlan and ethernet must each guard the recorded arp line")
+	}
+	if strings.Contains(s, `. [/interface/bridge/get ($b->0) arp] .`) {
+		t.Fatal("the arp value is read once into $cur")
+	}
+	// Static ARP and the flats' queues are not live before the switch (B2).
+	sw := strings.Index(s, ":set switched true")
+	for _, bad := range []string{"/ip/arp add address=10.5.50.60", "/queue/simple enable", "/queue/simple/move"} {
+		k := strings.Index(s, bad)
+		if k < 0 || k < sw {
+			t.Errorf("%q must come after the switch (%d < %d)", bad, k, sw)
+		}
+	}
+	if !strings.Contains(s, "/queue/simple add name=ftn-K7Q2MX target=10.5.50.60/32 max-limit=20M/20M disabled=yes") {
+		t.Error("queues are created disabled")
+	}
+	if strings.Count(s, "/queue/simple/move") != 2 {
+		t.Error("the queue move is repeated at the end of the switch")
+	}
+	if !strings.Contains(s, `/queue/simple/find where dynamic=no`) || strings.Contains(s, "where !dynamic") {
+		t.Error("queue discovery uses dynamic=no")
+	}
+	// A confirmed building: no timer, nothing rolled back.
+	if !strings.Contains(s, ":set confirmed ([:len [/ip/dhcp-server/find where name=\"ftn-dhcp\" and disabled=no]] > 0") || !strings.Contains(s, "nothing was rolled back") {
+		t.Error("confirmed re-run handling")
+	}
+	// First run takes the enabled servers; a re-run takes all and records nothing.
+	if !strings.Contains(s, `:set hs [/ip/hotspot/find where interface=$ifc and disabled=no]`) || !strings.Contains(s, `:set olddhcp [/ip/dhcp-server/find where interface=$ifc and disabled=no and name!="ftn-dhcp"]`) {
+		t.Error("first run discovery")
+	}
+	// Devices that are not flats stop the cutover unless forced, and forced runs copy them.
+	if !strings.Contains(s, ":local force false") || !strings.Contains(s, "ftn: keep") || !strings.Contains(s, "AA:BB:CC:DD:EE:01,") {
+		t.Error("preflight of non-flat devices")
+	}
+	in := ipoeInput(StageCutover)
+	in.Force = true
+	f, _ := RenderJoinScript(in)
+	if !strings.Contains(string(f), ":local force true") {
+		t.Error("force reaches the script")
+	}
+	// The v6 drop goes to the top, like every other rule.
+	if !strings.Contains(s, "chain=forward action=drop in-interface=$ifc place-before=") {
+		t.Error("v6 rule placement")
+	}
+	// Reboot note and observe header.
+	if !strings.Contains(s, "Reboot those ONTs") || strings.Contains(s, "# Observe mode") {
+		t.Error("notes")
+	}
+	in = ipoeInput(StageCutover)
+	in.Observe = true
+	o, _ := RenderJoinScript(in)
+	if !strings.Contains(string(o), "# Observe mode") {
+		t.Error("observe header")
+	}
+	// The rollback removes what the switch added.
+	rb := rollbackBase("h")
+	for _, want := range []string{`/ip arp remove [find where comment~"^ftn:acct:"]`, `/queue simple remove [find where comment~"^ftn:acct:"]`, `comment="ftn: keep"`} {
+		if !strings.Contains(rb, want) {
+			t.Errorf("rollback lacks %s", want)
+		}
 	}
 }

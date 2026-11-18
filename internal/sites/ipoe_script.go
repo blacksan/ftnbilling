@@ -74,7 +74,8 @@ type stageData struct {
 	UnregFrom, UnregTo              string
 	StaticFrom                      string
 	Accounts                        []LeaseSeed
-	Observe                         bool
+	Observe, Force                  bool
+	Known                           string // the flats' MACs, comma separated: everything else on the interface is a device to keep
 	IsolateRule, BlockRestRule      string
 	Suspended                       []LeaseSeed
 	Filter                          []string // firewall filter rules, ready to paste, last-added-first
@@ -120,6 +121,10 @@ func rollbackBase(hotspot string) string {
 	b.WriteString(g(`/ip firewall filter remove [find where comment~"^ftn: ipoe"]`))
 	b.WriteString(g(`/ip firewall nat remove [find where comment~"^ftn: ipoe"]`))
 	b.WriteString(g(`/ipv6 firewall filter remove [find where comment~"^ftn: ipoe"]`))
+	b.WriteString(g(`/ip arp remove [find where comment~"^ftn:acct:"]`))
+	b.WriteString(g(`/ip arp remove [find where comment="ftn: keep"]`))
+	b.WriteString(g(`/ip dhcp-server lease remove [find where comment="ftn: keep"]`))
+	b.WriteString(g(`/queue simple remove [find where comment~"^ftn:acct:"]`))
 	b.WriteString(g(`/system scheduler remove [find where name="` + RollbackSchedule + `"]`))
 	return b.String()
 }
@@ -195,7 +200,13 @@ func renderStage(in ScriptInput) ([]byte, error) {
 				d.Suspended = append(d.Suspended, a)
 			}
 		}
-		d.PublicIP, d.Observe = in.PublicIP, in.Observe
+		d.PublicIP, d.Observe, d.Force = in.PublicIP, in.Observe, in.Force
+		var macs []string
+		for _, a := range in.Accounts {
+			c, _ := store.CanonMAC(a.MAC)
+			macs = append(macs, c)
+		}
+		d.Known = strings.Join(macs, ",")
 		d.RollbackSource = rqs(rollbackBase(s.HotspotServer))
 		d.TickSource = rqs(tickSource())
 		d.TickLen = len(timerPrefix)

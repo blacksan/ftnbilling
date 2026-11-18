@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"sort"
 	"strings"
+	"time"
 
 	"ispbill/internal/netplan"
 	"ispbill/internal/routeros"
@@ -260,4 +261,38 @@ func (s *Service) foreignIPs(siteID string) map[string]bool {
 		out[ip] = true
 	}
 	return out
+}
+
+// Per-building marks of the IPoE rollout live in the settings table
+// (key "site.<id>.<name>"), so no schema change is needed:
+//
+//	cutover_seen_at       this server saw ftn-dhcp enabled on the router
+//	cutover_confirmed_at  the admin pressed Confirm cutover
+const (
+	MarkCutoverSeen      = "cutover_seen_at"
+	MarkCutoverConfirmed = "cutover_confirmed_at"
+)
+
+func markKey(siteID, name string) string { return "site." + siteID + "." + name }
+
+// SiteMark reports whether a mark is set. Call it inside View or Update.
+func SiteMark(d *store.Data, siteID, name string) bool {
+	_, ok := d.Settings[markKey(siteID, name)]
+	return ok
+}
+
+// SetSiteMarkLocked sets or clears a mark. Call it inside Update.
+func SetSiteMarkLocked(d *store.Data, siteID, name string, on bool, now time.Time) {
+	k := markKey(siteID, name)
+	if !on {
+		delete(d.Settings, k)
+		return
+	}
+	d.Settings[k] = store.Setting{Key: k, Value: now.UTC().Format(time.RFC3339), UpdatedAt: now}
+}
+
+// ClearCutoverMarks forgets the rollout marks of a building (it went back to the hotspot).
+func ClearCutoverMarks(d *store.Data, siteID string) {
+	SetSiteMarkLocked(d, siteID, MarkCutoverSeen, false, time.Time{})
+	SetSiteMarkLocked(d, siteID, MarkCutoverConfirmed, false, time.Time{})
 }

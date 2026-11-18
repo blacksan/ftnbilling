@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"ispbill/internal/billing"
@@ -20,21 +22,24 @@ var ErrCannotRender = errors.New("cannot make this script")
 // token's store update. It marks the token used and, for the cutover, gives
 // every flat a fixed address first (so the script and the reconciler agree).
 // The router must already be joined: no key is created and none is in the script.
-func (m *Manager) renderLaterStage(d *store.Data, site store.Site, stage string, now time.Time, from string, noCheck bool, script *[]byte, siteID *string) error {
+func (m *Manager) renderLaterStage(d *store.Data, site store.Site, stage string, now time.Time, from string, noCheck, force bool, script *[]byte, siteID *string) error {
 	if site.Mode != store.SiteModeWG || site.WGPublicKey == "" || site.TunnelIP == "" {
 		return fmt.Errorf("%w: join the router first (the join stage), then cut over", ErrCannotRender)
+	}
+	if stage == StageCutover && !force && billing.SiteMark(d, site.ID, billing.MarkCutoverConfirmed) {
+		return fmt.Errorf("%w: already cut over (the cutover was confirmed); changes are applied by the server now. Run it again only if you mean to (force)", ErrCannotRender)
 	}
 	eff := ApplyDefaults(m.cfg, site)
 	in := ScriptInput{
 		Site: eff, ServerPub: m.cfg.WGPublicKey, Endpoint: m.cfg.WGEndpoint, WGSubnet: m.pfx,
-		PublicBase: m.cfg.PublicBaseURL, PublicIP: m.cfg.PublicIP, Generated: now, NoCheck: noCheck, Stage: stage,
+		PublicBase: m.cfg.PublicBaseURL, PublicIP: m.cfg.PublicIP, Generated: now, NoCheck: noCheck, Stage: stage, Force: force,
 	}
 	if stage == StageCutover {
 		plan, err := PlanSubnet(eff.CustomerSubnet)
 		if err != nil {
 			return err
 		}
-		if _, err := billing.EnsureIPsLocked(d, site.ID, plan); err != nil {
+		if _, err := billing.EnsureIPsLocked(d, site.ID, plan, m.foreignIPsOf(site.ID)); err != nil {
 			return fmt.Errorf("%w: giving the flats their addresses: %v", ErrCannotRender, err)
 		}
 		enforce := site.AccessMode == store.AccessIPoE // observe mode never suspends anybody
@@ -75,6 +80,17 @@ func modeName(s store.Site) string {
 // its next pass. The building's collector is rebuilt, since IPoE buildings
 // read usage from the flats' queues.
 func (m *Manager) SetAccessMode(siteID, mode string) error {
+	return m.SetAccessModeForce(siteID, mode, false)
+}
+
+// ErrRouterUnknown is returned when the hotspot mode is chosen and the router
+// cannot be asked whether it serves the flats from ftn-dhcp. The check fails
+// closed; the admin can override it.
+var ErrRouterUnknown = errors.New("the router cannot be reached, so it is not known whether it still serves the flats from ftn-dhcp. Switching to hotspot now could break them. Fix the connection, or tick the override if you know the router is back on the hotspot")
+
+// SetAccessModeForce is SetAccessMode with override: it skips the check of the
+// router when the router cannot be reached.
+func (m *Manager) SetAccessModeForce(siteID, mode string, override bool) error {
 	switch mode {
 	case store.AccessHotspot, store.AccessIPoEObserve, store.AccessIPoE:
 	default:
@@ -86,8 +102,12 @@ func (m *Manager) SetAccessMode(siteID, mode string) error {
 		// none. Roll the router back first (or let the 15 minute timer do it).
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if on, err := m.ftnDHCPEnabled(ctx, siteID); err == nil && on {
+		on, err := m.ftnDHCPEnabled(ctx, siteID)
+		switch {
+		case err == nil && on:
 			return ErrRouterIsIPoE
+		case err != nil && !errors.Is(err, routeros.ErrNoRouter) && !override:
+			return ErrRouterUnknown
 		}
 	}
 	err := m.st.Update(func(d *store.Data) error {
@@ -99,6 +119,9 @@ func (m *Manager) SetAccessMode(siteID, mode string) error {
 			return store.ErrNoChange
 		}
 		d.AddEvent(store.Event{Time: m.now(), SiteID: siteID, Kind: "audit", Msg: fmt.Sprintf("access mode changed from %s to %s", modeName(s), mode)})
+		if mode == store.AccessHotspot {
+			billing.ClearCutoverMarks(d, siteID)
+		}
 		s.AccessMode = mode
 		d.Sites[siteID] = s
 		return nil
@@ -154,6 +177,8 @@ func (m *Manager) ConfirmCutover(ctx context.Context, siteID string) error {
 		}
 	}
 	_ = m.st.Update(func(d *store.Data) error {
+		billing.SetSiteMarkLocked(d, siteID, billing.MarkCutoverConfirmed, true, m.now())
+		billing.SetSiteMarkLocked(d, siteID, billing.MarkCutoverSeen, true, m.now())
 		d.AddEvent(store.Event{Time: m.now(), SiteID: siteID, Kind: "audit", Msg: fmt.Sprintf("cutover confirmed: rollback timer removed (%d)", len(timers))})
 		return nil
 	})
@@ -203,5 +228,59 @@ func (m *Manager) UnseenEntitled(ctx context.Context, siteID string) ([]string, 
 			}
 		}
 	})
+	return out, nil
+}
+
+// UnmanagedDevices lists what the cutover would cut off because the server
+// does not know it: devices with an ARP entry on the customer network that
+// are no flat's MAC and have no DHCP lease (an OLT's management address, an
+// access point on a fixed address), and static leases on the old DHCP server
+// that are not ours and not a flat's. Under reply-only ARP they would stop
+// working; a forced cutover copies them ("ftn: keep") instead.
+func (m *Manager) UnmanagedDevices(ctx context.Context, siteID string) ([]string, error) {
+	var site store.Site
+	m.st.View(func(d *store.Data) { site = d.Sites[siteID] })
+	plan, err := PlanSubnet(m.Effective(site).CustomerSubnet)
+	if err != nil {
+		return nil, err
+	}
+	rt := m.Router(siteID)
+	leases, err := rt.Rows(ctx, "/ip/dhcp-server/lease", nil)
+	if err != nil {
+		return nil, err
+	}
+	arp, aerr := rt.Rows(ctx, "/ip/arp", nil)
+	if aerr != nil {
+		arp = nil
+	}
+	flats := map[string]bool{}
+	m.st.View(func(d *store.Data) {
+		for _, a := range d.AccountList() {
+			if a.SiteID == siteID && a.MAC != "" {
+				flats[strings.ToUpper(a.MAC)] = true
+			}
+		}
+	})
+	leased := map[string]bool{}
+	var out []string
+	for _, r := range leases {
+		mac, ok := store.CanonMAC(r["mac-address"])
+		if !ok {
+			continue
+		}
+		leased[mac] = true
+		static := r["dynamic"] != "true" && r["dynamic"] != "yes"
+		if static && r["server"] != billing.DHCPServerName && !strings.HasPrefix(r["comment"], "ftn:") && !flats[mac] {
+			out = append(out, fmt.Sprintf("static lease %s %s", mac, r["address"]))
+		}
+	}
+	for _, r := range arp {
+		mac, ok := store.CanonMAC(r["mac-address"])
+		if !ok || flats[mac] || leased[mac] || strings.HasPrefix(r["comment"], "ftn:") || !plan.InNetwork(r["address"]) {
+			continue
+		}
+		out = append(out, fmt.Sprintf("device %s %s (no lease)", mac, r["address"]))
+	}
+	sort.Strings(out)
 	return out, nil
 }

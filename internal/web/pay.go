@@ -25,10 +25,27 @@ const defaultSupport = "0100133133"
 var (
 	// Every flat of a building reaches us from the router's one address, so the
 	// per-address limits are generous; the per-account and per-phone limits do the work.
-	payIPRL   = newLimiter(60, 10*time.Minute)
-	payFindRL = newLimiter(120, time.Minute)
-	payAcctRL = newLimiter(4, 10*time.Minute) // keyed by address and account, so one tenant cannot lock the building out
+	// An address that is not a recognised building is a stranger on the internet: much tighter.
+	payIPRL       = newLimiter(60, 10*time.Minute)
+	payFindRL     = newLimiter(120, time.Minute)
+	payIPRLOpen   = newLimiter(8, 10*time.Minute)
+	payFindRLOpen = newLimiter(15, time.Minute)
+	payAcctRL     = newLimiter(4, 10*time.Minute) // keyed by address and account, so one tenant cannot lock the building out
 )
+
+func payFindLimiter(p payPage) *limiter {
+	if p.Detected {
+		return payFindRL
+	}
+	return payFindRLOpen
+}
+
+func payStartLimiter(p payPage) *limiter {
+	if p.Detected {
+		return payIPRL
+	}
+	return payIPRLOpen
+}
 
 // limitKey keys a limiter by client: an IPv6 address by its /64 (a household
 // has a whole /64, and rotating inside it must not dodge the limit).
@@ -218,7 +235,7 @@ func (s *Server) payFind(w http.ResponseWriter, r *http.Request) {
 		s.payFail(w, r, http.StatusForbidden, p, payExpired)
 		return
 	}
-	if !payFindRL.allow(limitKey(realIP(r))) {
+	if !payFindLimiter(p).allow(limitKey(realIP(r))) {
 		s.payFail(w, r, http.StatusTooManyRequests, p, "Too many attempts. Wait a minute and try again.")
 		return
 	}
@@ -291,7 +308,7 @@ func (s *Server) payStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := limitKey(realIP(r))
-	if !payIPRL.allow(ip) {
+	if !payStartLimiter(p).allow(ip) {
 		s.payFail(w, r, http.StatusTooManyRequests, p, "Too many attempts. Wait a few minutes and try again.")
 		return
 	}
@@ -302,6 +319,11 @@ func (s *Server) payStart(w http.ResponseWriter, r *http.Request) {
 	} else if c := strings.ToUpper(strings.TrimSpace(r.FormValue("code"))); c != "" && len(c) <= 40 {
 		a, ok = s.svc.AccountByCode(c)
 		byCode = true
+	}
+	if ok { // only open accounts can pay: a closed or deleted one is refused explicitly
+		if open, found := s.svc.AccountByCode(a.Code); !found || open.ID != a.ID {
+			ok = false
+		}
 	}
 	if !ok {
 		s.payFail(w, r, http.StatusNotFound, p, "We could not find that account. Please start again, or call "+p.Support+".")

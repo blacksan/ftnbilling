@@ -361,9 +361,12 @@ func (s *Server) adminSiteScript(w http.ResponseWriter, r *http.Request) {
 		// Paying flats the router has not seen would lose service: say so before a command exists.
 		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 		unseen, uerr := s.mgr.UnseenEntitled(ctx, st.ID)
+		unmanaged, _ := s.mgr.UnmanagedDevices(ctx, st.ID)
 		cancel()
-		if uerr != nil || len(unseen) > 0 {
-			ex := map[string]any{"Unseen": unseen, "UnseenStage": stage}
+		var confirmed bool
+		s.st.View(func(d *store.Data) { confirmed = billing.SiteMark(d, st.ID, billing.MarkCutoverConfirmed) })
+		if uerr != nil || len(unseen) > 0 || len(unmanaged) > 0 || confirmed {
+			ex := map[string]any{"Unseen": unseen, "Unmanaged": unmanaged, "AlreadyCutOver": confirmed, "UnseenStage": stage}
 			if uerr != nil {
 				ex["UnseenErr"] = uerr.Error()
 			}
@@ -391,7 +394,7 @@ func (s *Server) adminSiteMode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mode := r.PostFormValue("mode")
-	if err := s.mgr.SetAccessMode(st.ID, mode); err != nil {
+	if err := s.mgr.SetAccessModeForce(st.ID, mode, r.PostFormValue("override") == "1"); err != nil {
 		s.back(w, r, "/admin/sites/view?id="+st.ID, "Error: "+err.Error())
 		return
 	}

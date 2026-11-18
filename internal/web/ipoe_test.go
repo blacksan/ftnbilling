@@ -2,6 +2,7 @@ package web_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"ispbill/internal/web"
@@ -354,8 +355,38 @@ func TestPayPageFindAndStart(t *testing.T) {
 	}
 }
 
-func TestPayLimitsAndGenericErrors(t *testing.T) {
+// ipoeAppDetected is ipoeApp where the test client counts as inside the building (its address is the WireGuard peer's endpoint).
+func ipoeAppDetected(t *testing.T) (*multi, store.Site, *routeros.Mock) {
+	dump := filepath.Join(t.TempDir(), "wg0.dump")
+	m, s, rt := ipoeApp(t, func(c *config.Config) { c.WGDumpPath = dump })
+	var key string
+	m.st.View(func(d *store.Data) { key = d.Sites[s.ID].WGPublicKey })
+	os.WriteFile(dump, []byte(fmt.Sprintf("%s\t127.0.0.1:51820\t10.99.0.5/32\t%d\t1\t1\t25\n", key, time.Now().Unix())), 0o600)
+	return m, s, rt
+}
+
+// A visitor from an address that is not a known building gets much tighter limits.
+func TestPayStrangersAreLimitedTighter(t *testing.T) {
 	m, s, _ := ipoeApp(t, nil)
+	a, _ := m.svc.CreateAccount(billing.AccountInput{SiteID: s.ID, Flat: "Flat 3B", MAC: "AA:BB:CC:DD:EE:01"})
+	c, page := newPayClient(t, m)
+	if strings.Contains(page, "paused") {
+		t.Fatal("not detected")
+	}
+	n429 := 0
+	for i := 0; i < 12; i++ {
+		r, _ := c.post("/pay/start", url.Values{"code": {a.Code}, "package": {m.pkgID("1 Hour")}, "method": {"test"}, "phone": {"bad"}}, true)
+		if r.StatusCode == 429 {
+			n429++
+		}
+	}
+	if n429 == 0 {
+		t.Fatal("a stranger was never limited")
+	}
+}
+
+func TestPayLimitsAndGenericErrors(t *testing.T) {
+	m, s, _ := ipoeAppDetected(t)
 	a, _ := m.svc.CreateAccount(billing.AccountInput{SiteID: s.ID, Flat: "Flat 3B", MAC: "AA:BB:CC:DD:EE:01"})
 	b2, _ := m.svc.CreateAccount(billing.AccountInput{SiteID: s.ID, Flat: "Flat 4A", MAC: "AA:BB:CC:DD:EE:02"})
 	c, _ := newPayClient(t, m)
@@ -464,4 +495,26 @@ func newReq(u string) (*http.Request, error) {
 		req.Header.Set("User-Agent", "MikroTik/7.20 (fetch)")
 	}
 	return req, err
+}
+
+func TestModeOverrideAndPreflightLists(t *testing.T) {
+	m, s, rt := ipoeApp(t, nil)
+	if _, err := m.svc.CreateAccount(billing.AccountInput{SiteID: s.ID, Flat: "Flat 3B", MAC: "AA:BB:CC:DD:EE:01"}); err != nil {
+		t.Fatal(err)
+	}
+	// A device with no lease shows up in the command-time preflight with the force button.
+	rt.SeedRow("/ip/arp", routeros.Row{"mac-address": "00:19:3E:00:00:01", "address": "10.5.50.5", "interface": "br-hotspot"})
+	r := m.admin("POST", "/admin/sites/script", url.Values{"id": {s.ID}, "stage": {"cutover"}})
+	b := body(t, r)
+	if !strings.Contains(b, "00:19:3E:00:00:01") || !strings.Contains(b, "Cut over anyway") || strings.Contains(b, "ftn-cutover.rsc") {
+		t.Fatalf("%d %s", r.StatusCode, b)
+	}
+	// Unreachable router: the switch back to hotspot is refused unless overridden.
+	rt.SetFail(errors.New("timeout"))
+	if loc := m.adminPost(t, "/admin/sites/mode", url.Values{"id": {s.ID}, "mode": {"hotspot"}}); !strings.Contains(loc, "Error") || !strings.Contains(loc, "cannot be reached") {
+		t.Fatal(loc)
+	}
+	if loc := m.adminPost(t, "/admin/sites/mode", url.Values{"id": {s.ID}, "mode": {"hotspot"}, "override": {"1"}}); strings.Contains(loc, "Error: the router") {
+		t.Fatal(loc)
+	}
 }
