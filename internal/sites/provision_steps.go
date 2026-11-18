@@ -2,7 +2,9 @@ package sites
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -22,13 +24,26 @@ const (
 // build runs the steps after the classification and the preflight.
 func (j *jobCtl) build(kind string, cl classification) error {
 	m := j.m
-	if p := m.provisioner(); p != nil {
-		j.release = p.HoldSite(j.siteID)
-	}
 	j.cust = cl.cust
 	j.newWriter()
 	j.flats = j.flatsOf()
 	migrate := kind == KindMigrate
+	if !migrate && j.cust.found {
+		// switching off an existing hotspot or DHCP server needs the safety kit (review S4)
+		if hs, dh, err := j.existingServers(); err == nil && len(hs)+len(dh) > 0 {
+			if it, ok := j.checks.Item(CheckKit); !ok || it.Status != StatusOK {
+				return j.park(JobNeedsAction, "this router still has a hotspot or DHCP server on the customer network and the safety kit is not installed: paste the join line again to install the safety kit")
+			}
+		}
+	}
+	// the lease wait can take up to an hour: it runs before the reconcile lock is taken
+	if err := j.runStep(StepLeases, j.stepLeases); err != nil {
+		j.restoreLeases(context.Background())
+		return err
+	}
+	if p := m.provisioner(); p != nil {
+		j.release = p.HoldSite(j.siteID)
+	}
 	if migrate {
 		j.setState(JobArming)
 	} else {
@@ -307,6 +322,9 @@ func (j *jobCtl) arpModeOf(iface string) (kind, mode string, found bool, err err
 }
 
 func (j *jobCtl) stepArm() (string, error) {
+	if _, err := j.cleanStrayNow(j.ctx); err != nil {
+		return "", routerErr(err, "clearing a stray rollback marker")
+	}
 	armed, err := j.markerRows(KitListArmed)
 	if err != nil {
 		return "", routerErr(err, "reading the kit markers")
@@ -356,22 +374,45 @@ func (j *jobCtl) stepArm() (string, error) {
 	}
 }
 
+// rearm restarts the kit's countdown (the marker comment is the tick count).
+func (j *jobCtl) rearm() error {
+	rows, err := j.markerRows(KitListArmed)
+	if err != nil {
+		return routerErr(err, "reading the kit markers")
+	}
+	if len(rows) == 0 || rows[0]["comment"] == KitArmedNow {
+		return fail(JobFailed, "the rollback marker is gone or already says now: nothing is switched")
+	}
+	if rows[0]["comment"] != "1" {
+		if err := j.w.set(j.ctx, pathAddrList, rows[0], map[string]string{"comment": "1"}); err != nil {
+			return routerErr(err, "restarting the rollback countdown")
+		}
+	}
+	j.job.DeadlineAt = j.m.now().Add(KitArmTicks * 30 * time.Second)
+	j.save()
+	return nil
+}
+
 // setNow sets the armed marker to "now": the router rolls back within 30 seconds.
 func (j *jobCtl) setNow(ctx context.Context) error {
 	if j.w == nil {
 		j.newWriter()
 	}
-	rows, err := j.rt.Rows(ctx, pathAddrList, map[string]string{"list": KitListArmed})
+	armed, undo, err := kitMarkers(ctx, j.rt)
 	if err != nil {
 		return err
 	}
-	if len(rows) == 0 {
+	if len(armed) == 0 {
+		// a marker is only ever created by a job that holds undo rows (between arming and the switch)
+		if !j.job.Armed || len(undo) == 0 {
+			return ErrNothingToRollBack
+		}
 		return j.w.add(ctx, pathAddrList, map[string]string{"list": KitListArmed, "address": KitArmedAddress, "comment": KitArmedNow})
 	}
-	if rows[0]["comment"] == KitArmedNow {
+	if armed[0]["comment"] == KitArmedNow {
 		return nil
 	}
-	return j.w.set(ctx, pathAddrList, rows[0], map[string]string{"comment": KitArmedNow})
+	return j.w.set(ctx, pathAddrList, armed[0], map[string]string{"comment": KitArmedNow})
 }
 
 // disarm removes the markers: the change is kept.
@@ -413,6 +454,9 @@ func (j *jobCtl) stepNetwork() (string, error) {
 	}
 	if !have {
 		return "", fail(JobNeedsAction, "the router has no interface called %s (the OLT port): check the router's settings", olt)
+	}
+	if err := j.guardFreshNetwork(olt); err != nil {
+		return "", err
 	}
 	port := olt
 	if j.site.VLANID > 0 {
@@ -458,7 +502,74 @@ func (j *jobCtl) stepNetwork() (string, error) {
 			}
 		}
 	}
+	// look again now that the network exists: anything that went wrong stops the set-up before the DHCP server is built
+	cs, err := j.m.Checks(j.ctx, j.siteID, true)
+	if err != nil {
+		return "", routerErr(err, "checking the router after the customer network was built")
+	}
+	skip := map[string]bool{CheckKit: true, CheckDMScheduler: true, CheckDNS: true, CheckCustDNS: true, CheckCustomerIf: true, CheckUnmanaged: true, CheckUnseen: true}
+	var left []string
+	for _, id := range cs.Blockers(false, false) {
+		if !skip[id] {
+			left = append(left, id)
+		}
+	}
+	if len(left) > 0 {
+		j.job.Blockers = left
+		return "", fail(JobNeedsAction, "after the customer network was built these checks need attention: %s", strings.Join(left, ", "))
+	}
 	return "customer bridge " + HotspotBridge + " with " + j.plan.GatewayIP, nil
+}
+
+// guardFreshNetwork refuses to build the customer network when it could collide with something on the
+// router: an address that overlaps the plan, an OLT port that belongs to the LAN or to another bridge.
+func (j *jobCtl) guardFreshNetwork(olt string) error {
+	sn := readSnapshot(j.ctx, j.rt, nil, []string{"/ip/address", "/interface/bridge/port", "/interface/vlan", "/interface/list/member",
+		"/ip/dhcp-server", "/ip/dhcp-client", "/ip/hotspot", "/interface/bridge/host", "/interface/bridge"})
+	for _, p := range []string{"/ip/address", "/interface/bridge/port", "/interface/list/member"} {
+		if err := sn.errs[p]; err != nil {
+			return routerErr(err, "reading "+p)
+		}
+	}
+	pn, err := netip.ParsePrefix(j.plan.Network)
+	if err != nil {
+		return fail(JobNeedsAction, "the customer subnet %q is not valid", j.plan.Network)
+	}
+	for _, r := range sn.tbl("/ip/address") {
+		if ours(r) && r["interface"] == HotspotBridge {
+			continue
+		}
+		if p, e := netip.ParsePrefix(r["address"]); e == nil && p.Masked().Overlaps(pn) {
+			return fail(JobNeedsAction, "the customer subnet %s overlaps the address %s on %s: pick another subnet in the router's settings", j.plan.Network, r["address"], r["interface"])
+		}
+	}
+	port := olt
+	if j.site.VLANID > 0 {
+		port = j.w.sc.vlan
+	}
+	for _, r := range sn.tbl("/interface/list/member") {
+		if strings.EqualFold(r["list"], "LAN") && !rowDisabled(r) && (r["interface"] == olt || r["interface"] == port) {
+			return fail(JobNeedsAction, "%s is in the LAN interface list: it carries the building's own network, not the customers. Check the fibre port in the router's settings", r["interface"])
+		}
+	}
+	if olt == "bridge" {
+		return fail(JobNeedsAction, "the fibre port %q is the router's default bridge: pick the physical fibre port in the router's settings", olt)
+	}
+	a := assessPort(sn, j.site, olt)
+	if len(a.hard) > 0 {
+		return fail(JobNeedsAction, "the server will not use %s: %s", olt, strings.Join(a.hard, "; "))
+	}
+	if len(a.unknown) > 0 {
+		return fail(JobNeedsAction, "%s could not be checked safely: %s", olt, strings.Join(a.unknown, "; "))
+	}
+	if len(a.rows) > 0 {
+		br := a.rows[0]["bridge"]
+		if j.site.VLANID > 0 {
+			return fail(JobNeedsAction, "%s is a port of bridge %s and the building uses VLAN %d: RouterOS would not hand the VLAN traffic to the VLAN interface. Take the port out of the bridge first (the check Fibre port is not stuck in the bridge shows the command)", olt, br, j.site.VLANID)
+		}
+		return fail(JobNeedsAction, "%s is already a port of bridge %s (with no VLAN id set the customers would join that bridge's network). Take it out of the bridge, or set the building's VLAN id", olt, br)
+	}
+	return nil
 }
 
 // ---- DHCP, queues, lists -----------------------------------------------------------------------
@@ -640,31 +751,87 @@ func (j *jobCtl) ensureRules(path string, want []ipoeRule) error {
 	for _, r := range want {
 		wantBy[r.Comment] = r
 	}
-	var have []routeros.Row // our rows of this set, table order
-	var stale []routeros.Row
+	haveBy := map[string]routeros.Row{}
+	var stale []routeros.Row // rows of ours that are no longer wanted, and duplicates
+	firstForeign := ""       // the first row of the table that is not ours: ours go above it
+	orderOK := true
+	next := 0 // index in want of the next rule expected in table order
 	for _, r := range rows {
 		c := r["comment"]
 		if _, ok := wantBy[c]; ok {
-			have = append(have, r)
+			if _, dup := haveBy[c]; dup {
+				stale = append(stale, r)
+				continue
+			}
+			haveBy[c] = r
+			idx := -1
+			for i, w := range want {
+				if w.Comment == c {
+					idx = i
+				}
+			}
+			if idx < next || firstForeign != "" {
+				orderOK = false // out of order, or below a foreign rule
+			} else {
+				next = idx + 1
+			}
 		} else if strings.HasPrefix(c, "ftn: ipoe") && c != masqComment && !strings.HasPrefix(c, "ftn: ipoe v6") {
 			stale = append(stale, r)
+		} else if !yes(r["dynamic"]) && !strings.HasPrefix(c, ftnPrefix) && firstForeign == "" && r[routeros.RowID] != "" {
+			firstForeign = r[routeros.RowID]
 		}
 	}
-	same := len(stale) == 0 && len(have) == len(want)
-	for i := 0; same && i < len(want); i++ {
-		if have[i]["comment"] != want[i].Comment || len(diffRow(have[i], want[i].Body(j.cust.iface))) > 0 {
-			same = false
+	if !orderOK {
+		return j.rewriteRules(path, want, rows)
+	}
+	// repair rule by rule, last to first, so every added rule goes above the one after it and the table never loses a rule
+	nextID := ""
+	for i := len(want) - 1; i >= 0; i-- {
+		body := want[i].Body(j.cust.iface)
+		if r, ok := haveBy[want[i].Comment]; ok {
+			if diff := diffRow(r, body); len(diff) > 0 {
+				if err := j.w.set(j.ctx, path, r, diff); err != nil {
+					return routerErr(err, "repairing a firewall rule")
+				}
+			}
+			nextID = r[routeros.RowID]
+			continue
 		}
+		switch {
+		case nextID != "":
+			body["place-before"] = nextID
+		case firstForeign != "":
+			body["place-before"] = firstForeign
+		}
+		id, err := j.w.addID(j.ctx, path, body)
+		if err != nil {
+			return routerErr(err, "adding a firewall rule")
+		}
+		nextID = id
 	}
-	if same {
-		return nil
-	}
-	for _, r := range append(have, stale...) {
+	for _, r := range stale {
 		if err := j.w.remove(j.ctx, path, r); err != nil {
 			return routerErr(err, "removing an old rule")
 		}
 	}
-	rows, err = j.rows(path)
+	return nil
+}
+
+// rewriteRules is the fallback when the rules are out of order: take them out and put them back at the top.
+func (j *jobCtl) rewriteRules(path string, want []ipoeRule, rows []routeros.Row) error {
+	wantBy := map[string]bool{}
+	for _, r := range want {
+		wantBy[r.Comment] = true
+	}
+	for _, r := range rows {
+		c := r["comment"]
+		if wantBy[c] || strings.HasPrefix(c, "ftn: ipoe") && c != masqComment && !strings.HasPrefix(c, "ftn: ipoe v6") {
+			if err := j.w.remove(j.ctx, path, r); err != nil {
+				return routerErr(err, "removing an old rule")
+			}
+		}
+	}
+	rows, err := j.rows(path)
 	if err != nil {
 		return routerErr(err, "reading "+path)
 	}
@@ -675,7 +842,7 @@ func (j *jobCtl) ensureRules(path string, want []ipoeRule) error {
 			break
 		}
 	}
-	for i := len(want) - 1; i >= 0; i-- { // the last one first: each goes above the one added before
+	for i := len(want) - 1; i >= 0; i-- {
 		body := want[i].Body(j.cust.iface)
 		if anchor != "" {
 			body["place-before"] = anchor
@@ -755,12 +922,18 @@ func (j *jobCtl) stepSwitch() (string, error) {
 			}
 		}
 	}
+	if j.job.Armed {
+		// the evidence window can be long: the switch gets a fresh 15 minute countdown
+		if err := j.rearm(); err != nil {
+			return "", err
+		}
+	}
 	if j.job.Kind == KindMigrate {
 		if err := j.noteOnline(); err != nil { // the last look at who is online before the lights change
 			return "", err
 		}
 		j.job.SwitchedAt = j.m.now()
-		j.job.DeadlineAt = j.job.SwitchedAt.Add(j.tm.Evidence)
+		j.job.DeadlineAt = j.job.SwitchedAt.Add(j.tm.evidenceWindow(time.Duration(j.job.LongestLeaseSec) * time.Second))
 		j.save()
 	}
 	hs, dh, err := j.existingServers()
@@ -965,12 +1138,20 @@ func (j *jobCtl) evidence(required []flatRow) (ProvEvidence, bool) {
 		if r, err := j.rt.PingHost(pc, "1.1.1.1", 3); err == nil && r.Received > 0 {
 			ev.InternetOK = true
 		}
+		// the customers' own path: a ping that leaves from the customer gateway address
+		if sp, ok := j.rt.(routeros.SourcePinger); ok && j.plan.Gateway != "" {
+			if r, err := sp.PingFrom(pc, "1.1.1.1", j.plan.Gateway, 3); err == nil && r.Received > 0 {
+				ev.CustomerPath = true
+			}
+		}
 	}
 	servingOK := false
 	if rows, err := j.rt.Rows(pc, "/ip/dhcp-server", map[string]string{"name": billing.DHCPServerName}); err == nil && len(rows) > 0 && !rowDisabled(rows[0]) {
 		servingOK = true
 	}
-	if leases, err := j.rt.Rows(pc, "/ip/dhcp-server/lease", nil); err == nil {
+	var leases []routeros.Row
+	if ls, err := j.rt.Rows(pc, "/ip/dhcp-server/lease", nil); err == nil {
+		leases = ls
 		for _, f := range required {
 			bound := false
 			for _, l := range leases {
@@ -985,8 +1166,74 @@ func (j *jobCtl) evidence(required []flatRow) (ProvEvidence, bool) {
 			}
 		}
 	}
-	pass := servingOK && ev.TunnelUp && ev.InternetOK && ev.FlatsBound == ev.FlatsRequired
+	base := servingOK && ev.TunnelUp && ev.InternetOK && ev.CustomerPath && ev.FlatsBound == ev.FlatsRequired
+	if base { // the dearer reads only once everything cheap holds
+		ev.ConnSeen = len(required) == 0 || j.connectionSeen(pc, required)
+		ev.DNSOK, ev.OLTOK = j.dnsAndOLT()
+	}
+	pass := base && ev.ConnSeen && ev.DNSOK && ev.OLTOK
 	return ev, pass
+}
+
+// connectionSeen: one of the flats has a connection through the router to a public address that was answered.
+func (j *jobCtl) connectionSeen(ctx context.Context, required []flatRow) bool {
+	rows, err := j.rt.Rows(ctx, "/ip/firewall/connection", nil)
+	if err != nil {
+		return false
+	}
+	ips := map[string]bool{}
+	for _, f := range required {
+		ips[f.IP] = true
+	}
+	for _, r := range rows {
+		src := hostOf(r["src-address"])
+		if !ips[src] || !publicAddr(hostOf(r["dst-address"])) {
+			continue
+		}
+		if yes(r["seen-reply"]) || yes(r["replied"]) || atoiRow(r["repl-packets"]) > 0 || atoiRow(r["repl-bytes"]) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func atoiRow(v string) int { n, _ := strconv.Atoi(strings.TrimSpace(v)); return n }
+
+// hostOf strips the port from "10.5.50.60:51234".
+func hostOf(a string) string {
+	if i := strings.LastIndexByte(a, ':'); i >= 0 && strings.Count(a, ":") == 1 {
+		return a[:i]
+	}
+	return a
+}
+
+func publicAddr(h string) bool {
+	a, err := netip.ParseAddr(h)
+	return err == nil && a.IsGlobalUnicast() && !a.IsPrivate() && !a.IsLoopback() && !a.IsLinkLocalUnicast()
+}
+
+// dnsAndOLT: customers can use the router's DNS (the allow-remote-requests switch and the customer DNS rule,
+// both checked on the router now), and the OLT port is not stuck in a bridge.
+func (j *jobCtl) dnsAndOLT() (dnsOK, oltOK bool) {
+	c, cancel := context.WithTimeout(j.ctx, 20*time.Second)
+	defer cancel()
+	if j.insp != nil {
+		if r, err := j.insp.One(c, "/ip/dns"); err != nil || !yes(r["allow-remote-requests"]) {
+			return false, false
+		}
+	}
+	cs, err := j.m.Checks(c, j.siteID, true)
+	if err != nil {
+		return false, false
+	}
+	if it, ok := cs.Item(CheckCustDNS); ok && it.Status == StatusOK {
+		dnsOK = true
+	}
+	oltOK = true
+	if it, ok := cs.Item(CheckOLT); ok && it.Status != StatusOK && it.Status != StatusInfo {
+		oltOK = false
+	}
+	return dnsOK, oltOK
 }
 
 func (ev ProvEvidence) text() string {
@@ -997,8 +1244,20 @@ func (ev ProvEvidence) text() string {
 	if !ev.InternetOK {
 		b = append(b, "the router cannot reach the internet (1.1.1.1)")
 	}
+	if ev.TunnelUp && !ev.CustomerPath {
+		b = append(b, "a ping from the customer network does not get out (forwarding or masquerade)")
+	}
 	if ev.FlatsBound != ev.FlatsRequired {
 		b = append(b, fmt.Sprintf("only %d of %d flats that were online came back (missing: %s)", ev.FlatsBound, ev.FlatsRequired, strings.Join(ev.Missing, ", ")))
+	}
+	if ev.FlatsRequired > 0 && ev.FlatsBound == ev.FlatsRequired && ev.CustomerPath && !ev.ConnSeen {
+		b = append(b, "no flat has a connection to the internet that was answered")
+	}
+	if ev.CustomerPath && ev.FlatsBound == ev.FlatsRequired && !ev.DNSOK {
+		b = append(b, "customers cannot use the router's DNS")
+	}
+	if ev.CustomerPath && ev.FlatsBound == ev.FlatsRequired && ev.DNSOK && !ev.OLTOK {
+		b = append(b, "the fibre port is stuck in a bridge")
 	}
 	if len(b) == 0 {
 		return "ftn-dhcp is not serving"
@@ -1014,7 +1273,7 @@ func (j *jobCtl) stepVerify() (string, error) {
 	window := 10 * j.tm.Poll
 	if migrate {
 		required = j.requiredFlats(j.job.SwitchedAt)
-		window = j.tm.Evidence
+		window = j.tm.evidenceWindow(time.Duration(j.job.LongestLeaseSec) * time.Second)
 	}
 	deadline := time.Now().Add(window)
 	for {
@@ -1033,27 +1292,31 @@ func (j *jobCtl) stepVerify() (string, error) {
 		case <-time.After(j.tm.Poll):
 		}
 	}
-	// keep it: the markers go, the marks are set
-	if j.job.Armed {
-		var last error
-		for try := 0; try < 3; try++ {
-			c, cancel := context.WithTimeout(j.ctx, 10*time.Second)
-			last = j.disarm(c)
-			cancel()
-			if last == nil {
-				break
-			}
-			select {
-			case <-j.ctx.Done():
-				return "", j.ctx.Err()
-			case <-time.After(j.tm.Poll):
-			}
+	// keep it. The decision is persisted BEFORE the markers go: a crash in between must
+	// never make a restart roll a confirmed router back.
+	j.job.Armed = false
+	j.save()
+	var last error
+	for try := 0; try < 3; try++ {
+		c, cancel := context.WithTimeout(j.ctx, 10*time.Second)
+		last = j.disarm(c)
+		cancel()
+		if last == nil {
+			break
 		}
-		if last != nil {
-			return "", fail(JobFailed, "the evidence held but the rollback markers could not be removed (%v): the router may roll back by itself", shortErr(last))
+		select {
+		case <-j.ctx.Done():
+			return "", j.ctx.Err()
+		case <-time.After(j.tm.Poll):
 		}
-		j.job.Armed = false
 	}
+	if last != nil {
+		// no rollback is asked for: the evidence held. The router's own timer may still fire.
+		return "", &failure{state: JobFailed, unreachable: true, msg: fmt.Sprintf("the evidence held but the rollback markers could not be removed (%v): the router may roll back by itself", shortErr(last))}
+	}
+	rc, rcancel := context.WithTimeout(j.ctx, 15*time.Second)
+	j.restoreLeases(rc)
+	rcancel()
 	_ = j.m.st.Update(func(d *store.Data) error {
 		now := j.m.now()
 		billing.SetSiteMarkLocked(d, j.siteID, billing.MarkCutoverConfirmed, true, now)
@@ -1107,6 +1370,11 @@ func (j *jobCtl) rollbackTail(reason string) {
 		return
 	}
 	j.job.Armed = false
+	{
+		rc, rcancel := context.WithTimeout(context.Background(), 15*time.Second)
+		j.restoreLeases(rc)
+		rcancel()
+	}
 	if j.job.Kind == KindMigrate {
 		j.m.revertToHotspotMode(j.siteID)
 		if p := j.m.provisioner(); p != nil {
@@ -1146,9 +1414,46 @@ func (m *Manager) revertToHotspotMode(siteID string) {
 	}
 }
 
+// ErrNothingToRollBack: the router has no armed rollback with undo rows, so there is nothing to go back to.
+var ErrNothingToRollBack = errors.New("there is nothing to roll back: the router holds no pending change (no ftn-armed with ftn-undo rows)")
+
+// kitMarkers reads the armed and undo rows.
+func kitMarkers(ctx context.Context, rt routeros.Client) (armed, undo []routeros.Row, err error) {
+	if armed, err = rt.Rows(ctx, pathAddrList, map[string]string{"list": KitListArmed}); err != nil {
+		return
+	}
+	undo, err = rt.Rows(ctx, pathAddrList, map[string]string{"list": KitListUndo})
+	return
+}
+
+// cleanStrayNow removes an armed marker that says "now" when no undo rows exist:
+// it would only make the kit run a rollback script with nothing to undo, and a
+// later change would be rolled back the moment the kit is armed again.
+func (j *jobCtl) cleanStrayNow(ctx context.Context) (bool, error) {
+	armed, undo, err := kitMarkers(ctx, j.rt)
+	if err != nil || len(undo) > 0 {
+		return false, err
+	}
+	removed := false
+	for _, r := range armed {
+		if r["comment"] == KitArmedNow {
+			if j.w == nil {
+				j.newWriter()
+			}
+			if err := j.w.remove(ctx, pathAddrList, r); err != nil {
+				return removed, err
+			}
+			removed = true
+		}
+	}
+	return removed, nil
+}
+
 // RollbackNow is the emergency "Roll back now": it stops a running job, sets the
 // rollback marker (the router goes back within 30 seconds) and follows the
-// rollback in the background. It returns once the marker is set.
+// rollback in the background. It returns once the marker is set. It never
+// creates a marker: with nothing armed (a router that is live and confirmed) it
+// returns ErrNothingToRollBack.
 func (m *Manager) RollbackNow(siteID, actor string) error {
 	var site store.Site
 	var found bool
@@ -1163,45 +1468,76 @@ func (m *Manager) RollbackNow(siteID, actor string) error {
 	if following { // a rollback is already under way: asking again changes nothing
 		return nil
 	}
-	m.abortProvision(siteID)
-	prev, _ := m.ProvJobOf(siteID)
-	j := &jobCtl{m: m, ctx: context.Background(), siteID: siteID, o: ProvOptions{Trigger: "rollback", Actor: actor}, tm: m.timing(), rt: m.Router(siteID), release: func() {}}
+	rt := m.Router(siteID)
+	j := &jobCtl{m: m, ctx: context.Background(), siteID: siteID, o: ProvOptions{Trigger: "rollback", Actor: actor}, tm: m.timing(), rt: rt, release: func() {}}
 	j.site = m.Effective(site)
-	j.insp, _ = j.rt.(routeros.Inspector)
+	j.insp, _ = rt.(routeros.Inspector)
 	j.plan, _ = PlanSubnet(j.site.CustomerSubnet)
+	j.newWriter()
+	c, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	armed, undo, err := kitMarkers(c, rt)
+	if err != nil {
+		return err
+	}
+	if len(armed) == 0 || len(undo) == 0 {
+		if _, e := j.cleanStrayNow(c); e != nil {
+			return e
+		}
+		return ErrNothingToRollBack
+	}
+	// reserve the run entry before stopping anything, so no other job can start in between
+	var run *provRun
+	for try := 0; try < 50; try++ {
+		m.prov.mu.Lock()
+		if m.prov.runs == nil {
+			m.prov.runs = map[string]*provRun{}
+		}
+		cur := m.prov.runs[siteID]
+		if cur == nil {
+			run = &provRun{cancel: func() {}, done: make(chan struct{}), state: JobRollingBack}
+			m.prov.runs[siteID] = run
+			m.prov.mu.Unlock()
+			break
+		}
+		if cur.state == JobRollingBack {
+			m.prov.mu.Unlock()
+			return nil
+		}
+		cur.cancel()
+		done := cur.done
+		m.prov.mu.Unlock()
+		<-done
+	}
+	if run == nil {
+		return ErrJobRunning
+	}
+	release := func() {
+		m.prov.mu.Lock()
+		delete(m.prov.runs, siteID)
+		m.prov.mu.Unlock()
+		close(run.done)
+	}
+	prev, _ := m.ProvJobOf(siteID)
 	j.job = prev
 	if j.job.StartedAt.IsZero() {
 		j.job.StartedAt = m.now()
 		j.job.Steps = newSteps("")
 	}
-	j.newWriter()
-	c, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	j.job.Armed = true // the markers exist: setNow only modifies the armed row
 	if err := j.setNow(c); err != nil {
+		release()
 		return err
 	}
-	j.job.Armed = true
 	j.job.Trigger = "rollback"
 	j.job.StartNow = false
 	j.job.State = JobRollingBack
 	j.save()
 	j.log("rollback requested by %s", actor)
-	m.prov.mu.Lock()
-	if m.prov.runs == nil {
-		m.prov.runs = map[string]*provRun{}
-	}
-	run := &provRun{cancel: func() {}, done: make(chan struct{}), state: JobRollingBack}
-	m.prov.runs[siteID] = run
-	m.prov.mu.Unlock()
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
-		defer func() {
-			m.prov.mu.Lock()
-			delete(m.prov.runs, siteID)
-			m.prov.mu.Unlock()
-			close(run.done)
-		}()
+		defer release()
 		if p := m.provisioner(); p != nil {
 			j.release = p.HoldSite(siteID)
 			defer func() { j.release() }()

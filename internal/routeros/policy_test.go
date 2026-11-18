@@ -45,8 +45,10 @@ func TestClassifyTable(t *testing.T) {
 		{"/interface/enable ether5", Confirm, ""},
 		{"/interface/reset-counters ether5", Confirm, ""},
 		{"/ip/hotspot/active/remove 0", Confirm, ""},
-		{"/system/reboot", Confirm, "/system reboot"},
-		{"/system/shutdown", Confirm, ""},
+		{"/system/reboot", Deny, ""},
+		{"/system reboot", Deny, ""},
+		{"/system/shutdown", Deny, ""},
+		{"/system shutdown", Deny, ""},
 		// denied paths, every verb
 		{"/system/reset-configuration", Deny, ""},
 		{"/system reset-configuration no-defaults=yes", Deny, ""},

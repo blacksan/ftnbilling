@@ -328,11 +328,12 @@ func classify(d Decision, cmd string) (Decision, bool) {
 			return deny(d, "settings that hold scripts are not allowed here ("+truncate(n, 40)+")")
 		}
 	}
+	if verb == "reboot" || verb == "shutdown" {
+		// a reboot or shutdown from the console would skip the guards of the reboot button (a running set-up, a pending rollback)
+		return deny(d, "/system "+verb+" is not run from the console: use the router's Reboot button, which checks that no set-up is running")
+	}
 	d.Verdict = Confirm
 	d.Reason = "this changes the router"
-	if verb == "reboot" || verb == "shutdown" {
-		d.Reason = "this changes the router (the router's API user is not allowed to " + verb + ", so it will refuse)"
-	}
 	d.Exec = join(append([]string{verb}, args...)...)
 	return d, true
 }

@@ -60,6 +60,7 @@ const (
 // Step keys, in order.
 const (
 	StepPreflight = "preflight"
+	StepLeases    = "leases"
 	StepBackup    = "backup"
 	StepArm       = "arm"
 	StepNetwork   = "network"
@@ -72,13 +73,13 @@ const (
 )
 
 var stepTitles = map[string]string{
-	StepPreflight: "Check the router", StepBackup: "Back up the router", StepArm: "Arm the safety rollback",
+	StepPreflight: "Check the router", StepLeases: "Wait for old leases", StepBackup: "Back up the router", StepArm: "Arm the safety rollback",
 	StepNetwork: "Customer network", StepDHCP: "DHCP, queues and lists", StepFirewall: "Firewall and DNS",
 	StepSwitch: "Switch the customers over", StepTelemetry: "Traffic reporting", StepVerify: "Verify",
 	StepReconcile: "Sync the customers",
 }
 
-var stepOrder = []string{StepPreflight, StepBackup, StepArm, StepNetwork, StepDHCP, StepFirewall, StepSwitch, StepTelemetry, StepVerify, StepReconcile}
+var stepOrder = []string{StepPreflight, StepLeases, StepBackup, StepArm, StepNetwork, StepDHCP, StepFirewall, StepSwitch, StepTelemetry, StepVerify, StepReconcile}
 
 // Step statuses.
 const (
@@ -103,6 +104,10 @@ type ProvStep struct {
 type ProvEvidence struct {
 	TunnelUp      bool     `json:"tunnel_up"`
 	InternetOK    bool     `json:"internet_ok"`
+	CustomerPath  bool     `json:"customer_path_ok"` // a ping from the customer gateway address got through (forwarding and masquerade)
+	DNSOK         bool     `json:"dns_ok"`           // customers can ask the router for DNS
+	ConnSeen      bool     `json:"connection_seen"`  // a required flat has a replied connection to the internet
+	OLTOK         bool     `json:"olt_ok"`
 	FlatsRequired int      `json:"flats_required"`
 	FlatsBound    int      `json:"flats_bound"`
 	Missing       []string `json:"missing,omitempty"`
@@ -126,6 +131,8 @@ type ProvJob struct {
 	Armed       bool         `json:"armed,omitempty"`     // the kit's markers were written: this job must never be resumed
 	Online      []string     `json:"online,omitempty"`    // codes of flats seen online, "code@RFC3339"
 	Evidence    ProvEvidence `json:"evidence"`
+	// LongestLeaseSec is the longest lease time of the old DHCP servers; it sizes the evidence window.
+	LongestLeaseSec int `json:"longest_lease_s,omitempty"`
 }
 
 func provKey(siteID string) string    { return "site." + siteID + ".prov_job" }
@@ -141,6 +148,9 @@ type ProvTiming struct {
 	OnlineWindow time.Duration // A1: "seen online" means this recently before the switch
 	JoinWindow   time.Duration // auto-start of a migration: the join paste is younger than this
 	Rollback     time.Duration // how long to wait for the router to roll back
+	LeaseShort   string        // lease time given to the old DHCP servers before the switch ("" = 1m)
+	LeaseGrace   time.Duration // slack on the lease waits and the evidence window ("" = 1 minute)
+	LeaseCap     time.Duration // the longest the job waits for old leases (0 = 65 minutes)
 }
 
 // DefaultProvTiming is the production timing.
@@ -502,7 +512,12 @@ func (j *jobCtl) finishFailed(err error) {
 	if j.job.Armed && !f.unreachable {
 		c, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if e := j.setNow(c); e != nil {
+		if e := j.setNow(c); errors.Is(e, ErrNothingToRollBack) {
+			j.job.LastError += " (nothing had been changed on the router)"
+			j.setState(JobFailed)
+			j.m.announce(j.siteID, "Setting up router "+j.site.Name+" stopped: "+j.job.LastError, j.dedupe("failed"))
+			return
+		} else if e != nil {
 			j.job.LastError += " (and the rollback marker could not be set: " + shortErr(e) + ")"
 			j.setState(JobFailed)
 			j.m.announce(j.siteID, "Setting up router "+j.site.Name+" failed and the router could not be told to roll back: "+f.msg+". It rolls back by itself within 15 minutes.", j.dedupe("failed"))
@@ -515,6 +530,11 @@ func (j *jobCtl) finishFailed(err error) {
 	}
 	if j.job.Armed && f.unreachable {
 		j.job.LastError += ". The router could not be reached; its own 15 minute timer rolls it back."
+	}
+	if !j.job.Armed && !f.unreachable {
+		rc, rcancel := context.WithTimeout(context.Background(), 15*time.Second)
+		j.restoreLeases(rc)
+		rcancel()
 	}
 	st := f.state
 	if st == "" {
@@ -588,8 +608,8 @@ func (j *jobCtl) pipeline() error {
 	case rows.live > 0 && !m.ServingCustomers(j.siteID):
 		j.job.Kind = KindMigrate
 		return j.park(JobNeedsAction, fmt.Sprintf("%d live devices found on the router: run it as a migration", rows.live))
-	case rows.live > 0:
-		kind = KindMigrate // intent "serving" with live devices
+	case m.ServingCustomers(j.siteID):
+		kind = KindMigrate // intent "serving": always the careful path, even when nobody is online right now
 	}
 	j.job.Kind = kind
 
@@ -604,6 +624,12 @@ func (j *jobCtl) pipeline() error {
 	if len(blockers) > 0 {
 		j.step(StepPreflight, StepFailed, "needs attention: "+strings.Join(blockers, ", "))
 		return j.park(JobNeedsAction, "these checks need attention first: "+strings.Join(blockers, ", "))
+	}
+	if kind == KindMigrate {
+		if bad := j.conflictedPaying(); len(bad) > 0 {
+			j.step(StepPreflight, StepFailed, "paying flats with a MAC conflict: "+strings.Join(bad, ", "))
+			return j.park(JobNeedsAction, "these paying flats have a MAC address conflict and would be left without internet by the switch. Fix their MACs first: "+strings.Join(bad, ", "))
+		}
 	}
 	j.job.LastError = ""
 	j.job.Blockers = nil
@@ -777,6 +803,21 @@ func (j *jobCtl) classify() (classification, error) {
 	}
 	out.live = len(macs)
 	return out, nil
+}
+
+// conflictedPaying lists the flats that have paid time but whose MAC is flagged: the switch does not provision them.
+func (j *jobCtl) conflictedPaying() []string {
+	now := j.m.now()
+	var out []string
+	j.m.st.View(func(d *store.Data) {
+		for _, a := range d.AccountList() {
+			if a.SiteID == j.siteID && a.MACConflict && billing.AccountState(a, now) == billing.StateActive {
+				out = append(out, a.Flat)
+			}
+		}
+	})
+	sort.Strings(out)
+	return out
 }
 
 // flatsOf builds the staged rows of the building's flats.

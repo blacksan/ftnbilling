@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"ispbill/internal/routeros"
 	"ispbill/internal/sites"
 	"ispbill/internal/store"
 )
@@ -23,13 +24,13 @@ func TestAPISetupRoles(t *testing.T) {
 		{"GET", "/routers/" + id + "/setup", nil, OK, OK, OK},
 		{"POST", "/routers/" + id + "/setup/run", nil, F, OK, OK},
 		{"POST", "/routers/" + id + "/setup/migrate", map[string]any{}, F, OK, OK},
-		{"POST", "/routers/" + id + "/setup/rollback", nil, F, OK, OK},
+		{"POST", "/routers/" + id + "/setup/rollback", nil, F, F, OK},
 		{"POST", "/routers", map[string]any{}, F, F, OK},
 		{"PATCH", "/routers/" + id, map[string]any{}, F, F, OK},
 		{"GET", "/routers/" + id + "/checks", nil, OK, OK, OK},
 		{"POST", "/routers/" + id + "/join-command", nil, F, F, OK},
 		{"GET", "/routers/" + id + "/cutover", nil, OK, OK, OK},
-		{"POST", "/routers/" + id + "/cutover/rollback", nil, F, OK, OK},
+		{"POST", "/routers/" + id + "/cutover/rollback", nil, F, F, OK},
 	} {
 		for who, want := range map[string]int{r.view.Access: c.viewer, r.oper.Access: c.oper, r.owner.Access: c.owner} {
 			got := r.call(who, c.method, c.path, c.body, nil)
@@ -164,5 +165,48 @@ func TestSessionSetupJSON(t *testing.T) {
 	}
 	if g := r.admin("GET", "/admin/routers/setup.json?id=nope", nil); g.StatusCode != 404 {
 		t.Fatalf("%d", g.StatusCode)
+	}
+}
+
+func TestAPIRollbackNeedsTheNameAndSomethingToRollBack(t *testing.T) {
+	r := newAPIRig(t)
+	id := r.A.ID
+	for _, path := range []string{"/routers/" + id + "/setup/rollback", "/routers/" + id + "/cutover/rollback"} {
+		if x := r.call(r.owner.Access, "POST", path, map[string]any{}, nil); x.Status != 422 && x.Status != 400 {
+			t.Fatalf("%s without the name: %d %s", path, x.Status, x.Raw)
+		}
+		if x := r.call(r.owner.Access, "POST", path, map[string]any{"confirm_name": "Beta"}, nil); x.Status != 422 && x.Status != 400 {
+			t.Fatalf("%s with another name: %d %s", path, x.Status, x.Raw)
+		}
+		// a live router holds no markers: there is nothing to roll back, and nothing may be written
+		r.mock(id).ResetWrites()
+		x := r.call(r.owner.Access, "POST", path, map[string]any{"confirm_name": "Alpha"}, nil)
+		if x.Status != 409 || x.errCode(t) != "bad_state" {
+			t.Fatalf("%s: %d %s", path, x.Status, x.Raw)
+		}
+		if r.mock(id).Writes() != 0 {
+			t.Fatal("the rollback request wrote to a router with nothing armed")
+		}
+	}
+	for _, row := range r.mock(id).Table("/ip/firewall/address-list") {
+		if row["list"] == "ftn-armed" {
+			t.Fatalf("a marker was created: %v", row)
+		}
+	}
+	// with a pending change the request is accepted and the marker says now
+	r.mock(id).SeedRow("/ip/firewall/address-list", routeros.Row{"list": "ftn-armed", "address": "127.0.0.2", "comment": "5"})
+	r.mock(id).SeedRow("/ip/firewall/address-list", routeros.Row{"list": "ftn-undo", "address": "127.0.1.1", "comment": "hotspot|hotspot1"})
+	x := r.call(r.owner.Access, "POST", "/routers/"+id+"/setup/rollback", map[string]any{"confirm_name": "Alpha"}, nil)
+	if x.Status != 202 {
+		t.Fatalf("%d %s", x.Status, x.Raw)
+	}
+	found := false
+	for _, row := range r.mock(id).Table("/ip/firewall/address-list") {
+		if row["list"] == "ftn-armed" && row["comment"] == "now" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the armed marker must say now")
 	}
 }
