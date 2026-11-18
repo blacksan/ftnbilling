@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+# Manage the admin VPN (WireGuard interface wg-admin, 10.98.0.0/24).
+# Installed as /usr/local/sbin/ftnbilling-admin-peer by deploy/install.sh.
+#
+#   ftnbilling-admin-peer add <name> [--no-qr]   new device: key pair, next free
+#                                                10.98.0.x, prints the client
+#                                                config + QR code, saves
+#                                                /root/ftnbilling-admin-<name>.conf
+#   ftnbilling-admin-peer list                   devices, address, last handshake
+#   ftnbilling-admin-peer remove <name>          revoke a device
+#
+# The client config reaches the admin only: AllowedIPs = 10.98.0.1/32 (the
+# server's admin address), so the phone's other traffic is not sent through
+# the VPS. The client private key is shown and saved once; the server keeps
+# only the public key.
+#
+# Test/override variables (all optional):
+#   WG_DIR (/etc/wireguard)  WG_ADMIN_IF (wg-admin)  OUT_DIR (/root)
+#   WG_BIN (wg)  WG_QUICK_BIN (wg-quick)  QR_BIN (qrencode)
+#   ADMIN_ENDPOINT   public address to put in the client config (default:
+#                    PUBLIC_IP from /etc/ftnbilling/ftnbilling.env, else detected)
+#   FTN_ENV_FILE     env file to read PUBLIC_IP from
+set -euo pipefail
+
+IFACE=${WG_ADMIN_IF:-wg-admin}
+WGDIR=${WG_DIR:-/etc/wireguard}
+CONF=$WGDIR/$IFACE.conf
+OUTDIR=${OUT_DIR:-/root}
+WG=${WG_BIN:-wg}
+WGQ=${WG_QUICK_BIN:-wg-quick}
+QR=${QR_BIN:-qrencode}
+ENVF=${FTN_ENV_FILE:-/etc/ftnbilling/ftnbilling.env}
+SELF=ftnbilling-admin-peer
+
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
+
+[ "${FTN_ADMIN_PEER_NOROOT:-0}" = 1 ] || [ "$(id -u)" = 0 ] || die "run as root (sudo $SELF ...)"
+[ -f "$CONF" ] || die "$CONF not found: run the installer first"
+
+valid_name() { [[ $1 =~ ^[a-z0-9][a-z0-9_-]{0,30}$ ]]; }
+
+peer_names() { sed -n 's/^# peer: //p' "$CONF"; }
+
+# The block of one peer: its comment line plus the lines up to the next blank
+# line or next comment.
+peer_value() { # name key
+  awk -v n="$1" -v k="$2" '
+    $0=="# peer: " n {on=1; next}
+    on && /^# peer: / {exit}
+    on && /^\[Interface\]/ {exit}
+    on && $1==k {sub(/^[^=]*= */,""); print; exit}
+  ' "$CONF"
+}
+
+server_pub() {
+  local priv
+  priv=$(awk '/^PrivateKey *=/{print $3; exit}' "$CONF")
+  [ -n "$priv" ] || die "no PrivateKey in $CONF"
+  printf '%s' "$priv" | "$WG" pubkey
+}
+
+server_port() { awk '/^ListenPort *=/{print $3; exit}' "$CONF"; }
+
+server_addr() { # 10.98.0.1
+  awk '/^Address *=/{print $3; exit}' "$CONF" | cut -d/ -f1
+}
+
+public_endpoint() {
+  local ip=${ADMIN_ENDPOINT:-}
+  if [ -z "$ip" ] && [ -r "$ENVF" ]; then
+    ip=$(grep -m1 '^PUBLIC_IP=' "$ENVF" | cut -d= -f2- || true)
+  fi
+  if [ -z "$ip" ]; then
+    ip=$(curl -4 -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)
+  fi
+  [ -n "$ip" ] || die "cannot work out this server's public IP; set ADMIN_ENDPOINT=<ip> and run again"
+  printf '%s' "$ip"
+}
+
+next_ip() {
+  local base used i
+  base=$(server_addr); base=${base%.*}
+  used=$(grep -E '^AllowedIPs *=' "$CONF" | sed -E 's/.*= *//; s#/.*##' || true)
+  for i in $(seq 2 254); do
+    if ! printf '%s\n' "$used" | grep -qx "$base.$i"; then printf '%s.%s' "$base" "$i"; return 0; fi
+  done
+  die "no free address left in the admin subnet"
+}
+
+apply() {
+  # Live update without dropping other devices' sessions.
+  if ! "$WG" show "$IFACE" >/dev/null 2>&1; then
+    echo "NOTE: $IFACE is not running; start it with: systemctl start wg-quick@$IFACE (the peer is saved)" >&2
+    return 0
+  fi
+  "$WG" syncconf "$IFACE" <("$WGQ" strip "$CONF") || die "could not apply the change to $IFACE (the file $CONF is updated; try: systemctl restart wg-quick@$IFACE)"
+}
+
+cmd_add() {
+  local name=${1:-} noqr=0
+  [ -n "$name" ] || die "usage: $SELF add <name>"
+  [ "${2:-}" = "--no-qr" ] && noqr=1
+  valid_name "$name" || die "name must be lowercase letters, digits, - or _ (like: owner, brian-phone)"
+  peer_names | grep -qx "$name" && die "a device called '$name' already exists (remove it first, or pick another name)"
+  local out=$OUTDIR/ftnbilling-admin-$name.conf
+  [ ! -e "$out" ] || die "$out already exists; move it away or pick another name"
+
+  local ip endpoint spub port priv pub
+  ip=$(next_ip)
+  endpoint=$(public_endpoint)
+  spub=$(server_pub)
+  port=$(server_port)
+  priv=$("$WG" genkey)
+  pub=$(printf '%s' "$priv" | "$WG" pubkey)
+
+  ( umask 077
+    tmp=$(mktemp "$WGDIR/.$IFACE.XXXXXX")
+    cp "$CONF" "$tmp"
+    {
+      printf '\n# peer: %s\n[Peer]\nPublicKey = %s\nAllowedIPs = %s/32\n' "$name" "$pub" "$ip"
+    } >>"$tmp"
+    mv -f "$tmp" "$CONF"
+  )
+  apply
+
+  mkdir -p "$OUTDIR"
+  ( umask 077
+    cat >"$out" <<EOF
+[Interface]
+PrivateKey = $priv
+Address = $ip/32
+
+[Peer]
+PublicKey = $spub
+Endpoint = $endpoint:$port
+AllowedIPs = $(server_addr)/32
+PersistentKeepalive = 25
+EOF
+  )
+  chmod 600 "$out"
+
+  printf '\nAdmin device "%s" added (%s).\n' "$name" "$ip"
+  echo "Client config (shown once; the private key is not kept on the server except in the file below):"
+  echo "------------------------------------------------------------------"
+  cat "$out"
+  echo "------------------------------------------------------------------"
+  echo "Saved as $out (mode 0600). Delete it once the device is set up."
+  if [ "$noqr" = 0 ]; then
+    if command -v "$QR" >/dev/null 2>&1; then
+      echo
+      echo "Scan this with the WireGuard app (Add tunnel > Create from QR code):"
+      "$QR" -t ansiutf8 <"$out" || echo "(could not draw the QR code; import the file instead)"
+    else
+      echo "(qrencode is not installed; import the file above instead)"
+    fi
+  fi
+  echo
+  echo "Then connect and open: http://$(server_addr):8080/admin"
+}
+
+cmd_list() {
+  local n found=0 ip pub hs
+  local dump=""
+  if "$WG" show "$IFACE" >/dev/null 2>&1; then dump=$("$WG" show "$IFACE" dump 2>/dev/null || true); fi
+  printf '%-24s %-14s %s\n' NAME ADDRESS "LAST HANDSHAKE"
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    found=1
+    ip=$(peer_value "$n" AllowedIPs); pub=$(peer_value "$n" PublicKey)
+    hs="-"
+    if [ -n "$dump" ]; then
+      hs=$(printf '%s\n' "$dump" | awk -F'\t' -v k="$pub" '$1==k{print $5}')
+      if [ -z "$hs" ] || [ "$hs" = 0 ]; then hs="never"; else hs="$(( ($(date +%s) - hs) ))s ago"; fi
+    fi
+    printf '%-24s %-14s %s\n' "$n" "${ip%/32}" "$hs"
+  done < <(peer_names)
+  [ "$found" = 1 ] || echo "(no devices yet: sudo $SELF add <name>)"
+}
+
+cmd_remove() {
+  local name=${1:-}
+  [ -n "$name" ] || die "usage: $SELF remove <name>"
+  peer_names | grep -qx "$name" || die "no device called '$name' (see: $SELF list)"
+  ( umask 077
+    tmp=$(mktemp "$WGDIR/.$IFACE.XXXXXX")
+    awk -v n="$name" '
+      $0=="# peer: " n {skip=1; next}
+      skip && /^# peer: / {skip=0}
+      skip && /^\[Interface\]/ {skip=0}
+      skip {next}
+      {print}
+    ' "$CONF" | cat -s >"$tmp"
+    mv -f "$tmp" "$CONF"
+  )
+  chmod 600 "$CONF"
+  apply
+  echo "Removed '$name'. It can no longer connect."
+  if [ -e "$OUTDIR/ftnbilling-admin-$name.conf" ]; then
+    echo "The saved client file $OUTDIR/ftnbilling-admin-$name.conf is still there; delete it if you do not need it."
+  fi
+}
+
+CMD=${1:-help}
+[ $# -gt 0 ] && shift
+case "$CMD" in
+  add) cmd_add "$@" ;;
+  list | ls) cmd_list ;;
+  remove | rm | delete) cmd_remove "$@" ;;
+  help | -h | --help) usage ;;
+  *) usage; exit 2 ;;
+esac
