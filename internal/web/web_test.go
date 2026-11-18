@@ -225,7 +225,15 @@ func TestAdminAuthAndCSRF(t *testing.T) {
 	if post(a.csrf, true) != 303 {
 		t.Error("valid post")
 	}
-	if p, ok := a.rt.GetProfile("ispbill-promo"); !ok || p.RateLimit != "3M/3M" {
+	// The push to the router runs in the background; wait for it.
+	var p routeros.Profile
+	var ok bool
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if p, ok = a.rt.GetProfile("ispbill-promo"); ok && p.RateLimit == "3M/3M" {
+			break
+		}
+	}
+	if !ok || p.RateLimit != "3M/3M" {
 		t.Errorf("profile not pushed: %+v", p)
 	}
 	resp, _ := c.PostForm(a.ts.URL+"/admin/packages/save", url.Values{"_csrf": {a.csrf}})
