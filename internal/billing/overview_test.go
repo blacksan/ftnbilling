@@ -71,14 +71,14 @@ func TestOverviewNumbersOnASeededStore(t *testing.T) {
 		s.JoinedAt = now.Add(-24 * time.Hour)
 		d.Sites[e.site] = s
 		for _, p := range []store.Payment{
-			pay("p1", e.site, "a1", 1000, eat(17, 8), "mpesa-c2b", store.PayApplied),
-			pay("p2", e.site, "a2", 500, eat(17, 1), "mpesa-c2b", store.PayApplied),
-			pay("p3", e.site, "a1", 700, eat(16, 20), "mpesa-c2b", store.PayApplied),
-			pay("p4", siteB, "a7", 300, eat(14, 10), "mpesa-c2b", store.PayApplied),
-			pay("p5", e.site, "a3", 400, eat(2, 10), "cash", store.PayApplied),
-			pay("p6", e.site, "a3", 900, eat(30, 10).AddDate(0, -1, 0), "mpesa-c2b", store.PayApplied), // 30 Oct: last month
-			pay("p7", e.site, "a3", 200, eat(17, 9), "voucher", store.PayApplied),                      // free time, not revenue
-			pay("p8", e.site, "", 250, eat(17, 7), "mpesa-c2b", store.PayUnmatched),
+			pay("P1", e.site, "a1", 1000, eat(17, 8), "mpesa-c2b", store.PayApplied),
+			pay("P2", e.site, "a2", 500, eat(17, 1), "mpesa-c2b", store.PayApplied),
+			pay("P3", e.site, "a1", 700, eat(16, 20), "mpesa-c2b", store.PayApplied),
+			pay("P4", siteB, "a7", 300, eat(14, 10), "mpesa-c2b", store.PayApplied),
+			pay("P5", e.site, "a3", 400, eat(2, 10), "cash", store.PayApplied),
+			pay("P6", e.site, "a3", 900, eat(30, 10).AddDate(0, -1, 0), "mpesa-c2b", store.PayApplied), // 30 Oct: last month
+			pay("P7", e.site, "a3", 200, eat(17, 9), "voucher", store.PayApplied),                      // free time, not revenue
+			pay("P8", e.site, "", 250, eat(17, 7), "mpesa-c2b", store.PayUnmatched),
 		} {
 			d.Payments[p.Key] = p
 		}
