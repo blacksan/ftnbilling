@@ -32,3 +32,9 @@ func (noRouter) PingHost(context.Context, string, int) (PingResult, error) {
 	return PingResult{}, ErrNoRouter
 }
 func (noRouter) System(context.Context) (SysInfo, error) { return SysInfo{}, ErrNoRouter }
+
+func (noRouter) Execute(context.Context, string) (string, error) { return "", ErrNoRouter }
+func (noRouter) Traceroute(context.Context, string, int) ([]Hop, error) {
+	return nil, ErrNoRouter
+}
+func (noRouter) Leases(context.Context, string) ([]Lease, error) { return nil, ErrNoRouter }

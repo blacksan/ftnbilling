@@ -18,6 +18,11 @@ type Mock struct {
 	hosts    []Host // extra (unauthorised) hosts for demos and tests
 	// Kicks records the names passed to KickUser (including no-op kicks).
 	Kicks []string
+	// Executed records every command passed to Execute.
+	Executed []string
+	// ExecOut, when set, answers Execute instead of the built-in samples.
+	ExecOut func(cmd string) (string, error)
+	leases  []Lease
 }
 
 func NewMock() *Mock {
@@ -155,4 +160,66 @@ func (m *Mock) IsActive(name string) bool {
 	defer m.mu.Unlock()
 	_, ok := m.active[name]
 	return ok
+}
+
+// AddLease adds a DHCP lease for Leases (demos and tests).
+func (m *Mock) AddLease(l Lease) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.leases = append(m.leases, l)
+}
+
+// Execute answers a few sample commands and records the rest.
+func (m *Mock) Execute(_ context.Context, cmd string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fail != nil {
+		return "", m.fail
+	}
+	m.Executed = append(m.Executed, cmd)
+	if m.ExecOut != nil {
+		return m.ExecOut(cmd)
+	}
+	c := strings.ToLower(strings.Join(strings.Fields(strings.ReplaceAll(cmd, "/", " ")), " "))
+	switch {
+	case strings.HasPrefix(c, ":put "):
+		return strings.Trim(strings.TrimSpace(cmd[strings.Index(cmd, " ")+1:]), `"`), nil
+	case c == "system identity print":
+		return "name: mock-router", nil
+	case c == "system resource print":
+		return "uptime: 3d4h5m\nversion: 7.20 (stable)\ncpu-load: 3%\nboard-name: mock", nil
+	case c == "ip address print":
+		return "0 address=10.5.50.1/24 interface=bridge-hotspot\n1 address=10.99.0.2/22 interface=wg-ftn", nil
+	}
+	return "", nil
+}
+
+// Traceroute returns three synthetic hops.
+func (m *Mock) Traceroute(_ context.Context, target string, _ int) ([]Hop, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fail != nil {
+		return nil, m.fail
+	}
+	return []Hop{
+		{N: 1, Address: "10.99.0.1", Loss: "0%", Sent: "1", Last: "1.1ms", Avg: "1.1ms", Best: "1.1ms", Worst: "1.1ms"},
+		{N: 2, Address: "196.201.0.1", Loss: "0%", Sent: "1", Last: "4.8ms", Avg: "4.8ms", Best: "4.8ms", Worst: "4.8ms"},
+		{N: 3, Address: target, Loss: "0%", Sent: "1", Last: "9.6ms", Avg: "9.6ms", Best: "9.6ms", Worst: "9.6ms"},
+	}, nil
+}
+
+// Leases returns the leases added with AddLease, filtered by MAC.
+func (m *Mock) Leases(_ context.Context, mac string) ([]Lease, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fail != nil {
+		return nil, m.fail
+	}
+	var out []Lease
+	for _, l := range m.leases {
+		if mac == "" || strings.EqualFold(l.MAC, mac) {
+			out = append(out, l)
+		}
+	}
+	return out, nil
 }
