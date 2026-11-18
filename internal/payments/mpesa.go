@@ -41,6 +41,10 @@ type MpesaConfig struct {
 	Passkey       string
 	PublicBaseURL string
 	CallbackToken string // shared secret in the callback URL (?t= or /pay/cb/t/<token>/)
+	// PrevToken is the token CallbackToken replaced; it is accepted, in both
+	// URL forms, until PrevUntil (a grace period for re-registration).
+	PrevToken string
+	PrevUntil time.Time
 	// UnknownRef decides what happens to a Paybill payment whose account
 	// number matches nothing: "reject" (default) bounces it at validation,
 	// "accept" takes it into the Unmatched queue.
@@ -113,7 +117,13 @@ func (m *Mpesa) SetConfig(c MpesaConfig) {
 // set, and tok equals it (constant time). Callbacks are 404 otherwise.
 func (m *Mpesa) CheckCallbackToken(tok string) bool {
 	c := m.conf()
-	return c.Enabled && c.CallbackToken != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(c.CallbackToken)) == 1
+	if !c.Enabled || tok == "" {
+		return false
+	}
+	// Both comparisons always run, so timing does not tell which one matched.
+	cur := c.CallbackToken != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(c.CallbackToken)) == 1
+	prev := c.PrevToken != "" && m.now().Before(c.PrevUntil) && subtle.ConstantTimeCompare([]byte(tok), []byte(c.PrevToken)) == 1
+	return cur || prev
 }
 
 // CallbackURL builds a public callback URL for a path under /pay/cb/, with the
@@ -141,7 +151,7 @@ func (m *Mpesa) CallbackPathURL(rest string) string {
 // scrub removes every credential from a message that may be shown or logged.
 func (m *Mpesa) scrub(s string) string {
 	c := m.conf()
-	for _, secret := range []string{c.Key, c.Secret, c.Passkey, c.CallbackToken, m.tokenNow()} {
+	for _, secret := range []string{c.Key, c.Secret, c.Passkey, c.CallbackToken, c.PrevToken, m.tokenNow()} {
 		if len(secret) >= 4 {
 			s = strings.ReplaceAll(s, secret, "[hidden]")
 		}

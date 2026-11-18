@@ -178,6 +178,11 @@ func (s *Server) settingsMpesa(w http.ResponseWriter, r *http.Request) {
 	p.Data["HTTPS"] = strings.HasPrefix(live.PublicBaseURL, "https://")
 	p.Data["Production"] = live.MpesaEnv == "production"
 	p.Data["HasToken"] = live.MpesaCallbackToken != ""
+	if s.setm != nil {
+		if until, ok := s.setm.PreviousCallbackToken(); ok {
+			p.Data["PrevUntil"] = until
+		}
+	}
 	p.Data["PublicURL"] = live.PublicBaseURL
 	if id := r.URL.Query().Get("test"); id != "" && s.mpesa != nil {
 		if t, ok := s.mpesa.TestStatus(id); ok {

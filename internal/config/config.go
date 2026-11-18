@@ -52,6 +52,11 @@ type Config struct {
 	// Daraja callback URLs carry ?t=<token> and callbacks without it are
 	// refused (Daraja callbacks are unsigned, so this stops forged "payments").
 	MpesaCallbackToken string
+	// MpesaCallbackTokenPrev is the token this one replaced. It keeps working
+	// until MpesaCallbackTokenPrevUntil, so payments Safaricom still sends to
+	// the registered URLs are not lost. Set by the settings manager only.
+	MpesaCallbackTokenPrev      string
+	MpesaCallbackTokenPrevUntil time.Time
 
 	// Multi-building (WireGuard) settings. WGPublicKey is the server's public
 	// key (the installer generates the private key); routers peer with it.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"ispbill/internal/payments"
 	"ispbill/internal/store"
@@ -162,5 +163,27 @@ func TestFTNTESTNeverMatchesAndUnknownRefPolicy(t *testing.T) {
 	r.mp.HandleC2BConfirmation(ctx, c2b("TRNSPACE01", spaced, "3000.00"))
 	if r.expiry().IsZero() {
 		t.Fatalf("payment with a typed code %q was not applied", spaced)
+	}
+}
+
+func TestCallbackTokenGraceForPreviousToken(t *testing.T) {
+	r := newRig(t)
+	c := r.mp.Config()
+	c.CallbackToken, c.PrevToken, c.PrevUntil = "current-token-123456", "previous-token-12345", r.now.Add(time.Hour)
+	r.mp.SetConfig(c)
+	for tok, want := range map[string]bool{"current-token-123456": true, "previous-token-12345": true, "other": false, "": false} {
+		if got := r.mp.CheckCallbackToken(tok); got != want {
+			t.Errorf("%q: %v want %v", tok, got, want)
+		}
+	}
+	r.now = r.now.Add(2 * time.Hour) // the grace is over
+	if r.mp.CheckCallbackToken("previous-token-12345") || !r.mp.CheckCallbackToken("current-token-123456") {
+		t.Error("previous token accepted after its grace period, or the current one refused")
+	}
+	// An empty current token never matches an empty candidate.
+	c.CallbackToken, c.PrevToken = "", ""
+	r.mp.SetConfig(c)
+	if r.mp.CheckCallbackToken("") {
+		t.Error("empty token accepted")
 	}
 }

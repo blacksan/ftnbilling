@@ -41,6 +41,7 @@ type Manager struct {
 	env    config.Config
 	getenv func(string) string
 	now    func() time.Time
+	grace  time.Duration // how long a replaced callback token keeps working
 	// note, when set, receives each audit message instead of an event row in
 	// the database (see NoteAuditTo).
 	note func(string)
@@ -55,7 +56,7 @@ type Manager struct {
 // settings then work, secrets are refused. getenv tells which keys the
 // environment really sets (to tell "env" from "default").
 func New(st *store.Store, dataKey []byte, env config.Config, getenv func(string) string) (*Manager, error) {
-	m := &Manager{st: st, env: env, getenv: getenv, now: time.Now, appliers: map[string][]func(config.Config){}}
+	m := &Manager{st: st, env: env, getenv: getenv, now: time.Now, appliers: map[string][]func(config.Config){}, grace: CallbackGrace}
 	if getenv == nil {
 		m.getenv = func(string) string { return "" }
 	}
@@ -150,6 +151,14 @@ func (m *Manager) rebuild() {
 		}
 		d.Set(&cfg, v)
 		src[d.Key] = SrcDatabase
+	}
+	// The token a rotation replaced keeps working for a while (see graceRows).
+	if row, ok := rows[KeyCallbackPrev]; ok && row.Enc && m.box != nil {
+		if tok, err := m.box.OpenAAD(row.Value, []byte(KeyCallbackPrev)); err == nil {
+			if until, err := time.Parse(time.RFC3339, rows[KeyCallbackPrevUntil].Value); err == nil {
+				cfg.MpesaCallbackTokenPrev, cfg.MpesaCallbackTokenPrevUntil = tok, until
+			}
+		}
 	}
 	m.snap.Store(&snapshot{cfg: cfg, src: src, bad: bad, rows: rows, hasPwd: rows[KeyAdminHash].Value != ""})
 }
@@ -291,9 +300,17 @@ func (m *Manager) Save(section string, values map[string]string, actor string) (
 		return nil, nil
 	}
 	now := m.now()
-	rows := make([]store.Setting, 0, len(writes))
+	rows := make([]store.Setting, 0, len(writes)+2)
 	changes := make([]Change, 0, len(writes))
 	for _, w := range writes {
+		if w.d.Key == "mpesa.callback_token" && w.what != "generated" {
+			// Replacing a working token: the old one stays valid for a while.
+			gr, err := m.graceRows(cur.cfg.MpesaCallbackToken, w.val, now)
+			if err != nil {
+				return nil, err
+			}
+			rows = append(rows, gr...)
+		}
 		row := store.Setting{Key: w.d.Key, Value: w.val, UpdatedAt: now}
 		if w.d.Secret {
 			enc, err := m.box.SealAAD(w.val, []byte(w.d.Key))
@@ -360,10 +377,27 @@ func (m *Manager) Revert(key, actor string) error {
 	if !ok {
 		return fmt.Errorf("unknown setting %q", key)
 	}
-	if _, has := m.snap.Load().rows[key]; !has {
+	cur := m.snap.Load()
+	if _, has := cur.rows[key]; !has {
 		return nil
 	}
-	if err := m.commit(nil, []string{key}, d.Section, []Change{{key, "reverted to " + SrcEnv}}, actor, m.now()); err != nil {
+	// A revert must not leave M-Pesa switched on without a callback token
+	// (callbacks would all be refused, and the config would not validate).
+	after := cur.cfg
+	d.Set(&after, d.Get(m.env))
+	if d.Section == SecMpesa && after.MpesaCallbackToken == "" && after.MpesaKey != "" && after.MpesaSecret != "" && after.MpesaShortcode != "" {
+		return errors.New("M-Pesa is configured and needs a callback token, and the environment file has none: set or rotate the token instead of going back")
+	}
+	now := m.now()
+	var rows []store.Setting
+	if key == "mpesa.callback_token" {
+		gr, err := m.graceRows(cur.cfg.MpesaCallbackToken, after.MpesaCallbackToken, now)
+		if err != nil {
+			return err
+		}
+		rows = gr
+	}
+	if err := m.commit(rows, []string{key}, d.Section, []Change{{key, "reverted to " + SrcEnv}}, actor, now); err != nil {
 		return err
 	}
 	m.applyLocked(d.Section)
@@ -387,11 +421,57 @@ func (m *Manager) RotateCallbackToken(actor string) error {
 		return err
 	}
 	row := store.Setting{Key: "mpesa.callback_token", Value: enc, Enc: true, UpdatedAt: now}
-	if err := m.commit([]store.Setting{row}, nil, SecMpesa, []Change{{"mpesa.callback_token", "rotated"}}, actor, now); err != nil {
+	gr, err := m.graceRows(m.snap.Load().cfg.MpesaCallbackToken, tok, now)
+	if err != nil {
+		return err
+	}
+	if err := m.commit(append(gr, row), nil, SecMpesa, []Change{{"mpesa.callback_token", "rotated"}}, actor, now); err != nil {
 		return err
 	}
 	m.applyLocked(SecMpesa)
 	return nil
+}
+
+// Keys of the replaced callback token, kept for a grace period. They are not
+// registry settings: the pages never show or edit them.
+const (
+	KeyCallbackPrev      = "mpesa.callback_token_prev"
+	KeyCallbackPrevUntil = "mpesa.callback_token_prev_until"
+)
+
+// CallbackGrace is how long a replaced callback token keeps working. Safaricom
+// keeps calling the registered URLs, and in production they cannot simply be
+// registered again, so cutting the old token off at once would lose payments.
+const CallbackGrace = 7 * 24 * time.Hour
+
+// graceRows keeps old as the previous callback token until now+grace, when it
+// is being replaced by a different value. Without an old token, or without a
+// DATA_KEY to seal it, there is nothing to keep.
+func (m *Manager) graceRows(old, replacement string, now time.Time) ([]store.Setting, error) {
+	if old == "" || old == replacement || m.box == nil || m.grace <= 0 {
+		return nil, nil
+	}
+	enc, err := m.box.SealAAD(old, []byte(KeyCallbackPrev))
+	if err != nil {
+		return nil, err
+	}
+	return []store.Setting{
+		{Key: KeyCallbackPrev, Value: enc, Enc: true, UpdatedAt: now},
+		{Key: KeyCallbackPrevUntil, Value: now.Add(m.grace).UTC().Format(time.RFC3339), UpdatedAt: now},
+	}, nil
+}
+
+// SetCallbackGrace changes the grace period (tests).
+func (m *Manager) SetCallbackGrace(d time.Duration) { m.grace = d }
+
+// PreviousCallbackToken reports whether a replaced token still works, and
+// until when. It never returns the token.
+func (m *Manager) PreviousCallbackToken() (until time.Time, ok bool) {
+	c := m.snap.Load().cfg
+	if c.MpesaCallbackTokenPrev == "" || !m.now().Before(c.MpesaCallbackTokenPrevUntil) {
+		return time.Time{}, false
+	}
+	return c.MpesaCallbackTokenPrevUntil, true
 }
 
 func newToken() (string, error) {

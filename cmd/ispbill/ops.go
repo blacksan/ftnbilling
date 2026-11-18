@@ -54,7 +54,7 @@ func (a alertInputs) Live(id string) (metrics.Live, metrics.Config, bool) {
 func mpesaConf(c config.Config) payments.MpesaConfig {
 	return payments.MpesaConfig{
 		BaseURL: c.MpesaBaseURL(), Key: c.MpesaKey, Secret: c.MpesaSecret, Shortcode: c.MpesaShortcode, C2BShortcode: c.MpesaC2BShortcode,
-		Passkey: c.MpesaPasskey, PublicBaseURL: c.PublicBaseURL, CallbackToken: c.MpesaCallbackToken, UnknownRef: c.MpesaUnknownRef,
+		Passkey: c.MpesaPasskey, PublicBaseURL: c.PublicBaseURL, CallbackToken: c.MpesaCallbackToken, PrevToken: c.MpesaCallbackTokenPrev, PrevUntil: c.MpesaCallbackTokenPrevUntil, UnknownRef: c.MpesaUnknownRef,
 		Enabled: c.MpesaEnabled(),
 	}
 }

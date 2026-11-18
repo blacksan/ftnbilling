@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"ispbill/internal/billing"
 	"ispbill/internal/notify"
 	"ispbill/internal/settings"
 	"ispbill/internal/store"
@@ -82,6 +83,19 @@ func (s *Server) settingsPassword(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/logout", http.StatusSeeOther)
 }
 
+// tokenChangeOK guards the M-Pesa callback token. In production Safaricom
+// keeps the URLs it was given, and registering new ones fails ("URLs are
+// already registered") until the old ones are deleted through the Daraja
+// portal or Safaricom support, so changing the token needs an explicit tick.
+func (s *Server) tokenChangeOK(w http.ResponseWriter, r *http.Request, to string) bool {
+	if s.live().MpesaEnv != "production" || r.PostFormValue("confirm_reregister") == "1" {
+		return true
+	}
+	s.back(w, r, to, "Error: M-Pesa is in production. Changing the callback token changes the URLs Safaricom must call, and Safaricom refuses to register new URLs "+
+		"until the old ones are deleted (Daraja portal or Safaricom support). The old token keeps working for 7 days. Tick \"I understand\" to go on.")
+	return false
+}
+
 // ---- generic save and revert ------------------------------------------------------------
 
 // saveSection stores a section's form. A secret that is being set or replaced
@@ -111,6 +125,9 @@ func (s *Server) saveSection(w http.ResponseWriter, r *http.Request, section, to
 		}
 	}
 	if needPass && !s.reauth(w, r, to) {
+		return nil, false
+	}
+	if section == settings.SecMpesa && strings.TrimSpace(values["mpesa.callback_token"]) != "" && !s.tokenChangeOK(w, r, to) {
 		return nil, false
 	}
 	ch, err := s.setm.Save(section, values, realIP(r))
@@ -144,6 +161,9 @@ func (s *Server) settingsRevert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if d.Secret && !s.reauth(w, r, to) {
+		return
+	}
+	if key == "mpesa.callback_token" && !s.tokenChangeOK(w, r, to) {
 		return
 	}
 	if err := s.setm.Revert(key, realIP(r)); err != nil {
@@ -332,14 +352,18 @@ func (s *Server) settingsMpesaSTKPoll(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) settingsMpesaRotate(w http.ResponseWriter, r *http.Request) {
 	to := "/admin/settings/mpesa"
-	if s.noManager(w, r, to) || !s.reauth(w, r, to) {
+	if s.noManager(w, r, to) || !s.reauth(w, r, to) || !s.tokenChangeOK(w, r, to) {
 		return
 	}
 	if err := s.setm.RotateCallbackToken(realIP(r)); err != nil {
 		s.back(w, r, to, "Error: "+err.Error())
 		return
 	}
-	s.back(w, r, to, "The callback token was replaced. Register the C2B URLs again, or Daraja keeps calling the old ones (which now answer 404).")
+	msg := "The callback token was replaced. Register the C2B URLs again."
+	if until, ok := s.setm.PreviousCallbackToken(); ok {
+		msg += " The old token still works until " + until.In(billing.EAT).Format("Mon 2 Jan, 15:04") + " EAT, so payments Safaricom sends to the old URLs are not lost."
+	}
+	s.back(w, r, to, msg)
 }
 
 // settingsMpesaReveal shows the real callback URLs once, after the password.

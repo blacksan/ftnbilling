@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"ispbill/internal/config"
 	"ispbill/internal/secretbox"
@@ -320,5 +321,80 @@ func TestNoteAuditToWritesNoEventRow(t *testing.T) {
 	}
 	if events() != before || len(notes) != 1 || !strings.Contains(notes[0], "admin.pass_hash") || strings.Contains(notes[0], "a-long-password") {
 		t.Fatalf("events %d->%d notes %q", before, events(), notes)
+	}
+}
+
+func mpesaVals() map[string]string {
+	return map[string]string{"mpesa.key": "consumerkey1234", "mpesa.secret": "consumersecret1234", "mpesa.shortcode": "174379",
+		"mpesa.passkey": "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919"}
+}
+
+// A rotated token keeps working for the grace period, then stops; it is stored
+// encrypted and never shown.
+func TestRotatedCallbackTokenKeepsWorkingForAGrace(t *testing.T) {
+	m, st := newMgr(t, nil, testKey)
+	now := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
+	m.SetClock(func() time.Time { return now })
+	if _, err := m.Save(SecMpesa, mpesaVals(), ""); err != nil {
+		t.Fatal(err)
+	}
+	first := m.Effective().MpesaCallbackToken
+	if _, ok := m.PreviousCallbackToken(); ok {
+		t.Fatal("a generated first token has no previous one")
+	}
+	if err := m.RotateCallbackToken("1.2.3.4"); err != nil {
+		t.Fatal(err)
+	}
+	c := m.Effective()
+	if c.MpesaCallbackToken == first || c.MpesaCallbackTokenPrev != first || !c.MpesaCallbackTokenPrevUntil.Equal(now.Add(7*24*time.Hour)) {
+		t.Fatalf("prev not kept: %q until %v", c.MpesaCallbackTokenPrev, c.MpesaCallbackTokenPrevUntil)
+	}
+	if until, ok := m.PreviousCallbackToken(); !ok || !until.Equal(now.Add(7*24*time.Hour)) {
+		t.Fatalf("PreviousCallbackToken: %v %v", until, ok)
+	}
+	st.View(func(d *store.Data) {
+		if r := d.Settings[KeyCallbackPrev]; !r.Enc || strings.Contains(r.Value, first) {
+			t.Fatalf("previous token stored in clear: %+v", r)
+		}
+		for _, e := range d.Events {
+			if strings.Contains(e.Msg, first) {
+				t.Fatal("token in the audit log")
+			}
+		}
+	})
+	// It survives a rebuild (a restart) and ends when the grace is over.
+	now = now.Add(8 * 24 * time.Hour)
+	if _, ok := m.PreviousCallbackToken(); ok {
+		t.Fatal("grace period not over")
+	}
+}
+
+// Going back to the environment value keeps the replaced token too, and is
+// refused when it would leave M-Pesa configured without any token.
+func TestRevertCallbackTokenChecksAndKeepsPrevious(t *testing.T) {
+	m, _ := newMgr(t, nil, testKey)
+	if _, err := m.Save(SecMpesa, mpesaVals(), ""); err != nil {
+		t.Fatal(err)
+	}
+	tok := m.Effective().MpesaCallbackToken
+	if err := m.Revert("mpesa.callback_token", ""); err == nil || m.Effective().MpesaCallbackToken != tok {
+		t.Fatalf("revert left M-Pesa without a token: %v", err)
+	}
+	// With a token in the environment file, the revert works and keeps the old one.
+	env := map[string]string{"MPESA_CALLBACK_TOKEN": "env-token-0123456789abcdef"}
+	m2, _ := newMgr(t, env, testKey)
+	if _, err := m2.Save(SecMpesa, mpesaVals(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := m2.RotateCallbackToken(""); err != nil {
+		t.Fatal(err)
+	}
+	rotated := m2.Effective().MpesaCallbackToken
+	if err := m2.Revert("mpesa.callback_token", ""); err != nil {
+		t.Fatal(err)
+	}
+	c := m2.Effective()
+	if c.MpesaCallbackToken != "env-token-0123456789abcdef" || c.MpesaCallbackTokenPrev != rotated {
+		t.Fatalf("token %q prev %q", c.MpesaCallbackToken, c.MpesaCallbackTokenPrev)
 	}
 }

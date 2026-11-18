@@ -459,3 +459,65 @@ func TestWebhookTurnsOnWithoutRestart(t *testing.T) {
 		t.Fatalf("webhook still live after the verify token was cleared: %d", c)
 	}
 }
+
+// In production, replacing or reverting the callback token needs an explicit
+// tick; the old token keeps working for the grace period, in both URL forms.
+func TestProductionTokenChangeNeedsConfirmation(t *testing.T) {
+	r := newSetRig(t)
+	vals := url.Values{"mpesa.key": {"consumerkey1234"}, "mpesa.secret": {"consumersecret1234"}, "mpesa.shortcode": {"174379"},
+		"mpesa.passkey": {"bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919"}, "mpesa.env": {"production"}, "current_password": {pw}}
+	if _, msg, _ := r.post("/admin/settings/mpesa", vals); !strings.HasPrefix(msg, "Saved") {
+		t.Fatalf("save: %q", msg)
+	}
+	tok := r.m.Effective().MpesaCallbackToken
+	if tok == "" || !strings.Contains(r.get(t, "/admin/settings/mpesa"), "Production warning") {
+		t.Fatal("no token, or no production warning in the page")
+	}
+	// Rotate without the tick: refused, token unchanged.
+	_, msg, _ := r.post("/admin/settings/mpesa/rotate-token", url.Values{"current_password": {pw}})
+	if !strings.HasPrefix(msg, "Error") || !strings.Contains(msg, "register") || r.m.Effective().MpesaCallbackToken != tok {
+		t.Fatalf("rotate without confirmation: %q", msg)
+	}
+	// Saving a replacement token or reverting it is refused the same way.
+	_, msg, _ = r.post("/admin/settings/mpesa", url.Values{"mpesa.callback_token": {"a-brand-new-token-0123456789"}, "current_password": {pw}})
+	if !strings.HasPrefix(msg, "Error") || r.m.Effective().MpesaCallbackToken != tok {
+		t.Fatalf("token replaced without confirmation: %q", msg)
+	}
+	_, msg, _ = r.post("/admin/settings/revert", url.Values{"key": {"mpesa.callback_token"}, "current_password": {pw}})
+	if !strings.HasPrefix(msg, "Error") || r.m.Effective().MpesaCallbackToken != tok {
+		t.Fatalf("revert without confirmation: %q", msg)
+	}
+	// With the tick the revert is still refused: it would leave M-Pesa without a token.
+	_, msg, _ = r.post("/admin/settings/revert", url.Values{"key": {"mpesa.callback_token"}, "current_password": {pw}, "confirm_reregister": {"1"}})
+	if !strings.HasPrefix(msg, "Error") || r.m.Effective().MpesaCallbackToken != tok {
+		t.Fatalf("revert left M-Pesa without a token: %q", msg)
+	}
+	// With the tick, rotate works and tells until when the old token works.
+	_, msg, _ = r.post("/admin/settings/mpesa/rotate-token", url.Values{"current_password": {pw}, "confirm_reregister": {"1"}})
+	if strings.HasPrefix(msg, "Error") || !strings.Contains(msg, "still works until") {
+		t.Fatalf("confirmed rotate: %q", msg)
+	}
+	c := r.m.Effective()
+	if c.MpesaCallbackToken == tok || c.MpesaCallbackTokenPrev != tok {
+		t.Fatal("previous token not kept")
+	}
+	// The callbacks accept the previous token in the ?t= and the path form.
+	r.mp.SetConfig(payments.MpesaConfig{Enabled: true, CallbackToken: c.MpesaCallbackToken, PrevToken: tok, PrevUntil: time.Now().Add(time.Hour), PublicBaseURL: "https://x.example"})
+	post := func(path string) int {
+		resp, err := http.Post(r.ts.URL+path, "application/json", strings.NewReader(`{"TransID":"X1","BillRefNumber":"NOPE","TransAmount":"5"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, p := range []string{"/pay/cb/t/" + tok + "/c2b/validate", "/pay/cb/c2b/validate?t=" + tok, "/pay/cb/t/" + c.MpesaCallbackToken + "/c2b/validate"} {
+		if code := post(p); code != 200 {
+			t.Errorf("%s: %d", p, code)
+		}
+	}
+	r.mp.SetConfig(payments.MpesaConfig{Enabled: true, CallbackToken: c.MpesaCallbackToken, PrevToken: tok, PrevUntil: time.Now().Add(-time.Second), PublicBaseURL: "https://x.example"})
+	if code := post("/pay/cb/t/" + tok + "/c2b/validate"); code != 404 {
+		t.Errorf("expired previous token still works: %d", code)
+	}
+}
