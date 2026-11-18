@@ -14,7 +14,7 @@
 <div class="card"><div class="muted">How long the server takes to reach the router's API through the WireGuard tunnel.</div>{{.Data.Chart}}</div>
 <h3>Outages</h3>
 <div class="tw"><table><tr><th>Started (EAT)</th><th>Ended (EAT)</th><th>Duration</th><th>Cause</th></tr>
-{{range .Data.Outages}}<tr><td>{{.Start}}</td><td>{{if .Open}}<span class="pill down">ongoing</span>{{else}}{{.End}}{{end}}</td><td>{{.Dur}}</td><td class="wrap">{{.Cause}}</td></tr>
+{{range .Data.Outages}}<tr><td>{{.Start}}</td><td>{{if .Open}}<span class="pill down">ongoing</span>{{else}}{{.End}}{{end}}</td><td>{{.Dur}}</td><td class="nw">{{.Cause}}</td></tr>
 {{else}}<tr><td colspan="4">No outages in the last {{$days}} days.</td></tr>{{end}}</table></div>
 {{if gt (len .Data.All) 1}}<h3>All buildings</h3>
 <div class="tw"><table><tr><th>Building</th><th class="n">Availability</th><th class="n">Outages</th><th class="n">Time down</th><th></th></tr>

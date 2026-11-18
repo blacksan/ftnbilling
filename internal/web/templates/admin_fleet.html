@@ -25,7 +25,8 @@
 <dt>Router ping</dt><dd>{{if .Router}}{{.Router}}{{else}}-{{end}}</dd>
 <dt>Tunnel</dt><dd>{{if .Tunnel}}{{.Tunnel}}{{else}}-{{end}}</dd>
 <dt>Flats active</dt><dd>{{.Active}} of {{.Total}}</dd>
-<dt>Revenue</dt><dd>{{kes .Today}} today, {{kes .Month}} month</dd>
+<dt>Revenue today</dt><dd>{{kes .Today}}</dd>
+<dt>Revenue this month</dt><dd>{{kes .Month}}</dd>
 </dl>
 {{if .Notice}}<form method="post" action="/admin/sites/outage-notice" style="margin-top:10px" onsubmit="return confirm('Send a WhatsApp outage notice to every tenant of {{.S.Name}} who has a WhatsApp number?')"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="site" value="{{.S.ID}}"><button>Tell tenants about the outage</button>{{if .Notified}} <span class="muted">{{.Notified}} notices already sent</span>{{end}}</form>{{end}}
 <div style="margin-top:8px"><a href="/admin/uptime?site={{.S.ID}}">uptime</a> &middot; <a href="/admin/site/select?site={{.S.ID}}&amp;next=/admin/metrics">usage</a> &middot; <a href="/admin/sites/view?id={{.S.ID}}">building</a></div>

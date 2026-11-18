@@ -1,15 +1,15 @@
 {{define "admin_alerts"}}{{template "ahead" .}}
-{{range .Data.Channels}}{{if .Paused}}<div class="banner"><b>{{.Label}} is paused.</b> The provider refused the credentials: <code>{{.Paused}}</code> Fix the setting on the server, then press the test button.</div>{{end}}{{end}}
+{{range .Data.Channels}}{{if .Paused}}<div class="banner"><b>{{.Label}} is paused.</b> The provider refused the credentials: <code>{{.Paused}}</code>. Fix the setting on the server, then press the test button.</div>{{end}}{{end}}
 <h3>Open alerts</h3>
 <div class="tw"><table><tr><th>Building</th><th>Alert</th><th>State</th><th>For</th><th>Detail</th><th>Message</th></tr>
-{{range .Data.Active}}<tr><td><b>{{.Building}}</b></td><td>{{.Label}}</td><td><span class="pill {{.A.State}}">{{.A.State}}</span></td><td>{{.For}}</td><td class="wrap">{{.A.Detail}}</td>
+{{range .Data.Active}}<tr><td><b>{{.Building}}</b></td><td>{{.Label}}</td><td><span class="pill {{.A.State}}">{{.A.State}}</span></td><td>{{.For}}</td><td class="nw">{{.A.Detail}}</td>
 <td>{{if .Muted}}muted{{else if .A.Group}}sent as one group message{{else if .A.NotifiedAt.IsZero}}{{if eq .A.State "firing"}}held back (cooldown){{else}}waiting for the hold time{{end}}{{else}}sent {{eat .A.NotifiedAt}}{{end}}</td></tr>
 {{else}}<tr><td colspan="6">Nothing is wrong right now.</td></tr>{{end}}</table></div>
 
 <div class="grid2">
 <div class="card"><b>Where alerts go</b>
 <p class="muted" style="margin:4px 0 8px">The addresses and tokens are server settings. Here you only switch a channel on or off, and test it.</p>
-<table>{{range .Data.Channels}}<tr><td><b>{{.Label}}</b></td><td class="wrap">{{if .Configured}}{{.To}}{{else}}<span class="muted">not set up: {{.To}}</span>{{end}}</td>
+<table>{{range .Data.Channels}}<tr><td><b>{{.Label}}</b></td><td class="nw">{{if .Configured}}{{.To}}{{else}}<span class="muted">not set up: {{.To}}</span>{{end}}</td>
 <td><form method="post" action="/admin/alerts/test" class="i"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="channel" value="{{.Name}}"><button{{if not .Configured}} disabled style="opacity:.45;cursor:not-allowed"{{end}}>Send test</button></form></td></tr>{{end}}</table>
 <p class="muted" style="margin-top:8px">The WhatsApp test sends the approved <code>ftn_admin_alert</code> template to every number in <code>WA_ADMIN_NUMBERS</code>.</p></div>
 <div class="card"><b>Mute a building</b>
@@ -27,14 +27,14 @@
 <td class="n">{{if .HasThreshold}}<input name="rule_{{.Key}}_thr" value="{{.R.Threshold}}" size="5" style="text-align:right"> <span class="muted">{{.Unit}}</span>{{else}}<span class="muted">-</span>{{end}}</td>
 <td class="n"><input name="rule_{{.Key}}_hold" value="{{.R.HoldMin}}" size="4" style="text-align:right"></td></tr>{{end}}</table></div>
 <div class="row" style="margin-top:12px">
-<label>Channels</label>
-<label class="muted"><input type="checkbox" name="ch_email" value="1"{{if .Data.Set.Email}} checked{{end}}> email</label>
-<label class="muted"><input type="checkbox" name="ch_telegram" value="1"{{if .Data.Set.Telegram}} checked{{end}}> Telegram</label>
-<label class="muted"><input type="checkbox" name="ch_whatsapp" value="1"{{if .Data.Set.WhatsApp}} checked{{end}}> WhatsApp</label></div>
+<span class="muted" style="align-self:center">Send alerts by</span>
+<label class="ck"><input type="checkbox" name="ch_email" value="1"{{if .Data.Set.Email}} checked{{end}}> email</label>
+<label class="ck"><input type="checkbox" name="ch_telegram" value="1"{{if .Data.Set.Telegram}} checked{{end}}> Telegram</label>
+<label class="ck"><input type="checkbox" name="ch_whatsapp" value="1"{{if .Data.Set.WhatsApp}} checked{{end}}> WhatsApp</label></div>
 <div class="row" style="margin-top:10px">
 <label>Cooldown per alert (minutes)<input name="cooldown" value="{{.Data.Set.CooldownMin}}" size="5"></label>
-<label class="muted" style="align-self:end"><input type="checkbox" name="repeat_on" value="1"{{if .Data.Set.RepeatEnabled}} checked{{end}}> repeat while still firing, every</label>
-<label style="align-self:end"><input name="repeat_hours" value="{{.Data.Set.RepeatHours}}" size="3"> <span class="muted">hours</span></label></div>
+<label class="ck"><input type="checkbox" name="repeat_on" value="1"{{if .Data.Set.RepeatEnabled}} checked{{end}}> repeat while still firing, every</label>
+<label class="ck"><input name="repeat_hours" value="{{.Data.Set.RepeatHours}}" size="3"> hours</label></div>
 <div class="row" style="margin-top:10px">
 <label>Tell tenants about an outage<select name="notice"><option value="off"{{if eq .Data.Set.OutageNotice "off"}} selected{{end}}>never</option><option value="manual"{{if eq .Data.Set.OutageNotice "manual"}} selected{{end}}>when I press the button</option><option value="auto"{{if eq .Data.Set.OutageNotice "auto"}} selected{{end}}>automatically</option></select></label>
 <label>Automatic notice after (minutes down)<input name="auto_min" value="{{.Data.Set.AutoMin}}" size="5"></label>
@@ -44,6 +44,6 @@
 
 <h3>History</h3>
 <div class="tw"><table><tr><th>Building</th><th>Alert</th><th>Started (EAT)</th><th>Lasted</th><th>Detail</th><th>Told you</th></tr>
-{{range .Data.History}}<tr><td><b>{{.Building}}</b></td><td>{{.Label}}</td><td>{{.Start}}</td><td>{{.Dur}}</td><td class="wrap">{{.E.Detail}}</td><td>{{if .E.Notified}}yes{{else}}no{{end}}</td></tr>
+{{range .Data.History}}<tr><td><b>{{.Building}}</b></td><td>{{.Label}}</td><td>{{.Start}}</td><td>{{.Dur}}</td><td class="nw">{{.E.Detail}}</td><td>{{if .E.Notified}}yes{{else}}no{{end}}</td></tr>
 {{else}}<tr><td colspan="6">No resolved alerts yet.</td></tr>{{end}}</table></div>
 {{template "afoot"}}{{end}}
