@@ -969,7 +969,7 @@ start_and_check() {
   if [ -n "$(envget DATABASE_URL)" ]; then
     local chk
     chk=$(app_cli db-check 2>&1 || true)
-    DB_COUNTS=$(printf '%s\n' "$chk" | sed -n '1,/^applied payments/p' | tr -s ' ' | head -24)
+    DB_COUNTS=$(printf '%s\n' "$chk" | sed -n '1,/^applied payments/p' | tr -s ' ')
     MAC_REPORT=$(printf '%s\n' "$chk" | sed -n '/^MAC conflicts:/,$p')
   fi
   make_setup_code
@@ -1006,12 +1006,14 @@ doctor_and_banner() {
  Health:            ${HEALTH:-}
  WireGuard:         $WG_IF (routers) udp/$WG_PORT, server key $WG_PUB
 EOF
-  if [ -n "${DB_COUNTS:-}" ]; then printf ' Database:\n%s\n' "$(printf '%s\n' "$DB_COUNTS" | sed 's/^/                    /')"; fi
   if [ -n "$MAC_REPORT" ]; then
     printf '\n ATTENTION, flats that share a MAC address (not provisioned until fixed in Admin):\n%s\n' "$(printf '%s\n' "$MAC_REPORT" | sed 's/^/   /')"
-  elif [ -n "$(envget DATABASE_URL)" ]; then
+  elif printf '%s' "${DB_COUNTS:-}" | grep -q 'applied payments'; then
     echo " MAC conflicts:     none"
+  elif [ -n "$(envget DATABASE_URL)" ]; then
+    warn "db-check gave no answer, so the MAC-conflict report is missing: run  sudo -u $APP $BIN db-check" 
   fi
+  if [ -n "${DB_COUNTS:-}" ]; then printf ' Database:\n%s\n' "$(printf '%s\n' "$DB_COUNTS" | sed 's/^/                    /')"; fi
   if [ -n "$SETUP_OUT" ]; then
     cat <<EOF
 
