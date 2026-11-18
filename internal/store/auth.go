@@ -21,6 +21,8 @@ type AdminUser struct {
 	TOTPSecretEnc   string    `json:"totp_secret_enc,omitempty"`
 	TOTPConfirmedAt time.Time `json:"totp_confirmed_at,omitempty"` // zero = not enrolled
 	TOTPLastStep    int64     `json:"totp_last_step,omitempty"`    // replay guard
+	TOTPFails       int       `json:"totp_fails,omitempty"`        // wrong codes since the last good one (durable: survives restarts)
+	TOTPFailAt      time.Time `json:"totp_fail_at,omitempty"`      // when the last wrong code came
 	RecoveryCodes   []string  `json:"recovery_codes,omitempty"`
 	Disabled        bool      `json:"disabled,omitempty"`
 	PassChangedAt   time.Time `json:"pass_changed_at,omitempty"`
@@ -56,6 +58,7 @@ type APIDevice struct {
 	AccessExpiresAt   time.Time `json:"access_expires_at,omitempty"`
 	RefreshHash       string    `json:"refresh_hash,omitempty"`
 	RefreshPrevHash   string    `json:"refresh_prev_hash,omitempty"`
+	RefreshOlder      []string  `json:"refresh_older,omitempty"` // the few refresh hashes before the previous one (reuse detection)
 	RefreshRotatedAt  time.Time `json:"refresh_rotated_at,omitempty"`
 	RefreshExpiresAt  time.Time `json:"refresh_expires_at,omitempty"`
 	AbsoluteExpiresAt time.Time `json:"absolute_expires_at,omitempty"`

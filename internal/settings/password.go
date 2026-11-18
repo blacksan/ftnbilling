@@ -33,6 +33,16 @@ func HashPassword(pw string) (string, error) {
 	return encodeHash(pw, salt, pbkdf2Iter)
 }
 
+// HashPasswordCost is HashPassword with a chosen number of rounds. Tests use a
+// small one to stay fast; the server always uses HashPassword.
+func HashPasswordCost(pw string, rounds int) (string, error) {
+	salt := make([]byte, saltBytes)
+	if _, err := rand.Read(salt); err != nil {
+		return "", err
+	}
+	return encodeHash(pw, salt, rounds)
+}
+
 func encodeHash(pw string, salt []byte, iter int) (string, error) {
 	k, err := pbkdf2.Key(sha256.New, pw, salt, iter, hashBytes)
 	if err != nil {

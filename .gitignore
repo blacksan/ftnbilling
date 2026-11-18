@@ -4,3 +4,5 @@ dist/*.zip
 *.log
 dist/*.tar.gz
 dist/SHA256SUMS
+/ispbill
+/cmd/ispbill/ispbill

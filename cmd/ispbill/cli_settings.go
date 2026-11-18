@@ -2,27 +2,39 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"time"
 
+	"ispbill/internal/authn"
 	"ispbill/internal/config"
 	"ispbill/internal/settings"
 	"ispbill/internal/store"
 )
 
-// runSettingsCommand runs admin-reset-password and settings-check. With
-// Postgres they work while the service runs (they touch settings rows only).
-// The JSON file has no lock, so there they refuse while the service answers.
+// runSettingsCommand runs admin-reset-password, admin-status and settings-check.
+// Changes to the sign-in (admin-reset-password) are refused while the service
+// answers, on either database: the running service keeps its own copy of the
+// users, sessions and phones in memory and would write it back over the change.
+// Use deploy/ftnbilling-admin-reset, which stops the service, runs this, and
+// starts it again. The read-only commands work on Postgres while it runs; the
+// JSON file has no lock, so there they refuse too.
 func runSettingsCommand(cmd string, args []string, getenv func(string) string, out io.Writer) error {
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	generate := fs.Bool("generate", false, "set a random password and print it once (admin-reset-password)")
+	setupCode := fs.Bool("setup-code", false, "print a one-time code to enrol the authenticator app (admin-reset-password)")
+	resetTOTP := fs.Bool("reset-totp", false, "remove the authenticator app and recovery codes (admin-reset-password)")
+	revoke := fs.Bool("revoke-sessions", false, "sign every browser and phone out (admin-reset-password)")
+	userName := fs.String("user", "", "the admin user (default: the owner)")
+	asJSON := fs.Bool("json", false, "machine-readable output (admin-status)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("%s: %w\n\n%s", cmd, err, usage)
 	}
@@ -34,6 +46,9 @@ func runSettingsCommand(cmd string, args []string, getenv func(string) string, o
 	defer cancel()
 	var st *store.Store
 	if cfg.DatabaseURL != "" {
+		if cmd == "admin-reset-password" && serviceAnswers(cfg.ListenAddr) {
+			return errServiceRunning
+		}
 		st, err = openPostgresShared(ctx, cfg)
 	} else {
 		if serviceAnswers(cfg.ListenAddr) {
@@ -49,42 +64,43 @@ func runSettingsCommand(cmd string, args []string, getenv func(string) string, o
 	if err != nil {
 		return err
 	}
+
+	au, err := authn.New(st, cfg.DataKey, "Fast Tech Net")
+	if err != nil {
+		return err
+	}
 	if cfg.DatabaseURL != "" {
-		// The service numbers its audit events itself; a row written here
-		// would collide with its next one. Log to stderr (the journal) instead.
-		m.NoteAuditTo(func(msg string) { fmt.Fprintln(os.Stderr, "audit: "+msg+" (cli)") })
+		au.SetAudit(func(_ *store.Data, e store.Event) { fmt.Fprintln(os.Stderr, "audit: "+e.Msg+" (cli)") })
 	}
 
 	switch cmd {
-	case "admin-reset-password":
-		if !*generate {
-			// Without a usable ADMIN_PASS, removing the stored hash would leave
-			// no admin password and the service would refuse to start.
-			if err := cfg.CheckAdminPass(); err != nil {
-				return fmt.Errorf("not removing the stored admin password: ADMIN_PASS in the environment file is empty or \"admin\", "+
-					"so the service could not start without it. Use `admin-reset-password -generate` to set a new random password instead (%w)", err)
-			}
-			if err := m.ClearAdminPassword("cli"); err != nil {
-				return err
-			}
-			fmt.Fprintln(out, "the stored admin password was removed: ADMIN_PASS from the environment file works again")
-			restartNote(out, cfg)
+	case "admin-status":
+		owner, ok := au.Owner()
+		res := struct {
+			Owner        string `json:"owner"`
+			TOTPEnrolled bool   `json:"totp_enrolled"`
+		}{}
+		if ok {
+			res.Owner, res.TOTPEnrolled = owner.Username, authn.Enrolled(owner)
+		}
+		if *asJSON {
+			return json.NewEncoder(out).Encode(res)
+		}
+		if !ok {
+			fmt.Fprintln(out, "no admin owner exists yet (it is created when the service first starts, from ADMIN_PASS)")
 			return nil
 		}
-		pw, err := settings.RandomPassword()
-		if err != nil {
-			return err
-		}
-		if err := m.SetAdminPassword(pw, "cli"); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "the admin password was reset. Log in as %q with:\n\n  %s\n\nChange it in Settings after logging in.\n", cfg.AdminUser, pw)
-		restartNote(out, cfg)
+		fmt.Fprintf(out, "owner: %s\nauthenticator app enrolled: %s\n", res.Owner, yesNo(res.TOTPEnrolled, "yes", "no"))
 		return nil
 
+	case "admin-reset-password":
+		return adminReset(au, st, cfg, out, resetOpts{user: *userName, generate: *generate, setupCode: *setupCode,
+			resetTOTP: *resetTOTP, revoke: *revoke})
+
 	case "settings-check":
-		fmt.Fprintf(out, "database: %s\nDATA_KEY: %s\nadmin password: %s\n\n", st.Kind(), yesNo(len(cfg.DataKey) > 0, "set", "NOT set (secrets cannot be saved)"),
-			yesNo(m.HasAdminPassword(), "stored in the database", "from ADMIN_PASS in the environment"))
+		owner, hasOwner := au.Owner()
+		fmt.Fprintf(out, "database: %s\nDATA_KEY: %s\nadmin owner: %s\nauthenticator app: %s\n\n", st.Kind(), yesNo(len(cfg.DataKey) > 0, "set", "NOT set (secrets cannot be saved)"),
+			yesNo(hasOwner, owner.Username, "not created yet (made from ADMIN_PASS at first start)"), yesNo(hasOwner && authn.Enrolled(owner), "enrolled", "not enrolled"))
 		for _, sec := range []string{settings.SecWhatsApp, settings.SecMpesa, settings.SecEmail} {
 			fmt.Fprintf(out, "[%s]\n", sec)
 			for _, f := range m.Fields(sec) {
@@ -107,16 +123,15 @@ func runSettingsCommand(cmd string, args []string, getenv func(string) string, o
 	return fmt.Errorf("unknown command %q", cmd)
 }
 
+var errServiceRunning = errors.New("the service is running, so this change would be undone: it keeps its own copy of the sign-in data " +
+	"and writes it back. Run `sudo ftnbilling-admin-reset ...` instead: it stops the service, makes the change and starts the service again")
+
 // restartNote tells the admin the running service has not seen the change.
 // With Postgres the service keeps working but still honours the old password
 // until it restarts (it remembers verified logins for 12 hours); with the JSON
 // file the service was stopped, and must be started again.
 func restartNote(out io.Writer, cfg config.Config) {
-	if cfg.DatabaseURL != "" {
-		fmt.Fprintln(out, "\nRESTART REQUIRED: the running service still accepts the old password until it restarts:\n  sudo systemctl restart ftnbilling\n(deploy/ftnbilling-admin-reset does this for you.)")
-		return
-	}
-	fmt.Fprintln(out, "\nStart the service again: sudo systemctl start ftnbilling")
+	fmt.Fprintln(out, "\nStart the service again: sudo systemctl start ftnbilling (deploy/ftnbilling-admin-reset does this for you)")
 }
 
 // serviceAnswers reports whether something answers /healthz on the listen address.
@@ -142,4 +157,98 @@ func yesNo(b bool, yes, no string) string {
 		return yes
 	}
 	return no
+}
+
+type resetOpts struct {
+	user                                   string
+	generate, setupCode, resetTOTP, revoke bool
+}
+
+// adminReset changes the admin owner's sign-in. With no flag it sets the
+// password back to ADMIN_PASS; -generate sets a random one. The other flags
+// leave the password alone. Every change signs all browsers and phones out
+// (the running service has to be restarted to see it, see restartNote).
+func adminReset(au *authn.Service, st *store.Store, cfg config.Config, out io.Writer, o resetOpts) error {
+	only := o.setupCode || o.resetTOTP || o.revoke
+	setPass := o.generate || !only
+	var u store.AdminUser
+	var ok bool
+	if !o.generate {
+		// A fresh server has no owner until main creates one at first start;
+		// make it the same way, so -setup-code works before the first start.
+		if _, has := au.Owner(); !has {
+			if err := seedOwner(au, st, cfg, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+				return err
+			}
+		}
+	}
+	if o.user != "" {
+		u, ok = au.UserByName(o.user)
+		if !ok {
+			return fmt.Errorf("there is no admin user %q", o.user)
+		}
+	} else {
+		u, ok = au.Owner()
+	}
+	if setPass {
+		pw := cfg.AdminPass
+		if o.generate {
+			var err error
+			if pw, err = settings.RandomPassword(); err != nil {
+				return err
+			}
+		} else if err := cfg.CheckAdminPass(); err != nil {
+			return fmt.Errorf("not resetting the admin password: ADMIN_PASS in the environment file is empty or \"admin\". "+
+				"Use `admin-reset-password -generate` to set a new random password instead (%w)", err)
+		}
+		hash, err := settings.HashPassword(pw)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			if _, err := au.SeedOwner(cfg.AdminUser, hash); err != nil {
+				return err
+			}
+			if u, ok = au.Owner(); !ok {
+				return errors.New("could not create the admin owner")
+			}
+		} else if err := au.SetPassword(u.ID, hash, "cli", "", ""); err != nil {
+			return err
+		}
+		if o.generate {
+			fmt.Fprintf(out, "the admin password was reset. Log in as %q with:\n\n  %s\n\nChange it under Security after logging in.\n", u.Username, pw)
+		} else {
+			fmt.Fprintf(out, "the password of %q was reset to ADMIN_PASS from the environment file\n", u.Username)
+		}
+	}
+	if !ok {
+		return errors.New("no admin owner exists yet: run `admin-reset-password -generate` to create one")
+	}
+	if o.resetTOTP {
+		if err := au.ResetTOTP(u.ID, "cli", "", ""); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "the authenticator app and recovery codes of %q were removed; they enrol again at their next sign-in\n", u.Username)
+		u, _ = au.UserByID(u.ID)
+	}
+	if o.revoke && !o.resetTOTP && !setPass {
+		n, err := au.RevokeSessions(u.ID, "", "command line", "cli", "")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "signed out %d browser session(s); phones must sign in again too\n", n)
+	}
+	if o.setupCode {
+		u, _ = au.UserByID(u.ID)
+		switch code, err := au.IssueSetupCode(u.ID, "cli", ""); {
+		case errors.Is(err, authn.ErrAlreadyEnrolled):
+			fmt.Fprintf(out, "%q already has an authenticator app, so no setup code was issued (use -reset-totp if the phone is lost)\n", u.Username)
+		case err != nil:
+			return err
+		default:
+			fmt.Fprintf(out, "\nsetup code (valid 14 days; it stops working when the authenticator app is set up. Type it at sign-in, after the password):\n\n  %s\n", code)
+		}
+	}
+	restartNote(out, cfg)
+	return nil
 }

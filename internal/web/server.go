@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"ispbill/internal/authn"
 	"ispbill/internal/billing"
 	"ispbill/internal/config"
 	"ispbill/internal/payments"
@@ -61,10 +62,13 @@ type Server struct {
 	toolRun   ToolRunner // runs ping and traceroute from this server; nil = the real programs
 	findRL    *limiter   // equipment finder
 	wgNet     netip.Prefix
-	adminNet  netip.Prefix
 	ops       Ops
 	setm      *settings.Manager // nil = environment configuration only
 	auth      *adminAuth
+	authn     *authn.Service
+	alertSink func(string) // tests: take security alerts instead of the outbox
+	idem      *idemStore
+	refreshRL *limiter // /api/v1/auth/refresh by client address
 
 	onlineMu sync.Mutex
 	online   map[string]onlineEntry
@@ -82,9 +86,15 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 	if p, err := netip.ParsePrefix(cfg.WGSubnet); err == nil {
 		s.wgNet = p.Masked()
 	}
-	if p, err := netip.ParsePrefix(cfg.AdminAllowCIDR); err == nil {
-		s.adminNet = p.Masked()
+	a, err := authn.New(st, cfg.DataKey, cfg.BrandName)
+	if err != nil {
+		log.Error("sign-in: DATA_KEY unusable, two-factor sign-in cannot be set up", "err", err)
+		a, _ = authn.New(st, nil, cfg.BrandName)
 	}
+	s.authn = a
+	a.SetAlert(s.securityAlert)
+	s.idem = newIdemStore()
+	s.refreshRL = newLimiter(30, time.Minute)
 	funcs := template.FuncMap{
 		"kes": func(n int) string { return "KES " + itoa(n) },
 		// brandParts splits "Fast Tech Net" into {"Fast Tech", "Net"} so the
@@ -159,7 +169,9 @@ func (s *Server) Handler() http.Handler {
 	s.routerFileRoutes(mux)
 	s.callbackRoutes(mux)
 	s.waRoutes(mux)
+	s.loginRoutes(mux)
 	s.adminRoutes(mux)
+	s.apiRoutes(mux)
 	return s.middleware(mux)
 }
 
@@ -224,6 +236,13 @@ func redactPath(p string) string {
 	if strings.HasPrefix(p, "/j/") {
 		return "/j/[redacted]"
 	}
+	// An API path may carry a device id or payment key, never a token, but the
+	// sign-in endpoints are kept out of the log entirely beyond their name.
+	if strings.HasPrefix(p, "/api/v1/auth/") {
+		if rest := strings.TrimPrefix(p, "/api/v1/auth/"); strings.HasPrefix(rest, "devices/") {
+			return "/api/v1/auth/devices/[id]"
+		}
+	}
 	// /pay/cb/t/<token>/stk: the token is a credential.
 	if rest, ok := strings.CutPrefix(p, "/pay/cb/t/"); ok {
 		if i := strings.Index(rest, "/"); i >= 0 {
@@ -262,20 +281,25 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, code: 200}
-		h := w.Header()
-		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("X-Frame-Options", "DENY")
-		h.Set("Cache-Control", "no-store")
+		s.securityHeaders(sw.Header(), r)
 		defer func() {
 			if rec := recover(); rec != nil {
 				s.log.Error("panic in handler", "path", redactPath(r.URL.Path), "panic", rec)
 				http.Error(sw, "internal error", 500)
 			}
 			if r.URL.Path != "/healthz" {
-				// Query strings are deliberately not logged.
+				// Query strings, headers and bodies are deliberately not logged:
+				// they carry passwords, codes and tokens.
 				s.log.Info("http", "method", r.Method, "path", redactPath(r.URL.Path), "status", sw.code, "ms", time.Since(start).Milliseconds())
 			}
 		}()
+		if s.fromTunnel(r) && (r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/admin/") || strings.HasPrefix(r.URL.Path, "/api/v1/") || r.URL.Path == "/api/v1") {
+			// Routers reach the server over their tunnel and must never see the
+			// admin pages or the API. (The customer portal's /api/orders/ poll
+			// is not part of the API and stays.)
+			http.NotFound(sw, r)
+			return
+		}
 		r.Body = http.MaxBytesReader(sw, r.Body, 1<<20)
 		next.ServeHTTP(sw, r)
 	})
@@ -313,6 +337,36 @@ type limiter struct {
 	hits map[string][]time.Time
 }
 
+const limiterCap = 5000
+
+// evictLocked drops the keys that were quiet the longest (never all of them,
+// which would hand every busy client a fresh allowance).
+func (l *limiter) evictLocked(now time.Time) {
+	type kv struct {
+		k string
+		t time.Time
+	}
+	all := make([]kv, 0, len(l.hits))
+	for k, ts := range l.hits {
+		last := time.Time{}
+		if len(ts) > 0 {
+			last = ts[len(ts)-1]
+		}
+		if now.Sub(last) >= l.win {
+			delete(l.hits, k)
+			continue
+		}
+		all = append(all, kv{k, last})
+	}
+	if len(l.hits) <= limiterCap {
+		return
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].t.Before(all[j].t) })
+	for _, x := range all[:len(all)-limiterCap*9/10] {
+		delete(l.hits, x.k)
+	}
+}
+
 func newLimiter(n int, win time.Duration) *limiter {
 	return &limiter{n: n, win: win, hits: map[string][]time.Time{}}
 }
@@ -332,8 +386,8 @@ func (l *limiter) allow(key string) bool {
 		return false
 	}
 	l.hits[key] = append(keep, now)
-	if len(l.hits) > 5000 { // crude bound on memory
-		l.hits = map[string][]time.Time{key: l.hits[key]}
+	if len(l.hits) > limiterCap {
+		l.evictLocked(now)
 	}
 	return true
 }
@@ -382,7 +436,8 @@ var _ = strings.TrimSpace
 func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
 
 // fromTunnel reports whether the request came from inside the WireGuard
-// subnet (a router, not a person). The admin is refused there.
+// subnet (a router, not a person). The admin pages and the API are refused
+// there (404, as if they did not exist).
 func (s *Server) fromTunnel(r *http.Request) bool {
 	if !s.wgNet.IsValid() {
 		return false
@@ -391,21 +446,6 @@ func (s *Server) fromTunnel(r *http.Request) bool {
 	return err == nil && s.wgNet.Contains(a.Unmap())
 }
 
-// adminAllowed says whether the admin may be served to this request: only
-// from the machine itself (SSH tunnel) and the admin WireGuard network.
-// Router tunnels (WG_SUBNET) and every other address are refused, even
-// though the reverse proxy already blocks /admin from the internet.
-func (s *Server) adminAllowed(r *http.Request) bool {
-	if s.fromTunnel(r) {
-		return false
-	}
-	a, err := netip.ParseAddr(realIP(r))
-	if err != nil {
-		return false
-	}
-	a = a.Unmap()
-	if a.IsLoopback() {
-		return true
-	}
-	return s.adminNet.IsValid() && s.adminNet.Contains(a)
-}
+// Auth is the sign-in service (users, sessions, devices); main seeds the owner
+// through it and the tests sign in with it.
+func (s *Server) Auth() *authn.Service { return s.authn }

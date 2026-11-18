@@ -17,13 +17,13 @@ func (s *Server) callbackRoutes(mux *http.ServeMux) {
 		if err := s.mpesa.HandleSTKCallback(r.Context(), b); err != nil {
 			s.log.Warn("stk callback", "err", err)
 		}
-		writeJSON(w, map[string]any{"ResultCode": 0, "ResultDesc": "Accepted"})
+		jsonOut(w, map[string]any{"ResultCode": 0, "ResultDesc": "Accepted"})
 	})
 	validate := s.cb(func(w http.ResponseWriter, b []byte, r *http.Request) {
-		writeJSON(w, s.mpesa.HandleC2BValidation(b))
+		jsonOut(w, s.mpesa.HandleC2BValidation(b))
 	})
 	confirm := s.cb(func(w http.ResponseWriter, b []byte, r *http.Request) {
-		writeJSON(w, s.mpesa.HandleC2BConfirmation(r.Context(), b))
+		jsonOut(w, s.mpesa.HandleC2BConfirmation(r.Context(), b))
 	})
 	mux.HandleFunc("POST /pay/cb/stk", stk)
 	mux.HandleFunc("POST /pay/cb/c2b/validate", validate)
@@ -54,7 +54,7 @@ func (s *Server) cb(h func(http.ResponseWriter, []byte, *http.Request)) http.Han
 	}
 }
 
-func writeJSON(w http.ResponseWriter, v any) {
+func jsonOut(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
 }

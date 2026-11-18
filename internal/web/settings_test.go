@@ -37,6 +37,17 @@ type setRig struct {
 	site store.Site
 	csrf string
 	cl   *http.Client
+	br   *browser
+	who  *who
+
+	alertMu sync.Mutex
+	alerts  []string // security alerts the owners would have got
+}
+
+func (r *setRig) gotAlerts() []string {
+	r.alertMu.Lock()
+	defer r.alertMu.Unlock()
+	return append([]string(nil), r.alerts...)
 }
 
 func newSetRig(t *testing.T) *setRig {
@@ -70,39 +81,19 @@ func newSetRig(t *testing.T) *setRig {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	r := &setRig{ts: ts, srv: srv, st: st, m: m, mp: mp, rt: mgr.MockRouter(),
-		cl: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+		cl: &http.Client{CheckRedirect: noRedirect}}
 	st.View(func(d *store.Data) { r.site = d.Sites[envID] })
-	r.do("GET", "/admin", nil, pw).Body.Close()
+	srv.SetSecurityAlertSink(func(msg string) { r.alertMu.Lock(); r.alerts = append(r.alerts, msg); r.alertMu.Unlock() })
+	r.who = seedUser(t, srv, st, "admin", store.RoleOwner, pw)
+	r.br = signIn(t, ts, srv, st, r.who)
+	r.csrf = r.br.CSRF
 	return r
 }
 
-func (r *setRig) do(method, path string, form url.Values, pass string) *http.Response {
-	var rd io.Reader
-	if method == "POST" {
-		if form == nil {
-			form = url.Values{}
-		}
-		form.Set("_csrf", r.csrf)
-		rd = strings.NewReader(form.Encode())
-	}
-	req, _ := http.NewRequest(method, r.ts.URL+path, rd)
-	req.SetBasicAuth("admin", pass)
-	if method == "POST" {
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	}
-	if r.csrf != "" {
-		req.AddCookie(&http.Cookie{Name: "ispbill_csrf", Value: r.csrf})
-	}
-	resp, err := r.cl.Do(req)
-	if err != nil {
-		panic(err)
-	}
-	for _, c := range resp.Cookies() {
-		if c.Name == "ispbill_csrf" {
-			r.csrf = c.Value
-		}
-	}
-	return resp
+// do sends a signed-in request. The pass argument is kept for old call sites
+// and ignored: the session is the credential now.
+func (r *setRig) do(method, path string, form url.Values, _ string) *http.Response {
+	return r.br.Do(r.cl, r.ts.URL, method, path, form)
 }
 
 func (r *setRig) get(t *testing.T, path string) string {
@@ -131,28 +122,45 @@ func (r *setRig) post(path string, f url.Values) (int, string, string) {
 
 const longPW = "a-long-new-password-42"
 
-func TestSettingsPasswordFlow(t *testing.T) {
+func TestSecurityPasswordFlow(t *testing.T) {
 	r := newSetRig(t)
+	other := signIn(t, r.ts, r.srv, r.st, r.who) // a second browser
 	// Wrong current password: nothing changes.
-	code, msg, _ := r.post("/admin/settings/password", url.Values{"current_password": {"nope"}, "new_password": {longPW}, "confirm_password": {longPW}})
-	if code != 303 || !strings.HasPrefix(msg, "Error") || r.m.HasAdminPassword() {
-		t.Fatalf("wrong current password: %d %q hash=%v", code, msg, r.m.HasAdminPassword())
+	code, msg, _ := r.post("/admin/security/password", url.Values{"current_password": {"nope"}, "new_password": {longPW}, "confirm_password": {longPW}})
+	if code != 303 || !strings.HasPrefix(msg, "Error") {
+		t.Fatalf("wrong current password: %d %q", code, msg)
 	}
-	// Too short.
-	_, msg, _ = r.post("/admin/settings/password", url.Values{"current_password": {pw}, "new_password": {"short"}, "confirm_password": {"short"}})
-	if !strings.HasPrefix(msg, "Error") || r.m.HasAdminPassword() {
+	if c, _, _ := r.attempt("", "admin", pw); c != 303 {
+		t.Fatalf("the password changed anyway: %d", c)
+	}
+	// Too short, and not matching.
+	_, msg, _ = r.post("/admin/security/password", url.Values{"current_password": {pw}, "new_password": {"short"}, "confirm_password": {"short"}, "totp": {r.who.Code(t, r.st)}})
+	if !strings.HasPrefix(msg, "Error") {
 		t.Fatalf("short password accepted: %q", msg)
 	}
-	code, _, _ = r.post("/admin/settings/password", url.Values{"current_password": {pw}, "new_password": {longPW}, "confirm_password": {longPW}})
-	if code != 303 || !r.m.HasAdminPassword() {
-		t.Fatalf("password change: %d", code)
+	_, msg, _ = r.post("/admin/security/password", url.Values{"current_password": {pw}, "new_password": {longPW}, "confirm_password": {longPW + "x"}, "totp": {r.who.Code(t, r.st)}})
+	if !strings.HasPrefix(msg, "Error") {
+		t.Fatalf("mismatch accepted: %q", msg)
 	}
-	// The environment password no longer works; the new one does.
-	if c := r.do("GET", "/admin", nil, pw).StatusCode; c != 401 {
-		t.Fatalf("old env password still works: %d", c)
+	code, msg, _ = r.post("/admin/security/password", url.Values{"current_password": {pw}, "new_password": {longPW}, "confirm_password": {longPW}, "totp": {r.who.Code(t, r.st)}})
+	if code != 303 || strings.HasPrefix(msg, "Error") {
+		t.Fatalf("password change: %d %q", code, msg)
 	}
-	if c := r.do("GET", "/admin", nil, longPW).StatusCode; c != 200 {
+	// The old password is refused, the new one accepted.
+	if c, _, _ := r.attempt("203.0.113.9", "admin", pw); c != 401 {
+		t.Fatalf("old password still works: %d", c)
+	}
+	if c, _, _ := r.attempt("203.0.113.8", "admin", longPW); c != 303 {
 		t.Fatalf("new password refused: %d", c)
+	}
+	// This browser stays signed in; every other one is signed out.
+	if c := r.do("GET", "/admin", nil, "").StatusCode; c != 200 {
+		t.Fatalf("the current session was ended: %d", c)
+	}
+	resp := other.Do(r.cl, r.ts.URL, "GET", "/admin", nil)
+	resp.Body.Close()
+	if resp.StatusCode != 303 {
+		t.Fatalf("the other session survived the password change: %d", resp.StatusCode)
 	}
 	// The password never reaches the audit log.
 	r.st.View(func(d *store.Data) {
@@ -162,23 +170,6 @@ func TestSettingsPasswordFlow(t *testing.T) {
 			}
 		}
 	})
-}
-
-func TestSettingsLoginRateLimit(t *testing.T) {
-	r := newSetRig(t)
-	var last int
-	for i := 0; i < 8; i++ {
-		last = r.do("GET", "/admin", nil, "wrong-password").StatusCode
-	}
-	if last != 429 {
-		t.Fatalf("after repeated failures want 429, got %d", last)
-	}
-	// Even the right password waits while blocked.
-	resp := r.do("GET", "/admin", nil, pw)
-	resp.Body.Close()
-	if resp.StatusCode != 429 || resp.Header.Get("Retry-After") == "" {
-		t.Fatalf("blocked client: %d retry-after=%q", resp.StatusCode, resp.Header.Get("Retry-After"))
-	}
 }
 
 func TestSettingsSecretsNeverRendered(t *testing.T) {

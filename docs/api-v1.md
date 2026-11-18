@@ -26,7 +26,7 @@ Auth:
 | Method/path | Request | Response |
 |---|---|---|
 | POST `/auth/login` | `{username,password,totp?,recovery_code?,setup_code?,device:{install_id,name,model,platform:"android",app_version}}` | `{access_token,access_expires_at,refresh_token,refresh_expires_at,device_id,user:{id,username,role}}` |
-| POST `/auth/refresh` | `{refresh_token}` | same token fields |
+| POST `/auth/refresh` | `{refresh_token}` | same token fields, including `user` |
 | POST `/auth/logout` | – | 204, revokes this device |
 | GET `/me` | | `{user,device:{id,name,created_at}}` |
 | GET `/auth/devices` | | `{items:[{id,name,model,app_version,created_at,last_seen_at,last_ip,current,revoked_at}]}` |
@@ -90,5 +90,28 @@ Supersedes the `GET /unregistered` row above. `GET /unregistered?site=&online=` 
 
 `attach` goes through the same rule as `PUT /accounts/{id}/mac`: one MAC can never be on more than one open account in any building.
 
+## Addendum J: assumptions fixed by the server (v2)
+
+- `POST /auth/refresh` returns the same body as login, including `user`. Refresh tokens rotate on every use. The previous token is accepted for 60 s (a lost response); after that, presenting it revokes the device (`token_revoked`).
+- Login: a user without an authenticator app gets 403 `totp_enrol_required` (enrol on the web page first). A correct password with no `totp`/`recovery_code` gets 401 `totp_invalid` (counts as a failed attempt). 429 carries a `Retry-After` header and `details.retry_after_s`.
+- Payment `status` is one of `matched`, `unmatched`, `refunded`, `ignored` (the store's `applied` is shown as `matched`). The app lists the queue with `GET /payments?status=unmatched`. Methods include `cash` (manual payments without a transaction code get a `CASH-...` key).
+- Account detail: `customer` is always an object `{id,name,phone,email}` (`id` is empty and name/phone come from the account when no customer record is linked); `events` are `{time,msg,actor}` (last 20); `usage.month_bytes`.
+- `lease_status` is `bound`, `waiting` or `none`. Account `state` is `active`, `expired`, `suspended` or `new`.
+- `/unregistered` items include `site_name` and a nullable `suggested_account` `{id,code,flat}`: in that building, an open account with no MAC first, else an account whose MAC has not been seen for over 24 h. `?online=true` is accepted (`online` = seen within the last 2 minutes and flagged online).
+- `POST /sites/{id}/unregistered/refresh` answers 202 `{queued:true}`.
+- `Idempotency-Key`: the identical stored status and body are replayed (header `Idempotent-Replayed: true`) for 24 h per device; only answers below 500 are kept; the same key with a different request is 400 `bad_request`. The store is in memory, so a server restart forgets it.
+- `GET /audit?limit=&cursor=`: newest first; the cursor is opaque (`s<seq>`); owner only.
+- `GET /sites/{id}/qoe?period=24h|7d|30d` maps to the collector's day/week/month windows; any other value is 400.
+- Access tokens last 15 min (`ftna_...`); refresh tokens `ftnr_...` slide 30 days, 90 days absolute. Cookies are never read on `/api/v1`. `/api/v1` answers 404 to the routers' WireGuard subnet.
+
+## Addendum K: sign-in hardening (v3)
+
+- `POST /auth/login` accepts an optional `known_token` and returns one (`known_token`) on success. Store it with the refresh token and send it back at every login. A phone that presents a valid `known_token` is never refused or slowed by strangers' failed guesses at the account. Without it a login can be refused only per client address (429, IPv6 grouped by /64); when many failures hit the account it is answered more slowly instead. The value is revoked by a password change, a 2FA reset, "sign out everywhere", or disabling the user.
+- After 5 wrong authenticator codes in a row for a user, further codes are refused for a growing wait (429 `rate_limited`, `Retry-After`). After 10, 401 `totp_invalid` with `details.recovery_code_required: true`: only `recovery_code` works, and a good one resets the count. The counter is stored in the database.
+- A refresh token older than the previous one (any of the last 5 the device had) that is presented again revokes the device (`token_revoked`); a token the device never had changes nothing.
+- Idempotency keys are capped at 500 per device (the oldest go first).
+
 ## Changes
 - v1 (2026-11-18): first version (W0).
+- v2 (2026-11-18): W1 server. Adds addendum J (see above): refresh returns `user`, payment status `matched`, customer/events shapes, `suggested_account`, 202 refresh, 429 details, idempotent replay semantics, `GET /audit` cursor, `cash` method.
+- v3 (2026-11-18): W1 review fixes: addendum K (`known_token`, TOTP back-off and lock, refresh history, idempotency cap). Additive only.
