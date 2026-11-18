@@ -33,6 +33,11 @@ func (s *Server) settingsRoutes(get, post func(string, http.HandlerFunc)) {
 	get("/admin/settings/mpesa/stk-test", s.settingsMpesaSTKPoll)
 	post("/admin/settings/mpesa/rotate-token", s.settingsMpesaRotate)
 	post("/admin/settings/mpesa/urls", s.settingsMpesaReveal)
+	// The reveal page is a POST result; its address must not be a dead end when
+	// opened again, or when a form on it redirects "back" to it.
+	get("/admin/settings/mpesa/urls", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/admin/settings/mpesa", http.StatusSeeOther)
+	})
 
 	get("/admin/settings/email", s.settingsEmail)
 	post("/admin/settings/email", s.settingsSaveEmail)
@@ -97,6 +102,11 @@ func (s *Server) sectionPage(r *http.Request, active, section string) adminPage 
 	p.Data["HasKey"] = s.setm != nil && s.setm.HasDataKey()
 	p.Data["NoManager"] = s.setm == nil
 	p.Data["Next"] = r.URL.Path
+	for _, t := range s.settingsTabs("") { // forms return to the tab, never to a POST-only address
+		if t.Key == strings.TrimPrefix(active, "set-") {
+			p.Data["Next"] = t.URL
+		}
+	}
 	if s.setm != nil && section != "" {
 		p.Data["Fields"] = s.setm.Fields(section)
 	}
@@ -244,6 +254,11 @@ func (s *Server) settingsEquipmentFind(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimSpace(r.URL.Query().Get("mac"))
 	if raw == "" {
 		s.renderEquipment(w, r, "", nil, "")
+		return
+	}
+	// Each search asks every building's router, so searches are rate limited.
+	if !s.findRL.allow(realIP(r)) {
+		s.back(w, r, "/admin/settings/equipment", "Error: too many searches in a short time; wait a minute and try again")
 		return
 	}
 	mac, err := billing.NormalizeMAC(raw)

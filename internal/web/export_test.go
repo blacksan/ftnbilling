@@ -24,3 +24,13 @@ func (s *Server) AuthInjectFailures(ip string, n int) {
 	}
 	_ = ip
 }
+
+// SetServerToolTimeout shortens the server-side tool timeout; it returns a restore func.
+func SetServerToolTimeout(d time.Duration) func() {
+	old := serverToolTimeout
+	serverToolTimeout = d
+	return func() { serverToolTimeout = old }
+}
+
+// ResetToolLimiter forgets recent tool runs, so a test can exceed 30 a minute.
+func (s *Server) ResetToolLimiter() { s.toolRL = newLimiter(30, time.Minute) }

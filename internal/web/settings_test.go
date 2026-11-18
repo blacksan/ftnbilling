@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -565,5 +566,115 @@ func TestEmailFirstSetupNeedsNoPassword(t *testing.T) {
 	_, msg, _ := r.post("/admin/settings/email", url.Values{"smtp.host": {"smtp.example.com"}, "smtp.port": {"587"}})
 	if !strings.HasPrefix(msg, "Saved") {
 		t.Fatalf("%q", msg)
+	}
+}
+
+// Ping and traceroute from this server run the program with an argument
+// vector (no shell), after the target passed the strict check.
+func TestServerSideTools(t *testing.T) {
+	r := newSetRig(t)
+	type call struct {
+		name string
+		args []string
+	}
+	var mu sync.Mutex
+	var calls []call
+	r.srv.SetToolRunner(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		mu.Lock()
+		calls = append(calls, call{name, args})
+		mu.Unlock()
+		return []byte("PING ok\n4 packets transmitted, 4 received\n"), nil
+	})
+	run := func(tool, target string) string {
+		resp := r.do("POST", "/admin/tools/"+tool, url.Values{"from": {"server"}, "target": {target}}, pw)
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return string(b)
+	}
+	if out := run("ping", "8.8.8.8"); !strings.Contains(out, "4 packets transmitted") || !strings.Contains(out, "this server") {
+		t.Fatalf("server ping output missing: %s", out)
+	}
+	if len(calls) != 1 || calls[0].name != "/usr/bin/ping" ||
+		strings.Join(calls[0].args, " ") != "-n -c 4 -W 2 -w 10 -- 8.8.8.8" {
+		t.Fatalf("ping call: %+v", calls)
+	}
+	run("traceroute", "example.co.ke")
+	if len(calls) != 2 || calls[1].name != "/usr/bin/traceroute" ||
+		strings.Join(calls[1].args, " ") != "-n -m 20 -q 1 -w 1 -- example.co.ke" {
+		t.Fatalf("traceroute call: %+v", calls)
+	}
+	run("ping", "2001:db8::1")
+	// Nothing odd reaches the program.
+	r.srv.ResetToolLimiter()
+	n := len(calls)
+	for _, bad := range []string{"-c", "-f", "-4", "--help", "fe80::1%eth0", "8.8.8.8; id", "$(id)", "`id`", "a b", "8.8.8.8 -c1", "-example.com", "", "../x", "http://x"} {
+		for _, tool := range []string{"ping", "traceroute"} {
+			if out := run(tool, bad); !strings.Contains(out, "enter an IP address or a host name") {
+				t.Errorf("%s %q was not refused", tool, bad)
+			}
+		}
+	}
+	if len(calls) != n {
+		t.Fatalf("a refused target reached the program: %+v", calls[n:])
+	}
+	// A hung program ends at the timeout.
+	r.srv.ResetToolLimiter()
+	defer web.SetServerToolTimeout(150 * time.Millisecond)()
+	r.srv.SetToolRunner(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	if out := run("ping", "8.8.8.8"); !strings.Contains(out, "timed out") {
+		t.Fatalf("no timeout message: %s", out)
+	}
+}
+
+func TestToolsPageOffersServerAndRouter(t *testing.T) {
+	r := newSetRig(t)
+	b := r.get(t, "/admin/tools")
+	if !strings.Contains(b, `name="from"`) || !strings.Contains(b, `value="server"`) || !strings.Contains(b, "this server") {
+		t.Fatal("the Tools page has no from=server choice")
+	}
+}
+
+// Test buttons allow 5 a minute; the equipment finder 5 a minute.
+func TestActionRateLimits(t *testing.T) {
+	r := newSetRig(t)
+	var msg string
+	for i := 0; i < 6; i++ {
+		_, msg, _ = r.post("/admin/settings/email/test", url.Values{})
+	}
+	if !strings.Contains(msg, "too many") {
+		t.Fatalf("6th test email: %q", msg)
+	}
+	for i := 0; i < 5; i++ {
+		resp := r.do("GET", "/admin/settings/equipment/find?mac=aa-bb-cc-dd-ee-0"+string(rune('1'+i)), nil, pw)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("search %d: %d", i, resp.StatusCode)
+		}
+	}
+	resp := r.do("GET", "/admin/settings/equipment/find?mac=aa-bb-cc-dd-ee-09", nil, pw)
+	resp.Body.Close()
+	loc, _ := url.Parse(resp.Header.Get("Location"))
+	if resp.StatusCode != 303 || !strings.Contains(loc.Query().Get("msg"), "too many") {
+		t.Fatalf("6th search: %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+}
+
+// The revealed-URLs page is the result of a POST. Its address answers a GET
+// with a redirect, and the forms on it return to the M-Pesa tab, not to it.
+func TestMpesaURLsPageIsNotADeadEnd(t *testing.T) {
+	r := newSetRig(t)
+	resp := r.do("GET", "/admin/settings/mpesa/urls", nil, pw)
+	resp.Body.Close()
+	if resp.StatusCode != 303 || resp.Header.Get("Location") != "/admin/settings/mpesa" {
+		t.Fatalf("GET /urls: %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	resp = r.do("POST", "/admin/settings/mpesa/urls", url.Values{"current_password": {pw}}, pw)
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || !strings.Contains(string(b), `name="next" value="/admin/settings/mpesa"`) || strings.Contains(string(b), `value="/admin/settings/mpesa/urls"`) {
+		t.Fatalf("revealed page: %d, next field wrong", resp.StatusCode)
 	}
 }
