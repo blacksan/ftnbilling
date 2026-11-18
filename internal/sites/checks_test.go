@@ -34,10 +34,14 @@ func seedHealthy(m *routeros.Mock) {
 	m.SeedRow("/ip/dhcp-server", R{"name": "dhcp-hotspot", "interface": "br-hotspot", "disabled": "false"})
 	m.SeedRow("/ip/traffic-flow/target", R{"dst-address": "10.99.0.1", "port": "2055", "version": "5", "comment": "ftn: netflow", "disabled": "false"})
 	m.SeedRow("/ip/service", R{"name": "www", "address": "10.99.0.1/32", "disabled": "false"})
-	m.SeedRow("/user/group", R{"name": "ftn-api", "policy": "read,write,test,sensitive,api,rest-api"})
-	m.SeedRow("/system/script", R{"name": "ftn-kit-tick"})
-	m.SeedRow("/system/script", R{"name": "ftn-kit-rollback"})
-	m.SeedRow("/system/scheduler", R{"name": "ftn-kit-timer", "comment": "ftn: kit v1", "run-count": "10", "disabled": "false"})
+	m.SeedRow("/user/group", R{"name": "ftn-api", "policy": "read,write,test,sensitive,api,rest-api,reboot,!ftp,!policy"})
+	m.SeedRow("/system/script", R{"name": "ftn-kit-tick", "source": kitTickSource(), "policy": kitTickPolicy, "owner": "admin"})
+	m.SeedRow("/system/script", R{"name": "ftn-kit-rollback", "source": kitRollbackSource("hotspot1"), "policy": kitScriptPolic, "owner": "admin"})
+	m.SeedRow("/system/scheduler", R{"name": "ftn-kit-timer", "comment": "ftn: kit v1", "run-count": "10", "disabled": "false", "on-event": "ftn-kit-tick", "policy": kitTickPolicy, "owner": "admin"})
+	m.SeedRow("/ip/route", R{"dst-address": "0.0.0.0/0", "gateway": "192.168.1.1", "immediate-gw": "192.168.1.1%ether1"})
+	m.SeedRow("/ip/dhcp-client", R{"interface": "ether1", "disabled": "false"})
+	m.SeedRow("/ip/firewall/filter", R{"chain": "input", "action": "accept", "protocol": "udp", "dst-port": "53", "in-interface": "br-hotspot", "comment": "ftn: customer dns"})
+	m.SeedRow("/ip/firewall/filter", R{"chain": "input", "action": "accept", "protocol": "tcp", "dst-port": "53", "in-interface": "br-hotspot", "comment": "ftn: customer dns"})
 	m.SeedRow("/ip/firewall/filter", R{"chain": "input", "action": "accept", "connection-state": "established,related,untracked"})
 	m.SeedRow("/ip/firewall/filter", R{"chain": "input", "action": "drop", "in-interface-list": "!LAN"})
 	// both paying flats are seen
@@ -143,10 +147,10 @@ func TestChecksVersionAndPolicy(t *testing.T) {
 		t.Fatalf("%+v", it)
 	}
 	for _, r := range m.Table("/user/group") {
-		m.SetRow(context.Background(), "/user/group", r[".id"], map[string]string{"policy": "read,write,test,api,rest-api,!ftp"})
+		m.SetRow(context.Background(), "/user/group", r[".id"], map[string]string{"policy": "read,write,test,api,rest-api,reboot,!ftp"})
 	}
 	it := item(t, get(t, f, s.ID, true), CheckAPIPolicy)
-	if it.Status != StatusFail || !strings.Contains(it.Detail, "sensitive") || it.Fix.Command != "/user/group/set ftn-api policy=read,write,test,sensitive,api,rest-api" {
+	if it.Status != StatusFail || !strings.Contains(it.Detail, "sensitive") || it.Fix.Command != "/user/group/set ftn-api policy=read,write,test,sensitive,api,rest-api,reboot" {
 		t.Fatalf("%+v", it)
 	}
 }
@@ -201,7 +205,7 @@ func TestChecksDNSAutoOnlyBehindADroppingFirewall(t *testing.T) {
 	m.SeedRow("/ip/firewall/filter", R{"chain": "input", "action": "accept", "protocol": "udp", "dst-port": "53"})
 	m.SeedRow("/ip/firewall/filter", R{"chain": "input", "action": "drop", "in-interface-list": "!LAN"})
 	it = item(t, get(t, f, s.ID, true), CheckDNS)
-	if it.Fix.Kind != FixManual || !strings.Contains(it.Fix.Command, "dst-port=53") || !strings.Contains(it.Detail, "might let outsiders") {
+	if it.Fix.Kind != FixManual || !strings.Contains(it.Fix.Command, "dst-port=53") || !strings.Contains(it.Detail, "answer the whole internet") {
 		t.Fatalf("%+v", it)
 	}
 	// No firewall at all: manual.
@@ -255,8 +259,11 @@ func TestChecksCustomerInterface(t *testing.T) {
 
 // liveOLT turns the healthy router into the bench router of 2026-11-18: the
 // OLT port is a defconf bridge port and carries the customer VLAN.
-func liveOLT(m *routeros.Mock) {
-	m.SeedRow("/interface/bridge/port", R{"bridge": "bridge", "interface": "sfp-sfpplus1", "disabled": "false"})
+func liveOLT(m *routeros.Mock) { liveOLTIn(m, "bridge") }
+
+// liveOLTIn is liveOLT with the OLT port in the named bridge.
+func liveOLTIn(m *routeros.Mock, bridge string) {
+	m.SeedRow("/interface/bridge/port", R{"bridge": bridge, "interface": "sfp-sfpplus1", "disabled": "false"})
 	m.SeedRow("/interface/vlan", R{"name": "vlan100-customers", "interface": "sfp-sfpplus1", "vlan-id": "100"})
 	m.SeedRow("/interface/bridge/port", R{"bridge": "br-hotspot", "interface": "vlan100-customers", "disabled": "false"})
 }
@@ -266,10 +273,19 @@ func TestChecksOLTBridgeConflict(t *testing.T) {
 	if it := item(t, get(t, f, s.ID, true), CheckOLT); it.Status != StatusOK {
 		t.Fatalf("%+v", it)
 	}
-	liveOLT(m)
+	liveOLT(m) // the defconf bridge, not the customer bridge: confirm
 	it := item(t, get(t, f, s.ID, true), CheckOLT)
-	if it.Status != StatusFail || !it.BlocksCutover || it.Fix.Kind != FixAuto {
+	if it.Status != StatusFail || !it.BlocksCutover || it.Fix.Kind != FixConfirm || it.Fix.Role != store.RoleOwner || !strings.Contains(it.Fix.ConfirmText, "not the customer bridge") {
 		t.Fatalf("%+v", it)
+	}
+	for _, r := range m.Table("/interface/bridge/port") {
+		if r["interface"] == "sfp-sfpplus1" {
+			m.SetRow(context.Background(), "/interface/bridge/port", r[".id"], R{"bridge": "br-hotspot"})
+		}
+	}
+	it = item(t, get(t, f, s.ID, true), CheckOLT)
+	if it.Fix.Kind != FixAuto {
+		t.Fatalf("in the customer bridge it is automatic: %+v", it)
 	}
 	// A device learned on the port: confirm, owner only, MACs listed.
 	m.SeedRow("/interface/bridge/host", R{"mac-address": "00:19:3E:00:00:09", "on-interface": "sfp-sfpplus1", "local": "false"})

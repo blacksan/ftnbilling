@@ -48,6 +48,8 @@ const (
 	CheckDMHotspot    = "device_mode.hotspot"
 	CheckKit          = "kit.installed"
 	CheckDNS          = "dns.remote_requests"
+	CheckCustDNS      = "customer.dns_input"
+	CheckHooks        = "router.script_hooks"
 	CheckCustomerIf   = "customer.interface"
 	CheckOLT          = "olt.bridge_conflict"
 	CheckBench        = "bench.port"
@@ -68,7 +70,8 @@ const (
 	readTimeout       = 3 * time.Second
 	extraReadTimeout  = 8 * time.Second
 	kitAdvanceAfter   = 45 * time.Second // the kit timer ticks every 30 s
-	requiredAPIPolicy = "read,write,test,sensitive,api,rest-api"
+	requiredAPIPolicy = "read,write,test,sensitive,api,rest-api,reboot"
+	custDNSComment    = "ftn: customer dns"
 )
 
 // CheckFix says how an item can be fixed.
@@ -224,6 +227,15 @@ var checkTables = []string{
 	"/interface/list/member", "/ip/hotspot", "/ip/hotspot/user", "/ip/hotspot/ip-binding", "/ip/dhcp-server",
 	"/ip/dhcp-server/lease", "/ip/dhcp-client", "/ip/arp", "/ip/pool", "/ip/traffic-flow/target", "/ip/service",
 	"/container", "/user/group", "/system/scheduler", "/system/script", "/file", "/ip/firewall/filter",
+	"/ipv6/firewall/filter", "/ip/route", "/interface/pppoe-client", "/ip/firewall/raw",
+	// read-only, for router.script_hooks
+	"/ppp/profile", "/ip/hotspot/user/profile", "/tool/netwatch",
+}
+
+// rowReader is all a read pass needs from the router client (singletons come
+// from its optional routeros.Inspector).
+type rowReader interface {
+	Rows(ctx context.Context, path string, query map[string]string) ([]routeros.Row, error)
 }
 
 // snapshot is one read pass: singletons, tables and the error of each path
@@ -258,7 +270,7 @@ func (sn *snapshot) failed(paths ...string) (string, error) {
 
 // readSnapshot reads the given singletons and tables, a few at a time, each
 // with its own short timeout.
-func readSnapshot(ctx context.Context, rt routeros.Client, singles, tables []string) *snapshot {
+func readSnapshot(ctx context.Context, rt rowReader, singles, tables []string) *snapshot {
 	sn := newSnapshot()
 	insp, _ := rt.(routeros.Inspector)
 	var mu sync.Mutex
@@ -477,6 +489,8 @@ var needs = map[string][]string{
 	CheckDMHotspot:   {"/system/device-mode"},
 	CheckKit:         {"/system/script", "/system/scheduler"},
 	CheckDNS:         {"/ip/dns"},
+	CheckCustDNS:     {"/ip/firewall/filter", "/ip/address", "/ip/hotspot", "/ip/dhcp-server"},
+	CheckHooks:       {"/ip/dhcp-server", "/ip/dhcp-client", "/ppp/profile", "/ip/hotspot/user/profile", "/tool/netwatch"},
 	CheckCustomerIf:  {"/ip/address", "/ip/hotspot", "/ip/dhcp-server"},
 	CheckOLT:         {"/interface/bridge/port", "/interface/vlan"},
 	CheckBench:       {"/interface/bridge/port", "/interface", "/ip/address", "/ip/hotspot", "/ip/dhcp-server"},
@@ -503,6 +517,8 @@ var checkDefs = []checkDef{
 	{CheckDMHotspot, "router", "Router allows the hotspot", false, "", evalDMHotspot},
 	{CheckKit, "router", "Safety kit is installed on the router", true, "", evalKit},
 	{CheckDNS, "services", "Customers can use the router for DNS", true, "", evalDNS},
+	{CheckCustDNS, "services", "Router accepts DNS from the customer network", true, "", evalCustDNS},
+	{CheckHooks, "router", "Scripts that run by themselves on the router", false, "", evalHooks},
 	{CheckCustomerIf, "network", "Customer network is on one interface", true, "", evalCustomerIf},
 	{CheckOLT, "network", "Fibre (OLT) port is not stuck in the bridge", true, "", evalOLT},
 	{CheckBench, "network", "Bench test port", false, "", evalBench},
@@ -608,8 +624,23 @@ func evalAPIPolicy(e *evalCtx, it *CheckItem) {
 		it.Fix = CheckFix{Kind: FixManual, Label: "Give the group its rights", Command: cmd}
 		return
 	}
-	okItem(it, fmt.Sprintf("Group %s has all the rights the server needs.", name))
+	var extra []string
+	for _, w := range extraAPIRights {
+		if hasWord(pol, w) {
+			extra = append(extra, w)
+		}
+	}
+	if len(extra) > 0 {
+		it.Status = StatusWarn
+		it.Detail = fmt.Sprintf("The server's group %s has more rights than it needs (%s). If the server were broken into, those rights would reach the router itself.", name, strings.Join(extra, ", "))
+		it.Fix = CheckFix{Kind: FixManual, Label: "Take the extra rights away", Command: cmd}
+		return
+	}
+	okItem(it, fmt.Sprintf("Group %s has exactly the rights the server needs.", name))
 }
+
+// extraAPIRights are the rights the server's API group must not have.
+var extraAPIRights = []string{"policy", "ftp", "password", "sniff", "romon", "winbox", "ssh", "telnet", "web", "local"}
 
 func dmField(e *evalCtx, it *CheckItem, key string) (string, bool) {
 	dm := e.sn.single("/system/device-mode")
@@ -706,6 +737,16 @@ func evalKit(e *evalCtx, it *CheckItem) {
 		return
 	}
 	it.Evidence = append(it.Evidence, "scheduler "+kitTimerName+" found", fmt.Sprintf("run-count: %s", timer["run-count"]))
+	// The kit runs with the join admin's rights for ever: any drift from the
+	// text the server ships (source, policy, owner, the timer's target) means
+	// somebody changed what runs with those rights.
+	if drift := kitDrift(e, byName(scripts, kitTickName), byName(scripts, kitRollbackName), timer); len(drift) > 0 {
+		it.Status = StatusFail
+		it.Evidence = append(it.Evidence, drift...)
+		it.Detail = "The safety kit on the router is not what the server installed (" + strings.Join(drift, "; ") + "). It runs with full rights, so paste the join command again to put the right one back."
+		it.Fix = fix
+		return
+	}
 	if rowDisabled(timer) {
 		it.Status = StatusFail
 		it.Detail = "The safety kit's timer is switched off on the router. Paste the join command again to repair it."
@@ -735,93 +776,296 @@ func evalKit(e *evalCtx, it *CheckItem) {
 	okItem(it, "The safety kit is installed and its timer is running.")
 }
 
+// normSource makes two copies of a script comparable (line ends, trailing space).
+func normSource(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " \t")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// kitDrift lists how the installed kit differs from the one the server ships.
+func kitDrift(e *evalCtx, tick, roll, timer routeros.Row) []string {
+	var out []string
+	api := e.site.RESTUser
+	if api == "" {
+		api = DefaultUser
+	}
+	chk := func(what string, r routeros.Row, wantSrc, wantPolicy string) {
+		if wantSrc != "" && normSource(r["source"]) != normSource(wantSrc) {
+			out = append(out, what+" source was changed")
+		}
+		if !sameSet(splitList(r["policy"]), splitList(wantPolicy)) {
+			out = append(out, fmt.Sprintf("%s policy is %q, expected %q", what, r["policy"], wantPolicy))
+		}
+		if o := r["owner"]; o != "" && o == api {
+			out = append(out, what+" is owned by the server's API user")
+		}
+	}
+	chk("script "+kitTickName, tick, kitTickSource(), kitTickPolicy)
+	chk("script "+kitRollbackName, roll, kitRollbackSource(e.site.HotspotServer), kitScriptPolic)
+	chk("scheduler "+kitTimerName, timer, "", kitTickPolicy)
+	if timer["on-event"] != kitTickName {
+		out = append(out, fmt.Sprintf("the timer runs %q instead of %s", timer["on-event"], kitTickName))
+	}
+	return out
+}
+
+// ---- scripts that run by themselves ---------------------------------------------------
+
+// hookTables are the places a RouterOS script can be hung so that it runs
+// with full rights when something happens.
+var hookTables = []struct {
+	path, what string
+	props      []string
+}{
+	{"/ip/dhcp-server", "DHCP server", []string{"lease-script"}},
+	{"/ip/dhcp-client", "DHCP client", []string{"script"}},
+	{"/ppp/profile", "PPP profile", []string{"on-up", "on-down"}},
+	{"/ip/hotspot/user/profile", "hotspot user profile", []string{"on-login", "on-logout"}},
+	{"/tool/netwatch", "netwatch entry", []string{"up-script", "down-script"}},
+}
+
+func evalHooks(e *evalCtx, it *CheckItem) {
+	for _, h := range hookTables {
+		for _, r := range e.sn.tbl(h.path) {
+			for _, p := range h.props {
+				if v := strings.TrimSpace(r[p]); v != "" {
+					if len(v) > 80 {
+						v = v[:80] + "..."
+					}
+					it.Evidence = append(it.Evidence, fmt.Sprintf("%s %s %s: %s", h.what, firstOf(r["name"], r["interface"], r["host"], r[routeros.RowID]), p, v))
+				}
+			}
+		}
+	}
+	if len(it.Evidence) == 0 {
+		okItem(it, "No scripts are hung on DHCP, PPP, hotspot or netwatch events.")
+		return
+	}
+	it.Status = StatusWarn
+	it.Detail = fmt.Sprintf("%d script hook(s) on the router run by themselves with full rights. The server never creates them; look at each and remove any you do not recognise (they are a way to turn a limited login into a full one).", len(it.Evidence))
+	it.Fix = CheckFix{Kind: FixNone, Label: "Review them on the router"}
+}
+
 // ---- DNS -----------------------------------------------------------------------
 
+// ---- firewall reading ----------------------------------------------------------
+
+type tri int
+
+const (
+	triNo tri = iota
+	triYes
+	triMaybe
+)
+
+// listMembers maps list name to its (enabled) member interfaces, from the
+// /interface/list/member table of the snapshot.
+func listMembers(sn *snapshot) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	for _, r := range sn.tbl("/interface/list/member") {
+		if rowDisabled(r) {
+			continue
+		}
+		if out[r["list"]] == nil {
+			out[r["list"]] = map[string]bool{}
+		}
+		out[r["list"]][r["interface"]] = true
+	}
+	return out
+}
+
+// matchIface says whether a firewall rule's in-interface / in-interface-list
+// matches packets arriving on iface. A list that is not in the member table
+// (other than the built-in ones) is a maybe.
+func matchIface(lists map[string]map[string]bool, r routeros.Row, iface string) tri {
+	if v := r["in-interface"]; v != "" {
+		neg := strings.HasPrefix(v, "!")
+		m := strings.TrimPrefix(v, "!") == iface
+		if neg {
+			m = !m
+		}
+		if !m {
+			return triNo
+		}
+	}
+	if v := r["in-interface-list"]; v != "" {
+		neg := strings.HasPrefix(v, "!")
+		n := strings.TrimPrefix(v, "!")
+		var m bool
+		switch members, known := lists[n]; {
+		case n == "all":
+			m = true
+		case n == "none":
+			m = false
+		case known:
+			m = members[iface]
+		case n == "static" || n == "dynamic":
+			return triMaybe
+		default:
+			m = false // a list with no members matches nothing; a negated one matches everything
+		}
+		if neg {
+			m = !m
+		}
+		if !m {
+			return triNo
+		}
+	}
+	return triYes
+}
+
+// protoMatch: does the rule's protocol match proto (udp/tcp)? A negated
+// protocol ("!udp") matches the other one.
+func protoMatch(r routeros.Row, proto string) tri {
+	p := r["protocol"]
+	switch {
+	case p == "":
+		return triYes
+	case strings.HasPrefix(p, "!"):
+		if strings.TrimPrefix(p, "!") == proto {
+			return triNo
+		}
+		return triMaybe
+	case p == proto:
+		return triYes
+	}
+	return triNo
+}
+
+// portMatch: does the rule's dst-port include 53?
+func portMatch(r routeros.Row) tri {
+	dp := r["dst-port"]
+	switch {
+	case dp == "":
+		return triYes
+	case strings.HasPrefix(dp, "!"):
+		return triMaybe
+	case portListHas(dp, 53):
+		return triYes
+	}
+	return triNo
+}
+
+// stateMatch says whether the rule can match a new packet, and an untracked one.
+func stateMatch(r routeros.Row) (isNew, untracked bool) {
+	cs := r["connection-state"]
+	if cs == "" {
+		return true, true
+	}
+	if strings.HasPrefix(cs, "!") {
+		return !strings.Contains(cs, "new"), !strings.Contains(cs, "untracked")
+	}
+	return strings.Contains(cs, "new"), strings.Contains(cs, "untracked")
+}
+
+// inputRules returns the enabled input rules in order.
+func inputRules(rows []routeros.Row) []routeros.Row {
+	var out []routeros.Row
+	for _, r := range rows {
+		if r["chain"] == "input" && !rowDisabled(r) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // dnsDropsWAN reports whether the input chain provably drops DNS (port 53,
-// UDP and TCP) coming from the WAN before any rule could accept it. It is
-// conservative: a rule it does not fully understand never counts as a drop
-// and an accept it cannot rule out counts as a hole.
-func dnsDropsWAN(rules []routeros.Row, wanList, wanIface string) (bool, string) {
+// UDP and TCP) arriving from every WAN interface before any rule could accept
+// it. It is conservative: a rule it does not fully understand never counts as
+// a drop, and an accept only gets skipped when it is bound to a LAN-list
+// member or one of the safe (customer) interfaces; any other accept is a hole.
+func dnsDropsWAN(sn *snapshot, rules []routeros.Row, site store.Site, safe map[string]bool, v6 bool) (bool, string) {
+	wan := wanIfaces(sn, site)
+	if len(wan) == 0 {
+		return false, "no WAN interface is known"
+	}
+	lists := listMembers(sn)
+	for w := range wan {
+		if lists["LAN"][w] {
+			return false, w + " is both a WAN and a LAN interface"
+		}
+	}
+	rules = inputRules(rules)
 	if len(rules) == 0 {
 		return false, "the router has no input firewall rules"
 	}
 	for _, proto := range []string{"udp", "tcp"} {
-		ok, why := dnsDropsWANProto(rules, proto, wanList, wanIface)
-		if !ok {
-			return false, why
+		decided := false
+	rule:
+		for i, r := range rules {
+			pm, port := protoMatch(r, proto), portMatch(r)
+			if pm == triNo || port == triNo {
+				continue
+			}
+			isNew, untr := stateMatch(r)
+			if !isNew && !untr {
+				continue
+			}
+			switch r["action"] {
+			case "accept":
+				if r["dst-address"] == "127.0.0.1" {
+					continue // loopback, not reachable from outside
+				}
+				if v := r["in-interface"]; v != "" && !strings.HasPrefix(v, "!") && (lists["LAN"][v] || safe[v]) {
+					continue
+				}
+				if r["in-interface-list"] == "LAN" {
+					continue
+				}
+				if !isNew && untr && noNotrack(sn, v6) {
+					continue // only untracked packets, and nothing on this router creates any
+				}
+				return false, fmt.Sprintf("input rule %d accepts %s traffic that could come from the WAN", i, proto)
+			case "drop", "reject":
+				if pm != triYes || port != triYes || !(isNew && untr) || !knownMatchers(r) {
+					continue // cannot count on it
+				}
+				covers := true
+				for w := range wan {
+					if matchIface(lists, r, w) != triYes {
+						covers = false
+					}
+				}
+				if covers {
+					decided = true
+					break rule
+				}
+			case "jump", "fasttrack-connection":
+				return false, fmt.Sprintf("input rule %d (%s) is too complex to judge", i, r["action"])
+			}
+		}
+		if !decided {
+			return false, "no input rule drops " + proto + " DNS from the WAN"
 		}
 	}
 	return true, ""
 }
 
-func dnsDropsWANProto(rules []routeros.Row, proto, wanList, wanIface string) (bool, string) {
-	for i, r := range rules {
-		if r["chain"] != "input" || rowDisabled(r) {
-			continue
-		}
-		// A rule that cannot see a new packet from outside is irrelevant.
-		if cs := r["connection-state"]; cs != "" {
-			neg := strings.HasPrefix(cs, "!")
-			if strings.Contains(cs, "new") == neg {
-				continue // matches only established/related/... traffic
-			}
-		}
-		if p := r["protocol"]; p != "" && p != proto {
-			continue
-		}
-		if dp := r["dst-port"]; dp != "" && !portListHas(dp, 53) {
-			continue
-		}
-		// Does it match traffic from the WAN side?
-		inList, inIf := r["in-interface-list"], r["in-interface"]
-		fromWAN, unsure := true, false
-		switch {
-		case inList != "":
-			neg := strings.HasPrefix(inList, "!")
-			name := strings.TrimPrefix(inList, "!")
-			if neg {
-				fromWAN = name != wanList // "!LAN" matches the WAN; "!WAN" does not
-				if name != wanList && name != "LAN" {
-					unsure = true // some other list: may or may not include the WAN
-				}
-			} else {
-				fromWAN = name == wanList
-				if !fromWAN && name != "LAN" {
-					unsure = true
-				}
-			}
-		case inIf != "":
-			fromWAN = strings.TrimPrefix(inIf, "!") == wanIface
-			if strings.HasPrefix(inIf, "!") {
-				fromWAN = !fromWAN
-			}
-		}
-		if !fromWAN && !unsure {
-			continue
-		}
-		known := knownMatchers(r)
-		switch r["action"] {
-		case "drop", "reject":
-			if fromWAN && !unsure && known {
-				return true, ""
-			}
-			if unsure || !known {
-				continue // cannot count on it, keep looking for a safe drop (an accept above would be seen first)
-			}
-		case "accept":
-			if r["dst-address"] == "127.0.0.1" {
-				continue // loopback, not reachable from outside
-			}
-			return false, fmt.Sprintf("input rule %d accepts %s traffic that could come from the WAN", i, proto)
-		case "jump", "fasttrack-connection":
-			return false, fmt.Sprintf("input rule %d (%s) is too complex to judge", i, r["action"])
+// noNotrack is true when the raw table is readable and holds no enabled
+// notrack rule, so no packet can be "untracked" and an accept that matches
+// only untracked traffic is harmless. v6 reads the IPv6 raw table (not read:
+// then it is false unless IPv6 is off, which dnsSafe handles).
+func noNotrack(sn *snapshot, v6 bool) bool {
+	if v6 {
+		return false
+	}
+	if sn.errs["/ip/firewall/raw"] != nil {
+		return false
+	}
+	for _, r := range sn.tbl("/ip/firewall/raw") {
+		if !rowDisabled(r) && r["action"] == "notrack" {
+			return false
 		}
 	}
-	return false, "no input rule drops DNS from the WAN"
+	return true
 }
 
 // knownMatchers is false when the rule has a matcher beyond the ones
-// dnsDropsWANProto understands (a source restriction, for instance).
+// dnsDropsWAN understands (a source restriction, for instance).
 func knownMatchers(r routeros.Row) bool {
 	for k, v := range r {
 		if v == "" {
@@ -852,9 +1096,106 @@ func portListHas(list string, port int) bool {
 	return false
 }
 
+// uplinkInWAN checks the interfaces the router really reaches the internet
+// through (default routes, DHCP clients, PPPoE clients) are all in the WAN
+// list: a firewall that drops DNS from "the WAN" is worth nothing if the
+// uplink is somewhere else.
+func uplinkInWAN(sn *snapshot, site store.Site) (bool, string) {
+	for _, p := range []string{"/ip/route", "/ip/dhcp-client"} {
+		if err := sn.errs[p]; err != nil {
+			return false, "could not read " + p
+		}
+	}
+	wan := wanIfaces(sn, site)
+	ups := map[string]string{}
+	for _, r := range sn.tbl("/ip/route") {
+		if rowDisabled(r) || r["dst-address"] != "0.0.0.0/0" {
+			continue
+		}
+		var ifc string
+		for _, g := range []string{r["immediate-gw"], r["gateway"]} {
+			if _, after, ok := strings.Cut(g, "%"); ok {
+				ifc = after
+				break
+			}
+		}
+		if ifc == "" {
+			g := r["gateway"]
+			for _, t := range []string{"/interface", "/interface/pppoe-client"} {
+				for _, ir := range sn.tbl(t) {
+					if ir["name"] == g && g != "" {
+						ifc = g
+					}
+				}
+			}
+		}
+		if ifc == "" {
+			return false, "the default route (" + firstOf(r["gateway"], "?") + ") does not say which interface it uses"
+		}
+		ups[ifc] = "default route"
+	}
+	for _, r := range sn.tbl("/ip/dhcp-client") {
+		if !rowDisabled(r) && r["interface"] != "" {
+			ups[r["interface"]] = "DHCP client"
+		}
+	}
+	for _, r := range sn.tbl("/interface/pppoe-client") {
+		if rowDisabled(r) {
+			continue
+		}
+		for _, n := range []string{r["name"], r["interface"]} {
+			if n != "" {
+				ups[n] = "PPPoE client"
+			}
+		}
+	}
+	if len(ups) == 0 {
+		return false, "the router's uplink could not be found"
+	}
+	for ifc, how := range ups {
+		if !wan[ifc] {
+			return false, fmt.Sprintf("%s (%s) is not in the WAN list", ifc, how)
+		}
+	}
+	return true, ""
+}
+
+// dnsSafe says whether turning on DNS for customers cannot open a resolver to
+// the internet: the uplink is the WAN, IPv4 input drops DNS from it, and IPv6
+// is off or drops it too.
+func dnsSafe(sn *snapshot, site store.Site, safe map[string]bool) (bool, string) {
+	if _, err := sn.failed("/ip/firewall/filter", "/interface/list/member"); err != nil {
+		return false, "the router's firewall rules could not be read"
+	}
+	if ok, why := uplinkInWAN(sn, site); !ok {
+		return false, why
+	}
+	if ok, why := dnsDropsWAN(sn, sn.tbl("/ip/firewall/filter"), site, safe, false); !ok {
+		return false, why
+	}
+	if v6, has := sn.single("/ipv6/settings")["disable-ipv6"]; has && yes(v6) {
+		return true, ""
+	}
+	if err := sn.errs["/ipv6/firewall/filter"]; err != nil || sn.errs["/ipv6/settings"] != nil {
+		return false, "IPv6 is on and its firewall could not be read"
+	}
+	if ok, why := dnsDropsWAN(sn, sn.tbl("/ipv6/firewall/filter"), site, safe, true); !ok {
+		return false, "IPv6 is on and " + why
+	}
+	return true, ""
+}
+
 const dnsFixCommand = `/ip/firewall/filter/add chain=input action=drop protocol=udp dst-port=53 in-interface-list=WAN place-before=0 comment="ftn: no WAN DNS"
 /ip/firewall/filter/add chain=input action=drop protocol=tcp dst-port=53 in-interface-list=WAN place-before=0 comment="ftn: no WAN DNS"
+/ipv6/settings/set disable-ipv6=yes
 /ip/dns/set allow-remote-requests=yes`
+
+func (c custInfo) safeSet() map[string]bool {
+	if c.found {
+		return map[string]bool{c.iface: true}
+	}
+	return nil
+}
 
 func evalDNS(e *evalCtx, it *CheckItem) {
 	v := e.sn.single("/ip/dns")["allow-remote-requests"]
@@ -865,17 +1206,91 @@ func evalDNS(e *evalCtx, it *CheckItem) {
 	}
 	it.Status = StatusFail
 	it.Detail = "The router does not answer DNS for customers (allow-remote-requests is off), so customers would have no working names after the cutover."
-	safe, why := false, "the router's firewall rules could not be read"
-	if _, err := e.sn.failed("/ip/firewall/filter"); err == nil {
-		safe, why = dnsDropsWAN(e.sn.tbl("/ip/firewall/filter"), e.site.WANList, e.site.WANInterface)
-	}
+	safe, why := dnsSafe(e.sn, e.site, e.cust.safeSet())
 	if safe {
 		it.Fix = CheckFix{Kind: FixAuto, Label: "Turn on DNS for customers", Role: store.RoleOperator}
-		it.Evidence = append(it.Evidence, "the input firewall already drops DNS from the WAN")
+		it.Evidence = append(it.Evidence, "the uplink is the WAN and the firewall already drops DNS from it")
 		return
 	}
-	it.Detail += " It is not turned on for you because the firewall might let outsiders use it (" + why + ")."
+	it.Detail += " It is not turned on for you because the router might then answer the whole internet (" + why + ")."
 	it.Fix = CheckFix{Kind: FixManual, Label: "Block DNS from the WAN, then turn it on", Command: dnsFixCommand, Role: store.RoleOwner}
+}
+
+// custDNSProblems lists the protocols (udp, tcp) whose DNS from the customer
+// interface the input chain does not accept before a drop, with the reason.
+func custDNSProblems(sn *snapshot, cust custInfo) (bad []string, why string) {
+	lists := listMembers(sn)
+	rules := inputRules(sn.tbl("/ip/firewall/filter"))
+	for _, proto := range []string{"udp", "tcp"} {
+	rule:
+		for i, r := range rules {
+			pm, port := protoMatch(r, proto), portMatch(r)
+			if pm == triNo || port == triNo {
+				continue
+			}
+			if isNew, _ := stateMatch(r); !isNew {
+				continue
+			}
+			im := matchIface(lists, r, cust.iface)
+			if im == triNo {
+				continue
+			}
+			switch r["action"] {
+			case "accept":
+				if im == triYes && pm == triYes && port == triYes && knownMatchers(r) {
+					break rule // accepted first: good
+				}
+				bad, why = append(bad, proto), fmt.Sprintf("input rule %d may accept %s DNS from %s but with conditions the server cannot judge", i, proto, cust.iface)
+				break rule
+			case "drop", "reject":
+				bad, why = append(bad, proto), fmt.Sprintf("input rule %d drops %s DNS from %s before anything accepts it", i, proto, cust.iface)
+				break rule
+			case "jump", "fasttrack-connection":
+				bad, why = append(bad, proto), fmt.Sprintf("input rule %d (%s) is too complex to judge", i, r["action"])
+				break rule
+			}
+		}
+	}
+	return bad, why
+}
+
+// firstStaticInput is the id of the first non-dynamic input rule.
+func firstStaticInput(rows []routeros.Row) (string, bool) {
+	for _, r := range rows {
+		if r["chain"] == "input" && !yes(r["dynamic"]) && r[routeros.RowID] != "" {
+			return r[routeros.RowID], true
+		}
+	}
+	return "", false
+}
+
+func custDNSCommand(iface string) string {
+	return fmt.Sprintf(`/ip/firewall/filter/add chain=input in-interface=%[1]s protocol=udp dst-port=53 action=accept place-before=0 comment=%[2]q
+/ip/firewall/filter/add chain=input in-interface=%[1]s protocol=tcp dst-port=53 action=accept place-before=0 comment=%[2]q`, iface, custDNSComment)
+}
+
+func evalCustDNS(e *evalCtx, it *CheckItem) {
+	if !e.cust.found {
+		it.Status = StatusUnknown
+		it.Detail = "The customer interface is not known yet, so the firewall cannot be judged. See the customer network check."
+		return
+	}
+	bad, why := custDNSProblems(e.sn, e.cust)
+	if len(bad) == 0 {
+		okItem(it, fmt.Sprintf("The firewall lets customers on %s ask the router for DNS.", e.cust.iface))
+		return
+	}
+	it.Status = StatusFail
+	it.Evidence = append(it.Evidence, why)
+	it.Detail = fmt.Sprintf("The router's firewall would drop DNS questions from the customer network %s (%s), so customers could ping the internet but not open any website.", e.cust.iface, why)
+	for _, r := range e.sn.tbl("/ip/firewall/filter") {
+		if r["comment"] == custDNSComment {
+			it.Detail += " A rule \"" + custDNSComment + "\" exists but does not take effect: move it above the drop by hand."
+			it.Fix = CheckFix{Kind: FixManual, Label: "Put the DNS accept rules first", Command: custDNSCommand(e.cust.iface), Role: store.RoleOwner}
+			return
+		}
+	}
+	it.Fix = CheckFix{Kind: FixAuto, Label: "Let customers ask the router for DNS", Role: store.RoleOperator}
 }
 
 // ---- customer interface -------------------------------------------------------------
@@ -1055,13 +1470,33 @@ func evalOLT(e *evalCtx, it *CheckItem) {
 		it.Evidence = append(it.Evidence, a.unknown...)
 		it.Detail += " The server could not prove it is safe to change (" + strings.Join(a.unknown, "; ") + ")."
 		it.Fix = CheckFix{Kind: FixManual, Label: "Take the port out of the bridge", Command: oltCommand(e.site), Role: store.RoleOwner}
-	case len(a.learned) > 0:
-		it.Evidence = append(it.Evidence, "devices learned on the port: "+strings.Join(a.learned, ", "))
+	case len(a.learned) > 0 || len(otherBridges(a, e.cust)) > 0:
+		var why []string
+		if ob := otherBridges(a, e.cust); len(ob) > 0 {
+			it.Evidence = append(it.Evidence, "the port is in bridge "+strings.Join(ob, ", ")+", not the customer bridge")
+			why = append(why, fmt.Sprintf("%s is in bridge %s, which is not the customer bridge: other devices may reach the router through it", a.iface, strings.Join(ob, ", ")))
+		}
+		if len(a.learned) > 0 {
+			it.Evidence = append(it.Evidence, "devices learned on the port: "+strings.Join(a.learned, ", "))
+			why = append(why, "devices are talking through it right now ("+strings.Join(a.learned, ", ")+")")
+		}
 		it.Fix = CheckFix{Kind: FixConfirm, Label: "Take the port out of the bridge", Role: store.RoleOwner,
-			ConfirmText: fmt.Sprintf("Devices are talking through %s right now (%s). Taking it out of the bridge may cut them off until the VLAN is working. Do it?", a.iface, strings.Join(a.learned, ", "))}
+			ConfirmText: fmt.Sprintf("%s. Taking it out of the bridge may cut them off. Do it?", strings.Join(why, "; "))}
 	default:
 		it.Fix = CheckFix{Kind: FixAuto, Label: "Take the port out of the bridge", Role: store.RoleOperator}
 	}
+}
+
+// otherBridges lists the bridges the port is in that are not the customer
+// bridge (all of them when the customer bridge is not known).
+func otherBridges(a portAssess, cust custInfo) []string {
+	var out []string
+	for _, r := range a.rows {
+		if !cust.found || r["bridge"] != cust.iface {
+			out = append(out, r["bridge"])
+		}
+	}
+	return out
 }
 
 func orNone(l []string) string {
@@ -1194,36 +1629,41 @@ func (o orphan) String() string {
 // that are not ours are never judged.
 func findOrphans(sn *snapshot, ix acctIndex) []orphan {
 	var out []orphan
-	for _, r := range sn.tbl("/ip/hotspot/user") {
-		name := r["name"]
-		mac, hasMAC := store.CanonMAC(r["mac-address"])
-		if strings.HasPrefix(r["comment"], "ispbill:") {
-			if !ix.codes[name] {
-				out = append(out, orphan{path: "/ip/hotspot/user", id: r[routeros.RowID], name: name, mac: macIf(hasMAC, mac), serverMade: true})
+	for _, path := range []string{"/ip/hotspot/user", "/ip/hotspot/ip-binding"} {
+		for _, r := range sn.tbl(path) {
+			if o, ok := orphanOf(path, r, ix); ok {
+				out = append(out, o)
 			}
-			continue
-		}
-		if hasMAC && !ix.macs[mac] {
-			out = append(out, orphan{path: "/ip/hotspot/user", id: r[routeros.RowID], name: name, mac: mac})
-		}
-	}
-	for _, r := range sn.tbl("/ip/hotspot/ip-binding") {
-		if strings.HasPrefix(r["comment"], "ftn:") {
-			continue // the server's own rows
-		}
-		mac, hasMAC := store.CanonMAC(r["mac-address"])
-		if hasMAC && !ix.macs[mac] {
-			name := r["comment"]
-			if name == "" {
-				name = r["type"]
-			}
-			if name == "" {
-				name = r["mac-address"]
-			}
-			out = append(out, orphan{path: "/ip/hotspot/ip-binding", id: r[routeros.RowID], name: name, mac: mac})
 		}
 	}
 	return out
+}
+
+// orphanOf judges one hotspot user or IP binding row (see findOrphans).
+func orphanOf(path string, r routeros.Row, ix acctIndex) (orphan, bool) {
+	mac, hasMAC := store.CanonMAC(r["mac-address"])
+	switch path {
+	case "/ip/hotspot/user":
+		name := r["name"]
+		if strings.HasPrefix(r["comment"], "ispbill:") {
+			if !ix.codes[name] {
+				return orphan{path: path, id: r[routeros.RowID], name: name, mac: macIf(hasMAC, mac), serverMade: true}, true
+			}
+			return orphan{}, false
+		}
+		if hasMAC && !ix.macs[mac] {
+			return orphan{path: path, id: r[routeros.RowID], name: name, mac: mac}, true
+		}
+	case "/ip/hotspot/ip-binding":
+		if strings.HasPrefix(r["comment"], "ftn:") {
+			return orphan{}, false // the server's own rows
+		}
+		if hasMAC && !ix.macs[mac] {
+			name := firstOf(r["comment"], r["type"], r["mac-address"])
+			return orphan{path: path, id: r[routeros.RowID], name: name, mac: mac}, true
+		}
+	}
+	return orphan{}, false
 }
 
 func macIf(ok bool, m string) string {

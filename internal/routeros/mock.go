@@ -303,6 +303,22 @@ func (m *Mock) AddRow(_ context.Context, path string, body map[string]string) (s
 	m.writes++
 	r := copyRow(body)
 	r[RowID] = fmt.Sprintf("*%X", m.nextID)
+	// place-before is an instruction, not a property: like the router, insert
+	// before that row (an unknown id is an error) and do not store it.
+	if before, ok := r["place-before"]; ok {
+		delete(r, "place-before")
+		rows := m.tables[p]
+		for i, o := range rows {
+			if o[RowID] == before {
+				out := append(append(append([]Row(nil), rows[:i]...), r), rows[i:]...)
+				m.tables[p] = out
+				return r[RowID], nil
+			}
+		}
+		m.nextID--
+		m.writes--
+		return "", &APIError{Status: 400, Message: "Bad Request", Detail: "place-before: no such item"}
+	}
 	m.tables[p] = append(m.tables[p], r)
 	return r[RowID], nil
 }
