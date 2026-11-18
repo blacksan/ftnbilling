@@ -111,6 +111,14 @@ writef() {
   fi
 }
 
+# Wait (up to 15 min) for the dpkg lock instead of failing: a new VPS often runs
+# unattended-upgrades in the background for the first few minutes. APT_CONFIG
+# applies to every apt-get call in this script, including the bare ones.
+if [ "$DRY" != 1 ]; then
+  APT_CONFIG=$(mktemp /tmp/ftn-apt.XXXXXX)
+  printf 'DPkg::Lock::Timeout "900";\n' >"$APT_CONFIG"
+  export APT_CONFIG
+fi
 apt_get() { run env DEBIAN_FRONTEND=noninteractive apt-get "$@"; }
 apt_install() { if [ "$DRY" = 1 ]; then printf '    [dry-run] apt-get install %s\n' "$*"; else apt_get install -y -qq --no-install-recommends "$@" >/dev/null; fi; }
 have() { command -v "$1" >/dev/null 2>&1; }
