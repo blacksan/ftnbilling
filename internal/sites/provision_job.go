@@ -999,8 +999,8 @@ func (j *jobCtl) setCustomer(iface string) {
 // the live view) use. It satisfies sites.ProvisionJobs where that is declared.
 type ProvJobs struct{ m *Manager }
 
-// Jobs returns the job view of the manager.
-func (m *Manager) Jobs() *ProvJobs { return &ProvJobs{m} }
+// ProvJobsView returns the job view of the manager (the default ProvisionJobs hook).
+func (m *Manager) ProvJobsView() *ProvJobs { return &ProvJobs{m} }
 
 // Running reports whether a setup job is working on the router (reboot refused while true).
 func (p *ProvJobs) Running(siteID string) bool { return p.m.SetupBusy(siteID) }
