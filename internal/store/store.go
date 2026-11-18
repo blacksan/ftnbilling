@@ -2,9 +2,12 @@
 package store
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,8 +24,9 @@ var ErrNoChange = errors.New("no change")
 // incompatible version (the PIN/subscriber model).
 var ErrOldFormat = errors.New("ispbill.json is in an old or unknown data format")
 
-// FormatVersion is the on-disk data format. 2 = flat accounts locked to an ONT MAC.
-const FormatVersion = 2
+// FormatVersion is the on-disk data format. 2 = flat accounts locked to an
+// ONT MAC (single building); 3 = adds Sites and a SiteID on every row.
+const FormatVersion = 3
 
 const (
 	OrderPending = "pending"
@@ -34,6 +38,68 @@ const (
 	PayRefunded  = "refunded"
 	PayIgnored   = "ignored"
 )
+
+// Site modes.
+const (
+	SiteModeWG  = "wg"  // joined over WireGuard
+	SiteModeEnv = "env" // legacy / container mode: router settings come from the environment
+)
+
+// Site is one building: one MikroTik router with its own hotspot.
+type Site struct {
+	ID           string `json:"id"` // "s" + 6 hex, immutable, used in portal URLs
+	Name         string `json:"name"`
+	Mode         string `json:"mode"` // wg | env
+	Notes        string `json:"notes,omitempty"`
+	SupportPhone string `json:"support_phone,omitempty"`
+	Disabled     bool   `json:"disabled,omitempty"` // paused: no collection, no router tasks
+	Removed      bool   `json:"removed,omitempty"`  // tombstone; keeps ledger names
+
+	// WireGuard / REST (Mode=wg)
+	TunnelIP    string    `json:"tunnel_ip,omitempty"` // 10.99.0.x
+	WGPublicKey string    `json:"wg_pub,omitempty"`
+	RESTUser    string    `json:"rest_user,omitempty"` // "ftn-api"
+	RESTPass    string    `json:"rest_pass,omitempty"` // 32 alphanumeric
+	RESTPort    int       `json:"rest_port,omitempty"` // 8081
+	Join        JoinToken `json:"join"`
+	JoinedAt    time.Time `json:"joined_at,omitempty"` // first successful REST ping after a join
+
+	// Router layout (metrics + join script)
+	HotspotServer  string  `json:"hotspot_server,omitempty"` // "hotspot1"
+	WANInterface   string  `json:"wan_interface,omitempty"`  // "ether1"
+	WANList        string  `json:"wan_list,omitempty"`       // "WAN"
+	OLTInterface   string  `json:"olt_interface,omitempty"`  // "sfp-sfpplus1"
+	VLANID         int     `json:"vlan_id,omitempty"`        // 0 = untagged
+	CustomerSubnet string  `json:"customer_subnet,omitempty"`
+	WANCapMbps     float64 `json:"wan_cap_mbps,omitempty"`
+	OLTCapMbps     float64 `json:"olt_cap_mbps,omitempty"`
+	FUPTB          float64 `json:"fup_tb,omitempty"`
+	Provision      bool    `json:"provision,omitempty"` // script builds bridge/DHCP/hotspot
+	BenchPort      string  `json:"bench_port,omitempty"`
+	// LegacyContainer makes the script stop the old ispbill/tailscale containers.
+	LegacyContainer bool `json:"legacy_container,omitempty"`
+
+	// PkgOverrides adjust the shared package list for this building, by package ID.
+	PkgOverrides map[string]PkgOverride `json:"pkg_overrides,omitempty"`
+
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// PkgOverride is a per-building tweak of a shared package.
+type PkgOverride struct {
+	Hidden   bool `json:"hidden,omitempty"`
+	PriceKES int  `json:"price_kes,omitempty"` // 0 = use the shared price
+}
+
+// JoinToken is a single-use, short-lived token to fetch the join script. Only
+// a SHA-256 hash of the token is stored.
+type JoinToken struct {
+	Hash      string    `json:"hash,omitempty"`
+	ExpiresAt time.Time `json:"expires_at,omitempty"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+	UsedAt    time.Time `json:"used_at,omitempty"`
+	UsedFrom  string    `json:"used_from,omitempty"`
+}
 
 type Package struct {
 	ID          string `json:"id"`
@@ -58,12 +124,16 @@ func (p Package) RateLimit() string { return fmt.Sprintf("%dM/%dM", p.SpeedMbps,
 // the M-Pesa Paybill account number.
 type Account struct {
 	ID     string `json:"id"`
+	SiteID string `json:"site_id"`
 	Code   string `json:"code"`
 	Flat   string `json:"flat"`
 	MAC    string `json:"mac"`
 	Tenant string `json:"tenant,omitempty"`
 	Phone  string `json:"phone,omitempty"`
 	Notes  string `json:"notes,omitempty"`
+	// WhatsApp (format 2547XXXXXXXX) and WAOptOut are used by tenant messaging.
+	WhatsApp string `json:"whatsapp,omitempty"`
+	WAOptOut bool   `json:"wa_opt_out,omitempty"`
 
 	PackageID string    `json:"package_id,omitempty"`
 	ExpiresAt time.Time `json:"expires_at,omitempty"`
@@ -83,6 +153,7 @@ type Account struct {
 
 type Order struct {
 	ID                string    `json:"id"`
+	SiteID            string    `json:"site_id"`
 	AccountID         string    `json:"account_id"`
 	PackageID         string    `json:"package_id"`
 	Phone             string    `json:"phone,omitempty"` // M-Pesa payer
@@ -103,6 +174,7 @@ type Order struct {
 
 type Voucher struct {
 	Code      string    `json:"code"`
+	SiteID    string    `json:"site_id,omitempty"` // "" = valid at any building
 	PackageID string    `json:"package_id"`
 	Batch     string    `json:"batch"`
 	Used      bool      `json:"used"`
@@ -115,6 +187,7 @@ type Voucher struct {
 // VOUCHER-<code>, TEST-<order>, ADMIN-<id>. Inserting a duplicate key is a no-op.
 type Payment struct {
 	Key        string    `json:"key"`
+	SiteID     string    `json:"site_id"`
 	Method     string    `json:"method"` // mpesa-manual, mpesa-stk, mpesa-c2b, voucher, test, admin
 	Status     string    `json:"status"` // applied, unmatched, refunded, ignored
 	AmountKES  int       `json:"amount_kes"`
@@ -133,6 +206,7 @@ type Payment struct {
 // Device is a MAC that opened the portal (or showed up as a hotspot host)
 // without a matching account.
 type Device struct {
+	SiteID    string    `json:"site_id"`
 	MAC       string    `json:"mac"`
 	IP        string    `json:"ip,omitempty"`
 	Source    string    `json:"source"` // portal, hotspot-host
@@ -146,6 +220,7 @@ type Device struct {
 // and they survive a restart.
 type Task struct {
 	ID        string    `json:"id"`
+	SiteID    string    `json:"site_id"`
 	AccountID string    `json:"account_id"`
 	Code      string    `json:"code"`
 	Kick      bool      `json:"kick,omitempty"` // also end the live session (MAC change)
@@ -160,6 +235,7 @@ type Task struct {
 // Event is a lifecycle note (reminder due, expired). No SMS is sent yet.
 type Event struct {
 	Time      time.Time `json:"time"`
+	SiteID    string    `json:"site_id,omitempty"`
 	Kind      string    `json:"kind"` // reminder_due, expired, info
 	AccountID string    `json:"account_id,omitempty"`
 	Msg       string    `json:"msg"`
@@ -170,18 +246,22 @@ const maxEvents = 300
 // Data is the whole database.
 type Data struct {
 	Format   int                `json:"format"`
+	Sites    map[string]Site    `json:"sites"`
 	Packages map[string]Package `json:"packages"`
 	Accounts map[string]Account `json:"accounts"`
 	Orders   map[string]Order   `json:"orders"`
 	Vouchers map[string]Voucher `json:"vouchers"`
 	Payments map[string]Payment `json:"payments"` // key -> entry
-	Devices  map[string]Device  `json:"devices"`  // mac -> device
+	Devices  map[string]Device  `json:"devices"`  // siteID|MAC -> device
 	Tasks    map[string]Task    `json:"tasks"`
 	Events   []Event            `json:"events"`
 }
 
 func (d *Data) init() {
 	d.Format = FormatVersion
+	if d.Sites == nil {
+		d.Sites = map[string]Site{}
+	}
 	if d.Packages == nil {
 		d.Packages = map[string]Package{}
 	}
@@ -228,13 +308,17 @@ func (d *Data) AccountByCode(code string) (Account, bool) {
 	return Account{}, false
 }
 
-// AccountByMAC expects a normalised MAC (AA:BB:CC:DD:EE:FF).
-func (d *Data) AccountByMAC(mac string) (Account, bool) {
+// DeviceKey is the key of d.Devices.
+func DeviceKey(siteID, mac string) string { return siteID + "|" + mac }
+
+// AccountByMAC expects a normalised MAC (AA:BB:CC:DD:EE:FF). MACs are only
+// unique inside one building.
+func (d *Data) AccountByMAC(siteID, mac string) (Account, bool) {
 	if mac == "" {
 		return Account{}, false
 	}
 	for _, a := range d.Accounts {
-		if strings.EqualFold(a.MAC, mac) {
+		if a.SiteID == siteID && strings.EqualFold(a.MAC, mac) {
 			return a, true
 		}
 	}
@@ -400,12 +484,18 @@ func Open(dir string) (*Store, error) {
 		if err := json.Unmarshal(b, &probe); err != nil {
 			return nil, fmt.Errorf("corrupt %s: %w", s.path, err)
 		}
-		if probe.Format != FormatVersion {
+		switch probe.Format {
+		case FormatVersion:
+			if err := json.Unmarshal(b, &s.data); err != nil {
+				return nil, fmt.Errorf("corrupt %s: %w", s.path, err)
+			}
+		case 2:
+			if err := migrateV2(s.path, b, &s.data); err != nil {
+				return nil, err
+			}
+		default:
 			return nil, fmt.Errorf("%w: %s has format %d, this version needs %d (old PIN/subscriber model). "+
 				"Move or delete the file to start fresh; ispbill will not touch it", ErrOldFormat, s.path, probe.Format, FormatVersion)
-		}
-		if err := json.Unmarshal(b, &s.data); err != nil {
-			return nil, fmt.Errorf("corrupt %s: %w", s.path, err)
 		}
 	}
 	s.data.init()
@@ -478,4 +568,109 @@ func WriteFileAtomic(path string, b []byte) error {
 		d.Close()
 	}
 	return nil
+}
+
+// ---- sites ----------------------------------------------------------------
+
+// NewSiteID returns "s" + 6 random hex characters.
+func NewSiteID() string {
+	b := make([]byte, 3)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return "s" + hex.EncodeToString(b)
+}
+
+// SiteList returns the non-removed sites, natural-sorted by name.
+func (d *Data) SiteList() []Site {
+	out := make([]Site, 0, len(d.Sites))
+	for _, s := range d.Sites {
+		if !s.Removed {
+			out = append(out, s)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return NaturalLess(out[i].Name, out[j].Name)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+// SiteByTunnelIP finds the non-removed site that owns a WireGuard tunnel IP.
+func (d *Data) SiteByTunnelIP(ip string) (Site, bool) {
+	if ip == "" {
+		return Site{}, false
+	}
+	for _, s := range d.Sites {
+		if !s.Removed && s.TunnelIP == ip {
+			return s, true
+		}
+	}
+	return Site{}, false
+}
+
+// EnvSite returns the non-removed site that takes its router settings from
+// the environment (legacy / container mode), if there is one.
+func (d *Data) EnvSite() (Site, bool) {
+	var best Site
+	found := false
+	for _, s := range d.Sites {
+		if !s.Removed && s.Mode == SiteModeEnv && (!found || s.CreatedAt.Before(best.CreatedAt)) {
+			best, found = s, true
+		}
+	}
+	return best, found
+}
+
+// EffectivePackage is the shared package with the building's overrides
+// applied: the price is replaced when the override is non-zero, and the
+// package counts as disabled when the building hides it.
+func (d *Data) EffectivePackage(siteID, pkgID string) (Package, bool) {
+	p, ok := d.Packages[pkgID]
+	if !ok {
+		return Package{}, false
+	}
+	if o, has := d.Sites[siteID].PkgOverrides[pkgID]; has {
+		if o.PriceKES > 0 {
+			p.PriceKES = o.PriceKES
+		}
+		p.Disabled = p.Disabled || o.Hidden
+	}
+	return p, true
+}
+
+// EffectivePackages is PackageList with the building's overrides applied.
+func (d *Data) EffectivePackages(siteID string) []Package {
+	out := d.PackageList()
+	for i, p := range out {
+		if ep, ok := d.EffectivePackage(siteID, p.ID); ok {
+			out[i] = ep
+		}
+	}
+	return out
+}
+
+// NextTunnelIP returns the lowest free host address in prefix after the first
+// host (the server), skipping addresses held by non-removed sites.
+func (d *Data) NextTunnelIP(prefix netip.Prefix) (string, error) {
+	prefix = prefix.Masked()
+	used := map[string]bool{}
+	for _, s := range d.Sites {
+		if !s.Removed && s.TunnelIP != "" {
+			used[s.TunnelIP] = true
+		}
+	}
+	first := prefix.Addr().Next() // network address + 1 = the server
+	for a := first.Next(); prefix.Contains(a); a = a.Next() {
+		next := a.Next()
+		if !prefix.Contains(next) { // the broadcast address
+			break
+		}
+		if !used[a.String()] {
+			return a.String(), nil
+		}
+	}
+	return "", fmt.Errorf("no free tunnel address left in %s", prefix)
 }

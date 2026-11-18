@@ -104,7 +104,7 @@ func TestFreshFileHasFormatVersionAndEmptyAccounts(t *testing.T) {
 	s, _ := Open(dir)
 	s.Update(func(d *Data) error { d.Packages["p"] = Package{ID: "p"}; return nil })
 	b, _ := os.ReadFile(filepath.Join(dir, "ispbill.json"))
-	if !strings.Contains(string(b), `"format": 2`) {
+	if !strings.Contains(string(b), `"format": 3`) {
 		t.Fatalf("no format marker: %s", b)
 	}
 	if _, err := Open(dir); err != nil {
