@@ -1,5 +1,6 @@
 package ke.co.ftw.ftnadmin.ui.nav
 
+import android.net.Uri
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -29,7 +30,17 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import ke.co.ftw.ftnadmin.core.network.UserInfo
-import ke.co.ftw.ftnadmin.ui.common.EmptyState
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
+import ke.co.ftw.ftnadmin.ui.alerts.AlertsScreen
+import ke.co.ftw.ftnadmin.ui.buildings.BuildingDetailScreen
+import ke.co.ftw.ftnadmin.ui.buildings.BuildingsScreen
+import ke.co.ftw.ftnadmin.ui.customers.CustomerDetailScreen
+import ke.co.ftw.ftnadmin.ui.customers.CustomersScreen
+import ke.co.ftw.ftnadmin.ui.dashboard.DashboardScreen
+import ke.co.ftw.ftnadmin.ui.newdevices.NewDevicesScreen
+import ke.co.ftw.ftnadmin.ui.payments.PaymentFilter
+import ke.co.ftw.ftnadmin.ui.payments.PaymentsScreen
 import ke.co.ftw.ftnadmin.ui.settings.SettingsScreen
 
 object Routes {
@@ -39,6 +50,16 @@ object Routes {
     const val BUILDINGS = "buildings"
     const val ALERTS = "alerts"
     const val SETTINGS = "settings"
+    const val PAYMENTS_UNMATCHED = "payments/unmatched"
+    const val CUSTOMER_PATTERN = "customer/{id}"
+    const val BUILDING_PATTERN = "building/{id}"
+    const val NEW_DEVICES_PATTERN = "newdevices?site={site}"
+
+    fun customer(id: String) = "customer/${Uri.encode(id)}"
+
+    fun building(id: String) = "building/${Uri.encode(id)}"
+
+    fun newDevices(siteId: String?) = if (siteId == null) "newdevices" else "newdevices?site=${Uri.encode(siteId)}"
 }
 
 private enum class Tab(val route: String, val label: String, val icon: ImageVector) {
@@ -96,13 +117,62 @@ fun MainShell(user: UserInfo) {
 }
 
 @Composable
-private fun Destinations(nav: NavHostController, @Suppress("UNUSED_PARAMETER") user: UserInfo) {
+private fun Destinations(nav: NavHostController, user: UserInfo) {
+    val openSettings = { nav.navigate(Routes.SETTINGS) }
+    val openAccount = { id: String -> nav.navigate(Routes.customer(id)) }
     NavHost(nav, startDestination = Routes.DASHBOARD) {
-        composable(Routes.DASHBOARD) { EmptyState("Dashboard") }
-        composable(Routes.CUSTOMERS) { EmptyState("Customers") }
-        composable(Routes.PAYMENTS) { EmptyState("Payments") }
-        composable(Routes.BUILDINGS) { EmptyState("Buildings") }
-        composable(Routes.ALERTS) { EmptyState("Alerts") }
+        composable(Routes.DASHBOARD) {
+            DashboardScreen(
+                onSettings = openSettings,
+                onNewDevices = { nav.navigate(Routes.newDevices(null)) },
+                onUnmatchedPayments = { nav.navigate(Routes.PAYMENTS_UNMATCHED) },
+                onAlerts = { nav.navigate(Routes.ALERTS) { launchSingleTop = true } },
+            )
+        }
+        composable(Routes.CUSTOMERS) { CustomersScreen(onSettings = openSettings, onOpen = openAccount) }
+        composable(Routes.PAYMENTS) { PaymentsScreen(user, onSettings = openSettings) }
+        composable(Routes.PAYMENTS_UNMATCHED) { PaymentsScreen(user, onSettings = openSettings, initialFilter = PaymentFilter.Unmatched) }
+        composable(Routes.BUILDINGS) { BuildingsScreen(onSettings = openSettings, onOpen = { nav.navigate(Routes.building(it)) }) }
+        composable(Routes.ALERTS) { AlertsScreen(user, onSettings = openSettings) }
         composable(Routes.SETTINGS) { SettingsScreen(onBack = { nav.popBackStack() }) }
+        composable(
+            Routes.CUSTOMER_PATTERN,
+            arguments = listOf(navArgument("id") { type = NavType.StringType }),
+        ) { e ->
+            CustomerDetailScreen(
+                id = e.arguments?.getString("id").orEmpty(),
+                user = user,
+                onBack = { nav.popBackStack() },
+                onOpenOther = openAccount,
+            )
+        }
+        composable(
+            Routes.BUILDING_PATTERN,
+            arguments = listOf(navArgument("id") { type = NavType.StringType }),
+        ) { e ->
+            BuildingDetailScreen(
+                id = e.arguments?.getString("id").orEmpty(),
+                onBack = { nav.popBackStack() },
+                onNewDevices = { nav.navigate(Routes.newDevices(it)) },
+                onOpenAccount = openAccount,
+            )
+        }
+        composable(
+            Routes.NEW_DEVICES_PATTERN,
+            arguments = listOf(
+                navArgument("site") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+            ),
+        ) { e ->
+            NewDevicesScreen(
+                siteId = e.arguments?.getString("site"),
+                user = user,
+                onBack = { nav.popBackStack() },
+                onOpenAccount = openAccount,
+            )
+        }
     }
 }

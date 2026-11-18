@@ -61,6 +61,10 @@ android {
         buildConfig = true
     }
 
+    lint {
+        textReport = true
+    }
+
     testOptions {
         unitTests.isReturnDefaultValues = true
     }

@@ -138,3 +138,32 @@ fun Context.isDeviceSecure(): Boolean = getSystemService(KeyguardManager::class.
 fun FullWidth(content: @Composable () -> Unit) {
     Box(Modifier.fillMaxWidth()) { content() }
 }
+
+/** Top bar shared by the top-level screens: title plus a settings shortcut. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun AppTopBar(
+    title: String,
+    onSettings: (() -> Unit)? = null,
+    onBack: (() -> Unit)? = null,
+    actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
+) {
+    androidx.compose.material3.TopAppBar(
+        title = { Text(title, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+        navigationIcon = {
+            if (onBack != null) {
+                androidx.compose.material3.IconButton(onClick = onBack) {
+                    androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                }
+            }
+        },
+        actions = {
+            actions()
+            if (onSettings != null) {
+                androidx.compose.material3.IconButton(onClick = onSettings) {
+                    androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Settings, contentDescription = "Settings")
+                }
+            }
+        },
+    )
+}
