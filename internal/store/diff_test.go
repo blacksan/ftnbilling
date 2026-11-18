@@ -13,16 +13,24 @@ import (
 
 // memBackend is an in-memory Backend that records commits and can fail.
 type memBackend struct {
-	mu      sync.Mutex
-	last    *Data
-	commits []*ChangeSet
-	failErr error // returned by the next Commit (once)
-	loadErr error
+	mu       sync.Mutex
+	last     *Data
+	commits  []*ChangeSet
+	failErr  error // returned by the next Commit (once)
+	failAll  error // returned by every Commit until cleared
+	loadErr  error
+	loadGate chan struct{} // when set, Load waits for it to be closed
 }
 
 func (m *memBackend) Kind() string { return "mem" }
 func (m *memBackend) Close() error { return nil }
 func (m *memBackend) Load(context.Context) (*Data, error) {
+	m.mu.Lock()
+	gate := m.loadGate
+	m.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.loadErr != nil {
@@ -39,6 +47,9 @@ func (m *memBackend) Load(context.Context) (*Data, error) {
 func (m *memBackend) Commit(_ context.Context, d *Data, cs *ChangeSet) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.failAll != nil {
+		return m.failAll
+	}
 	if m.failErr != nil {
 		e := m.failErr
 		m.failErr = nil
@@ -398,4 +409,119 @@ func TestDiffBudget(t *testing.T) {
 	if per := time.Duration(r200.NsPerOp()); per > 300*time.Millisecond {
 		t.Fatalf("diff of 200k rows took %v, sanity limit 300ms", per)
 	}
+}
+
+func waitHealthy(t *testing.T, s *Store, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for (s.Healthy() == nil) != want && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if (s.Healthy() == nil) != want {
+		t.Fatalf("healthy = %v, want %v", s.Healthy() == nil, want)
+	}
+}
+
+func TestRepeatedPersistFailuresDegradeThenRecover(t *testing.T) {
+	defer SetReloadInterval(10 * time.Millisecond)()
+	s, mb := openMem(t)
+	set := func(name string) error {
+		return s.Update(func(d *Data) error { d.Packages["p"] = Package{ID: "p", Name: name}; return nil })
+	}
+	if err := set("kept"); err != nil {
+		t.Fatal(err)
+	}
+	mb.mu.Lock()
+	mb.failAll = errors.New("write failed")
+	mb.mu.Unlock()
+	// Below the threshold the store stays healthy, and a success resets the count.
+	for i := 0; i < degradeAfter-1; i++ {
+		if err := set("lost"); !errors.Is(err, ErrPersist) {
+			t.Fatalf("failure %d: %v", i, err)
+		}
+	}
+	if s.Healthy() != nil {
+		t.Fatal("degraded too early")
+	}
+	mb.mu.Lock()
+	mb.failAll = nil
+	mb.mu.Unlock()
+	if err := set("kept2"); err != nil {
+		t.Fatal(err)
+	}
+	mb.mu.Lock()
+	mb.failAll = errors.New("write failed")
+	mb.loadErr = errors.New("db down")
+	mb.mu.Unlock()
+	for i := 0; i < degradeAfter-1; i++ {
+		set("lost")
+	}
+	if s.Healthy() != nil {
+		t.Fatal("the success should have reset the failure count")
+	}
+	// The threshold failure degrades the store.
+	if err := set("lost"); !errors.Is(err, ErrPersist) {
+		t.Fatal(err)
+	}
+	if s.Healthy() == nil {
+		t.Fatal("not degraded after consecutive persist failures")
+	}
+	// Now writes fail fast without touching the backend, reads keep working.
+	before := len(mb.commits)
+	start := time.Now()
+	if err := set("x"); !errors.Is(err, ErrUnavailable) || time.Since(start) > 100*time.Millisecond {
+		t.Fatalf("want a fast ErrUnavailable, got %v after %v", err, time.Since(start))
+	}
+	if len(mb.commits) != before {
+		t.Fatal("a refused update reached the backend")
+	}
+	s.View(func(d *Data) {
+		if d.Packages["p"].Name != "kept2" {
+			t.Fatalf("view: %+v", d.Packages["p"])
+		}
+	})
+	// The database comes back: the loop restores the store.
+	mb.mu.Lock()
+	mb.failAll, mb.loadErr = nil, nil
+	mb.mu.Unlock()
+	waitHealthy(t, s, true)
+	if err := set("after"); err != nil {
+		t.Fatalf("update after recovery: %v", err)
+	}
+}
+
+func TestConnectionFailureDegradesAtOnceAndReadsNeverBlock(t *testing.T) {
+	defer SetReloadInterval(10 * time.Millisecond)()
+	s, mb := openMem(t)
+	s.Update(func(d *Data) error { d.Packages["p"] = Package{ID: "p", Name: "kept"}; return nil })
+	gate := make(chan struct{})
+	mb.mu.Lock()
+	mb.failErr = fmt.Errorf("tx: %w: i/o timeout", ErrConnection)
+	mb.loadGate = gate // the background reload hangs, as it does against dropped packets
+	mb.mu.Unlock()
+	err := s.Update(func(d *Data) error { d.Packages["p"] = Package{ID: "p", Name: "lost"}; return nil })
+	if !errors.Is(err, ErrPersist) || s.Healthy() == nil {
+		t.Fatalf("a connection failure must degrade at once: %v / %v", err, s.Healthy())
+	}
+	time.Sleep(50 * time.Millisecond) // the retry loop is now stuck inside Load
+	done := make(chan string)
+	go func() {
+		var name string
+		s.View(func(d *Data) { name = d.Packages["p"].Name })
+		s.Healthy()
+		done <- name
+	}()
+	select {
+	case name := <-done:
+		if name != "kept" {
+			t.Fatalf("view: %q", name)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("View blocked while the reload was waiting on the database")
+	}
+	if err := s.Update(func(d *Data) error { return nil }); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("got %v", err)
+	}
+	close(gate)
+	waitHealthy(t, s, true)
 }

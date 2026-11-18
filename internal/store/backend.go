@@ -18,6 +18,10 @@ var (
 	// commit happened (the connection broke during COMMIT). The store then
 	// reloads everything from the backend to find out.
 	ErrAmbiguous = errors.New("commit outcome unknown")
+	// ErrConnection is wrapped by a backend when a commit failed because the
+	// database could not be reached or stopped answering (as opposed to the
+	// database refusing the change). The store turns degraded at once.
+	ErrConnection = errors.New("database connection failed")
 )
 
 // Backend makes a Store durable.

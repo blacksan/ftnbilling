@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"sort"
 	"sync"
 	"time"
@@ -13,8 +15,15 @@ import (
 // changed something. Tests set it; production leaves it off.
 var Strict bool
 
-// DefaultCommitTimeout bounds one Commit.
-const DefaultCommitTimeout = 5 * time.Second
+// DefaultCommitTimeout bounds one Commit. Update holds the write lock for
+// this long at worst, so it is kept short: a database that has not answered in
+// 3 seconds is not going to.
+const DefaultCommitTimeout = 3 * time.Second
+
+// degradeAfter is how many persist failures in a row turn the store degraded
+// (writes fail fast, reads keep working, a background loop restores it). A
+// connection-level failure degrades it at once.
+var degradeAfter = 3
 
 // reloadEvery is how often a degraded store retries loading from its backend.
 var reloadEvery = 5 * time.Second
@@ -29,6 +38,7 @@ type Store struct {
 	data          Data
 	shadow        Data
 	degraded      error
+	failures      int // consecutive failed commits
 	commitTimeout time.Duration
 	now           func() time.Time
 
@@ -128,13 +138,37 @@ func (s *Store) Update(fn func(d *Data) error) error {
 	defer cancel()
 	if err := s.b.Commit(ctx, &s.data, cs); err != nil {
 		rollbackData(&s.data, &s.shadow, cs)
-		if errors.Is(err, ErrAmbiguous) {
+		switch {
+		case errors.Is(err, ErrAmbiguous):
 			s.reloadLocked()
+		case isConnErr(err):
+			s.degradeLocked(err)
+		default:
+			s.failures++
+			if s.failures >= degradeAfter {
+				s.degradeLocked(err)
+			}
 		}
 		return fmt.Errorf("%w: %w", ErrPersist, err)
 	}
+	s.failures = 0
 	applyChangeSet(&s.shadow, &s.data, cs)
 	return nil
+}
+
+// isConnErr reports whether a commit failed because the database could not
+// be reached (as opposed to refusing the change).
+func isConnErr(err error) bool {
+	var ne net.Error
+	return errors.Is(err, ErrConnection) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &ne)
+}
+
+// degradeLocked refuses writes until the background loop has reloaded from
+// the backend. Memory already equals the last committed state.
+func (s *Store) degradeLocked(err error) {
+	s.degraded = err
+	s.startRetryLocked()
 }
 
 // reloadLocked replaces memory with what the backend holds. When that fails
@@ -144,12 +178,12 @@ func (s *Store) reloadLocked() {
 	defer cancel()
 	d, err := s.b.Load(ctx)
 	if err != nil {
-		s.degraded = err
-		s.startRetryLocked()
+		s.degradeLocked(err)
 		return
 	}
 	s.install(d)
 	s.degraded = nil
+	s.failures = 0
 }
 
 func (s *Store) startRetryLocked() {
@@ -168,13 +202,20 @@ func (s *Store) startRetryLocked() {
 				return
 			case <-t.C:
 			}
-			s.mu.Lock()
-			ctx, cancel := context.WithTimeout(context.Background(), 3*s.commitTimeout)
+			// Load without the lock: reads must keep working while the
+			// database is away, and Updates are refused meanwhile, so
+			// nothing can change the data under us.
+			s.mu.RLock()
+			ct := s.commitTimeout
+			s.mu.RUnlock()
+			ctx, cancel := context.WithTimeout(context.Background(), 3*ct)
 			d, err := s.b.Load(ctx)
 			cancel()
+			s.mu.Lock()
 			if err == nil {
 				s.install(d)
 				s.degraded = nil
+				s.failures = 0
 				s.retrying = false
 				s.mu.Unlock()
 				return

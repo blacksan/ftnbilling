@@ -55,6 +55,11 @@ func Open(ctx context.Context, url string, opt Options) (*Backend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("DATABASE_URL is not valid: %w", redactErr(err))
 	}
+	if cfg.ConnConfig.ConnectTimeout <= 0 {
+		// A dropped-packets network must fail a connection attempt quickly,
+		// not after the OS gives up (minutes).
+		cfg.ConnConfig.ConnectTimeout = 3 * time.Second
+	}
 	if !strings.Contains(url, "pool_max_conns") {
 		cfg.MaxConns = 4
 	}
@@ -339,18 +344,18 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	}
 	tx, err := b.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return connErr(err)
 	}
 	defer tx.Rollback(context.Background())
 	br := tx.SendBatch(ctx, batch)
 	for i := 0; i < batch.Len(); i++ {
 		if _, err := br.Exec(); err != nil {
 			br.Close()
-			return fmt.Errorf("%s: %w", names[i], err)
+			return connErr(fmt.Errorf("%s: %w", names[i], err))
 		}
 	}
 	if err := br.Close(); err != nil {
-		return err
+		return connErr(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		var pe *pgconn.PgError
@@ -360,6 +365,20 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 		return fmt.Errorf("%w: %w", store.ErrAmbiguous, err)
 	}
 	return nil
+}
+
+// connErr marks an error that did not come from the server (timeout, reset,
+// no route) with store.ErrConnection. A server error (constraint, syntax)
+// passes through unchanged.
+func connErr(err error) error {
+	var pe *pgconn.PgError
+	if err == nil {
+		return nil
+	}
+	if errors.As(err, &pe) && !strings.HasPrefix(pe.Code, "08") && !strings.HasPrefix(pe.Code, "57P") {
+		return err // the server answered and refused the change
+	}
+	return fmt.Errorf("%w: %w", store.ErrConnection, err)
 }
 
 // queueAccountPrepare frees the unique slots (code, open MAC per site) held by
