@@ -124,12 +124,89 @@ The extra settings are `WG_PUBLIC_KEY`, `WG_ENDPOINT` (default `PUBLIC_IP:51820`
 and `SITE_NAME` (renames the legacy building once). `ROUTER_PASS` is only needed
 while a legacy building exists.
 
+## Monitoring, alerts and WhatsApp
+
+The server checks every building every 30 seconds (a TCP connection to the router's API through the tunnel). A building is **down** after 3 failed checks in a row and **up** again after 2 good ones. Each outage is logged with a cause: `no-handshake` (the WireGuard handshake is older than 3 minutes: power or internet at the building), `tunnel-up-rest-down` (the tunnel works but the router does not answer) or `unknown`.
+
+- **Fleet overview** (`/admin/fleet`): one tile per building, reloads every 30 seconds. It is the start page when "All buildings" is selected and there is more than one building.
+- **Uptime** (`/admin/uptime`): 30 or 90 days of daily availability, the tunnel round-trip time and the outage list.
+- **Alerts** (`/admin/alerts`): the rules, their settings, a Send test button for each channel, mute, and the history.
+- **Messages** (`/admin/messages`): everything the server sent or tried to send, with retry and cancel.
+
+### Alert settings
+
+All of these are edited on the Alerts page. Defaults:
+
+| Rule | Fires when | Default |
+|---|---|---|
+| Building offline | the router API does not answer | for 5 minutes |
+| WAN saturated | WAN use is at or above the threshold | 85% of capacity for 15 minutes |
+| Packet loss | average loss to the ping targets | 5% for 10 minutes |
+| High latency | average round trip | 150 ms for 10 minutes |
+| OLT port down | the OLT interface is not running | for 2 minutes |
+
+An alert is *pending* until its condition has held for the whole time, then *firing* (you get the message), then *resolved*. The recovery message is sent only if the problem message was. The same alert is announced at most once per **cooldown** (60 minutes), and optionally repeated every 6 hours while it stays firing. While a building is offline its other alerts are paused. If more than half of the buildings (and at least 3) go offline within 2 minutes you get one message listing them, and one when they are all back. **Mute** silences a building for planned work. Messages go to every channel that is switched on and set up.
+
+The secrets and addresses are environment settings, not part of the admin page:
+
+| Variable | Default | Notes |
+|---|---|---|
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | port `587` | email: STARTTLS on 587, TLS from the first byte on 465. The password is only sent over TLS (or to localhost) |
+| `ALERT_EMAIL_TO` | | comma separated recipients |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | | create a bot with @BotFather, add it to the chat |
+| `WA_TOKEN`, `WA_PHONE_NUMBER_ID` | | WhatsApp Cloud API |
+| `WA_ADMIN_NUMBERS` | | numbers that get admin alerts, like `254712345678`, comma separated |
+| `WA_API_VERSION`, `WA_LANG` | `v23.0`, `en` | Graph API version; template language |
+| `WA_DAILY_LIMIT` | `240` | tenant WhatsApp messages per day (admin alerts are exempt) |
+| `WA_MIN_CONFIRM_KES` | `250` | smallest payment that gets a confirmation |
+| `WA_APP_SECRET`, `WA_VERIFY_TOKEN` | | switch the inbound webhook on (see below) |
+
+### Messages to tenants (WhatsApp)
+
+| Message | When | Template |
+|---|---|---|
+| Expiry reminder | `REMINDER_DAYS` before a plan ends | `ftn_expiry_reminder` |
+| Plan ended | when a plan of 7 days or longer ends (`REMINDER_ON_EXPIRY`) | `ftn_plan_expired` |
+| Payment received | an M-Pesa payment of at least `WA_MIN_CONFIRM_KES` was applied in the last 6 hours (not free admin grants or vouchers) | `ftn_payment_received` |
+| Outage notice | the admin presses "Tell tenants about the outage" on the fleet page, or automatically after the offline alert has fired for 30 minutes (setting: never / manual / automatic, default manual) | `ftn_outage_notice` |
+| Service restored | to the tenants who got the notice, when the outage ends | `ftn_outage_resolved` |
+
+Each message is created once per event (an expiry, a payment, an outage), however often the server checks. A message is checked again just before it is sent and skipped if it no longer applies (the tenant paid, opted out or changed number).
+
+**Meta Business Manager checklist**
+
+1. A Meta Business portfolio and a WhatsApp Business Account (WABA).
+2. A dedicated phone number registered to the Cloud API. It cannot also be in use in the WhatsApp app or WhatsApp Business app.
+3. A System User with a permanent token that has the `whatsapp_business_messaging` and `whatsapp_business_management` permissions. Put the token in `WA_TOKEN`, and the phone number's ID (not the number) in `WA_PHONE_NUMBER_ID`.
+4. A payment method on the WABA.
+5. The tenants' consent to receive messages. Collect it when you take the flat's details, and keep a record.
+6. Create the six templates below, category **Utility**, language **English (`en`)**, and wait for approval. The wording and the number of parameters must match exactly, or Meta refuses the message (error 132000 or 132001, shown on the Messages page as failed).
+7. The five tenant templates carry the footer **Reply STOP to opt out**.
+8. Put your own number(s) in `WA_ADMIN_NUMBERS` and press **Send test** next to WhatsApp on the Alerts page: it sends `ftn_admin_alert`.
+
+Message templates (create these exactly; `{{1}}` and so on are the parameters):
+
+| Name | Body | Parameters |
+|---|---|---|
+| `ftn_expiry_reminder` | Hello, your {{1}} internet plan for {{2}} ends on {{3}}. To stay connected, pay KES {{4}} via {{5}}, account number {{6}}. Thank you. | package, flat + building, expiry, price, pay hint, account code |
+| `ftn_plan_expired` | Hello, the internet plan for {{1}} ended on {{2}}. To reconnect, pay via {{3}}, account number {{4}}. You will be reconnected automatically. | flat + building, expiry, pay hint, code |
+| `ftn_payment_received` | Payment received: KES {{1}}, reference {{2}}. Your {{3}} plan for {{4}} is active until {{5}}. Thank you. | amount, receipt, package, flat + building, expiry |
+| `ftn_outage_notice` | Hello, we are aware of an internet outage at {{1}} since {{2}}. Our team is working on it. We apologise for the inconvenience. | building, start |
+| `ftn_outage_resolved` | Internet service at {{1}} was restored at {{2}}. Thank you for your patience. | building, time |
+| `ftn_admin_alert` | Network alert, {{1}}: {{2}} at {{3}}. Details: {{4}}. Time: {{5}}. End of alert. | PROBLEM/RECOVERED, rule, building, detail, time |
+
+A tenant only gets messages if the account has a WhatsApp number (Accounts, the flat's page; "same as phone" copies the phone number) and has not been opted out. Messages go out between 07:00 and 21:00 EAT for reminders; payment confirmations and outage notices go at once. At most `WA_DAILY_LIMIT` (240) tenant messages are sent per day; admin alerts are not counted. Failed sends retry with growing waits (30 s up to 1 h, 8 tries). A rejected token pauses the channel and shows a banner on the Messages page.
+
+### Inbound WhatsApp replies (optional)
+
+If `WA_APP_SECRET` (the app secret of your Meta app) and `WA_VERIFY_TOKEN` (any string you choose) are both set, the server answers `GET/POST /wa/webhook`. In the Meta app's WhatsApp configuration set the callback URL to `PUBLIC_BASE_URL/wa/webhook`, the verify token to the same string, and subscribe to the `messages` field. Every POST must carry a valid `X-Hub-Signature-256`; others are refused. Delivery statuses (sent, delivered, read, failed) are shown on the Messages page. A tenant whose number is on an account can send `BALANCE` or `STATUS` (plan, expiry, account code and how to pay), `STOP` (opt out) or `START` (opt back in); anything else gets a short help text. A number that is on no account gets only the support phone. At most 5 replies per sender per minute.
+
 ## Configuration (environment variables)
 
 | Variable | Default | Notes |
 |---|---|---|
 | `LISTEN_ADDR` | `:8080` | |
-| `DATA_DIR` | `/data` | holds `ispbill.json` and the `metrics/` folder (one file per building) |
+| `DATA_DIR` | `/data` | holds `ispbill.json`, `metrics/` (one file per building), `fleet.json`, `alerts.json` and `outbox.json` |
 | `BRAND_NAME` | `Fast Tech Net` | |
 | `TEST_MODE` | `false` | enables the Test payment button |
 | `ROUTER_URL` | `http://172.17.0.1` | `setup.rsc` sets `http://172.17.0.1:8081` |
@@ -147,6 +224,7 @@ while a legacy building exists.
 | `WAN_INTERFACE` / `OLT_INTERFACE` | `ether1` / `sfp-sfpplus1` | for the ports charts; these layout settings (with the two capacity values, `FUP_TB`, `CUSTOMER_SUBNET`) apply to the legacy building only. Join-command buildings have them on their own page |
 | `WAN_CAPACITY_MBPS` / `OLT_CAPACITY_MBPS` | `500` / `10000` | |
 | `FUP_TB` | `15` | monthly fair-use figure used for the projection |
+| `SMTP_*`, `ALERT_EMAIL_TO`, `TELEGRAM_*`, `WA_*` | | alerts and tenant messages, see "Monitoring, alerts and WhatsApp" above |
 | `NETFLOW_ADDR` | `:2055` | UDP listen address for NetFlow v5; one socket for all buildings, told apart by tunnel source address |
 | `CUSTOMER_SUBNET` | `10.5.50.0/24` | flows from here are attributed to flats |
 | `QOE_PING_TARGETS` | `8.8.8.8,1.1.1.1` | comma separated |
@@ -223,7 +301,7 @@ Everything important is in `ispbill.json` under the data folder (`usb1/ispbill-d
 - **Not tested on a real RouterOS device, a real Daraja account or a real OLT.** The REST calls follow the RouterOS 7 documentation; the first real run may need small fixes, especially container, hotspot and traffic-flow settings in `setup.rsc` and the exact field names RouterOS returns for hosts, queues and `/system/health`.
 - JSON file storage: fine for a building, not for thousands of users. All data is held in memory.
 - One router and one hotspot server per building. Each account is locked to one MAC (the ONT WAN); `shared-users=1`. Flat isolation relies on the OLT configuration, which this project cannot check.
-- No refunds on the router side, no pro-rata upgrades, no SMS or receipts (reminders are log events only).
+- No refunds on the router side, no pro-rata upgrades, no SMS or receipts (reminders are log events, and WhatsApp messages when WhatsApp is set up).
 - Daraja callbacks are unsigned. Use `MPESA_CALLBACK_TOKEN` and, if you can, restrict the source IPs.
 - The portal is plain HTTP inside the building. The admin UI has no login rate limit and no HTTPS; keep it off the open internet and block `/admin` from the hotspot network.
 - Test payments count in "revenue" while `TEST_MODE=true`.

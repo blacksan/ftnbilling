@@ -85,6 +85,56 @@ A building that is "paused" in the admin gets no collection and no router change
 | Portal says "open this page from the WiFi login" | The router's host table must list the phone: `/ip/hotspot/host/print`. |
 | No traffic charts | Check `/ip/traffic-flow/target/print` (should be `10.99.0.1:2055`). The admin Settings page counts NetFlow packets from unknown sources. |
 
+## 5. Alerts, Telegram, email and WhatsApp
+
+The server monitors every building from the moment it starts (Admin, Fleet overview). To be told when something breaks, add the settings of the channels you want to the environment file the installer wrote (`/etc/ftnbilling/ftnbilling.env`) and restart: `systemctl restart ftnbilling`. Each channel is optional.
+
+```
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=alerts@example.com
+SMTP_PASS=...
+SMTP_FROM=Fast Tech Net <alerts@example.com>
+ALERT_EMAIL_TO=you@example.com
+TELEGRAM_BOT_TOKEN=123456:ABC...
+TELEGRAM_CHAT_ID=-1001234567890
+WA_TOKEN=...
+WA_PHONE_NUMBER_ID=...
+WA_ADMIN_NUMBERS=254712345678
+```
+
+Then open Admin, Alerts, and press **Send test** next to each channel. The thresholds, hold times, cooldown, repeat and mute are edited on that page (defaults and meaning: see "Monitoring, alerts and WhatsApp" in the main README). `/var/lib/ftnbilling` keeps the state in `fleet.json`, `alerts.json` and `outbox.json`; the daily backup includes them.
+
+If a provider rejects the credentials (an expired WhatsApp token, a changed SMTP password) the channel pauses, messages stay queued, and the Messages page shows a banner. Fix the setting, restart, and press the resume button.
+
+### WhatsApp: Meta Business Manager checklist
+
+**Meta Business Manager checklist**
+
+1. A Meta Business portfolio and a WhatsApp Business Account (WABA).
+2. A dedicated phone number registered to the Cloud API. It cannot also be in use in the WhatsApp app or WhatsApp Business app.
+3. A System User with a permanent token that has the `whatsapp_business_messaging` and `whatsapp_business_management` permissions. Put the token in `WA_TOKEN`, and the phone number's ID (not the number) in `WA_PHONE_NUMBER_ID`.
+4. A payment method on the WABA.
+5. The tenants' consent to receive messages. Collect it when you take the flat's details, and keep a record.
+6. Create the six templates below, category **Utility**, language **English (`en`)**, and wait for approval. The wording and the number of parameters must match exactly, or Meta refuses the message (error 132000 or 132001, shown on the Messages page as failed).
+7. The five tenant templates carry the footer **Reply STOP to opt out**.
+8. Put your own number(s) in `WA_ADMIN_NUMBERS` and press **Send test** next to WhatsApp on the Alerts page: it sends `ftn_admin_alert`.
+
+Templates to create (`{{1}}` and so on are the parameters; the wording and the number of parameters must match exactly):
+
+| Name | Body | Parameters |
+|---|---|---|
+| `ftn_expiry_reminder` | Hello, your {{1}} internet plan for {{2}} ends on {{3}}. To stay connected, pay KES {{4}} via {{5}}, account number {{6}}. Thank you. | package, flat + building, expiry, price, pay hint, account code |
+| `ftn_plan_expired` | Hello, the internet plan for {{1}} ended on {{2}}. To reconnect, pay via {{3}}, account number {{4}}. You will be reconnected automatically. | flat + building, expiry, pay hint, code |
+| `ftn_payment_received` | Payment received: KES {{1}}, reference {{2}}. Your {{3}} plan for {{4}} is active until {{5}}. Thank you. | amount, receipt, package, flat + building, expiry |
+| `ftn_outage_notice` | Hello, we are aware of an internet outage at {{1}} since {{2}}. Our team is working on it. We apologise for the inconvenience. | building, start |
+| `ftn_outage_resolved` | Internet service at {{1}} was restored at {{2}}. Thank you for your patience. | building, time |
+| `ftn_admin_alert` | Network alert, {{1}}: {{2}} at {{3}}. Details: {{4}}. Time: {{5}}. End of alert. | PROBLEM/RECOVERED, rule, building, detail, time |
+
+A tenant only gets messages if the account has a WhatsApp number (Accounts, the flat's page; "same as phone" copies the phone number) and has not been opted out. Messages go out between 07:00 and 21:00 EAT for reminders; payment confirmations and outage notices go at once. At most `WA_DAILY_LIMIT` (240) tenant messages are sent per day; admin alerts are not counted. Failed sends retry with growing waits (30 s up to 1 h, 8 tries). A rejected token pauses the channel and shows a banner on the Messages page.
+
+Optional inbound replies (BALANCE, STATUS, STOP, START): set `WA_APP_SECRET` and `WA_VERIFY_TOKEN`, set the Meta app's webhook to `https://YOUR-DOMAIN/wa/webhook` with the same verify token, and subscribe to `messages`. The webhook is the only part of this server besides the portal and the payment callbacks that is reachable from the internet; it refuses anything without a valid `X-Hub-Signature-256`.
+
 ## Legacy: one router with the app in a container, or ROUTER_URL
 
 An install that already has `ROUTER_URL`/`ROUTER_PASS` in its settings keeps
