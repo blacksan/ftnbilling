@@ -288,13 +288,13 @@ func (m *Mpesa) stkPush(ctx context.Context, phone string, amount int, accountRe
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 	var r struct {
-		CheckoutRequestID   string `json:"CheckoutRequestID"`
-		ResponseCode        string `json:"ResponseCode"`
-		ResponseDescription string `json:"ResponseDescription"`
-		ErrorMessage        string `json:"errorMessage"`
+		CheckoutRequestID   string          `json:"CheckoutRequestID"`
+		ResponseCode        json.RawMessage `json:"ResponseCode"`
+		ResponseDescription string          `json:"ResponseDescription"`
+		ErrorMessage        string          `json:"errorMessage"`
 	}
 	_ = json.Unmarshal(rb, &r)
-	if resp.StatusCode != 200 || r.ResponseCode != "0" || r.CheckoutRequestID == "" {
+	if resp.StatusCode != 200 || rawString(r.ResponseCode) != "0" || r.CheckoutRequestID == "" {
 		msg := r.ErrorMessage
 		if msg == "" {
 			msg = r.ResponseDescription
@@ -423,21 +423,24 @@ func (m *Mpesa) STKQuery(ctx context.Context, checkoutID string) (code, desc str
 	}
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	// Daraja sends the codes as strings in some answers and as numbers in
+	// others, so they are read raw (like the other fields).
 	var r struct {
-		ResponseCode        string `json:"ResponseCode"`
-		ResponseDescription string `json:"ResponseDescription"`
-		ResultCode          string `json:"ResultCode"`
-		ResultDesc          string `json:"ResultDesc"`
-		ErrorCode           string `json:"errorCode"`
-		ErrorMessage        string `json:"errorMessage"`
+		ResponseCode        json.RawMessage `json:"ResponseCode"`
+		ResponseDescription string          `json:"ResponseDescription"`
+		ResultCode          json.RawMessage `json:"ResultCode"`
+		ResultDesc          string          `json:"ResultDesc"`
+		ErrorCode           json.RawMessage `json:"errorCode"`
+		ErrorMessage        string          `json:"errorMessage"`
 	}
 	_ = json.Unmarshal(rb, &r)
+	resultCode, responseCode, errorCode := rawString(r.ResultCode), rawString(r.ResponseCode), rawString(r.ErrorCode)
 	switch {
-	case r.ResultCode != "":
-		return r.ResultCode, m.scrub(r.ResultDesc), nil
-	case r.ErrorCode == "500.001.1001": // Daraja's answer while the customer has not responded yet
+	case resultCode != "" && resultCode != "null":
+		return resultCode, m.scrub(r.ResultDesc), nil
+	case errorCode == "500.001.1001": // Daraja's answer while the customer has not responded yet
 		return "", "the transaction is still being processed", nil
-	case resp.StatusCode != 200 || r.ResponseCode != "0":
+	case resp.StatusCode != 200 || responseCode != "0":
 		msg := r.ErrorMessage
 		if msg == "" {
 			msg = r.ResponseDescription
@@ -488,12 +491,12 @@ func (m *Mpesa) RegisterC2B(ctx context.Context) (string, error) {
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 	var r struct {
-		ResponseCode        string `json:"ResponseCode"`
-		ResponseDescription string `json:"ResponseDescription"`
-		ErrorMessage        string `json:"errorMessage"`
+		ResponseCode        json.RawMessage `json:"ResponseCode"`
+		ResponseDescription string          `json:"ResponseDescription"`
+		ErrorMessage        string          `json:"errorMessage"`
 	}
 	_ = json.Unmarshal(rb, &r)
-	if resp.StatusCode == 200 && r.ResponseCode == "0" {
+	if resp.StatusCode == 200 && rawString(r.ResponseCode) == "0" {
 		if r.ResponseDescription == "" {
 			r.ResponseDescription = "Success"
 		}

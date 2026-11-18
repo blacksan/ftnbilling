@@ -364,8 +364,8 @@ func (s *Server) settingsMpesaSTKPoll(w http.ResponseWriter, r *http.Request) {
 			t = s.mpesa.ApplyQuery(id, code, desc)
 		}
 	}
-	if t.Status == "pending" && time.Since(t.Started) > 3*time.Minute {
-		t.Status, t.Detail = "failed", "no answer after 3 minutes: the prompt expired or the phone was off"
+	if t.Status == "pending" && time.Since(t.Started) > 2*time.Minute {
+		t.Status, t.Detail = "failed", "no answer after 2 minutes: the prompt expired or the phone was off"
 	}
 	writeJSON(w, map[string]any{"status": t.Status, "detail": t.Detail, "receipt": t.Receipt})
 }

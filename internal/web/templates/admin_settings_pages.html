@@ -40,7 +40,7 @@
 <form method="post" action="/admin/settings/mpesa/stk-test" class="row" style="margin:6px 0"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Your phone<input name="phone" placeholder="0712 345 678" autocomplete="off"></label><button>Send KES 1 prompt</button></form>
 {{if .Data.Production}}<p class="muted">Production: the KES 1 is real money. It is recorded as an unmatched payment noted "settings test".</p>{{end}}
 {{with .Data.Test}}<p id="stk" data-id="{{.CheckoutID}}"><b>Test payment:</b> <span id="stks" class="pill {{.Status}}">{{.Status}}</span> <span id="stkd">{{.Detail}}</span></p>
-<script>(function(){var id=document.getElementById('stk').dataset.id,n=0;function poll(){fetch('/admin/settings/mpesa/stk-test?id='+encodeURIComponent(id),{credentials:'same-origin'}).then(function(r){return r.json()}).then(function(j){document.getElementById('stks').textContent=j.status;document.getElementById('stkd').textContent=j.detail||(j.receipt?'receipt '+j.receipt:'');if(j.status==='pending'&&++n<40)setTimeout(poll,4000)})}poll()})()</script>{{end}}</div>
+<script>(function(){var id=document.getElementById('stk').dataset.id,n=0;function poll(){fetch('/admin/settings/mpesa/stk-test?id='+encodeURIComponent(id),{credentials:'same-origin'}).then(function(r){return r.json()}).then(function(j){document.getElementById('stks').textContent=j.status;document.getElementById('stkd').textContent=j.detail||(j.receipt?'receipt '+j.receipt:'');if(j.status==='pending'&&++n<15)setTimeout(poll,8000)})}poll()})()</script>{{end}}</div>
 </div>{{template "afoot"}}{{end}}
 
 {{define "admin_settings_email"}}{{template "ahead" .}}{{template "set_tabs" .}}

@@ -187,3 +187,34 @@ func TestCallbackTokenGraceForPreviousToken(t *testing.T) {
 		t.Error("empty token accepted")
 	}
 }
+
+// Daraja sends ResponseCode and ResultCode as strings or as numbers; both
+// decode, and a type surprise must not turn a result into a bogus error.
+func TestSTKQueryAcceptsNumericAndStringCodes(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	ts, err := r.mp.StartTest(ctx, "0712345678")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for body, want := range map[string]string{
+		`{"ResponseCode":0,"ResponseDescription":"ok","ResultCode":1032,"ResultDesc":"cancelled"}`:   "1032",
+		`{"ResponseCode":"0","ResponseDescription":"ok","ResultCode":"0","ResultDesc":"paid"}`:       "0",
+		`{"ResponseCode":0,"ResponseDescription":"ok","ResultCode":0,"ResultDesc":"paid"}`:           "0",
+		`{"ResponseCode":"0","ResponseDescription":"ok","ResultCode":"1037","ResultDesc":"timeout"}`: "1037",
+	} {
+		r.fd.queryRaw = body
+		code, _, err := r.mp.STKQuery(ctx, ts.CheckoutID)
+		if err != nil || code != want {
+			t.Errorf("%s: code %q err %v", body, code, err)
+		}
+	}
+	r.fd.queryRaw = `{"ResponseCode":0,"ResponseDescription":"accepted, no result yet"}`
+	if code, _, err := r.mp.STKQuery(ctx, ts.CheckoutID); err != nil || code != "" {
+		t.Errorf("no result yet: %q %v", code, err)
+	}
+	r.fd.queryRaw = `{"ResponseCode":1,"ResponseDescription":"nope"}`
+	if _, _, err := r.mp.STKQuery(ctx, ts.CheckoutID); err == nil {
+		t.Error("a non-zero ResponseCode must be an error")
+	}
+}

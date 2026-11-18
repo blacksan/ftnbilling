@@ -29,6 +29,7 @@ type fakeDaraja struct {
 	regBody  map[string]string // last RegisterURL body
 	regCode  string            // ResponseCode to answer RegisterURL with
 	queryRes string            // ResultCode to answer STK queries with ("" = still processing)
+	queryRaw string            // when set, the exact body of the STK query answer
 }
 
 func (f *fakeDaraja) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -62,6 +63,10 @@ func (f *fakeDaraja) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Write([]byte(`{"ResponseCode":"0","ResponseDescription":"Success"}`))
 	case "/mpesa/stkpushquery/v1/query":
+		if f.queryRaw != "" {
+			w.Write([]byte(f.queryRaw))
+			return
+		}
 		if f.queryRes == "" {
 			w.WriteHeader(500)
 			w.Write([]byte(`{"errorCode":"500.001.1001","errorMessage":"The transaction is being processed"}`))
