@@ -572,6 +572,24 @@ func (d *Data) AccountByMAC(mac string) (Account, bool) {
 	return Account{}, false
 }
 
+// OpenAccountsByMAC lists every open account with the MAC, flagged ones
+// included, the owner first.
+func (d *Data) OpenAccountsByMAC(mac string) []Account {
+	var out []Account
+	for _, a := range d.Accounts {
+		if mac != "" && strings.EqualFold(a.MAC, mac) {
+			out = append(out, a)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].MACConflict != out[j].MACConflict {
+			return !out[i].MACConflict
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
 // MACConflicts lists the open accounts flagged MACConflict, by building name
 // then natural flat order.
 func (d *Data) MACConflicts() []Account {

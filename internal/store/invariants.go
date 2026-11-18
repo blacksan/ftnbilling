@@ -18,6 +18,11 @@ var ErrDuplicateIP = errors.New("that IP address is already assigned to another 
 // existed and are not touched by the change are not its business: migrations
 // flag those (Account.MACConflict) and db-check lists them.
 func checkAccountInvariants(d *Data, cs *ChangeSet) error {
+	for _, a := range cs.Accounts.Upsert {
+		if a.MAC != "" && !a.MACConflict && !macShape.MatchString(a.MAC) {
+			return fmt.Errorf("%w: %q on flat %s", ErrBadMAC, a.MAC, a.Flat)
+		}
+	}
 	if cs.Accounts.Empty() {
 		return nil
 	}
@@ -68,6 +73,77 @@ func checkAccountInvariants(d *Data, cs *ChangeSet) error {
 	}
 	if k := keys(byIP); len(k) > 0 {
 		return fmt.Errorf("%w (%s is on accounts %s)", ErrDuplicateIP, strings.SplitN(k[0], "|", 2)[1], strings.Join(byIP[k[0]], " and "))
+	}
+	return nil
+}
+
+// checkOtherInvariants covers the rules the Postgres schema enforces outside
+// the accounts table, so that the JSON backend refuses the same changes:
+// equipment MACs, user names, token hashes and building access modes.
+func checkOtherInvariants(d *Data, cs *ChangeSet) error {
+	for _, st := range cs.Sites.Upsert {
+		switch st.AccessMode {
+		case AccessHotspot, AccessIPoEObserve, AccessIPoE:
+		default:
+			return fmt.Errorf("%w: %q", ErrBadAccessMode, st.AccessMode)
+		}
+	}
+	if len(cs.Equipment.Upsert) > 0 {
+		macs := map[string]bool{}
+		for _, e := range cs.Equipment.Upsert {
+			if e.MAC != "" && e.Status != EqRetired {
+				macs[strings.ToUpper(e.MAC)] = true
+			}
+		}
+		seen := map[string]string{}
+		ids := make([]string, 0, len(d.Equipment))
+		for id := range d.Equipment {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			e := d.Equipment[id]
+			k := strings.ToUpper(e.MAC)
+			if e.MAC == "" || e.Status == EqRetired || !macs[k] {
+				continue
+			}
+			if o, dup := seen[k]; dup {
+				return fmt.Errorf("%w (%s is on items %s and %s)", ErrDuplicateEquipmentMAC, e.MAC, o, id)
+			}
+			seen[k] = id
+		}
+	}
+	if len(cs.AdminUsers.Upsert) > 0 {
+		names := map[string]string{}
+		ids := make([]string, 0, len(d.AdminUsers))
+		for id := range d.AdminUsers {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			k := strings.ToLower(d.AdminUsers[id].Username)
+			if o, dup := names[k]; dup {
+				return fmt.Errorf("%w (%q is on users %s and %s)", ErrDuplicateUsername, d.AdminUsers[id].Username, o, id)
+			}
+			names[k] = id
+		}
+	}
+	if len(cs.APIDevices.Upsert) > 0 {
+		acc, ref := map[string]string{}, map[string]string{}
+		for id, x := range d.APIDevices {
+			for _, t := range []struct {
+				m map[string]string
+				h string
+			}{{acc, x.AccessHash}, {ref, x.RefreshHash}} {
+				if t.h == "" {
+					continue
+				}
+				if o, dup := t.m[t.h]; dup && o != id {
+					return fmt.Errorf("%w (devices %s and %s)", ErrDuplicateToken, o, id)
+				}
+				t.m[t.h] = id
+			}
+		}
 	}
 	return nil
 }

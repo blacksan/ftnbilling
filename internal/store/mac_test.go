@@ -21,6 +21,17 @@ func TestNormalizeMACMovedToStore(t *testing.T) {
 			t.Errorf("%q must be refused: %v", in, err)
 		}
 	}
+	// The separators are exactly : - . and the ASCII space (migration 0004 strips the same set).
+	for in, want := range map[string]string{"AA::BB:CC:DD:EE:07": "AA:BB:CC:DD:EE:07", " AABBCCDDEE06": "AA:BB:CC:DD:EE:06", "aabb.ccdd.ee03": "AA:BB:CC:DD:EE:03"} {
+		if m, ok := CanonMAC(in); !ok || m != want {
+			t.Errorf("CanonMAC(%q) = %q %v", in, m, ok)
+		}
+	}
+	for _, in := range []string{"AABBCCDDEE0A\t", "\u00a0AABBCCDDEE0B", "ＡＡＢＢＣＣＤＤＥＥ０１", "AA:BB:CC:DD:EE:01:02"} {
+		if m, ok := CanonMAC(in); ok {
+			t.Errorf("CanonMAC(%q) = %q, want refused", in, m)
+		}
+	}
 	// CanonMAC only fixes the spelling.
 	if m, ok := CanonMAC("01-00-5e-00-00-01"); !ok || m != "01:00:5E:00:00:01" {
 		t.Errorf("CanonMAC: %q %v", m, ok)
@@ -211,5 +222,73 @@ func TestValidateReportsGlobalDuplicates(t *testing.T) {
 	d.Accounts["a2"] = a
 	if p := Validate(d); len(p) != 0 {
 		t.Fatalf("flagged: %v", p)
+	}
+}
+
+func TestIPIsStoredCanonically(t *testing.T) {
+	s, _ := Open(t.TempDir())
+	now := time.Now()
+	s.Update(func(d *Data) error {
+		d.Sites["s1"] = Site{ID: "s1", Name: "A", Mode: SiteModeEnv, CreatedAt: now}
+		d.Accounts["a1"] = Account{ID: "a1", SiteID: "s1", Flat: "1", IP: "::ffff:10.0.0.5", CreatedAt: now}
+		d.Accounts["a2"] = Account{ID: "a2", SiteID: "s1", Flat: "2", IP: "not an ip", CreatedAt: now}
+		return nil
+	})
+	snap := s.Snapshot()
+	if snap.Accounts["a1"].IP != "10.0.0.5" || snap.Accounts["a2"].IP != "not an ip" {
+		t.Fatalf("%+v %+v", snap.Accounts["a1"], snap.Accounts["a2"])
+	}
+	// The same address in another spelling is a duplicate.
+	err := s.Update(func(d *Data) error {
+		d.Accounts["a3"] = Account{ID: "a3", SiteID: "s1", Flat: "3", IP: "::ffff:10.0.0.5", CreatedAt: now}
+		return nil
+	})
+	if !errors.Is(err, ErrDuplicateIP) {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestMigrateV5ToV6EquipmentMACs(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{"format":5,
+ "sites":{"s1":{"id":"s1","name":"A","mode":"env","created_at":"2026-01-01T00:00:00Z"}},
+ "accounts":{"a1":{"id":"a1","site_id":"s1","code":"AAA111","flat":"1","mac":"AA:BB:CC:DD:EE:01","hs_pass":"x","created_at":"2026-01-01T00:00:00Z"}},
+ "equipment":{
+  "k1":{"id":"k1","kind":"ont","mac":"aa:bb:cc:dd:ee:20","status":"in_stock","created_at":"2026-01-01T00:00:00Z"},
+  "k2":{"id":"k2","kind":"ont","mac":"AA-BB-CC-DD-EE-20","status":"installed","site_id":"s1","account_id":"a1","created_at":"2026-02-01T00:00:00Z"},
+  "k3":{"id":"k3","kind":"ont","mac":"AA:BB:CC:DD:EE:20","status":"installed","site_id":"s1","notes":"hi","created_at":"2026-03-01T00:00:00Z"},
+  "k4":{"id":"k4","kind":"ont","mac":"AA:BB:CC:DD:EE:20","status":"retired","created_at":"2026-01-01T00:00:00Z"}},
+ "event_seq":0}`
+	os.WriteFile(filepath.Join(dir, "ispbill.json"), []byte(raw), 0o600)
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := s.Snapshot()
+	if len(d.Equipment) != 4 || d.Equipment["k2"].Status != EqInstalled || d.Equipment["k2"].AccountID != "a1" || d.Equipment["k2"].MAC != "AA:BB:CC:DD:EE:20" {
+		t.Fatalf("keeper: %+v", d.Equipment["k2"])
+	}
+	for _, id := range []string{"k1", "k3"} {
+		if e := d.Equipment[id]; e.Status != EqRetired || e.AccountID != "" || e.MAC != "AA:BB:CC:DD:EE:20" {
+			t.Errorf("%s: %+v", id, e)
+		}
+	}
+	if n := d.Equipment["k3"].Notes; n != "hi | migration 0004: MAC AA:BB:CC:DD:EE:20 is on another live item; retired (was installed)" {
+		t.Errorf("notes %q", n)
+	}
+	if d.Equipment["k4"].Notes != "" {
+		t.Error("a retired item must be left alone")
+	}
+	n := 0
+	for _, e := range d.Events {
+		if e.Kind == "audit" && e.EquipmentID != "" {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("%d audit events", n)
+	}
+	if p := Validate(&d); len(p) != 0 {
+		t.Fatalf("%v", p)
 	}
 }

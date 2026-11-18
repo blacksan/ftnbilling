@@ -320,9 +320,58 @@ func (d *Data) migrateV5toV6(now time.Time) {
 		d.Accounts[id] = a
 		d.AddEvent(Event{Time: now, SiteID: a.SiteID, Kind: "audit", AccountID: a.ID,
 			Msg: "MAC conflict found by migration 0004: flat " + a.Flat + " (" + a.Code + ") has MAC " + a.MAC +
-				", already used or malformed. Not provisioned until fixed."})
+				", already used or malformed. It will not be provisioned on IPoE until fixed."})
 	}
+	d.migrateEquipmentMACs(now)
 	d.Format = 6
+}
+
+// migrateEquipmentMACs writes equipment MACs in the canonical form and makes
+// them unique among live (not retired) items so the unique index can always
+// exist. Of the items sharing a MAC the keeper is an installed one, then the
+// oldest, then the lowest id. The others are retired and detached from their
+// flat, their MAC stays on the row and a note says what they were; each gets
+// an audit event. Nothing is deleted. (Mirrors migration 0004 in pgstore.)
+func (d *Data) migrateEquipmentMACs(now time.Time) {
+	groups := map[string][]Equipment{}
+	for k, e := range d.Equipment {
+		if m, ok := CanonMAC(e.MAC); ok {
+			e.MAC = m
+			d.Equipment[k] = e
+		}
+		if e.MAC != "" && e.Status != EqRetired {
+			groups[e.MAC] = append(groups[e.MAC], e)
+		}
+	}
+	var losers []Equipment
+	for _, es := range groups {
+		sort.Slice(es, func(i, j int) bool {
+			if ii, jj := es[i].Status == EqInstalled, es[j].Status == EqInstalled; ii != jj {
+				return ii
+			}
+			if !es[i].CreatedAt.Equal(es[j].CreatedAt) {
+				return es[i].CreatedAt.Before(es[j].CreatedAt)
+			}
+			return es[i].ID < es[j].ID
+		})
+		losers = append(losers, es[1:]...)
+	}
+	sort.Slice(losers, func(i, j int) bool { return losers[i].ID < losers[j].ID })
+	for _, e := range losers {
+		note := "migration 0004: MAC " + e.MAC + " is on another live item; retired (was " + e.Status + ")"
+		if e.AccountID != "" {
+			note += ", detached from account " + e.AccountID
+		}
+		if e.Notes != "" {
+			note = e.Notes + " | " + note
+		}
+		acct := e.AccountID
+		e.Status, e.AccountID, e.Notes = EqRetired, "", note
+		d.Equipment[e.ID] = e
+		d.AddEvent(Event{Time: now, SiteID: e.SiteID, Kind: "audit", AccountID: acct, EquipmentID: e.ID,
+			Msg: "Equipment MAC conflict found by migration 0004: item " + e.ID + " shares MAC " + e.MAC +
+				" with another live item. Retired and detached; the MAC is kept on the row."})
+	}
 }
 
 var macShape = regexp.MustCompile(`^([0-9A-F]{2}:){5}[0-9A-F]{2}$`)

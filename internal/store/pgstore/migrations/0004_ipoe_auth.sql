@@ -1,4 +1,5 @@
 -- IPoE and sign-in. Forward-only; never edit once released.
+SET LOCAL lock_timeout = '10s';
 --
 -- One MAC address can never be used by more than one open account, in any
 -- building. Existing duplicates are flagged (mac_conflict), never dropped or
@@ -30,7 +31,7 @@ UPDATE accounts a SET mac_conflict = true FROM r WHERE a.id = r.id AND r.rn > 1;
 INSERT INTO events (seq, time, site_id, kind, account_id, msg)
 SELECT (SELECT coalesce(max(seq),0) FROM events) + row_number() OVER (ORDER BY id), now(), site_id, 'audit', id,
        'MAC conflict found by migration 0004: flat ' || flat || ' (' || code || ') has MAC ' || mac ||
-       ', already used or malformed. Not provisioned until fixed.'
+       ', already used or malformed. It will not be provisioned on IPoE until fixed.'
 FROM accounts WHERE mac_conflict AND closed_at IS NULL;
 -- Deferred foreign-key checks queued by the updates above must run before DDL.
 SET CONSTRAINTS ALL IMMEDIATE;
@@ -44,14 +45,28 @@ ALTER TABLE accounts ADD CONSTRAINT accounts_mac_shape
 UPDATE equipment SET mac = regexp_replace(upper(regexp_replace(mac,'[-:. ]','','g')),
        '^(..)(..)(..)(..)(..)(..)$','\1:\2:\3:\4:\5:\6')
  WHERE mac <> '' AND regexp_replace(mac,'[-:. ]','','g') ~* '^[0-9a-f]{12}$';
+-- Two live (not retired) items must not share a MAC. Keeper: an installed item,
+-- then the oldest, then the lowest id. The others are retired and detached from
+-- their flat (a retired item cannot belong to one); their MAC stays on the row,
+-- the notes say what they were, and each gets an audit event. Nothing is deleted.
+CREATE TEMP TABLE ftn_eq_dupes ON COMMIT DROP AS
+  SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY mac ORDER BY
+           (status = 'installed') DESC, created_at, id) AS rn
+         FROM equipment WHERE mac <> '' AND status <> 'retired') r WHERE rn > 1;
+INSERT INTO events (seq, time, site_id, kind, account_id, equipment_id, msg)
+SELECT (SELECT coalesce(max(seq),0) FROM events) + row_number() OVER (ORDER BY e.id), now(),
+       coalesce(e.site_id,''), 'audit', coalesce(e.account_id,''), e.id,
+       'Equipment MAC conflict found by migration 0004: item ' || e.id || ' shares MAC ' || e.mac ||
+       ' with another live item. Retired and detached; the MAC is kept on the row.'
+FROM equipment e JOIN ftn_eq_dupes d ON d.id = e.id;
+UPDATE equipment e SET
+  notes = CASE WHEN e.notes = '' THEN '' ELSE e.notes || ' | ' END ||
+          'migration 0004: MAC ' || e.mac || ' is on another live item; retired (was ' || e.status || ')' ||
+          CASE WHEN e.account_id IS NOT NULL THEN ', detached from account ' || e.account_id ELSE '' END,
+  status = 'retired', account_id = NULL
+FROM ftn_eq_dupes d WHERE d.id = e.id;
 SET CONSTRAINTS ALL IMMEDIATE;
--- Equipment MACs are checked by the service layer; the database enforces them
--- only when the data is already clean.
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM equipment WHERE mac <> '' AND status <> 'retired' GROUP BY mac HAVING count(*) > 1) THEN
-    CREATE UNIQUE INDEX equipment_mac_live ON equipment (mac) WHERE mac <> '' AND status <> 'retired';
-  END IF;
-END $$;
+CREATE UNIQUE INDEX equipment_mac_live ON equipment (mac) WHERE mac <> '' AND status <> 'retired';
 
 ALTER TABLE sites ADD COLUMN access_mode text NOT NULL DEFAULT 'hotspot'
   CHECK (access_mode IN ('hotspot','ipoe_observe','ipoe'));

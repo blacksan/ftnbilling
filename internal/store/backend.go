@@ -18,6 +18,11 @@ var (
 	// commit happened (the connection broke during COMMIT). The store then
 	// reloads everything from the backend to find out.
 	ErrAmbiguous = errors.New("commit outcome unknown")
+	// ErrIntegrity is wrapped by a backend when the database refused a change
+	// because it breaks an integrity rule (SQLSTATE class 23: unique, foreign
+	// key, check, not null). The change was wrong, not the database: Update
+	// rolls back, returns the error, and never counts it towards degrading.
+	ErrIntegrity = errors.New("the database refused the change")
 	// ErrConnection is wrapped by a backend when a commit failed because the
 	// database could not be reached or stopped answering (as opposed to the
 	// database refusing the change). The store turns degraded at once.

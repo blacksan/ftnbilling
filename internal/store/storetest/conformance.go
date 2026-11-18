@@ -176,6 +176,82 @@ func Run(t *testing.T) {
 		}
 	})
 
+	t.Run("IntegrityRefusalsNeverDegradeTheStore", func(t *testing.T) {
+		h := New(t)
+		at := Fixture(t, h.Store)
+		before := h.Store.Snapshot()
+		cases := []struct {
+			name string
+			fn   func(d *store.Data)
+			want error
+		}{
+			{"equipment MAC", func(d *store.Data) {
+				d.Equipment["n1"] = store.Equipment{ID: "n1", Kind: store.KindONT, MAC: "aa-bb-cc-dd-ee-01", Status: store.EqInStock, CreatedAt: at}
+			}, store.ErrDuplicateEquipmentMAC},
+			{"user name", func(d *store.Data) {
+				d.AdminUsers["n1"] = store.AdminUser{ID: "n1", Username: "BRIAN", Role: store.RoleViewer, CreatedAt: at}
+			}, store.ErrDuplicateUsername},
+			{"access token", func(d *store.Data) {
+				d.APIDevices["n1"] = store.APIDevice{ID: "n1", UserID: "u1", AccessHash: "ah", CreatedAt: at}
+			}, store.ErrDuplicateToken},
+			{"refresh token", func(d *store.Data) {
+				d.APIDevices["n1"] = store.APIDevice{ID: "n1", UserID: "u1", RefreshHash: "rh", CreatedAt: at}
+			}, store.ErrDuplicateToken},
+			{"malformed MAC", func(d *store.Data) {
+				d.Accounts["n1"] = store.Account{ID: "n1", SiteID: "s111111", Code: "MAL234", Flat: "Flat 20", MAC: "aa:bb", CreatedAt: at}
+			}, store.ErrBadMAC},
+			{"access mode", func(d *store.Data) {
+				st := d.Sites["s222222"]
+				st.AccessMode = "bogus"
+				d.Sites["s222222"] = st
+			}, store.ErrBadAccessMode},
+			{"un-retiring a duplicate", func(d *store.Data) {
+				d.Equipment["r1"] = store.Equipment{ID: "r1", Kind: store.KindONT, MAC: "AA:BB:CC:DD:EE:01", Status: store.EqRetired, CreatedAt: at}
+			}, nil}, // allowed: retired items may share a MAC (checked below)
+		}
+		for _, c := range cases {
+			for i := 0; i < 5; i++ { // more than the failure count that degrades a store
+				err := h.Store.Update(func(d *store.Data) error { c.fn(d); return nil })
+				if c.want == nil {
+					if err != nil {
+						t.Fatalf("%s: %v", c.name, err)
+					}
+					break
+				}
+				if !errors.Is(err, c.want) {
+					t.Fatalf("%s: got %v, want %v", c.name, err, c.want)
+				}
+			}
+			if err := h.Store.Healthy(); err != nil {
+				t.Fatalf("%s: store degraded: %v", c.name, err)
+			}
+		}
+		after := h.Store.Snapshot()
+		if len(after.Equipment) != len(before.Equipment)+1 || after.Equipment["r1"].Status != store.EqRetired {
+			t.Fatal("only the retired item should have been added")
+		}
+		delete(after.Equipment, "r1")
+		after.EventSeq, before.EventSeq = 0, 0
+		if !reflect.DeepEqual(after.Equipment, before.Equipment) || !reflect.DeepEqual(after.Accounts, before.Accounts) ||
+			!reflect.DeepEqual(after.AdminUsers, before.AdminUsers) || !reflect.DeepEqual(after.APIDevices, before.APIDevices) {
+			t.Fatal("a refused update changed the data")
+		}
+		// A real write still works afterwards.
+		if err := h.Store.Update(func(d *store.Data) error { d.Notes["after"] = store.Note{ID: "after", Text: "t", Time: at}; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		// Un-retiring the duplicate is refused.
+		err := h.Store.Update(func(d *store.Data) error {
+			e := d.Equipment["r1"]
+			e.Status = store.EqInStock
+			d.Equipment["r1"] = e
+			return nil
+		})
+		if !errors.Is(err, store.ErrDuplicateEquipmentMAC) {
+			t.Fatalf("un-retire: %v", err)
+		}
+	})
+
 	t.Run("NoChangeWritesNothing", func(t *testing.T) {
 		h := New(t)
 		Fixture(t, h.Store)

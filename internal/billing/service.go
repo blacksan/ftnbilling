@@ -19,10 +19,12 @@ var (
 	ErrNoPackage    = errors.New("no package matches that amount")
 	ErrSuspended    = errors.New("this account is suspended")
 	ErrDuplicateMAC = store.ErrDuplicateMAC
-	ErrDuplicateKey = errors.New("that transaction code is already recorded")
-	ErrBadState     = errors.New("that payment is not waiting for a decision")
-	ErrVoucherSite  = errors.New("this voucher is for another building")
-	ErrNoSite       = errors.New("choose a building")
+	// ErrDuplicateEquipmentMAC: another live (not retired) equipment item has that MAC.
+	ErrDuplicateEquipmentMAC = store.ErrDuplicateEquipmentMAC
+	ErrDuplicateKey          = errors.New("that transaction code is already recorded")
+	ErrBadState              = errors.New("that payment is not waiting for a decision")
+	ErrVoucherSite           = errors.New("this voucher is for another building")
+	ErrNoSite                = errors.New("choose a building")
 )
 
 // DuplicateMACError says which open account already owns a MAC. It matches
@@ -296,11 +298,19 @@ func (s *Service) ChangeMAC(ctx context.Context, id, rawMAC string) error {
 		if other, ok := d.AccountByMAC(mac); ok && other.ID != id {
 			return duplicateMAC(d, other)
 		}
-		if strings.EqualFold(a.MAC, mac) {
+		if strings.EqualFold(a.MAC, mac) && !a.MACConflict {
 			return store.ErrNoChange
 		}
-		d.AddEvent(store.Event{Time: s.now(), SiteID: a.SiteID, Kind: "info", AccountID: id, Msg: fmt.Sprintf("%s: ONT MAC changed %s -> %s", a.Flat, a.MAC, mac)})
-		a.MAC = mac
+		// Writing a MAC always puts the account back under the uniqueness
+		// rule (clears a migration's MACConflict flag). The same MAC on a
+		// flagged account is a re-check: it clears the flag if the MAC is
+		// free (checked above) and was refused otherwise.
+		msg := fmt.Sprintf("%s: ONT MAC changed %s -> %s", a.Flat, a.MAC, mac)
+		if strings.EqualFold(a.MAC, mac) {
+			msg = fmt.Sprintf("%s: ONT MAC %s checked, no other flat uses it", a.Flat, mac)
+		}
+		d.AddEvent(store.Event{Time: s.now(), SiteID: a.SiteID, Kind: "info", AccountID: id, Msg: msg})
+		a.MAC, a.MACConflict = mac, false
 		d.Accounts[id] = a
 		delete(d.Devices, store.DeviceKey(a.SiteID, mac))
 		s.enqueueLocked(d, a, true, "MAC changed")
@@ -350,6 +360,23 @@ func (s *Service) AccountByMAC(mac string) (a store.Account, ok bool) {
 	return
 }
 
+// PortalAccount finds the account a device on siteID's own network belongs
+// to: the open account with that MAC in this building (the owner first, else a flagged one)
+// A flagged account is used when migration found the MAC on two flats: the
+// hotspot keeps working for the flat behind this router until somebody fixes
+// the MAC. An account of another building is never returned.
+func (s *Service) PortalAccount(siteID, mac string) (a store.Account, ok bool) {
+	s.st.View(func(d *store.Data) {
+		for _, c := range d.OpenAccountsByMAC(mac) {
+			if c.SiteID == siteID {
+				a, ok = c, true
+				return
+			}
+		}
+	})
+	return
+}
+
 // ---- unregistered devices ----------------------------------------------
 
 // NoteDevice records a MAC that has no account. It is a no-op for known MACs.
@@ -358,7 +385,7 @@ func (s *Service) NoteDevice(siteID, mac, ip, source string) {
 		return
 	}
 	_ = s.st.Update(func(d *store.Data) error {
-		if _, ok := d.AccountByMAC(mac); ok {
+		if len(d.OpenAccountsByMAC(mac)) > 0 {
 			return store.ErrNoChange // already a customer (here or in another building)
 		}
 		if st, ok := d.Sites[siteID]; !ok || st.Removed {

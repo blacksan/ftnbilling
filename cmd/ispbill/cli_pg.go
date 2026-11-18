@@ -94,7 +94,7 @@ func runDBCommand(cmd string, args []string, getenv func(string) string, out io.
 		if err := store.WriteJSON(*outPath, d); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "wrote %s (mode 0600). It holds secrets (router passwords, encrypted national IDs): keep it private.\n", *outPath)
+		fmt.Fprintf(out, "wrote %s (mode 0600). It holds secrets (router passwords, encrypted national IDs, sign-in data: password hashes, sealed 2FA secrets and recovery-code hashes): keep it private.\n", *outPath)
 		return nil
 
 	case "db-check":
@@ -135,6 +135,9 @@ func printCounts(out io.Writer, c pgstore.Counts) {
 	}
 	fmt.Fprintf(out, "%-18s %d\n", "closed accounts", c.Closed)
 	fmt.Fprintf(out, "%-18s KES %d\n", "applied payments", c.AppliedKES)
+	if c.SchemaVersion > 0 && c.SchemaVersion < pgstore.SchemaVersion() {
+		fmt.Fprintf(out, "schema version %d (this program is at %d): tables added since then are counted as 0\n", c.SchemaVersion, pgstore.SchemaVersion())
+	}
 }
 
 // compareDB prints how a restored copy (counts) differs from the live

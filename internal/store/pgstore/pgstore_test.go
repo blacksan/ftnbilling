@@ -126,6 +126,19 @@ func TestForeignKeyViolationRollsBackMemory(t *testing.T) {
 	if h.Store.Healthy() != nil {
 		t.Fatal("a constraint failure must not degrade the store")
 	}
+	// However often it happens (degrading starts at 3 failures in a row).
+	for i := 0; i < 6; i++ {
+		err := h.Store.Update(func(d *store.Data) error {
+			d.Accounts["a1"] = store.Account{ID: "a1", SiteID: "no-such-site", Flat: "1", CreatedAt: time.Now()}
+			return nil
+		})
+		if !errors.Is(err, store.ErrIntegrity) {
+			t.Fatalf("attempt %d: %v", i, err)
+		}
+	}
+	if h.Store.Healthy() != nil {
+		t.Fatal("repeated constraint failures degraded the store")
+	}
 	// Unique constraints also come back as plain errors.
 	h.Store.Update(func(d *store.Data) error {
 		d.Sites["s1"] = store.Site{ID: "s1", Name: "A", Mode: "env", CreatedAt: time.Now()}
@@ -365,11 +378,25 @@ func TestExportImportRoundTrip(t *testing.T) {
 	}
 	c1, _ := b.Counts(ctx)
 	c2, _ := b2.Counts(ctx)
+	// Browser sessions are not carried over by an import.
+	if c1.Rows["admin_sessions"] != 1 || c2.Rows["admin_sessions"] != 0 {
+		t.Fatalf("sessions: %d -> %d", c1.Rows["admin_sessions"], c2.Rows["admin_sessions"])
+	}
+	c1.Rows["admin_sessions"] = 0
 	if c1.Diff(c2) != "" {
 		t.Fatalf("round trip differs: %s", c1.Diff(c2))
 	}
 	d2, _ := b2.LoadAll(ctx)
-	if !reflect.DeepEqual(*d2, *all) {
+	// App devices must sign in again: tokens dropped, device marked revoked.
+	want := *all
+	want.AdminSessions = map[string]store.AdminSession{}
+	want.APIDevices = map[string]store.APIDevice{}
+	for k, x := range all.APIDevices {
+		x.AccessHash, x.RefreshHash, x.RefreshPrevHash = "", "", ""
+		x.AccessExpiresAt, x.RefreshExpiresAt = time.Time{}, time.Time{}
+		want.APIDevices[k] = x
+	}
+	if !reflect.DeepEqual(*d2, want) {
 		t.Fatal("data differs after export, import, load")
 	}
 }

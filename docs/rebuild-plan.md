@@ -175,6 +175,15 @@ CREATE UNIQUE INDEX api_devices_refresh ON api_devices (refresh_hash) WHERE refr
 ```
 Notes: verify on PG 14, 16 and 18; check how `EventSeq` is loaded (expected `max(seq)`) so inserted audit rows don't collide; PG 23505 on `accounts_mac_open` in `pgstore.Commit` → new `store.ErrDuplicateMAC`. Adjust column names to the real 0001 schema where they differ (e.g. `closed_at`, `suspended`, `expires_at`, `equipment.status`).
 
+W0 implementation choices (recorded after review):
+- Only text that is exactly 12 hex digits once `[-:. ]` is stripped is rewritten to `AA:BB:CC:DD:EE:FF`; anything else is left as typed and flagged. Go `CanonMAC` and the SQL strip the same set; a test runs the same vectors through both.
+- The old `accounts_site_mac_open` index is dropped first (rewriting spellings can make rows equal), and `SET CONSTRAINTS ALL IMMEDIATE` runs before each `CREATE INDEX`.
+- Audit events are written only for flagged accounts with `closed_at IS NULL`. Closed accounts with a malformed MAC are flagged silently, because the `accounts_mac_shape` CHECK covers every row and needs the flag.
+- Equipment: `equipment_mac_live` is always created. Of live (not retired) items that share a MAC after normalising, the keeper is an installed one, then the oldest, then the lowest id. The others are set to `retired`, detached from their flat (a retired item cannot have an account), keep their MAC, get a note saying what they were, and each gets an audit event. Nothing is deleted.
+- Integrity refusals (SQLSTATE class 23) are `store.ErrIntegrity`: Update rolls back and never counts them towards degrading. Specific errors: `ErrDuplicateMAC`, `ErrDuplicateIP`, `ErrBadMAC` (`accounts_mac_shape`), `ErrDuplicateEquipmentMAC`, `ErrDuplicateUsername`, `ErrDuplicateToken`, `ErrBadAccessMode`. The JSON backend enforces the same rules in Update.
+- Writing a MAC with `ChangeMAC` clears `mac_conflict`; the same MAC on a flagged account is a re-check (cleared if free, `DuplicateMACError` if not).
+- Import from JSON drops browser sessions and revokes app devices (users sign in again).
+
 ### Store format 6 (JSON path + shared structs)
 - `store.FormatVersion = 6`. New fields: `Account.MACConflict`, `Account.IP`, `Site.AccessMode`, `Event.Actor`, `Event.IP`. New maps + deltas: `AdminUsers`, `AdminSessions`, `APIDevices`.
 - `internal/store/migrate.go`: `migrateV5toV6` with same normalise/flag/audit behaviour. Existing `.v5.bak` copy in `jsonBackend.Load` protects the original.

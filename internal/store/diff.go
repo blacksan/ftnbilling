@@ -1,6 +1,7 @@
 package store
 
 import (
+	"net/netip"
 	"reflect"
 	"time"
 )
@@ -32,6 +33,9 @@ func (x Customer) norm() Customer {
 }
 func (x Equipment) norm() Equipment {
 	x.InstalledAt, x.CreatedAt, x.UpdatedAt = nt(x.InstalledAt), nt(x.CreatedAt), nt(x.UpdatedAt)
+	if m, ok := CanonMAC(x.MAC); ok {
+		x.MAC = m
+	}
 	return x
 }
 func (x Account) norm() Account {
@@ -39,6 +43,9 @@ func (x Account) norm() Account {
 	x.CreatedAt, x.ClosedAt = nt(x.CreatedAt), nt(x.ClosedAt)
 	if m, ok := CanonMAC(x.MAC); ok {
 		x.MAC = m
+	}
+	if a, err := netip.ParseAddr(x.IP); err == nil {
+		x.IP = a.Unmap().String()
 	}
 	return x
 }

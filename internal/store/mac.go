@@ -19,8 +19,12 @@ var ErrBadMAC = errors.New("enter the ONT WAN MAC address like AA:BB:CC:DD:EE:FF
 // spelling of a 12-digit MAC (colons, dashes, dots, spaces or none). It does
 // not judge the address: multicast and all-zero values pass. ok is false when
 // s is not 12 hex digits; callers then keep the text as it was.
+//
+// Separators are exactly ':', '-', '.' and the ASCII space, no other
+// whitespace; migration 0004 strips the same set (`[-:. ]`) and a test runs
+// the same vectors through both.
 func CanonMAC(s string) (string, bool) {
-	s = strings.ToUpper(strings.TrimSpace(s))
+	s = strings.ToUpper(s)
 	s = strings.NewReplacer(":", "", "-", "", ".", "", " ", "").Replace(s)
 	if len(s) != 12 {
 		return "", false
@@ -44,7 +48,7 @@ func CanonMAC(s string) (string, bool) {
 // aabbccddeeff and returns the upper-case colon form. Multicast and all-zero
 // addresses are refused.
 func NormalizeMAC(s string) (string, error) {
-	m, ok := CanonMAC(s)
+	m, ok := CanonMAC(strings.TrimSpace(s))
 	if !ok {
 		return "", ErrBadMAC
 	}
@@ -57,3 +61,18 @@ func NormalizeMAC(s string) (string, error) {
 	}
 	return m, nil
 }
+
+// Refusals the database (or Update's own checks) make for rows that break an
+// integrity rule. They all mean "your change was wrong, nothing was written";
+// none of them is an outage.
+var (
+	// ErrDuplicateEquipmentMAC: two live (not retired) equipment items would
+	// have the same MAC.
+	ErrDuplicateEquipmentMAC = errors.New("another equipment item already has that MAC address")
+	// ErrDuplicateUsername: two users would have the same name (any letter case).
+	ErrDuplicateUsername = errors.New("that user name is already taken")
+	// ErrDuplicateToken: an access or refresh token hash is already in use.
+	ErrDuplicateToken = errors.New("that token is already in use")
+	// ErrBadAccessMode: a building's access mode is not hotspot, ipoe_observe or ipoe.
+	ErrBadAccessMode = errors.New("the building access mode must be hotspot, ipoe_observe or ipoe")
+)

@@ -379,7 +379,7 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	for i := 0; i < batch.Len(); i++ {
 		if _, err := br.Exec(); err != nil {
 			br.Close()
-			return connErr(dupErr(fmt.Errorf("%s: %w", names[i], err)))
+			return connErr(integrityErr(fmt.Errorf("%s: %w", names[i], err)))
 		}
 	}
 	if err := br.Close(); err != nil {
@@ -388,28 +388,44 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	if err := tx.Commit(ctx); err != nil {
 		var pe *pgconn.PgError
 		if errors.As(err, &pe) { // the server answered: the commit definitely failed
-			return err
+			return integrityErr(err)
 		}
 		return fmt.Errorf("%w: %w", store.ErrAmbiguous, err)
 	}
 	return nil
 }
 
-// dupErr marks a violation of the one-MAC-per-open-account index (or the
-// per-building IP index) with store.ErrDuplicateMAC / ErrDuplicateIP, so the
-// caller can tell it from any other refusal. The original error stays in the
-// chain and the message.
-func dupErr(err error) error {
+// integrityErr marks a refusal by the database (SQLSTATE class 23: unique,
+// foreign key, check, not null) with store.ErrIntegrity, and, where the rule is
+// one the program knows by name, with the specific error too, so callers can
+// tell a duplicate MAC from a bad value. The original error stays in the chain
+// and in the message. Update treats ErrIntegrity as a refusal, never an outage.
+func integrityErr(err error) error {
 	var pe *pgconn.PgError
-	if errors.As(err, &pe) && pe.Code == "23505" {
-		switch pe.ConstraintName {
-		case "accounts_mac_open":
-			return fmt.Errorf("%w: %w", store.ErrDuplicateMAC, err)
-		case "accounts_site_ip_open":
-			return fmt.Errorf("%w: %w", store.ErrDuplicateIP, err)
-		}
+	if !errors.As(err, &pe) || !strings.HasPrefix(pe.Code, "23") {
+		return err
 	}
-	return err
+	var specific error
+	switch pe.ConstraintName {
+	case "accounts_mac_open":
+		specific = store.ErrDuplicateMAC
+	case "accounts_site_ip_open":
+		specific = store.ErrDuplicateIP
+	case "accounts_mac_shape":
+		specific = store.ErrBadMAC
+	case "equipment_mac_live":
+		specific = store.ErrDuplicateEquipmentMAC
+	case "admin_users_username":
+		specific = store.ErrDuplicateUsername
+	case "api_devices_access", "api_devices_refresh":
+		specific = store.ErrDuplicateToken
+	case "sites_access_mode_check":
+		specific = store.ErrBadAccessMode
+	}
+	if specific != nil {
+		return fmt.Errorf("%w: %w: %w", store.ErrIntegrity, specific, err)
+	}
+	return fmt.Errorf("%w: %w", store.ErrIntegrity, err)
 }
 
 // connErr marks an error that did not come from the server (timeout, reset,

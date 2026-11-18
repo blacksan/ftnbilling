@@ -134,7 +134,7 @@ func (s *Store) Update(fn func(d *Data) error) error {
 	if cs.Empty() {
 		return nil
 	}
-	if err := checkAccountInvariants(&s.data, cs); err != nil {
+	if err := firstErr(checkAccountInvariants(&s.data, cs), checkOtherInvariants(&s.data, cs)); err != nil {
 		rollbackData(&s.data, &s.shadow, cs)
 		return err
 	}
@@ -143,9 +143,12 @@ func (s *Store) Update(fn func(d *Data) error) error {
 	if err := s.b.Commit(ctx, &s.data, cs); err != nil {
 		rollbackData(&s.data, &s.shadow, cs)
 		switch {
+		case errors.Is(err, ErrIntegrity):
+			// The database refused a change that breaks a rule the in-memory
+			// checks did not catch (it is the final word). Not an outage:
+			// never counts towards degrading, however often it happens.
+			return fmt.Errorf("%w: %w", ErrPersist, err)
 		case errors.Is(err, ErrDuplicateMAC), errors.Is(err, ErrDuplicateIP):
-			// The database refused a duplicate the in-memory check could not
-			// see (the database is the final word). Not an outage.
 			return err
 		case errors.Is(err, ErrAmbiguous):
 			s.reloadLocked()
@@ -317,4 +320,13 @@ func SetReloadInterval(d time.Duration) (restore func()) {
 	old := reloadEvery
 	reloadEvery = d
 	return func() { reloadEvery = old }
+}
+
+func firstErr(errs ...error) error {
+	for _, e := range errs {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
 }

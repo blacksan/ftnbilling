@@ -70,8 +70,9 @@ func TestMigration0004FlagsDuplicateMACs(t *testing.T) {
 		// Malformed MACs are kept as typed and flagged; a closed one is flagged silently.
 		`INSERT INTO accounts (id,site_id,code,flat,mac,created_at) VALUES ('z1','s1','FFF666','Flat 4','not-a-mac','2026-01-06'), ('z2','s1','GGG777','Flat 5','AA:BB','2026-01-07'), ('z3','s1','HHH888','Flat 6','','2026-01-08'), ('z4','s1','JJJ999','Flat 7','','2026-01-09')`,
 		`INSERT INTO accounts (id,site_id,code,flat,mac,created_at,closed_at) VALUES ('c2','s1','KKK234','Flat 8','garbage','2026-01-01','2026-02-01')`,
-		// Equipment: two live items with one MAC keep the database from adding the index.
-		`INSERT INTO equipment (id,kind,mac,status,created_at) VALUES ('e1','ont','aa:bb:cc:dd:ee:10','in_stock',now()), ('e2','ont','AA:BB:CC:DD:EE:10','in_stock',now())`,
+		// Equipment: two live items with one MAC; the second is retired by the migration.
+		`INSERT INTO equipment (id,kind,mac,status,created_at) VALUES ('e1','ont','aa:bb:cc:dd:ee:10','in_stock','2026-01-01'), ('e2','ont','AA-BB-CC-DD-EE-10','in_stock','2026-01-01')`,
+		`INSERT INTO equipment (id,kind,mac,status,notes,created_at) VALUES ('e3','ont','AA:BB:CC:DD:EE:11','installed','keep','2026-01-01')`,
 		`INSERT INTO events (seq,time,kind,msg) VALUES (41,now(),'info','old'),(42,now(),'info','old2')`,
 	}
 	for _, q := range seed {
@@ -114,7 +115,12 @@ func TestMigration0004FlagsDuplicateMACs(t *testing.T) {
 	}
 	// One audit event per flagged open account, after the old events.
 	got := map[string]string{}
+	eqAudit := map[string]string{}
 	for _, e := range d.Events {
+		if e.Kind == "audit" && e.EquipmentID != "" {
+			eqAudit[e.EquipmentID] = e.Msg
+			continue
+		}
 		if e.Kind == "audit" {
 			got[e.AccountID] = e.Msg
 			if e.Seq <= 42 {
@@ -124,6 +130,17 @@ func TestMigration0004FlagsDuplicateMACs(t *testing.T) {
 	}
 	if len(got) != 4 || got["x1"] == "" || got["x3"] == "" || got["z1"] == "" || got["z2"] == "" || got["x2"] != "" || got["c2"] != "" {
 		t.Fatalf("audit events for %v", got)
+	}
+	if len(eqAudit) != 1 || eqAudit["e2"] == "" {
+		t.Fatalf("equipment audit events: %v", eqAudit)
+	}
+	// Equipment e1/e2 share a MAC: e1 (oldest by id) stays live, e2 is retired, detached and annotated; both rows are kept.
+	if e1, e2 := d.Equipment["e1"], d.Equipment["e2"]; len(d.Equipment) != 3 || e1.Status != "in_stock" || e2.Status != "retired" ||
+		e2.MAC != "AA:BB:CC:DD:EE:10" || !strings.Contains(e2.Notes, "migration 0004") || e2.AccountID != "" {
+		t.Fatalf("equipment after the migration: %+v / %+v", e1, e2)
+	}
+	if e3 := d.Equipment["e3"]; e3.Status != "installed" || e3.AccountID != "" || e3.Notes != "keep" {
+		t.Fatalf("e3 must be untouched: %+v", e3)
 	}
 	if !strings.Contains(got["x1"], "Flat 1") || !strings.Contains(got["x1"], "AAA111") || !strings.Contains(got["x1"], "AA:BB:CC:DD:EE:01") {
 		t.Errorf("audit text: %q", got["x1"])
@@ -139,13 +156,13 @@ func TestMigration0004FlagsDuplicateMACs(t *testing.T) {
 	if lines := store.Conflicts(d); len(lines) != 4 {
 		t.Fatalf("conflict report: %v", lines)
 	}
-	// Indexes: the unique index exists, the old one is gone, the equipment one is skipped (dirty data).
+	// Indexes: the unique index exists, the old one is gone, the equipment one always exists.
 	has := func(name string) bool {
 		var n int
 		b.pool.QueryRow(ctx, "SELECT count(*) FROM pg_indexes WHERE schemaname = $1 AND indexname = $2", schema, name).Scan(&n)
 		return n == 1
 	}
-	if !has("accounts_mac_open") || has("accounts_site_mac_open") || !has("accounts_site_ip_open") || has("equipment_mac_live") {
+	if !has("accounts_mac_open") || has("accounts_site_mac_open") || !has("accounts_site_ip_open") || !has("equipment_mac_live") {
 		t.Fatal("indexes after the migration are wrong")
 	}
 	if m := d.Equipment["e1"].MAC; m != "AA:BB:CC:DD:EE:10" {
