@@ -34,6 +34,14 @@ class AdminWebViewClient(
 ) : WebViewClient() {
     private var unauthorized = false
 
+    /**
+     * Set when a main-frame response asked for sign-in, was rate-limited or was refused. WebView
+     * fires onPageStarted for that same response only after it has been answered, so that callback
+     * must not clear the panel (it used to: the sign-in dialog flashed and vanished) nor forget the
+     * 401 (which would let a wrong typed password be saved as good).
+     */
+    private var problemThisLoad = false
+
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
         when (policy.decide(request.url.toString())) {
             UrlDecision.Allow -> false
@@ -56,13 +64,21 @@ class AdminWebViewClient(
             WebResourceResponse("text/plain", "utf-8", 403, "Forbidden", emptyMap(), ByteArrayInputStream(ByteArray(0)))
         }
 
+    /** The app itself starts a navigation (reload, sign-in submitted, URL load): forget the last load's problem. */
+    fun beginNavigation() {
+        problemThisLoad = false
+        unauthorized = false
+    }
+
     override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+        if (problemThisLoad) return
         unauthorized = false
         gate.onNavigationStart()
         events.onNavigationStarted()
     }
 
     override fun onPageFinished(view: WebView, url: String?) {
+        problemThisLoad = false
         events.onPageFinished(unauthorized)
     }
 
@@ -77,6 +93,7 @@ class AdminWebViewClient(
             AuthOutcome.Prompt -> {
                 handler.cancel()
                 unauthorized = true
+                problemThisLoad = true
                 events.onAuthPrompt()
             }
         }
@@ -87,14 +104,19 @@ class AdminWebViewClient(
         when (errorResponse.statusCode) {
             401 -> {
                 unauthorized = true
+                problemThisLoad = true
                 events.onAuthPrompt()
             }
             429 -> {
                 val retry = errorResponse.responseHeaders.entries
                     .firstOrNull { it.key.equals("Retry-After", ignoreCase = true) }?.value?.trim()?.toIntOrNull()
+                problemThisLoad = true
                 events.onLockedOut(retry)
             }
-            404 -> if (request.url.path.orEmpty().trimEnd('/') == "/admin") events.onNotOnAdminNetwork()
+            404 -> if (request.url.path.orEmpty().trimEnd('/') == "/admin") {
+                problemThisLoad = true
+                events.onNotOnAdminNetwork()
+            }
         }
     }
 

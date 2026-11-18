@@ -51,6 +51,7 @@ class AdminWebController(
     private var webView: WebView? = null
     private var rememberOnSuccess = false
 
+    private var client: AdminWebViewClient? = null
     private val _overlay = MutableStateFlow<WebOverlay>(WebOverlay.None)
     val overlay: StateFlow<WebOverlay> = _overlay.asStateFlow()
     private val _progress = MutableStateFlow(0)
@@ -98,7 +99,7 @@ class AdminWebController(
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(wv, false)
         }
-        wv.webViewClient = AdminWebViewClient(policy, gate, this)
+        wv.webViewClient = AdminWebViewClient(policy, gate, this).also { client = it }
         wv.webChromeClient = AdminChromeClient(this)
         wv.setDownloadListener { downloadUrl, _, _, _, _ -> onDownload(downloadUrl) }
         webView = wv
@@ -114,22 +115,28 @@ class AdminWebController(
         WebViewDatabase.getInstance(appContext).clearHttpAuthUsernamePassword()
         CookieManager.getInstance().flush()
         wv.destroy()
-        if (webView === wv) webView = null
+        if (webView === wv) {
+            webView = null
+            client = null
+        }
         _jsDialog.value?.cancel()
         _jsDialog.value = null
         gate.reset()
     }
 
     fun reload() {
+        client?.beginNavigation()
         gate.onNavigationStart()
         webView?.reload()
     }
 
     fun goBack() {
+        client?.beginNavigation()
         webView?.goBack()
     }
 
     fun loadUrl(url: String) {
+        client?.beginNavigation()
         webView?.loadUrl(url)
     }
 
@@ -144,6 +151,7 @@ class AdminWebController(
         rememberOnSuccess = remember
         gate.offer(Credentials(username.trim(), password))
         _overlay.value = WebOverlay.None
+        client?.beginNavigation()
         webView?.reload()
     }
 

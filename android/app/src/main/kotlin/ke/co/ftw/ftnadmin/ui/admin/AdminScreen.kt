@@ -286,7 +286,8 @@ private fun SignInDialog(
     var save by remember { mutableStateOf(canRemember) }
     AlertDialog(
         onDismissRequest = onCancel,
-        properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
+        // A stray tap outside must not throw the owner back to Home mid-typing.
+        properties = DialogProperties(dismissOnClickOutside = false, securePolicy = SecureFlagPolicy.SecureOn),
         title = { Text("Sign in to admin") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
