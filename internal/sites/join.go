@@ -121,6 +121,19 @@ func (m *Manager) ConsumeJoin(token, userAgent, from string) (script []byte, sit
 // ConsumeJoinOpts is ConsumeJoin with noCheck: the router fetched the script
 // without certificate checking, so the script's own downloads skip it too.
 func (m *Manager) ConsumeJoinOpts(token, userAgent, from string, noCheck bool) (script []byte, siteID string, err error) {
+	return m.ConsumeJoinStage(token, userAgent, from, noCheck, "")
+}
+
+// ConsumeJoinStage is ConsumeJoinOpts for a stage of the IPoE rollout (see
+// ScriptInput.Stage). "" and "join" make the router's keys and password, like
+// the old join; "cutover" and "cleanup" only render what the database holds
+// (the router is already joined, so no key is touched and none is in the script).
+func (m *Manager) ConsumeJoinStage(token, userAgent, from string, noCheck bool, stage string) (script []byte, siteID string, err error) {
+	switch stage {
+	case "", StageJoin, StageCutover, StageCleanup:
+	default:
+		return nil, "", ErrJoinInvalid
+	}
 	if token == "" || len(token) > 128 {
 		return nil, "", ErrJoinInvalid
 	}
@@ -140,6 +153,9 @@ func (m *Manager) ConsumeJoinOpts(token, userAgent, from string, noCheck bool) (
 		}
 		if !found || !site.Join.UsedAt.IsZero() || !now.Before(site.Join.ExpiresAt) {
 			return ErrJoinInvalid
+		}
+		if stage == StageCutover || stage == StageCleanup {
+			return m.renderLaterStage(d, site, stage, now, from, noCheck, &script, &siteID)
 		}
 		priv, pub, err := wg.GenerateKeypair()
 		if err != nil {
@@ -163,6 +179,7 @@ func (m *Manager) ConsumeJoinOpts(token, userAgent, from string, noCheck bool) (
 		script, err = RenderJoinScript(ScriptInput{
 			Site: ApplyDefaults(m.cfg, site), PrivateKey: priv, RESTPass: pass, ServerPub: m.cfg.WGPublicKey,
 			Endpoint: m.cfg.WGEndpoint, WGSubnet: m.pfx, PublicBase: m.cfg.PublicBaseURL, PublicIP: m.cfg.PublicIP, Generated: now, NoCheck: noCheck,
+			Stage: stage,
 		})
 		if err != nil {
 			return fmt.Errorf("could not render the join script: %w", err)
@@ -173,6 +190,10 @@ func (m *Manager) ConsumeJoinOpts(token, userAgent, from string, noCheck bool) (
 	})
 	if err != nil {
 		return nil, "", err
+	}
+	if stage == StageCutover || stage == StageCleanup {
+		m.log.Info("ipoe script handed out", "site", siteID, "stage", stage, "from", from)
+		return script, siteID, nil
 	}
 	if err := m.ApplyPeers(); err != nil {
 		m.log.Warn("could not write the WireGuard peers file", "site", siteID, "err", err)

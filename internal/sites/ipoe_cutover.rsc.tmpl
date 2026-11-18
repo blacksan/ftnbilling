@@ -1,0 +1,121 @@
+# Fast Tech Net: IPoE cutover (stage: cutover) for {{rq .SiteName}} ({{.SiteID}}), generated {{.Generated}}
+# Switches the flats from the hotspot to server-managed IPoE: one static lease and
+# one queue per flat, and a walled garden for unregistered and unpaid addresses.
+# Nothing is deleted: the hotspot server and the old DHCP server are only disabled.
+# It never touches the WAN interface, the routes, the router's users, or any
+# service other than www (which the join stage handled).
+# If "Confirm cutover" is not pressed in the billing admin within {{.RollbackMin}} minutes, the
+# router switches back to the hotspot by itself (script ftn-rollback). To go back
+# at once: /system/script/run ftn-rollback
+# Every object it creates has a comment that starts with "ftn:".
+:local fails 0
+:local abort ""
+:local switched false
+:do {
+
+:put "ftn cutover 0/7: checking RouterOS"
+:local ver [/system/resource/get version]
+:put ("   RouterOS " . $ver)
+:local major [:tonum [:pick $ver 0 [:find $ver "."]]]
+:if ($major < 7) do={ :set abort "ftn: RouterOS 7 or newer is required"; :error $abort }
+
+:put "ftn cutover 1/7: backup and export (ftn-pre-ipoe.backup, ftn-pre-ipoe.rsc)"
+/system/backup/save name=ftn-pre-ipoe
+/export file=ftn-pre-ipoe
+
+:put "ftn cutover 2/7: safety net: back to the hotspot after {{.RollbackMin}} minutes unless confirmed"
+:do {
+  /system/script remove [find where name="ftn-rollback"]
+  /system/script remove [find where name="ftn-rollback-tick"]
+  /system/script add name=ftn-rollback policy=read,write,policy,test source="{{.RollbackSource}}" comment="ftn: IPoE rollback"
+  /system/script add name=ftn-rollback-tick policy=read,write,policy,test source="{{.TickSource}}" comment="ftn: IPoE rollback timer tick"
+  /system/scheduler remove [find where name="ftn-rollback-timer"]
+  /system/scheduler add name=ftn-rollback-timer interval=1m on-event=ftn-rollback-tick policy=read,write,policy,test comment="ftn: rollback timer 0"
+} on-error={ :set abort "ftn: section 2 (rollback timer) failed, nothing was changed"; :error $abort }
+
+:put "ftn cutover 3/7: finding the customer interface"
+:local hs [/ip/hotspot/find where name="{{.HotspotServer}}"]
+:if ([:len $hs] = 0) do={ :set hs [/ip/hotspot/find] }
+:if ([:len $hs] = 0) do={ :set abort "ftn: no hotspot server found on this router, so the interface the flats are on is unknown"; :error $abort }
+:local hsname [/ip/hotspot/get ($hs->0) name]
+:local ifc [/ip/hotspot/get ($hs->0) interface]
+:put ("   hotspot " . $hsname . " on interface " . $ifc)
+:if ([:len [/ip/address/find where interface=$ifc and address="{{.GatewayCIDR}}"]] = 0) do={ :set abort ("ftn: interface " . $ifc . " has no address {{.GatewayCIDR}}; check the building's customer subnet on the server"); :error $abort }
+:local olddhcp [/ip/dhcp-server/find where interface=$ifc and disabled=no and name!="{{.DHCPServer}}"]
+:local rb [/system/script/get ftn-rollback source]
+:set rb ($rb . ":do { /ip hotspot enable [find where name=\"" . $hsname . "\"] } on-error={}\n")
+:foreach i in=$olddhcp do={ :set rb ($rb . ":do { /ip dhcp-server enable [find where name=\"" . [/ip/dhcp-server/get $i name] . "\"] } on-error={}\n") }
+/system/script set ftn-rollback source=$rb
+
+:put "ftn cutover 4/7: unregistered pool, DHCP server, {{len .Accounts}} flat(s)"
+:do {
+  :if ([:len [/ip/pool/find where name="{{.UnregList}}"]] = 0) do={
+    /ip/pool add name={{.UnregList}} ranges={{.UnregFrom}}-{{.UnregTo}} comment="ftn: unregistered pool"
+  } else={
+    /ip/pool set [find where name="{{.UnregList}}"] ranges={{.UnregFrom}}-{{.UnregTo}}
+  }
+  :if ([:len [/ip/dhcp-server/find where name="{{.DHCPServer}}"]] = 0) do={
+    /ip/dhcp-server add name={{.DHCPServer}} interface=$ifc address-pool={{.UnregList}} lease-time=10m authoritative=yes disabled=yes comment="ftn: IPoE DHCP"
+  } else={
+    /ip/dhcp-server set [find where name="{{.DHCPServer}}"] interface=$ifc address-pool={{.UnregList}} lease-time=10m authoritative=yes
+  }
+  :if ([:len [/ip/dhcp-server/network/find where address="{{.CustomerNetwork}}"]] = 0) do={
+    /ip/dhcp-server/network add address={{.CustomerNetwork}} gateway={{.Gateway}} dns-server={{.Gateway}} comment="ftn: IPoE DHCP network"
+  }
+  /ip/dhcp-server/lease remove [find where comment~"^ftn:acct:"]
+  /queue/simple remove [find where comment~"^ftn:acct:"]
+  /ip/firewall/address-list remove [find where list="{{.SuspList}}" and comment~"^ftn:acct:"]
+  /ip/firewall/address-list remove [find where list="{{.UnregList}}" and comment="ftn: unregistered range"]
+  /ip/firewall/address-list add list={{.UnregList}} address={{.UnregFrom}}-{{.UnregTo}} comment="ftn: unregistered range"
+{{- range .Accounts}}
+  :do { /ip/dhcp-server/lease add address={{.IP}} mac-address={{.MAC}} server={{$.DHCPServer}} comment="ftn:acct:{{.Code}} {{rq .Flat}}" } on-error={ :set fails ($fails + 1); :put "   lease for {{rq .Flat}} failed" }
+  :do { /queue/simple add name=ftn-{{.Code}} target={{.IP}}/32 max-limit={{.MaxLimit}} comment="ftn:acct:{{.Code}} {{rq .Flat}}" } on-error={ :set fails ($fails + 1); :put "   queue for {{rq .Flat}} failed" }
+{{- end}}
+{{- range .Suspended}}
+  :do { /ip/firewall/address-list add list={{$.SuspList}} address={{.IP}} disabled=yes comment="ftn:acct:{{.Code}} {{rq .Flat}}" } on-error={ :set fails ($fails + 1); :put "   suspended entry for {{rq .Flat}} failed" }
+{{- end}}
+} on-error={ :set abort "ftn: section 4 (DHCP server, leases, queues) failed"; :error $abort }
+
+:put "ftn cutover 5/7: walled garden (DNS and the payment page only) and queue-friendly firewall"
+:do {
+  /ip/firewall/filter remove [find where comment~"^ftn: ipoe"]
+  /ip/firewall/nat remove [find where comment~"^ftn: ipoe"]
+{{- range .Filter}}
+{{.}}
+{{- end}}
+{{- range .NAT}}
+{{.}}
+{{- end}}
+  :if ([:len [/ip/firewall/nat/find where comment="ftn: ipoe customer masquerade"]] = 0) do={
+    /ip/firewall/nat add chain=srcnat action=masquerade src-address={{.CustomerNetwork}} out-interface-list={{.WANList}} comment="ftn: ipoe customer masquerade"
+  }
+} on-error={ :set abort "ftn: section 5 (firewall) failed"; :error $abort }
+
+:put "ftn cutover 6/7: switching the flats over"
+:do {
+  :foreach i in=$hs do={ /ip/hotspot disable $i }
+  :foreach i in=$olddhcp do={ /ip/dhcp-server disable $i }
+  /ip/dhcp-server enable [find where name="{{.DHCPServer}}"]
+  /ip/firewall/address-list enable [find where list="{{.SuspList}}" and comment~"^ftn:acct:"]
+  :set switched true
+} on-error={ :set abort "ftn: section 6 (switch) failed; the safety net will switch back"; :error $abort }
+
+:put "ftn cutover 7/7: checking the internet and the billing server"
+:do { /ping 1.1.1.1 count=3 } on-error={ :put "   WARNING: no answer from 1.1.1.1" }
+:do { /ping {{.ServerIP}} count=3 } on-error={ :put "   WARNING: no answer from the billing server tunnel address {{.ServerIP}}" }
+:if ($fails > 0) do={ :put ("ftn: finished with " . $fails . " problem(s), see the messages above") }
+:put "ftn: the flats are now on IPoE. Check one flat, then press Confirm cutover in the billing admin within {{.RollbackMin}} minutes."
+:put "ftn: otherwise the router goes back to the hotspot by itself."
+} on-error={
+  :put "ftn: the cutover stopped early, see below"
+  :if ([:len $abort] > 0) do={ :put $abort }
+  :if ($switched) do={
+    :put "   the flats were switched: the safety net returns to the hotspot, or run /system/script/run ftn-rollback now"
+  } else={
+    :do { /system/scheduler remove [find where name="ftn-rollback-timer"] } on-error={}
+    :put "   nothing was switched: the hotspot is still serving the flats"
+  }
+  /file remove [find where name="{{.File}}"]
+  :error "ftn: cutover stopped; the script file was removed from the router"
+}
+/file remove [find where name="{{.File}}"]

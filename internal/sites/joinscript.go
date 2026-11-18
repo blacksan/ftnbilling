@@ -37,6 +37,15 @@ type ScriptInput struct {
 	// (router with a wrong clock or no CA store): the page downloads in
 	// section 6 then skip the check too, or they would fail for the same reason.
 	NoCheck bool
+	// Stage picks the script: "" is the legacy all-in-one script (hotspot
+	// buildings); "join" joins the router to the server and nothing else;
+	// "cutover" switches the flats from the hotspot to server-managed IPoE;
+	// "cleanup" deletes the disabled hotspot objects after the cutover was
+	// confirmed. See ipoe_script.go.
+	Stage string
+	// Accounts are the flats the cutover script writes (static lease and
+	// queue each), rendered from the accounts table.
+	Accounts []LeaseSeed
 }
 
 // scriptData is the template view of ScriptInput.
@@ -87,6 +96,13 @@ var joinTmpl = template.Must(template.New("join").Funcs(template.FuncMap{"rq": r
 // RenderJoinScript renders the router script. It is deterministic for fixed
 // input (the golden-file tests rely on that).
 func RenderJoinScript(in ScriptInput) ([]byte, error) {
+	switch in.Stage {
+	case "":
+	case StageJoin, StageCutover, StageCleanup:
+		return renderStage(in)
+	default:
+		return nil, fmt.Errorf("join script: unknown stage %q", in.Stage)
+	}
 	s := in.Site
 	if s.TunnelIP == "" || s.RESTPort <= 0 || in.PrivateKey == "" || in.RESTPass == "" {
 		return nil, errors.New("join script: site is missing its tunnel address, REST port or credentials")
@@ -160,12 +176,27 @@ func splitEndpoint(ep string) (string, int, error) {
 // It asks for /j/{token}?nocheck=1 so the script it receives skips the check
 // for its own page downloads as well.
 func JoinCommand(base, token string, checkCert bool) string {
-	chk, q := "yes", ""
-	if !checkCert {
-		chk, q = "no", NoCheckQuery
+	return JoinCommandStage(base, token, checkCert, "")
+}
+
+// JoinCommandStage is JoinCommand for a stage of the IPoE scripts: the file is
+// ftn-<stage>.rsc and the link asks for ?stage=<stage>.
+func JoinCommandStage(base, token string, checkCert bool, stage string) string {
+	file, q := "ftn-join.rsc", ""
+	if stage != "" {
+		file, q = "ftn-"+stage+".rsc", "?stage="+stage
 	}
-	return fmt.Sprintf(`/tool/fetch url="%s/j/%s%s" dst-path=ftn-join.rsc check-certificate=%s; :delay 1s; /import ftn-join.rsc`,
-		strings.TrimRight(base, "/"), token, q, chk)
+	chk := "yes"
+	if !checkCert {
+		chk = "no"
+		if q == "" {
+			q = NoCheckQuery
+		} else {
+			q += "&nocheck=1"
+		}
+	}
+	return fmt.Sprintf(`/tool/fetch url="%s/j/%s%s" dst-path=%s check-certificate=%s; :delay 1s; /import %s`,
+		strings.TrimRight(base, "/"), token, q, file, chk, file)
 }
 
 // NoCheckQuery is the query string of the no-certificate-check join command.
