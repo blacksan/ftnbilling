@@ -1,11 +1,24 @@
-# Weekly backup to Google Drive
+# Backups: database dumps, restore drill, weekly Google Drive
+
+There are three layers, all installed by `deploy/install.sh`:
+
+| Layer | When | What |
+|---|---|---|
+| Database dump | every 6 hours (`ftnbilling-dump.timer`) | `pg_dump -Fc` of the `ftnbilling` database into `/var/backups/ftnbilling/db/` (root only, mode 0600). Each dump is checked with `pg_restore -l` and written under a temporary name first. Kept: the newest 8, one per day for 14 days, one per week for 8 weeks, one per month for 12 months. The same run also makes the daily file tar (`ispbill.json*`, `outbox.json`, `alerts.json`, `fleet.json`, `spool/`, kept 30 days) and, on Sundays, the `metrics/` tar (kept 4 weeks). This replaces the old daily cron job. Run by hand: `sudo ftnbilling-backup dump` |
+| Restore drill | monthly (`ftnbilling-drill.timer`) | Creates a scratch database `ftnbilling_drill`, restores the newest dump into it, runs `ftnbilling db-check` against it and compares row counts and the sum of applied payments with production (the restored copy may be missing recent rows but must never have more), then drops it. A backup you have never restored is only a hope. Run by hand: `sudo ftnbilling-backup drill` |
+| Google Drive | weekly (below) | An encrypted snapshot off the server, with a fresh dump, the settings file (including `DATA_KEY`), `wg0.conf` and `wg-admin.conf` |
+
+The last dump, drill and upload results are written to `/var/lib/ftnbilling/backup-status.json` (`dump_at`, `dump_file`, `dump_bytes`, `drill_at`, `drill_ok`, `drill_msg`, `upload_at`, `upload_ok`, `error`), which the admin Settings page shows; the app treats a dump older than 36 hours as stale. A failed dump or drill also sends a Telegram message if `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set. `sudo ftnbilling-doctor` checks all of this.
+
+Dumps on the same server do not protect you from losing the server: set up the Drive upload (section 1).
+
+## Weekly Drive upload
 
 Every Sunday at 02:30 (Nairobi time) the server makes one snapshot of
 everything it needs to be rebuilt, scrambles (encrypts) it, and uploads it to
 your Google Drive. Snapshots older than 12 weeks are deleted automatically.
 The newest snapshot is also kept on the server in
-`/var/backups/ftnbilling/weekly/`. The existing daily backup in
-`/var/backups/ftnbilling` keeps running as before.
+`/var/backups/ftnbilling/weekly/`.
 
 Why encrypt? The snapshot contains passwords (admin, router passwords,
 M-Pesa keys) and the WireGuard private key. They are encrypted on the server
@@ -86,13 +99,17 @@ In it:
   `fleet.json`, `alerts.json`, `outbox.json`, the `metrics/` history and the
   WireGuard peer list in `wg/`).
 - Settings, including passwords: `/etc/ftnbilling/` (the `.env` file).
-- The WireGuard server key: `/etc/wireguard/wg0.conf`. With it, a rebuilt
-  server keeps the same identity and the routers reconnect on their own.
+- The WireGuard server keys: `/etc/wireguard/wg0.conf` (routers) and
+  `/etc/wireguard/wg-admin.conf` (your admin devices). With them, a rebuilt
+  server keeps the same identity and routers and admin devices reconnect on
+  their own.
 - The web server settings: `/etc/caddy/Caddyfile`.
-- When PostgreSQL is in use (`DATABASE_URL` in the settings file): a full
-  database dump, `database.dump`. This needs `pg_dump` on the server
-  (`apt install postgresql-client`); if it is missing, the backup fails
-  loudly instead of silently leaving the database out.
+- When PostgreSQL is in use (`DATABASE_URL` in the settings file): a fresh,
+  verified full database dump, `database.dump` (the same kind the 6-hourly
+  timer makes). If the dump fails, the Drive backup fails loudly instead of
+  silently leaving the database out. The settings file holds `DATA_KEY`:
+  without it the stored national IDs cannot be read, so keep the backup
+  passphrases safe.
 - `MANIFEST.txt`: server name, date, app version and a checksum of every file.
 
 Not in it:
@@ -100,9 +117,9 @@ Not in it:
 - The program itself (the installer rebuilds it from GitHub).
 - The routers' own configuration (each router holds its own; a joined router
   reconnects when the server key and peer list are restored).
-- Your domain's DNS, Tailscale login, and the GitHub token.
+- Your domain's DNS and the GitHub token.
 - Anything changed after the Sunday run: at worst you lose a week of changes.
-  The daily local backups cover the days in between while the server is alive.
+  The 6-hourly local dumps cover the days in between while the server is alive.
 
 ## 4. Size
 
@@ -160,7 +177,9 @@ installer first so the `ftnbilling` user and folders exist.
 
 | Command | What it does |
 |---|---|
-| `sudo ftnbilling-backup run` | Back up right now |
+| `sudo ftnbilling-backup dump` | Database dump + file tars now |
+| `sudo ftnbilling-backup drill` | Restore drill now |
+| `sudo ftnbilling-backup run` | Drive snapshot right now |
 | `sudo ftnbilling-backup list` | Snapshots on Drive |
 | `sudo ftnbilling-backup status` | Last result, next run, space used |
 | `sudo ftnbilling-backup restore <name or latest> [folder]` | Download into a new folder |

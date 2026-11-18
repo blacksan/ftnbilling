@@ -543,7 +543,7 @@ Results are grouped (Customers, Accounts, Equipment, Payments, Buildings), 20 pe
 | Postgres | about 230–280 MB |
 | ispbill | about 350–450 MB, capped at 600 MiB |
 | Caddy | about 50 MB |
-| Tailscale | about 40 MB |
+| wg-admin (kernel WireGuard) | negligible |
 | **Total** | **about 0.9–1.0 GB**, leaving about 0.9 GB for cache |
 
 **Disk:** the database grows about 60 MB a year, all dumps together stay under 0.5 GB, and year 1 totals under 10 GB.
