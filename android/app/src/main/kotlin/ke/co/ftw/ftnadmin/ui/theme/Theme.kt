@@ -1,53 +1,55 @@
 package ke.co.ftw.ftnadmin.ui.theme
 
+import android.os.Build
+import androidx.annotation.ChecksSdkIntAtLeast
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.MaterialExpressiveTheme
+import androidx.compose.material3.MotionScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.Color
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.platform.LocalContext
 
-private val Orange = Color(0xFFFF8E1C)
-private val Navy = Color(0xFF001432)
+val LocalExtendedColors = staticCompositionLocalOf { FastTechNetBrand.extended }
 
-private val LightColors = lightColorScheme(
-    primary = Color(0xFFA85A00),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFFFDCBE),
-    onPrimaryContainer = Color(0xFF2C1600),
-    secondary = Color(0xFF3A4B6E),
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFFD9E2FF),
-    onSecondaryContainer = Navy,
-    tertiary = Color(0xFF00629D),
-    background = Color(0xFFFFFBF8),
-    onBackground = Color(0xFF1D1B19),
-    surface = Color(0xFFFFFBF8),
-    onSurface = Color(0xFF1D1B19),
-    surfaceVariant = Color(0xFFF2E0D0),
-    onSurfaceVariant = Color(0xFF51443A),
-)
-
-private val DarkColors = darkColorScheme(
-    primary = Orange,
-    onPrimary = Navy,
-    primaryContainer = Color(0xFF7A3F00),
-    onPrimaryContainer = Color(0xFFFFDCBE),
-    secondary = Color(0xFFB3C5F5),
-    onSecondary = Navy,
-    secondaryContainer = Color(0xFF1E3358),
-    onSecondaryContainer = Color(0xFFD9E2FF),
-    tertiary = Color(0xFF9DCAFF),
-    background = Color(0xFF000C1F),
-    onBackground = Color(0xFFE6E8F0),
-    surface = Color(0xFF000C1F),
-    onSurface = Color(0xFFE6E8F0),
-    surfaceVariant = Color(0xFF14243F),
-    onSurfaceVariant = Color(0xFFC3C9D8),
-)
-
-/** Material 3 scheme seeded from the bulb logo: #FF8E1C and #001432. No dynamic colour, to keep the brand. */
+/** Material 3 Expressive theme. Dynamic colour is opt-in so the brand stays the default. */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun FtnTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = if (darkTheme) DarkColors else LightColors, content = content)
+fun AppTheme(
+    brand: Brand = FastTechNetBrand,
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    dynamicColor: Boolean = false,
+    content: @Composable () -> Unit,
+) {
+    val colorScheme = if (dynamicColor && supportsDynamicTheming()) {
+        val context = LocalContext.current
+        if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+    } else {
+        if (darkTheme) brand.dark else brand.light
+    }
+    CompositionLocalProvider(
+        LocalExtendedColors provides if (darkTheme) brand.extendedDark else brand.extended,
+    ) {
+        MaterialExpressiveTheme(
+            colorScheme = colorScheme,
+            motionScheme = MotionScheme.expressive(),
+            shapes = AppShapes,
+            typography = AppTypography,
+            content = content,
+        )
+    }
 }
+
+object AppTheme {
+    val extended: ExtendedColors
+        @Composable
+        @ReadOnlyComposable
+        get() = LocalExtendedColors.current
+}
+
+@ChecksSdkIntAtLeast(api = Build.VERSION_CODES.S)
+fun supportsDynamicTheming(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S

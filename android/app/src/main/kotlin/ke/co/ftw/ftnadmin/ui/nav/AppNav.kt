@@ -1,10 +1,10 @@
 package ke.co.ftw.ftnadmin.ui.nav
 
+import ke.co.ftw.ftnadmin.ui.common.LoadingSpinner
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -48,7 +48,7 @@ fun AppNav() {
     val s = settings
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         if (s == null || !loaded || lock == LockState.Unknown) {
-            CircularProgressIndicator(Modifier.align(Alignment.Center))
+            LoadingSpinner(Modifier.align(Alignment.Center))
         } else {
             val gate = when {
                 !s.onboardingDone || summary == null -> Routes.ONBOARDING

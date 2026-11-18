@@ -1,5 +1,6 @@
 package ke.co.ftw.ftnadmin.ui.onboarding
 
+import ke.co.ftw.ftnadmin.ui.common.LoadingSpinner
 import android.app.Activity
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -18,7 +19,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -59,7 +59,7 @@ fun OnboardingScreen() {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text("FTN Admin", style = MaterialTheme.typography.headlineMedium)
-        if (vm.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (vm.busy) LoadingSpinner()
         when (vm.step) {
             OnboardingStep.Welcome -> {
                 Text(

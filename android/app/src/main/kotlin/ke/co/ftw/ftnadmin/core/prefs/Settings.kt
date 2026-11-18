@@ -28,6 +28,7 @@ data class AppSettings(
     val publicBaseUrl: String = DEFAULT_PUBLIC_URL,
     val autoConnect: Boolean = false,
     val onboardingDone: Boolean = false,
+    val dynamicColor: Boolean = false,
 )
 
 private val Context.dataStore by preferencesDataStore(name = "ftn_settings")
@@ -52,6 +53,7 @@ class Settings(context: Context, scope: CoroutineScope) {
             p[PUBLIC_URL] = n.publicBaseUrl
             p[AUTO_CONNECT] = n.autoConnect
             p[ONBOARDING_DONE] = n.onboardingDone
+            p[DYNAMIC_COLOR] = n.dynamicColor
         }
     }
 
@@ -69,6 +71,7 @@ class Settings(context: Context, scope: CoroutineScope) {
             publicBaseUrl = this[PUBLIC_URL] ?: d.publicBaseUrl,
             autoConnect = this[AUTO_CONNECT] ?: d.autoConnect,
             onboardingDone = this[ONBOARDING_DONE] ?: d.onboardingDone,
+            dynamicColor = this[DYNAMIC_COLOR] ?: d.dynamicColor,
         )
     }
 
@@ -80,5 +83,6 @@ class Settings(context: Context, scope: CoroutineScope) {
         val PUBLIC_URL = stringPreferencesKey("public_base_url")
         val AUTO_CONNECT = booleanPreferencesKey("auto_connect")
         val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
+        val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
     }
 }

@@ -1,5 +1,6 @@
 package ke.co.ftw.ftnadmin.ui.admin
 
+import ke.co.ftw.ftnadmin.ui.common.LoadingSpinner
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -219,7 +220,7 @@ private fun TunnelPanel(state: TunnelState, onConnect: () -> Unit) {
                 Text("Connecting", style = MaterialTheme.typography.titleLarge)
                 Text(state.stage, textAlign = TextAlign.Center)
                 Spacer(Modifier.height(16.dp))
-                LinearProgressIndicator(Modifier.fillMaxWidth())
+                LoadingSpinner()
             }
             is TunnelState.Error -> {
                 Text("Could not connect", style = MaterialTheme.typography.titleLarge)

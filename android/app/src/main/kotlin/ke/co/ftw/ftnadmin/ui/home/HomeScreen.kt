@@ -1,5 +1,7 @@
 package ke.co.ftw.ftnadmin.ui.home
 
+import ke.co.ftw.ftnadmin.ui.theme.AppTheme
+import ke.co.ftw.ftnadmin.ui.common.LoadingSpinner
 import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -19,7 +21,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -33,7 +34,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -119,7 +119,7 @@ private fun TunnelCard(state: TunnelState, summary: TunnelSummary?, onConnect: (
         }
         Text(label, style = MaterialTheme.typography.titleLarge, color = stateColor(state))
         detail?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-        if (state is TunnelState.Connecting) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (state is TunnelState.Connecting) LoadingSpinner()
         if (state is TunnelState.Up) {
             val now = rememberNow()
             Text("Last handshake: ${formatAge(state.stats.lastHandshakeEpochMs, now)}")
@@ -136,7 +136,8 @@ private fun TunnelCard(state: TunnelState, summary: TunnelSummary?, onConnect: (
 
 @Composable
 private fun stateColor(state: TunnelState) = when (state) {
-    is TunnelState.Up -> MaterialTheme.colorScheme.primary
+    is TunnelState.Up -> AppTheme.extended.success
+    is TunnelState.Connecting -> AppTheme.extended.warning
     is TunnelState.Error -> MaterialTheme.colorScheme.error
     else -> MaterialTheme.colorScheme.onSurface
 }
@@ -170,7 +171,7 @@ private fun HealthBlock(title: String, health: Fetch<ServerHealth>) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(title, style = MaterialTheme.typography.labelLarge)
         when (health) {
-            Fetch.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
+            Fetch.Loading -> LoadingSpinner()
             is Fetch.Ok -> {
                 val h = health.value
                 StatusRow("Server", h.ok)
@@ -193,8 +194,8 @@ private fun StatusRow(label: String, ok: Boolean) {
         Text(label)
         Text(
             if (ok) "OK" else "Problem",
-            fontWeight = FontWeight.SemiBold,
-            color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (ok) AppTheme.extended.success else MaterialTheme.colorScheme.error,
         )
     }
 }
@@ -213,7 +214,7 @@ private fun FleetCard(
             return@SectionCard
         }
         when (fleet) {
-            Fetch.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
+            Fetch.Loading -> LoadingSpinner()
             Fetch.ServerTooOld -> Text("The server is too old for this view. Update the server; the admin pages still work.")
             Fetch.AuthNeeded -> {
                 Text("Sign in to the admin to see the fleet.")
@@ -245,7 +246,7 @@ private fun FleetContent(f: FleetSummary, onOpenSite: (String) -> Unit, onOpenAl
 private fun SiteRow(site: SiteSummary, onClick: () -> Unit) {
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 4.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(site.name.ifEmpty { site.id }, fontWeight = FontWeight.SemiBold)
+            Text(site.name.ifEmpty { site.id }, style = MaterialTheme.typography.titleSmall)
             Text(
                 site.state.replaceFirstChar { it.uppercase() },
                 color = when (site.state) {

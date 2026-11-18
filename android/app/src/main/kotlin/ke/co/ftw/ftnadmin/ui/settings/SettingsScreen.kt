@@ -54,6 +54,7 @@ import ke.co.ftw.ftnadmin.ui.common.TunnelSummaryBlock
 import ke.co.ftw.ftnadmin.ui.common.importTunnel
 import ke.co.ftw.ftnadmin.ui.common.isDeviceSecure
 import ke.co.ftw.ftnadmin.ui.common.saveLogin
+import ke.co.ftw.ftnadmin.ui.theme.supportsDynamicTheming
 import kotlinx.coroutines.launch
 
 private enum class Dialog { None, Import, Login, ForgetLogin, LockTimeout, AutoDisconnect, PublicUrl, Wipe, About }
@@ -136,6 +137,13 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
             ActionRow("Auto-disconnect", minutesLabel(settings.autoDisconnectMin, "in background")) { dialog = Dialog.AutoDisconnect }
             ActionRow("Public URL", settings.publicBaseUrl) { dialog = Dialog.PublicUrl }
+
+            if (supportsDynamicTheming()) {
+                Header("Appearance")
+                SwitchRow("Use wallpaper colours (Android 12+)", "Match the system palette instead of the brand colours", settings.dynamicColor) { on ->
+                    update { it.copy(dynamicColor = on) }
+                }
+            }
 
             Header("Other")
             ActionRow("About", "Version ${BuildConfig.VERSION_NAME}") { dialog = Dialog.About }

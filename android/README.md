@@ -98,3 +98,14 @@ the tunnel (it fails closed). Connecting only works while the app is in the fore
 - [ ] Home screen: public and in-tunnel health; fleet card shows "server too old" until the summary
       endpoint exists on the server, then the buildings list.
 - [ ] Wipe app data returns to onboarding with the reminder to revoke the device on the server.
+
+## Theme
+
+The app follows the owner's standard Android theme (Material 3 Expressive). Code lives in
+`app/src/main/kotlin/ke/co/ftw/ftnadmin/ui/theme/` (`Color.kt`, `Shape.kt`, `Type.kt`, `Theme.kt`),
+brand `FastTechNetBrand`, entry point `AppTheme(...)`. Screens never hard-code colours, shapes or text
+sizes: use `MaterialTheme.colorScheme` / `shapes` / `typography`, and `AppTheme.extended` for status
+(tunnel Up = success, Connecting = warning, Error = error). Dynamic colour is off by default and can be
+enabled in Settings ("Use wallpaper colours (Android 12+)"). `material3` is pinned to `1.5.0-rc01` in
+`gradle/libs.versions.toml` (overrides the BOM). The XML theme uses an AppCompat DayNight parent because
+androidx.biometric needs it, and the launch screen uses `androidx.core:core-splashscreen`.

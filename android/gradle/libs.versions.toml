@@ -4,6 +4,8 @@ kotlin = "2.3.10"
 composeBom = "2026.09.00"
 activity = "1.13.0"
 coreKtx = "1.18.0"
+splashscreen = "1.2.0"
+material3 = "1.5.0-rc01"
 lifecycle = "2.10.0"
 navigation = "2.9.6"
 datastore = "1.2.1"
@@ -20,10 +22,12 @@ compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeB
 compose-ui = { module = "androidx.compose.ui:ui" }
 compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
 compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
-compose-material3 = { module = "androidx.compose.material3:material3" }
+# Explicit version overrides the BOM: Material 3 Expressive APIs (LoadingIndicator, MaterialExpressiveTheme).
+compose-material3 = { module = "androidx.compose.material3:material3", version.ref = "material3" }
 compose-material-icons-core = { module = "androidx.compose.material:material-icons-core" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
+androidx-core-splashscreen = { module = "androidx.core:core-splashscreen", version.ref = "splashscreen" }
 androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
 androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
 androidx-lifecycle-process = { module = "androidx.lifecycle:lifecycle-process", version.ref = "lifecycle" }

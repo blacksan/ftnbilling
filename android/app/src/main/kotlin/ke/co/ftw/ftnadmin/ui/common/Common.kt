@@ -1,5 +1,7 @@
 package ke.co.ftw.ftnadmin.ui.common
 
+import androidx.compose.material3.LoadingIndicator
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import android.app.Activity
 import android.app.KeyguardManager
 import android.content.Context
@@ -58,6 +60,13 @@ fun rememberConnectAction(): () -> Unit {
             if (intent == null) scope.launch { container.tunnel.connect() } else launcher.launch(intent)
         }
     }
+}
+
+/** Expressive indeterminate indicator for connecting and loading states. */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun LoadingSpinner(modifier: Modifier = Modifier) {
+    LoadingIndicator(modifier)
 }
 
 @Composable
