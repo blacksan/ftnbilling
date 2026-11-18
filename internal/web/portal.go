@@ -369,12 +369,14 @@ func (s *Server) portalSuccess(w http.ResponseWriter, r *http.Request) {
 	if !logged && o.IP != "" && strings.EqualFold(o.MAC, a.MAC) {
 		logged = s.svc.AutoLogin(r.Context(), a, o.IP)
 	}
-	if o.MAC == "" { // paid on /pay (IPoE): the router un-walls the flat by itself
+	var ipoe bool
+	s.st.View(func(d *store.Data) { ipoe = billing.IPoE(d.Sites[o.SiteID]) })
+	if ipoe { // paid on /pay: the router un-walls the flat by itself
 		logged = false
 	}
 	s.render(w, "success", map[string]any{
 		"Brand": s.cfg.BrandName, "SiteName": s.siteName(o.SiteID), "Site": o.SiteID, "Acct": a, "Pkg": pkg, "LoggedIn": logged, "Dst": o.Dst,
-		"Support": support, "MAC": o.MAC, "IP": o.IP, "Expires": a.ExpiresAt,
+		"Support": support, "IPoE": ipoe, "MAC": o.MAC, "IP": o.IP, "Expires": a.ExpiresAt,
 	})
 }
 

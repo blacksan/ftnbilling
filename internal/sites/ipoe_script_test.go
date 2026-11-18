@@ -51,7 +51,7 @@ func TestIPoEStagesCommentEverythingAndStayOffTheWAN(t *testing.T) {
 				continue
 			}
 			for _, bad := range []string{"/ip/route", "/ip/service disable", "/interface/ethernet", "/ip/dhcp-client", "/interface/bridge/port", "/user/remove", "/ip/firewall/connection", "/system/reset", "/system/reboot"} {
-				if strings.Contains(tl, bad) {
+				if strings.Contains(tl, bad) && !(bad == "/interface/ethernet" && strings.Contains(tl, "$ifc") || (bad == "/interface/ethernet" && strings.Contains(tl, "$e->0"))) {
 					t.Errorf("%s: touches %q: %s", stage, bad, tl)
 				}
 			}
@@ -81,8 +81,7 @@ func TestCutoverStageOrderAndSafety(t *testing.T) {
 	s := string(out)
 	// The plan's order: backup, safety net, discovery, objects, firewall, switch, checks.
 	last := -1
-	for _, m := range []string{"cutover 0/7", "cutover 1/7", "/system/backup/save", "/export file=ftn-pre-ipoe", "cutover 2/7", "ftn-rollback-timer", "cutover 3/7",
-		"/ip/hotspot/get ($hs->0) interface", "cutover 4/7", "ftn-unreg", "lease-time=10m authoritative=yes disabled=yes", "cutover 5/7", "cutover 6/7", "/ip/hotspot disable", "/ip/dhcp-server enable", "cutover 7/7", "/ping 1.1.1.1", "/ping 10.99.0.1"} {
+	for _, m := range []string{"cutover 1/7", "/ip/hotspot/get ($hs->0) interface", "cutover 2/7", "/system/backup/save", "/export file=ftn-pre-ipoe", "cutover 3/7", "ftn-rollback-timer", "cutover 4/7", "ftn-unreg", "authoritative=yes add-arp=yes disabled=yes", "cutover 5/7", "cutover 6/7", ":set switched true", "/ip/hotspot disable", "/ip/dhcp-server enable", "cutover 7/7", "/ping 1.1.1.1", "/ping 10.99.0.1"} {
 		i := strings.Index(s, m)
 		if i < 0 {
 			t.Fatalf("script lacks %q", m)
@@ -103,7 +102,7 @@ func TestCutoverStageOrderAndSafety(t *testing.T) {
 		`chain=forward action=accept connection-state=established,related src-address=10.5.50.0/24`,
 		`/ip/firewall/filter remove [find where comment~"^ftn: ipoe"]`,
 		`interval=1m on-event=ftn-rollback-tick`,
-		`/system/script set ftn-rollback source=$rb`,
+		`/system/script set [find where name="ftn-rollback"] source=$rb`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("cutover lacks %q", want)
@@ -118,6 +117,50 @@ func TestCutoverStageOrderAndSafety(t *testing.T) {
 	if !strings.Contains(s, `comment="`+timerPrefix+`0"`) {
 		t.Error("the timer's comment must start at the tick count the tick script parses")
 	}
+	// B2: the old DHCP servers are found by interface in any state and the rollback is only created when absent.
+	for _, want := range []string{
+		`:local olddhcp [/ip/dhcp-server/find where interface=$ifc and name!="ftn-dhcp"]`,
+		`:if ([:len [/system/script/find where name="ftn-rollback"]] = 0) do={`,
+		`:if ([:typeof [:find $rb $l]] = "nil")`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("cutover lacks %q", want)
+		}
+	}
+	if strings.Contains(s, `interface=$ifc and disabled=no`) {
+		t.Error("old servers must be found regardless of their state")
+	}
+	if strings.Count(s, `/system/script remove [find where name="ftn-rollback"]`) != 0 {
+		t.Error("the rollback script must never be rebuilt")
+	}
+	// B3: any failure after the safety net exists runs the rollback; the timer is not removed on abort;
+	// the switch is marked before the first disable; the unregistered range is enabled only in the switch.
+	if !strings.Contains(s, ":if ($armed) do={") || !strings.Contains(s, "/system/script/run ftn-rollback") {
+		t.Error("abort must run the rollback once armed")
+	}
+	if ab := s[strings.Index(s, ":put \"ftn: the cutover stopped early"):]; strings.Contains(ab, "scheduler remove") {
+		t.Error("the abort path must not remove the timer")
+	}
+	if strings.Index(s, ":set switched true") > strings.Index(s, "/ip/hotspot disable") {
+		t.Error("switched must be set before the first disable")
+	}
+	if !strings.Contains(s, `address=10.5.50.10-10.5.50.59 disabled=yes comment="ftn: unregistered range"`) ||
+		strings.Index(s, `/ip/firewall/address-list enable [find where list="ftn-unreg"`) < strings.Index(s, ":set switched true") {
+		t.Error("the unregistered list entry is created disabled and enabled in the switch")
+	}
+	// Squatting, DNS, input and v6.
+	for _, want := range []string{"add-arp=yes", "arp=reply-only", "ftn: ipoe v6 drop", "action=redirect protocol=udp dst-port=53 src-address-list=ftn-unreg",
+		"chain=input action=drop src-address-list=ftn-suspended", "chain=input action=accept protocol=icmp src-address-list=ftn-unreg", "chain=input action=accept protocol=udp dst-port=67 src-address-list=ftn-suspended",
+		"ftn: ipoe isolate flats", "ftn: ipoe block rest", "allow-remote-requests", "ftn-pre-ipoe.backup", `"ftn-"`, "place-before", "/queue/simple/move"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("cutover lacks %q", want)
+		}
+	}
+	for _, bad := range []string{"walled dns udp", "walled dns tcp"} {
+		if strings.Contains(s, "chain=forward action=accept protocol=udp dst-port=53") || strings.Contains(s, "chain=forward action=accept protocol=tcp dst-port=53") || strings.Contains(s, bad) {
+			t.Errorf("walled flats must not have forwarded DNS (%q)", bad)
+		}
+	}
 	// The old services are only disabled, never removed.
 	for _, bad := range []string{"/ip/hotspot remove", "/ip/hotspot/remove", "/ip/dhcp-server remove", "/ip/dhcp-server/remove", "/ip/pool remove"} {
 		if strings.Contains(s, bad) {
@@ -129,7 +172,7 @@ func TestCutoverStageOrderAndSafety(t *testing.T) {
 		t.Error("self-removal on both exits")
 	}
 	// The rollback script comes from the discovered names and every line is guarded.
-	if rb := rollbackBase("hotspot1"); !strings.Contains(rb, `/ip hotspot enable [find where name="hotspot1"]`) || strings.Count(rb, "on-error={}") != 5 {
+	if rb := rollbackBase("hotspot1"); !strings.Contains(rb, `/ip hotspot enable [find where name="hotspot1"]`) || strings.Count(rb, "on-error={}") != 6 {
 		t.Fatalf("rollback script: %s", rb)
 	}
 	if strings.Index(rollbackBase("h"), "disable [find where name=\"ftn-dhcp\"]") > strings.Index(rollbackBase("h"), "hotspot enable") {
@@ -178,5 +221,21 @@ func TestJoinCommandStages(t *testing.T) {
 	}
 	if JoinCommandStage("https://b.example", "T", true, "") != JoinCommand("https://b.example", "T", true) {
 		t.Fatal("no stage = the legacy command")
+	}
+}
+
+// The cleanup keeps flat isolation and the REST port block, as "ftn: ipoe" rules, before the "ftn: hs" ones go.
+func TestCleanupKeepsIsolationAndRESTBlock(t *testing.T) {
+	out, err := RenderJoinScript(ipoeInput(StageCleanup))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	iso, blk, rm := strings.Index(s, `comment="ftn: ipoe isolate flats"`), strings.Index(s, `comment="ftn: ipoe block rest"`), strings.Index(s, `remove [find where comment~"^ftn: hs"]`)
+	if iso < 0 || blk < 0 || rm < 0 || iso > rm || blk > rm {
+		t.Fatalf("isolation %d, rest block %d, removal %d", iso, blk, rm)
+	}
+	if !strings.Contains(s, "in-interface=$ifc out-interface=$ifc") {
+		t.Fatal("isolation must be per customer interface")
 	}
 }

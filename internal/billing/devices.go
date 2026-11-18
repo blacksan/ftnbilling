@@ -72,6 +72,9 @@ func (s *Service) collectDevices(site store.Site, pl netplan.Plan, wants []wantA
 			o.ip = ip
 		}
 		if host != "" {
+			if len(host) > 64 {
+				host = host[:64]
+			}
 			o.host = host
 		}
 		if source == "dhcp" {
@@ -86,6 +89,9 @@ func (s *Service) collectDevices(site store.Site, pl netplan.Plan, wants []wantA
 		upsert(r["mac-address"], firstNonEmpty(r["active-address"], r["address"]), r["host-name"], "dhcp", r["status"] == "bound")
 	}
 	for _, r := range arp {
+		if isOurs(r) {
+			continue // our static entry says nothing about whether the flat is there
+		}
 		upsert(r["mac-address"], r["address"], "", "arp", arpOnline(r))
 	}
 	// Flats that were seen right now.
@@ -420,6 +426,13 @@ type DeviceAccountInput struct {
 // given, is set as the flat's plan (no time is granted: it is paid for as
 // usual); the router gets the lease and queue at once.
 func (s *Service) CreateFromDevice(ctx context.Context, in DeviceAccountInput) (store.Account, error) {
+	if in.PackageID != "" { // checked first: a bad package must not leave a half-made flat behind
+		ok := false
+		s.st.View(func(d *store.Data) { p, found := d.Packages[in.PackageID]; ok = found && !p.Deleted })
+		if !ok {
+			return store.Account{}, fmt.Errorf("choose a package from the list")
+		}
+	}
 	a, err := s.CreateAccount(AccountInput{SiteID: in.SiteID, Flat: in.Flat, MAC: in.MAC, Tenant: in.Tenant, Phone: in.Phone})
 	if err != nil {
 		return store.Account{}, err

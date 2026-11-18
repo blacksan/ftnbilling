@@ -217,7 +217,7 @@ func (s *Service) MoveAccount(ctx context.Context, id, toSiteID string) error {
 			if err != nil {
 				return err
 			}
-			if a.IP, err = FreeIPLocked(d, toSiteID, pl); err != nil {
+			if a.IP, err = FreeIPLocked(d, toSiteID, pl, s.foreignIPs(toSiteID)); err != nil {
 				return err
 			}
 		}

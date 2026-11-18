@@ -44,7 +44,7 @@ func (s *Server) joinScript(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
-	script, siteID, err := s.mgr.ConsumeJoinStage(r.PathValue("token"), r.UserAgent(), realIP(r), r.URL.Query().Get("nocheck") == "1", r.URL.Query().Get("stage"))
+	script, siteID, err := s.mgr.ConsumeJoinForce(r.PathValue("token"), r.UserAgent(), realIP(r), r.URL.Query().Get("nocheck") == "1", r.URL.Query().Get("stage"), r.URL.Query().Get("force") == "1")
 	switch {
 	case errors.Is(err, sites.ErrJoinInvalid):
 		http.NotFound(w, r)
@@ -161,7 +161,7 @@ func (s *Server) siteID(r *http.Request) (store.Site, bool) {
 
 // siteView builds the building page; cmd and fallback are set only in the
 // response to a join request, which is the one time the command is shown.
-func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site, cmd, cmdNoCheck string, exp time.Time, stage string) {
+func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site, cmd, cmdNoCheck string, exp time.Time, stage string, extra ...map[string]any) {
 	p := s.page(r, "sites")
 	eff := s.mgr.Effective(st)
 	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
@@ -169,6 +169,11 @@ func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site,
 	status, _ := s.mgr.Status(ctx, st.ID)
 	p.Data["Site"], p.Data["Eff"], p.Data["Status"] = st, eff, status
 	p.Data["Env"] = st.Mode == store.SiteModeEnv
+	for _, m := range extra {
+		for k, v := range m {
+			p.Data[k] = v
+		}
+	}
 	p.Data["Cmd"], p.Data["CmdNoCheck"], p.Data["CmdExpires"], p.Data["CmdStage"] = cmd, cmdNoCheck, exp, stage
 	mode := st.AccessMode
 	if mode == "" {
@@ -351,13 +356,32 @@ func (s *Server) adminSiteScript(w http.ResponseWriter, r *http.Request) {
 		s.back(w, r, "/admin/sites/view?id="+st.ID, "Error: set the access mode to IPoE observe or IPoE first")
 		return
 	}
-	tok, exp, err := s.mgr.MintJoin(st.ID)
+	force := r.PostFormValue("force") == "1"
+	if stage == sites.StageCutover && !force {
+		// Paying flats the router has not seen would lose service: say so before a command exists.
+		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		unseen, uerr := s.mgr.UnseenEntitled(ctx, st.ID)
+		cancel()
+		if uerr != nil || len(unseen) > 0 {
+			ex := map[string]any{"Unseen": unseen, "UnseenStage": stage}
+			if uerr != nil {
+				ex["UnseenErr"] = uerr.Error()
+			}
+			s.siteView(w, r, st, "", "", time.Time{}, "", ex)
+			return
+		}
+	}
+	tok, exp, err := s.mgr.MintJoinStage(st.ID, stage)
 	if err != nil {
 		s.back(w, r, "/admin/sites/view?id="+st.ID, "Error: "+err.Error())
 		return
 	}
 	base := s.cfg.PublicBaseURL
-	s.siteView(w, r, st, sites.JoinCommandStage(base, tok, true, stage), sites.JoinCommandStage(base, tok, false, stage), exp, stage)
+	mk := sites.JoinCommandStage
+	if force {
+		mk = sites.JoinCommandForce
+	}
+	s.siteView(w, r, st, mk(base, tok, true, stage), mk(base, tok, false, stage), exp, stage)
 }
 
 func (s *Server) adminSiteMode(w http.ResponseWriter, r *http.Request) {

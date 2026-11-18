@@ -38,9 +38,13 @@ func (m *Manager) renderLaterStage(d *store.Data, site store.Site, stage string,
 			return fmt.Errorf("%w: giving the flats their addresses: %v", ErrCannotRender, err)
 		}
 		enforce := site.AccessMode == store.AccessIPoE // observe mode never suspends anybody
+		in.Observe = !enforce
 		for _, a := range d.AccountList() {
 			if a.SiteID != site.ID || a.MACConflict || a.MAC == "" || a.IP == "" {
 				continue
+			}
+			if !plan.InStatic(a.IP) {
+				return fmt.Errorf("%w: %s has the address %s outside the static range", ErrCannotRender, a.Flat, a.IP)
 			}
 			in.Accounts = append(in.Accounts, LeaseSeed{
 				Code: a.Code, Flat: a.Flat, MAC: a.MAC, IP: a.IP, MaxLimit: billing.QueueLimit(d.Packages[a.PackageID]),
@@ -76,6 +80,16 @@ func (m *Manager) SetAccessMode(siteID, mode string) error {
 	default:
 		return store.ErrBadAccessMode
 	}
+	if mode == store.AccessHotspot {
+		// The router decides: while it serves the flats from ftn-dhcp, "hotspot"
+		// would make the server write hotspot users into a router that has
+		// none. Roll the router back first (or let the 15 minute timer do it).
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if on, err := m.ftnDHCPEnabled(ctx, siteID); err == nil && on {
+			return ErrRouterIsIPoE
+		}
+	}
 	err := m.st.Update(func(d *store.Data) error {
 		s, ok := d.Sites[siteID]
 		if !ok || s.Removed {
@@ -94,6 +108,18 @@ func (m *Manager) SetAccessMode(siteID, mode string) error {
 	}
 	m.Reload(siteID)
 	return nil
+}
+
+// ErrRouterIsIPoE is returned when the hotspot mode is chosen for a building
+// whose router is serving its flats from ftn-dhcp.
+var ErrRouterIsIPoE = errors.New("the router is serving the flats from ftn-dhcp (IPoE): roll the router back first (run /system/script/run ftn-rollback on it), then switch the mode to hotspot")
+
+func (m *Manager) ftnDHCPEnabled(ctx context.Context, siteID string) (bool, error) {
+	servers, err := m.Router(siteID).Rows(ctx, "/ip/dhcp-server", map[string]string{"name": billing.DHCPServerName})
+	if err != nil {
+		return false, err
+	}
+	return len(servers) > 0 && servers[0]["disabled"] != "true" && servers[0]["disabled"] != "yes", nil
 }
 
 // ErrNotCutOver is returned by ConfirmCutover when the router does not run ftn-dhcp.
@@ -143,4 +169,39 @@ func (m *Manager) CutoverPending(ctx context.Context, siteID string) (pending, o
 		return false, false
 	}
 	return len(rows) > 0, true
+}
+
+// UnseenEntitled lists the flats that have paid time (and a usable MAC) whose
+// MAC is in neither the router's DHCP leases nor its ARP table: the cutover
+// would leave them without service. It reads the router only.
+func (m *Manager) UnseenEntitled(ctx context.Context, siteID string) ([]string, error) {
+	rt := m.Router(siteID)
+	seen := map[string]bool{}
+	for _, path := range []string{"/ip/dhcp-server/lease", "/ip/arp"} {
+		rows, err := rt.Rows(ctx, path, nil)
+		if err != nil {
+			if path == "/ip/arp" {
+				continue // best effort
+			}
+			return nil, err
+		}
+		for _, r := range rows {
+			if mac, ok := store.CanonMAC(r["mac-address"]); ok {
+				seen[mac] = true
+			}
+		}
+	}
+	now := m.now()
+	var out []string
+	m.st.View(func(d *store.Data) {
+		for _, a := range d.AccountList() {
+			if a.SiteID != siteID || a.MACConflict || a.MAC == "" || billing.AccountState(a, now) != billing.StateActive {
+				continue
+			}
+			if mac, ok := store.CanonMAC(a.MAC); ok && !seen[mac] {
+				out = append(out, fmt.Sprintf("%s (%s)", a.Flat, a.MAC))
+			}
+		}
+	})
+	return out, nil
 }

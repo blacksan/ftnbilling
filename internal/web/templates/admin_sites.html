@@ -101,6 +101,11 @@
 <span class="muted">last pass {{if .LastRunAt.IsZero}}never{{else}}{{eat .LastRunAt}}{{end}} &middot; {{.Drift}} differences &middot; {{.PendingOps}} writes pending{{if .Repaired}} &middot; {{.Repaired}} rows repaired last pass{{end}}{{if .WouldSuspend}} &middot; {{.WouldSuspend}} flats would be suspended in ipoe mode{{end}}</span></p>
 {{if .Note}}<p class="muted">{{.Note}}</p>{{end}}{{if .LastError}}<p class="bad">Last error: {{.LastError}}</p>{{end}}
 {{if .ForeignConflicts}}<p class="bad">Rows on the router that the server does not own and will not touch:</p><ul>{{range .ForeignConflicts}}<li>{{.}}</li>{{end}}</ul>{{end}}{{end}}
+{{if or .Data.Unseen .Data.UnseenErr}}<div class="card danger"><b class="bad">The cutover command was not made</b>
+{{if .Data.UnseenErr}}<p>The router could not be read to check the flats: {{.Data.UnseenErr}}</p>{{end}}
+{{if .Data.Unseen}}<p>These paying flats have not been seen on the router (no lease or ARP entry with their MAC), so they would lose service:</p><ul>{{range .Data.Unseen}}<li>{{.}}</li>{{end}}</ul>{{end}}
+<p class="muted">Fix their MACs (Unregistered devices) and try again, or cut over anyway.</p>
+<form method="post" action="/admin/sites/script"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="stage" value="cutover"><input type="hidden" name="force" value="1"><button>Cut over anyway</button></form></div>{{end}}
 {{if .Data.CutoverPending}}<div class="card danger"><b class="bad">Cutover not confirmed</b><p class="muted" style="margin:4px 0">The router rolls back by itself 15 minutes after the cutover command unless you confirm. Check that a flat can browse, then confirm.</p>
 <form method="post" action="/admin/sites/confirm"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button>Confirm cutover</button></form></div>{{end}}
 <div class="row" style="margin-top:8px">

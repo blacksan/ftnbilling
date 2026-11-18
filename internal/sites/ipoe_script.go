@@ -74,6 +74,8 @@ type stageData struct {
 	UnregFrom, UnregTo              string
 	StaticFrom                      string
 	Accounts                        []LeaseSeed
+	Observe                         bool
+	IsolateRule, BlockRestRule      string
 	Suspended                       []LeaseSeed
 	Filter                          []string // firewall filter rules, ready to paste, last-added-first
 	NAT                             []string // dst-nat rules, same
@@ -117,6 +119,7 @@ func rollbackBase(hotspot string) string {
 	b.WriteString(g(`/ip hotspot enable [find where name="` + hotspot + `"]`))
 	b.WriteString(g(`/ip firewall filter remove [find where comment~"^ftn: ipoe"]`))
 	b.WriteString(g(`/ip firewall nat remove [find where comment~"^ftn: ipoe"]`))
+	b.WriteString(g(`/ipv6 firewall filter remove [find where comment~"^ftn: ipoe"]`))
 	b.WriteString(g(`/system scheduler remove [find where name="` + RollbackSchedule + `"]`))
 	return b.String()
 }
@@ -184,21 +187,22 @@ func renderStage(in ScriptInput) ([]byte, error) {
 			if _, ok := store.CanonMAC(a.MAC); !ok {
 				return nil, fmt.Errorf("cutover script: flat %q has no valid MAC", a.Flat)
 			}
-			if ip, err := netip.ParseAddr(a.IP); err != nil || !ip.Is4() || !plan.InNetwork(a.IP) {
-				return nil, fmt.Errorf("cutover script: flat %q has no address inside %s", a.Flat, plan.Network)
+			if ip, err := netip.ParseAddr(a.IP); err != nil || !ip.Is4() || !plan.InStatic(a.IP) {
+				return nil, fmt.Errorf("cutover script: flat %q has no address in the static range %s-%s (the range below it is the unregistered pool, which is walled)", a.Flat, plan.StaticFrom, plan.StaticTo)
 			}
 			d.Accounts = append(d.Accounts, a)
 			if a.Suspended {
 				d.Suspended = append(d.Suspended, a)
 			}
 		}
-		d.PublicIP = in.PublicIP
+		d.PublicIP, d.Observe = in.PublicIP, in.Observe
 		d.RollbackSource = rqs(rollbackBase(s.HotspotServer))
 		d.TickSource = rqs(tickSource())
 		d.TickLen = len(timerPrefix)
-		d.Filter, d.NAT = ipoeRules(plan, in.PublicIP)
+		d.Filter, d.NAT = ipoeRules(plan, in.PublicIP, s.RESTPort)
 		tmpl = ipoeCutoverTmpl
 	case StageCleanup:
+		d.IsolateRule, d.BlockRestRule = isolateRule(), blockRestRule(s.RESTPort)
 		tmpl = ipoeCleanupTmpl
 	}
 	var b bytes.Buffer
@@ -211,31 +215,32 @@ func renderStage(in ScriptInput) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
+func isolateRule() string {
+	return fw("chain=forward action=drop in-interface=$ifc out-interface=$ifc", "ftn: ipoe isolate flats")
+}
+
+func blockRestRule(port int) string {
+	return fw(fmt.Sprintf("chain=input action=drop protocol=tcp in-interface=$ifc dst-port=%d", port), "ftn: ipoe block rest")
+}
+
 // ipoeRules builds the walled-garden rules. Each is placed at the top of its
 // table (above FastTrack), so they are rendered last-wanted-first: the rule
 // added last ends up first.
 //
-// Top to bottom in the forward chain, for each walled list (unregistered
-// devices, flats with no paid time):
-//
-//	accept DNS (udp, tcp 53)
-//	accept tcp 80 and 443 to PUBLIC_IP: the payment page
-//	reject tcp with a reset (HTTPS fails at once), reject everything else
-//
-// then established and related traffic of the customer network is accepted
-// above FastTrack, so the per-flat queues see it (FastTrack would bypass them).
-// Walled flats are matched first, so cutting a flat off also ends its open
-// connections.
-func ipoeRules(plan netplan.Plan, publicIP string) (filter, nat []string) {
+// Forward chain, top to bottom, for each walled list (unregistered devices,
+// flats with no paid time): accept tcp 80/443 to PUBLIC_IP (the payment page),
+// reject tcp with a reset (HTTPS fails at once), reject everything else. DNS
+// is not forwarded: it is redirected to the router (nat). Then established and
+// related traffic of the customer network is accepted above FastTrack, so the
+// per-flat queues see it, and flat-to-flat traffic is dropped.
+// Input chain: the REST port is blocked from the flats and a walled flat may
+// only use the router's DNS, DHCP and ping.
+func ipoeRules(plan netplan.Plan, publicIP string, restPort int) (filter, nat []string) {
 	lists := []string{listUnreg, billing.SuspendedList}
 	type rule struct{ args, comment string }
 	var top []rule // top to bottom
-	for _, l := range lists {
-		top = append(top, rule{"chain=forward action=accept protocol=udp dst-port=53 src-address-list=" + l, "ftn: ipoe walled dns udp " + l})
-	}
-	for _, l := range lists {
-		top = append(top, rule{"chain=forward action=accept protocol=tcp dst-port=53 src-address-list=" + l, "ftn: ipoe walled dns tcp " + l})
-	}
+	// DNS is not forwarded for walled flats (a walled flat could tunnel
+	// through any resolver): their DNS is redirected to the router (nat below).
 	for _, l := range lists {
 		top = append(top, rule{"chain=forward action=accept protocol=tcp dst-port=80,443 dst-address=" + publicIP + " src-address-list=" + l, "ftn: ipoe walled payment page " + l})
 	}
@@ -248,19 +253,47 @@ func ipoeRules(plan netplan.Plan, publicIP string) (filter, nat []string) {
 	top = append(top,
 		rule{"chain=forward action=accept connection-state=established,related src-address=" + plan.Network, "ftn: ipoe customer est/rel out (above FastTrack, so queues apply)"},
 		rule{"chain=forward action=accept connection-state=established,related dst-address=" + plan.Network, "ftn: ipoe customer est/rel in (above FastTrack, so queues apply)"},
+		rule{"chain=forward action=drop in-interface=$ifc out-interface=$ifc", "ftn: ipoe isolate flats"},
 	)
 	for i := len(top) - 1; i >= 0; i-- {
 		filter = append(filter, fw(top[i].args, top[i].comment))
 	}
-	// Input: flats may use the router's DNS (the DHCP server hands out the gateway as the resolver).
-	filter = append([]string{
-		fw("chain=input action=accept protocol=tcp dst-port=53 in-interface=$ifc", "ftn: ipoe dns tcp"),
-		fw("chain=input action=accept protocol=udp dst-port=53 in-interface=$ifc", "ftn: ipoe dns udp"),
-	}, filter...)
-	// The walled flats' plain web requests go to the payment page.
-	for i := len(lists) - 1; i >= 0; i-- {
-		nat = append(nat, fwOn("/ip/firewall/nat", "chain=dstnat action=dst-nat protocol=tcp dst-port=80 dst-address=!"+publicIP+" src-address-list="+lists[i]+" to-addresses="+publicIP+" to-ports=80",
-			"ftn: ipoe walled http to the payment page "+lists[i]))
+	// Input, top to bottom: the REST port is blocked from the flats; the router's
+	// DNS, DHCP and ping work for everybody; a walled flat gets nothing else
+	// from the router (no WinBox, SSH, API or any other service).
+	var in []rule
+	in = append(in,
+		rule{fmt.Sprintf("chain=input action=drop protocol=tcp in-interface=$ifc dst-port=%d", restPort), "ftn: ipoe block rest"},
+		rule{"chain=input action=accept protocol=udp dst-port=53 in-interface=$ifc", "ftn: ipoe dns udp"},
+		rule{"chain=input action=accept protocol=tcp dst-port=53 in-interface=$ifc", "ftn: ipoe dns tcp"},
+	)
+	for _, l := range lists {
+		in = append(in,
+			rule{"chain=input action=accept protocol=udp dst-port=67 src-address-list=" + l, "ftn: ipoe walled dhcp " + l},
+			rule{"chain=input action=accept protocol=icmp src-address-list=" + l, "ftn: ipoe walled icmp " + l},
+			rule{"chain=input action=drop src-address-list=" + l, "ftn: ipoe walled input drop " + l},
+		)
+	}
+	var inFilter []string
+	for i := len(in) - 1; i >= 0; i-- {
+		inFilter = append(inFilter, fw(in[i].args, in[i].comment))
+	}
+	filter = append(inFilter, filter...)
+	// NAT, top to bottom: the walled flats' DNS goes to the router, and
+	// their plain web requests go to the payment page.
+	var nt []rule
+	for _, l := range lists {
+		nt = append(nt,
+			rule{"chain=dstnat action=redirect protocol=udp dst-port=53 src-address-list=" + l + " to-ports=53", "ftn: ipoe walled dns redirect udp " + l},
+			rule{"chain=dstnat action=redirect protocol=tcp dst-port=53 src-address-list=" + l + " to-ports=53", "ftn: ipoe walled dns redirect tcp " + l},
+		)
+	}
+	for _, l := range lists {
+		nt = append(nt, rule{"chain=dstnat action=dst-nat protocol=tcp dst-port=80 dst-address=!" + publicIP + " src-address-list=" + l + " to-addresses=" + publicIP + " to-ports=80",
+			"ftn: ipoe walled http to the payment page " + l})
+	}
+	for i := len(nt) - 1; i >= 0; i-- {
+		nat = append(nat, fwOn("/ip/firewall/nat", nt[i].args, nt[i].comment))
 	}
 	return filter, nat
 }

@@ -8,32 +8,19 @@
 # router switches back to the hotspot by itself (script ftn-rollback). To go back
 # at once: /system/script/run ftn-rollback
 # Every object it creates has a comment that starts with "ftn:".
+# Observe mode: the unregistered range is not walled and no flat is suspended.
 :local fails 0
 :local abort ""
+:local armed false
 :local switched false
 :do {
 
-:put "ftn cutover 0/7: checking RouterOS"
+:put "ftn cutover 1/7: checking the router (nothing is changed yet)"
 :local ver [/system/resource/get version]
 :put ("   RouterOS " . $ver)
 :local major [:tonum [:pick $ver 0 [:find $ver "."]]]
 :if ($major < 7) do={ :set abort "ftn: RouterOS 7 or newer is required"; :error $abort }
-
-:put "ftn cutover 1/7: backup and export (ftn-pre-ipoe.backup, ftn-pre-ipoe.rsc)"
-/system/backup/save name=ftn-pre-ipoe
-/export file=ftn-pre-ipoe
-
-:put "ftn cutover 2/7: safety net: back to the hotspot after {{.RollbackMin}} minutes unless confirmed"
-:do {
-  /system/script remove [find where name="ftn-rollback"]
-  /system/script remove [find where name="ftn-rollback-tick"]
-  /system/script add name=ftn-rollback policy=read,write,policy,test source="{{.RollbackSource}}" comment="ftn: IPoE rollback"
-  /system/script add name=ftn-rollback-tick policy=read,write,policy,test source="{{.TickSource}}" comment="ftn: IPoE rollback timer tick"
-  /system/scheduler remove [find where name="ftn-rollback-timer"]
-  /system/scheduler add name=ftn-rollback-timer interval=1m on-event=ftn-rollback-tick policy=read,write,policy,test comment="ftn: rollback timer 0"
-} on-error={ :set abort "ftn: section 2 (rollback timer) failed, nothing was changed"; :error $abort }
-
-:put "ftn cutover 3/7: finding the customer interface"
+:if ([/ip/dns/get allow-remote-requests] = false) do={ :set abort "ftn: the router's DNS does not answer the flats (/ip/dns allow-remote-requests is off). Turn it on first, because the DHCP server hands out the router as the resolver"; :error $abort }
 :local hs [/ip/hotspot/find where name="{{.HotspotServer}}"]
 :if ([:len $hs] = 0) do={ :set hs [/ip/hotspot/find] }
 :if ([:len $hs] = 0) do={ :set abort "ftn: no hotspot server found on this router, so the interface the flats are on is unknown"; :error $abort }
@@ -41,11 +28,39 @@
 :local ifc [/ip/hotspot/get ($hs->0) interface]
 :put ("   hotspot " . $hsname . " on interface " . $ifc)
 :if ([:len [/ip/address/find where interface=$ifc and address="{{.GatewayCIDR}}"]] = 0) do={ :set abort ("ftn: interface " . $ifc . " has no address {{.GatewayCIDR}}; check the building's customer subnet on the server"); :error $abort }
-:local olddhcp [/ip/dhcp-server/find where interface=$ifc and disabled=no and name!="{{.DHCPServer}}"]
-:local rb [/system/script/get ftn-rollback source]
-:set rb ($rb . ":do { /ip hotspot enable [find where name=\"" . $hsname . "\"] } on-error={}\n")
-:foreach i in=$olddhcp do={ :set rb ($rb . ":do { /ip dhcp-server enable [find where name=\"" . [/ip/dhcp-server/get $i name] . "\"] } on-error={}\n") }
-/system/script set ftn-rollback source=$rb
+:local olddhcp [/ip/dhcp-server/find where interface=$ifc and name!="{{.DHCPServer}}"]
+:local v6 false
+:do { :if ([/ipv6/settings/get disable-ipv6] = false) do={ :set v6 true } } on-error={}
+:if ($v6) do={ :put "   IPv6 is on: the flats' IPv6 forwarding is blocked, because IPoE billing sees IPv4 only" }
+:foreach q in=[/queue/simple/find where dynamic=no] do={
+  :if ([:pick [/queue/simple/get $q name] 0 4] != "ftn-") do={
+    :if ([:tostr [/queue/simple/get $q target]] ~ "0.0.0.0/0") do={ :put ("   WARNING: queue " . [/queue/simple/get $q name] . " targets 0.0.0.0/0 and may cap or hide the flats' own queues") }
+  }
+}
+
+:put "ftn cutover 2/7: backup and export (kept if they already exist)"
+:if ([:len [/file/find where name="ftn-pre-ipoe.backup"]] = 0) do={ /system/backup/save name=ftn-pre-ipoe } else={ :put "   ftn-pre-ipoe.backup already exists, kept" }
+:if ([:len [/file/find where name="ftn-pre-ipoe.rsc"]] = 0) do={ /export file=ftn-pre-ipoe } else={ :put "   ftn-pre-ipoe.rsc already exists, kept" }
+
+:put "ftn cutover 3/7: safety net: back to the hotspot after {{.RollbackMin}} minutes unless confirmed"
+:do {
+  :if ([:len [/system/script/find where name="ftn-rollback"]] = 0) do={
+    /system/script add name=ftn-rollback policy=read,write,policy,test source="{{.RollbackSource}}" comment="ftn: IPoE rollback"
+  }
+  /system/script remove [find where name="ftn-rollback-tick"]
+  /system/script add name=ftn-rollback-tick policy=read,write,policy,test source="{{.TickSource}}" comment="ftn: IPoE rollback timer tick"
+  /system/scheduler remove [find where name="ftn-rollback-timer"]
+  /system/scheduler add name=ftn-rollback-timer interval=1m on-event=ftn-rollback-tick policy=read,write,policy,test comment="ftn: rollback timer 0"
+  # The servers this cutover will disable are written into the rollback script once.
+  # A second run never rebuilds it, so the first run's record of them is kept.
+  :local rb [/system/script/get [find where name="ftn-rollback"] source]
+  :local lines ({})
+  :foreach h in=$hs do={ :set lines ($lines, (":do { /ip hotspot enable [find where name=\"" . [/ip/hotspot/get $h name] . "\"] } on-error={}\n")) }
+  :foreach i in=$olddhcp do={ :set lines ($lines, (":do { /ip dhcp-server enable [find where name=\"" . [/ip/dhcp-server/get $i name] . "\"] } on-error={}\n")) }
+  :foreach l in=$lines do={ :if ([:typeof [:find $rb $l]] = "nil") do={ :set rb ($rb . $l) } }
+  /system/script set [find where name="ftn-rollback"] source=$rb
+  :set armed true
+} on-error={ :set abort "ftn: section 3 (rollback timer) failed, nothing was changed"; :error $abort }
 
 :put "ftn cutover 4/7: unregistered pool, DHCP server, {{len .Accounts}} flat(s)"
 :do {
@@ -55,22 +70,29 @@
     /ip/pool set [find where name="{{.UnregList}}"] ranges={{.UnregFrom}}-{{.UnregTo}}
   }
   :if ([:len [/ip/dhcp-server/find where name="{{.DHCPServer}}"]] = 0) do={
-    /ip/dhcp-server add name={{.DHCPServer}} interface=$ifc address-pool={{.UnregList}} lease-time=10m authoritative=yes disabled=yes comment="ftn: IPoE DHCP"
+    /ip/dhcp-server add name={{.DHCPServer}} interface=$ifc address-pool={{.UnregList}} lease-time=10m authoritative=yes add-arp=yes disabled=yes comment="ftn: IPoE DHCP"
   } else={
-    /ip/dhcp-server set [find where name="{{.DHCPServer}}"] interface=$ifc address-pool={{.UnregList}} lease-time=10m authoritative=yes
+    /ip/dhcp-server set [find where name="{{.DHCPServer}}"] interface=$ifc address-pool={{.UnregList}} lease-time=10m authoritative=yes add-arp=yes
   }
   :if ([:len [/ip/dhcp-server/network/find where address="{{.CustomerNetwork}}"]] = 0) do={
     /ip/dhcp-server/network add address={{.CustomerNetwork}} gateway={{.Gateway}} dns-server={{.Gateway}} comment="ftn: IPoE DHCP network"
   }
   /ip/dhcp-server/lease remove [find where comment~"^ftn:acct:"]
+  /ip/arp remove [find where comment~"^ftn:acct:"]
   /queue/simple remove [find where comment~"^ftn:acct:"]
   /ip/firewall/address-list remove [find where list="{{.SuspList}}" and comment~"^ftn:acct:"]
   /ip/firewall/address-list remove [find where list="{{.UnregList}}" and comment="ftn: unregistered range"]
-  /ip/firewall/address-list add list={{.UnregList}} address={{.UnregFrom}}-{{.UnregTo}} comment="ftn: unregistered range"
+  # Disabled until the switch: the old DHCP pool overlaps this range, so walling it earlier would wall the flats that are online now.
+  /ip/firewall/address-list add list={{.UnregList}} address={{.UnregFrom}}-{{.UnregTo}} disabled=yes comment="ftn: unregistered range"
+  # Our queues go first: the first matching simple queue wins.
+  :local fq ""
+  :foreach q in=[/queue/simple/find] do={ :if ([:len $fq] = 0 && [:pick [/queue/simple/get $q name] 0 4] != "ftn-") do={ :set fq [:tostr $q] } }
 {{- range .Accounts}}
   :do { /ip/dhcp-server/lease add address={{.IP}} mac-address={{.MAC}} server={{$.DHCPServer}} comment="ftn:acct:{{.Code}} {{rq .Flat}}" } on-error={ :set fails ($fails + 1); :put "   lease for {{rq .Flat}} failed" }
+  :do { /ip/arp add address={{.IP}} mac-address={{.MAC}} interface=$ifc comment="ftn:acct:{{.Code}} {{rq .Flat}}" } on-error={ :set fails ($fails + 1); :put "   ARP entry for {{rq .Flat}} failed" }
   :do { /queue/simple add name=ftn-{{.Code}} target={{.IP}}/32 max-limit={{.MaxLimit}} comment="ftn:acct:{{.Code}} {{rq .Flat}}" } on-error={ :set fails ($fails + 1); :put "   queue for {{rq .Flat}} failed" }
 {{- end}}
+  :if ([:len $fq] > 0) do={ :do { /queue/simple/move [/queue/simple/find where name~"^ftn-"] destination=$fq } on-error={ :put "   WARNING: could not move the flats' queues above the other queues" } }
 {{- range .Suspended}}
   :do { /ip/firewall/address-list add list={{$.SuspList}} address={{.IP}} disabled=yes comment="ftn:acct:{{.Code}} {{rq .Flat}}" } on-error={ :set fails ($fails + 1); :put "   suspended entry for {{rq .Flat}} failed" }
 {{- end}}
@@ -80,12 +102,14 @@
 :do {
   /ip/firewall/filter remove [find where comment~"^ftn: ipoe"]
   /ip/firewall/nat remove [find where comment~"^ftn: ipoe"]
+  :do { /ipv6/firewall/filter remove [find where comment~"^ftn: ipoe"] } on-error={}
 {{- range .Filter}}
 {{.}}
 {{- end}}
 {{- range .NAT}}
 {{.}}
 {{- end}}
+  :if ($v6) do={ /ipv6/firewall/filter add chain=forward action=drop in-interface=$ifc comment="ftn: ipoe v6 drop" }
   :if ([:len [/ip/firewall/nat/find where comment="ftn: ipoe customer masquerade"]] = 0) do={
     /ip/firewall/nat add chain=srcnat action=masquerade src-address={{.CustomerNetwork}} out-interface-list={{.WANList}} comment="ftn: ipoe customer masquerade"
   }
@@ -93,27 +117,59 @@
 
 :put "ftn cutover 6/7: switching the flats over"
 :do {
+  # Marked first: from here on a failure means the flats may be half switched.
+  :set switched true
   :foreach i in=$hs do={ /ip/hotspot disable $i }
   :foreach i in=$olddhcp do={ /ip/dhcp-server disable $i }
   /ip/dhcp-server enable [find where name="{{.DHCPServer}}"]
+{{- if not .Observe}}
+  /ip/firewall/address-list enable [find where list="{{.UnregList}}" and comment="ftn: unregistered range"]
+{{- end}}
   /ip/firewall/address-list enable [find where list="{{.SuspList}}" and comment~"^ftn:acct:"]
-  :set switched true
-} on-error={ :set abort "ftn: section 6 (switch) failed; the safety net will switch back"; :error $abort }
+  # Only addresses with a static ARP entry (ours, or the DHCP server's) can talk: nobody can squat a flat's address.
+  # The old setting is written into the rollback script first.
+  :local rb [/system/script/get [find where name="ftn-rollback"] source]
+  :local b [/interface/bridge/find where name=$ifc]
+  :local v [/interface/vlan/find where name=$ifc]
+  :local e [/interface/ethernet/find where name=$ifc]
+  :if ([:len $b] > 0) do={
+    :local l (":do { /interface bridge set [find where name=\"" . $ifc . "\"] arp=" . [/interface/bridge/get ($b->0) arp] . " } on-error={}\n")
+    :if ([:typeof [:find $rb $l]] = "nil") do={ /system/script set [find where name="ftn-rollback"] source=($rb . $l) }
+    /interface/bridge set ($b->0) arp=reply-only
+  }
+  :if ([:len $v] > 0) do={
+    :local l (":do { /interface vlan set [find where name=\"" . $ifc . "\"] arp=" . [/interface/vlan/get ($v->0) arp] . " } on-error={}\n")
+    :if ([:typeof [:find $rb $l]] = "nil") do={ /system/script set [find where name="ftn-rollback"] source=($rb . $l) }
+    /interface/vlan set ($v->0) arp=reply-only
+  }
+  :if ([:len $e] > 0) do={
+    :local l (":do { /interface ethernet set [find where name=\"" . $ifc . "\"] arp=" . [/interface/ethernet/get ($e->0) arp] . " } on-error={}\n")
+    :if ([:typeof [:find $rb $l]] = "nil") do={ /system/script set [find where name="ftn-rollback"] source=($rb . $l) }
+    /interface/ethernet set ($e->0) arp=reply-only
+  }
+} on-error={ :set abort "ftn: section 6 (switch) failed"; :error $abort }
 
 :put "ftn cutover 7/7: checking the internet and the billing server"
-:do { /ping 1.1.1.1 count=3 } on-error={ :put "   WARNING: no answer from 1.1.1.1" }
-:do { /ping {{.ServerIP}} count=3 } on-error={ :put "   WARNING: no answer from the billing server tunnel address {{.ServerIP}}" }
+:local r1 0
+:local r2 0
+:do { :set r1 [/ping 1.1.1.1 count=3] } on-error={}
+:do { :set r2 [/ping {{.ServerIP}} count=3] } on-error={}
+:if ($r1 = 0) do={ :put "   WARNING: no answer from 1.1.1.1"; :set fails ($fails + 1) } else={ :put ("   internet: " . $r1 . " of 3 replies") }
+:if ($r2 = 0) do={ :put "   WARNING: no answer from the billing server tunnel address {{.ServerIP}}"; :set fails ($fails + 1) } else={ :put ("   billing server: " . $r2 . " of 3 replies") }
 :if ($fails > 0) do={ :put ("ftn: finished with " . $fails . " problem(s), see the messages above") }
 :put "ftn: the flats are now on IPoE. Check one flat, then press Confirm cutover in the billing admin within {{.RollbackMin}} minutes."
 :put "ftn: otherwise the router goes back to the hotspot by itself."
 } on-error={
   :put "ftn: the cutover stopped early, see below"
   :if ([:len $abort] > 0) do={ :put $abort }
-  :if ($switched) do={
-    :put "   the flats were switched: the safety net returns to the hotspot, or run /system/script/run ftn-rollback now"
+  :if ($armed) do={
+    # Safe before the switch too: the rollback script only undoes what this script did. The timer is left alone;
+    # the rollback script removes it itself, and if it fails the timer is still the safety net.
+    :put "   undoing the changes now (running ftn-rollback)"
+    :do { /system/script/run ftn-rollback } on-error={ :put "   WARNING: ftn-rollback failed. Run /system/script/run ftn-rollback by hand; the timer will also try in a few minutes" }
+    :if ($switched) do={ :put "   the flats were switched and are going back to the hotspot" } else={ :put "   the flats were not switched" }
   } else={
-    :do { /system/scheduler remove [find where name="ftn-rollback-timer"] } on-error={}
-    :put "   nothing was switched: the hotspot is still serving the flats"
+    :put "   nothing was changed: the hotspot is still serving the flats"
   }
   /file remove [find where name="{{.File}}"]
   :error "ftn: cutover stopped; the script file was removed from the router"

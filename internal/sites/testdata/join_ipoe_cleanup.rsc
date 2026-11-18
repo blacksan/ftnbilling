@@ -19,6 +19,13 @@
 :do { /ip/dhcp-server/remove [find where interface=$ifc and disabled=yes and name!="ftn-dhcp"] } on-error={ :put "   old DHCP server: left in place" }
 :do { /ip/pool/remove [find where name="pool-hotspot"] } on-error={ :put "   pool-hotspot: left in place (still in use?)" }
 :do { /ip/hotspot/walled-garden/ip/remove [find where comment="ftn: portal"] } on-error={}
+# Flat isolation and REST-port blocking were "ftn: hs" rules; keep them as "ftn: ipoe" rules first.
+:if ([:len [/ip/firewall/filter/find where comment="ftn: ipoe isolate flats"]] = 0) do={
+  :if ([:len [/ip/firewall/filter find where dynamic=no]] > 0) do={ /ip/firewall/filter add chain=forward action=drop in-interface=$ifc out-interface=$ifc place-before=([/ip/firewall/filter find where dynamic=no]->0) comment="ftn: ipoe isolate flats" } else={ /ip/firewall/filter add chain=forward action=drop in-interface=$ifc out-interface=$ifc comment="ftn: ipoe isolate flats" }
+}
+:if ([:len [/ip/firewall/filter/find where comment="ftn: ipoe block rest"]] = 0) do={
+  :if ([:len [/ip/firewall/filter find where dynamic=no]] > 0) do={ /ip/firewall/filter add chain=input action=drop protocol=tcp in-interface=$ifc dst-port=8081 place-before=([/ip/firewall/filter find where dynamic=no]->0) comment="ftn: ipoe block rest" } else={ /ip/firewall/filter add chain=input action=drop protocol=tcp in-interface=$ifc dst-port=8081 comment="ftn: ipoe block rest" }
+}
 /ip/firewall/filter remove [find where comment~"^ftn: hs"]
 
 :put "ftn cleanup 3/3: deleting the rollback script"

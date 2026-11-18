@@ -48,8 +48,13 @@ func (s *Service) PlanFor(site store.Site) (netplan.Plan, error) {
 // FreeIPLocked returns the lowest unused address of the building's static
 // range. Every open account counts, flagged ones too (their address is still
 // theirs). Call it inside Update or View with d.
-func FreeIPLocked(d *store.Data, siteID string, pl netplan.Plan) (string, error) {
+func FreeIPLocked(d *store.Data, siteID string, pl netplan.Plan, avoid ...map[string]bool) (string, error) {
 	used := map[string]bool{pl.Gateway: true}
+	for _, m := range avoid { // addresses of the router's own static leases
+		for ip := range m {
+			used[ip] = true
+		}
+	}
 	for _, a := range d.Accounts {
 		if a.SiteID == siteID && a.IP != "" {
 			used[a.IP] = true
@@ -65,13 +70,21 @@ func FreeIPLocked(d *store.Data, siteID string, pl netplan.Plan) (string, error)
 // EnsureIPsLocked gives every open account of the building that has no address
 // one from the static range (accounts are taken in flat order, so the first
 // flat gets the lowest address). It returns how many were allocated.
-func EnsureIPsLocked(d *store.Data, siteID string, pl netplan.Plan) (int, error) {
+//
+// An address outside the static range (the unregistered pool .10 to .59, or
+// anything else) does not count as an address: such a flat would be walled
+// the moment the cutover enables the unregistered list, so it gets a fresh one.
+func EnsureIPsLocked(d *store.Data, siteID string, pl netplan.Plan, avoid ...map[string]bool) (int, error) {
 	n := 0
 	for _, a := range d.AccountList() {
-		if a.SiteID != siteID || a.IP != "" {
+		if a.SiteID != siteID || (a.IP != "" && pl.InStatic(a.IP)) {
 			continue
 		}
-		ip, err := FreeIPLocked(d, siteID, pl)
+		if a.IP != "" { // free the unusable address before searching
+			a.IP = ""
+			d.Accounts[a.ID] = a
+		}
+		ip, err := FreeIPLocked(d, siteID, pl, avoid...)
 		if err != nil {
 			return n, err
 		}
@@ -95,7 +108,7 @@ func (s *Service) EnsureIPs(siteID string) (int, error) {
 	n := 0
 	err = s.st.Update(func(d *store.Data) error {
 		var e error
-		if n, e = EnsureIPsLocked(d, siteID, pl); n == 0 && e == nil {
+		if n, e = EnsureIPsLocked(d, siteID, pl, s.foreignIPs(siteID)); n == 0 && e == nil {
 			return store.ErrNoChange
 		}
 		return e
@@ -167,6 +180,26 @@ func (s *Service) AdoptLeases(ctx context.Context, siteID string) (AdoptResult, 
 				res.Skipped = append(res.Skipped, fmt.Sprintf("%s: no lease seen for %s", a.Flat, a.MAC))
 				continue
 			}
+			if !pl.InStatic(ip) {
+				// The unregistered pool (.10 to .59) is walled at the cutover:
+				// a flat must not keep an address from it. It gets a static one.
+				if a.IP == "" || !pl.InStatic(a.IP) {
+					fresh, ferr := FreeIPLocked(d, siteID, pl, s.foreignIPs(siteID))
+					if ferr != nil {
+						res.Skipped = append(res.Skipped, fmt.Sprintf("%s: leased %s is outside the static range and none is free", a.Flat, ip))
+						continue
+					}
+					delete(owner, a.IP)
+					a.IP = fresh
+					owner[fresh] = a.ID
+					d.Accounts[a.ID] = a
+					changed = true
+					res.Adopted = append(res.Adopted, fmt.Sprintf("%s: %s (leased %s is in the unregistered range, so a static address was given; the ONT picks it up when it renews or restarts)", a.Flat, fresh, ip))
+					continue
+				}
+				res.Skipped = append(res.Skipped, fmt.Sprintf("%s: leased %s is in the unregistered range, keeps %s", a.Flat, ip, a.IP))
+				continue
+			}
 			if a.IP == ip {
 				res.Unchanged++
 				continue
@@ -215,3 +248,16 @@ func ipLess(a, b string) bool {
 }
 
 var _ = routeros.RowID
+
+// foreignIPs are the addresses of the router's own static leases seen by the
+// last pass: they are not handed to a flat.
+func (s *Service) foreignIPs(siteID string) map[string]bool {
+	ps := s.prov(siteID)
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	out := make(map[string]bool, len(ps.foreign))
+	for ip := range ps.foreign {
+		out[ip] = true
+	}
+	return out
+}

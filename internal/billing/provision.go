@@ -32,6 +32,8 @@ const (
 	AcctPrefix     = "ftn:acct:"
 	DHCPServerName = "ftn-dhcp"
 	SuspendedList  = "ftn-suspended"
+	UnregList      = "ftn-unreg"
+	unregComment   = "ftn: unregistered range"
 
 	pathLease = "/ip/dhcp-server/lease"
 	pathDHCP  = "/ip/dhcp-server"
@@ -96,6 +98,7 @@ type ProvisionStatus struct {
 	Note         string `json:"note,omitempty"`          // e.g. waiting for the cutover
 	Repaired     int    `json:"repaired,omitempty"`      // rows changed by the last pass
 	WouldSuspend int    `json:"would_suspend,omitempty"` // observe mode: flats that ipoe mode would suspend
+	RolledBack   bool   `json:"rolled_back,omitempty"`   // the router went back to the hotspot by itself
 }
 
 // AccountRouterState is what the router side looks like for one account. It
@@ -117,8 +120,10 @@ type provState struct {
 	status  ProvisionStatus
 	accts   map[string]acctSnap // by account code
 	seen    map[string]time.Time
-	started time.Time  // first pass, the baseline of "not seen for 24 h"
-	run     sync.Mutex // one pass at a time per building
+	started time.Time       // first pass, the baseline of "not seen for 24 h"
+	foreign map[string]bool // addresses of the router's own static leases, from the last pass
+	sawOn   bool            // ftn-dhcp has been seen enabled by this server
+	run     sync.Mutex      // one pass at a time per building
 }
 
 type acctSnap struct {
@@ -269,7 +274,8 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	}
 	var wants []wantAcct
 	var skipped []string
-	flagged := map[string]bool{} // codes we must not touch
+	flagged := map[string]bool{}         // codes we must not touch
+	flaggedEntitled := map[string]bool{} // of those, the flats that have paid time (their walled rows must go)
 	s.st.View(func(d *store.Data) {
 		for _, a := range d.AccountList() {
 			if a.SiteID != siteID {
@@ -278,9 +284,11 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 			switch {
 			case a.MACConflict:
 				flagged[a.Code] = true
+				flaggedEntitled[a.Code] = AccountState(a, now) == StateActive
 				skipped = append(skipped, fmt.Sprintf("%s (%s): MAC %s is flagged as a duplicate, not provisioned until fixed", a.Flat, a.Code, a.MAC))
 			case a.MAC == "" || a.IP == "":
 				flagged[a.Code] = true
+				flaggedEntitled[a.Code] = AccountState(a, now) == StateActive
 				skipped = append(skipped, fmt.Sprintf("%s (%s): no MAC or no address yet, not provisioned", a.Flat, a.Code))
 			default:
 				wants = append(wants, wantAcct{a: a, pkg: d.Packages[a.PackageID], entitled: AccountState(a, now) == StateActive, comment: AcctComment(a.Code, a.Flat)})
@@ -299,6 +307,10 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	suspended, err := rt.Rows(ctx, pathList, map[string]string{"list": SuspendedList})
 	if err != nil {
 		return run, fmt.Errorf("reading the suspended list: %w", err)
+	}
+	unreg, err := rt.Rows(ctx, pathList, map[string]string{"list": UnregList})
+	if err != nil {
+		return run, fmt.Errorf("reading the unregistered list: %w", err)
 	}
 	servers, err := rt.Rows(ctx, pathDHCP, nil)
 	if err != nil {
@@ -320,8 +332,16 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	}
 
 	snap := map[string]acctSnap{}
-	pd := planOps(site, wants, flagged, leases, queues, suspended, snap, now)
+	ifc := ""
+	if ftn != nil {
+		ifc = ftn["interface"]
+	}
+	pd := planOps(site, wants, flagged, leases, queues, suspended, snap, now, planExtra{unreg: unreg, arp: arp, ifc: ifc, flaggedEntitled: flaggedEntitled})
 	ps.mu.Lock()
+	ps.foreign = map[string]bool{}
+	for _, ip := range pd.foreignIPs {
+		ps.foreign[ip] = true
+	}
 	for code, sn := range snap { // the router's own "last seen" survives a restart of this server
 		if sn.lastSeen.After(ps.seen[code]) {
 			ps.seen[code] = sn.lastSeen
@@ -332,13 +352,28 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	run.Ops = len(pd.ops)
 
 	note := ""
+	rolledBack := false
 	switch {
 	case ftn == nil:
 		// Before the cutover the router still runs the hotspot: write nothing.
 		run.Waiting, note = true, "waiting for the cutover: the router has no "+DHCPServerName+" DHCP server yet, nothing was written"
 		pd.ops = nil
 	case ftn["disabled"] == "true" || ftn["disabled"] == "yes":
-		note = DHCPServerName + " is disabled on the router (rolled back?); rows are still kept up to date"
+		// Disabled: the cutover has not switched yet, or the router rolled
+		// back to the hotspot. Either way the hotspot's own rows are live, so
+		// nothing is written (writes could disturb the flats' working leases).
+		run.Waiting, pd.ops = true, nil
+		note = DHCPServerName + " is disabled on the router: waiting for the cutover (or the router rolled back); nothing was written"
+		ps.mu.Lock()
+		rolledBack = ps.sawOn
+		ps.mu.Unlock()
+		if rolledBack {
+			note = "the router rolled back to the hotspot (" + DHCPServerName + " is disabled); IPoE handling was switched off for this building"
+		}
+	default:
+		ps.mu.Lock()
+		ps.sawOn = true
+		ps.mu.Unlock()
 	}
 
 	var firstErr error
@@ -399,21 +434,33 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 		st.LastError = firstErr.Error()
 	}
 	st.InSync = firstErr == nil && !run.Waiting && st.Drift == 0
+	st.RolledBack = rolledBack
 	ps.status = st
 	ps.mu.Unlock()
+	if rolledBack {
+		s.revertToHotspot(siteID)
+	}
 	return run, firstErr
+}
+
+// planExtra is the rest of what planOps reads.
+type planExtra struct {
+	unreg, arp      []routeros.Row
+	ifc             string          // the customer interface (ftn-dhcp's)
+	flaggedEntitled map[string]bool // flagged flats that have paid time
 }
 
 // opSet collects what a pass wants to do.
 type opSet struct {
-	ops       []provOp
-	conflicts []string
-	would     int // flats observe mode would suspend
+	foreignIPs []string // addresses held by the router's own static leases
+	ops        []provOp
+	conflicts  []string
+	would      int // flats observe mode would suspend
 }
 
 // planOps compares the three tables with the wanted state. It is pure: it
 // reads rows, it writes nothing.
-func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases, queues, suspended []routeros.Row, snap map[string]acctSnap, now time.Time) opSet {
+func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases, queues, suspended []routeros.Row, snap map[string]acctSnap, now time.Time, x planExtra) opSet {
 	var out opSet
 	enforce := site.AccessMode == store.AccessIPoE
 	byCode := map[string]*wantAcct{}
@@ -449,10 +496,10 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 	evicted := map[string]bool{} // row ids removed to make room for another flat
 	removed := map[string]bool{}
 	rm := func(path string, r routeros.Row, code, why string) {
-		if removed[r[routeros.RowID]] {
+		if removed[path+r[routeros.RowID]] {
 			return
 		}
-		removed[r[routeros.RowID]] = true
+		removed[path+r[routeros.RowID]] = true
 		add(provOp{phase: phaseRemove, kind: "rm", path: path, id: r[routeros.RowID], code: code, desc: why})
 	}
 	// An address or MAC that another of our rows holds today, for a flat that
@@ -471,6 +518,11 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 			}
 		}
 	}
+	for _, r := range foreignLeases {
+		if r["address"] != "" {
+			out.foreignIPs = append(out.foreignIPs, r["address"])
+		}
+	}
 	for _, w := range wants {
 		a := w.a
 		sn := acctSnap{leaseStatus: "none"}
@@ -484,6 +536,9 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 		}
 		// A dynamic lease on our MAC or address would block the static one.
 		for _, r := range dynLeases {
+			if r["server"] != DHCPServerName {
+				continue // the hotspot's own dynamic leases are not ours to remove
+			}
 			if strings.EqualFold(r["mac-address"], a.MAC) || (r["address"] == a.IP && !strings.EqualFold(r["mac-address"], a.MAC)) {
 				if !clash {
 					rm(pathLease, r, a.Code, "dynamic lease "+r["mac-address"]+" "+r["address"])
@@ -605,6 +660,9 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 		for i, r := range mine {
 			if wantIn && keep == nil && r["address"] == a.IP {
 				keep = &mine[i]
+				if r["disabled"] == "true" || r["disabled"] == "yes" { // a disabled entry walls nobody: turn it on
+					add(provOp{phase: phaseSuspend, kind: "set", path: pathList, id: r[routeros.RowID], code: a.Code, body: map[string]string{"disabled": "no"}, desc: "enable suspended entry " + a.IP + " (" + a.Flat + ")"})
+				}
 				continue
 			}
 			add(provOp{phase: phaseUnsuspend, kind: "rm", path: pathList, id: r[routeros.RowID], code: a.Code, desc: "suspended entry " + r["address"] + " (" + a.Flat + ")"})
@@ -623,11 +681,67 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 		snap[a.Code] = sn
 	}
 	for code, rows := range ourList {
-		if byCode[code] != nil || flagged[code] {
-			continue
+		if byCode[code] != nil || (flagged[code] && !x.flaggedEntitled[code]) {
+			continue // a flagged flat that has paid time is un-walled; one that has not stays as it is
 		}
 		for _, r := range rows {
 			add(provOp{phase: phaseUnsuspend, kind: "rm", path: pathList, id: r[routeros.RowID], code: code, desc: "stray suspended entry " + r["address"]})
+		}
+	}
+
+	// --- the unregistered range is walled in ipoe mode only; observe keeps it off
+	for _, r := range x.unreg {
+		if r["comment"] != unregComment {
+			continue
+		}
+		off := r["disabled"] == "true" || r["disabled"] == "yes"
+		if enforce && off {
+			add(provOp{phase: phaseSuspend, kind: "set", path: pathList, id: r[routeros.RowID], body: map[string]string{"disabled": "no"}, desc: "wall the unregistered range"})
+		} else if !enforce && !off {
+			add(provOp{phase: phaseUnsuspend, kind: "set", path: pathList, id: r[routeros.RowID], body: map[string]string{"disabled": "yes"}, desc: "unwall the unregistered range (observe mode)"})
+		}
+	}
+
+	// --- static ARP: with the interface on reply-only, only these (and the
+	// DHCP server's own entries) let an address talk, so nobody can squat a
+	// flat's address
+	if x.ifc != "" {
+		ourARP, foreignARP, _ := ours(x.arp)
+		for _, w := range wants {
+			a := w.a
+			if snap[a.Code].clash {
+				continue
+			}
+			want := map[string]string{"address": a.IP, "mac-address": a.MAC, "interface": x.ifc, "comment": w.comment}
+			mine := ourARP[a.Code]
+			foreignHere := false
+			for _, r := range foreignARP {
+				if r["address"] == a.IP && !strings.EqualFold(r["mac-address"], a.MAC) && r["dynamic"] != "true" && r["dynamic"] != "yes" {
+					conflict("%s (%s): the router has its own static ARP entry for %s (%s) that is not ours; left alone", a.Flat, a.Code, a.IP, r["mac-address"])
+					foreignHere = true
+				}
+			}
+			if foreignHere {
+				continue
+			}
+			for i, r := range mine {
+				if i > 0 {
+					rm(pathARP, r, a.Code, "duplicate ARP row "+r["address"])
+				}
+			}
+			if len(mine) == 0 {
+				add(provOp{phase: phaseWrite, kind: "add", path: pathARP, code: a.Code, body: want, desc: fmt.Sprintf("ARP %s %s (%s)", a.IP, a.MAC, a.Flat)})
+			} else if diff := rowDiff(mine[0], want); len(diff) > 0 {
+				add(provOp{phase: phaseWrite, kind: "set", path: pathARP, id: mine[0][routeros.RowID], code: a.Code, body: diff, desc: fmt.Sprintf("ARP %s %s (%s)", a.IP, a.MAC, a.Flat)})
+			}
+		}
+		for code, rows := range ourARP {
+			if byCode[code] != nil || flagged[code] {
+				continue
+			}
+			for _, r := range rows {
+				rm(pathARP, r, code, "stray ARP row "+r["address"])
+			}
 		}
 	}
 	return out
@@ -654,4 +768,36 @@ func sameProp(key, cur, want string) bool {
 		return strings.TrimSuffix(cur, "/32") == strings.TrimSuffix(want, "/32")
 	}
 	return routeros.SameValue(key, cur, want)
+}
+
+// reloader is implemented by *sites.Manager: it rebuilds a building's runtime
+// (its collector reads queue counters only in IPoE modes).
+type reloader interface{ Reload(siteID string) }
+
+// revertToHotspot sets a building back to the hotspot access mode after its
+// router rolled back (ftn-dhcp was on and is now off). From then on the
+// hotspot loop, the portal and the sweep treat it as a hotspot building again.
+func (s *Service) revertToHotspot(siteID string) {
+	changed := false
+	_ = s.st.Update(func(d *store.Data) error {
+		st, ok := d.Sites[siteID]
+		if !ok || !IPoE(st) {
+			return store.ErrNoChange
+		}
+		st.AccessMode = store.AccessHotspot
+		d.Sites[siteID] = st
+		d.AddEvent(store.Event{Time: s.now(), SiteID: siteID, Kind: "audit", Msg: "the router rolled back to the hotspot (" + DHCPServerName + " is disabled): access mode set back to hotspot"})
+		changed = true
+		return nil
+	})
+	if changed {
+		s.log.Warn("ipoe rollback detected, building set back to hotspot", "site", siteID)
+		if r, ok := s.routers.(reloader); ok {
+			r.Reload(siteID)
+		}
+		ps := s.prov(siteID)
+		ps.mu.Lock()
+		ps.sawOn = false
+		ps.mu.Unlock()
+	}
 }

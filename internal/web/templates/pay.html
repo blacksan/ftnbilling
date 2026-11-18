@@ -1,12 +1,12 @@
 {{define "pay"}}{{template "head" .}}
 {{template "brandbar" .Brand}}{{if .SiteName}}<p class="muted" style="margin:0 0 4px">{{.SiteName}}</p>{{end}}
 {{if .Found}}
-<div class="card"><div class="flat">{{.Flat}} · Account {{.Code}}</div>
-<p style="margin:6px 0">{{if eq .State "active"}}<span class="pill active">Active</span> until <b>{{eat .ExpiresAt}}</b>
+<div class="card"><div class="flat">{{.Flat}}{{if .ByCode}} · Account {{.Code}}{{end}}</div>
+{{if .ByCode}}<p style="margin:6px 0">{{if eq .State "active"}}<span class="pill active">Active</span> until <b>{{eat .ExpiresAt}}</b>
 {{else if eq .State "expired"}}<span class="pill expired">Expired</span> on {{eat .ExpiresAt}}
-{{else}}<span class="pill new">No package yet</span>{{end}}</p></div>
+{{else}}<span class="pill new">No package yet</span>{{end}}</p>{{end}}</div>
 {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
-<form method="post" action="/pay/start"><input type="hidden" name="code" value="{{.Code}}">
+<form method="post" action="/pay/start"><input type="hidden" name="_pcsrf" value="{{.CSRF}}"><input type="hidden" name="tok" value="{{.Tok}}">
 {{$sel := .Selected}}<h2>Choose a package</h2>
 {{range .Groups}}<h2>{{.Title}}</h2>
 {{range .Packages}}{{if index $.Blocked .ID}}<label class="pkg off"><input type="radio" name="package" value="{{.ID}}" disabled><b>{{.Name}}</b><small>{{dur .DurationMin}} · {{.SpeedMbps}} Mbps · {{kes .PriceKES}}</small><small class="why">Available when your current plan ends on {{$.BlockedUntil}}</small></label>{{else}}<label class="pkg"><input type="radio" name="package" value="{{.ID}}"{{if eq .ID $sel}} checked{{end}}><b>{{.Name}}</b><small>{{dur .DurationMin}} · {{.SpeedMbps}} Mbps · {{kes .PriceKES}}</small></label>{{end}}
@@ -21,7 +21,7 @@
 <div class="card"><b>{{if .Detected}}Your internet is paused{{else}}Pay for your internet{{end}}</b>
 <p class="muted">Enter your account number{{if .Detected}} (or your flat, for example Flat 3B){{end}} to pay with M-Pesa. Your internet comes back within a minute of paying.</p></div>
 {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
-<form method="post" action="/pay/find"><input type="text" name="code" placeholder="Account number" autocapitalize="characters" autocomplete="off" required maxlength="40">
+<form method="post" action="/pay/find"><input type="hidden" name="_pcsrf" value="{{.CSRF}}"><input type="text" name="code" placeholder="Account number" autocapitalize="characters" autocomplete="off" required maxlength="40">
 <button type="submit">Continue</button></form>
 {{end}}
 <p class="muted">Help: {{.Support}}</p>

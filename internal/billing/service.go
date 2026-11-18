@@ -254,7 +254,7 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 			if err != nil {
 				return err
 			}
-			if a.IP, err = FreeIPLocked(d, in.SiteID, pl); err != nil {
+			if a.IP, err = FreeIPLocked(d, in.SiteID, pl, s.foreignIPs(in.SiteID)); err != nil {
 				return err
 			}
 		}

@@ -16,7 +16,7 @@ import (
 func (f *fixture) joined(name string) store.Site {
 	f.t.Helper()
 	s := f.create(name)
-	tok, _, err := f.m.MintJoin(s.ID)
+	tok, _, err := f.m.MintJoinStage(s.ID, StageJoin)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -39,11 +39,11 @@ func (f *fixture) joined(name string) store.Site {
 
 func (f *fixture) consume(siteID, stage string) (string, error) {
 	f.t.Helper()
-	tok, _, err := f.m.MintJoin(siteID)
+	tok, _, err := f.m.MintJoinStage(siteID, stage)
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	b, _, err := f.m.ConsumeJoinStage(tok, mt, "9.9.9.9", false, stage)
+	b, _, err := f.m.ConsumeJoinForce(tok, mt, "9.9.9.9", false, stage, true)
 	return string(b), err
 }
 
@@ -129,7 +129,7 @@ func TestCutoverStageRendersFromTheDatabaseAndKeepsKeys(t *testing.T) {
 func TestCutoverNeedsAJoinedRouterAndKeepsTheTokenWhenItCannotRender(t *testing.T) {
 	f := newFixture(t, nil)
 	s := f.create("Block A") // not joined
-	tok, _, _ := f.m.MintJoin(s.ID)
+	tok, _, _ := f.m.MintJoinStage(s.ID, StageCutover)
 	if _, _, err := f.m.ConsumeJoinStage(tok, mt, "x", false, StageCutover); !errors.Is(err, ErrCannotRender) {
 		t.Fatalf("%v", err)
 	}
@@ -212,5 +212,111 @@ func TestSetAccessModeAndConfirmCutover(t *testing.T) {
 	})
 	if j := strings.Join(msgs, "|"); !strings.Contains(j, "access mode changed") || !strings.Contains(j, "cutover confirmed") {
 		t.Fatal(j)
+	}
+}
+
+func TestTokensAreBoundToTheirStage(t *testing.T) {
+	f := newFixture(t, nil)
+	s := f.joined("Block A")
+	f.m.SetAccessMode(s.ID, store.AccessIPoE)
+	// A cutover token cannot run the join (which rotates the router's keys), and a join token cannot run the cutover.
+	cut, _, _ := f.m.MintJoinStage(s.ID, StageCutover)
+	if _, _, err := f.m.ConsumeJoinStage(cut, mt, "x", false, StageJoin); err != ErrJoinInvalid {
+		t.Fatalf("cutover token as join: %v", err)
+	}
+	if _, _, err := f.m.ConsumeJoinStage(cut, mt, "x", false, ""); err != ErrJoinInvalid {
+		t.Fatalf("cutover token as legacy join: %v", err)
+	}
+	if _, _, err := f.m.ConsumeJoinStage(cut, mt, "x", false, StageCleanup); err != ErrJoinInvalid {
+		t.Fatalf("cutover token as cleanup: %v", err)
+	}
+	join, _, _ := f.m.MintJoinStage(s.ID, StageJoin)
+	if _, _, err := f.m.ConsumeJoinForce(join, mt, "x", false, StageCutover, true); err != ErrJoinInvalid {
+		t.Fatalf("join token as cutover: %v", err)
+	}
+	cut, _, _ = f.m.MintJoinStage(s.ID, StageCutover)
+	if _, _, err := f.m.ConsumeJoinForce(cut, mt, "x", false, StageCutover, true); err != nil {
+		t.Fatalf("the right stage works: %v", err)
+	}
+}
+
+// A paying flat whose MAC the router has never shown blocks the cutover unless it is forced.
+func TestCutoverRefusesWhenAPayingFlatWasNeverSeen(t *testing.T) {
+	f := newFixture(t, nil)
+	s := f.joined("Block A")
+	f.m.SetAccessMode(s.ID, store.AccessIPoE)
+	f.start()
+	f.m.Reload(s.ID)
+	f.m.Router(s.ID)
+	mock := f.mocks[s.ID]
+	tok, _, _ := f.m.MintJoinStage(s.ID, StageCutover)
+	_, _, err := f.m.ConsumeJoinStage(tok, mt, "x", false, StageCutover)
+	if !errors.Is(err, ErrCannotRender) || !strings.Contains(err.Error(), "Flat 3B") || strings.Contains(err.Error(), "Flat 10A") {
+		t.Fatalf("a refusal names the paying flat only: %v", err)
+	}
+	if got := f.site(s.ID); !got.Join.UsedAt.IsZero() {
+		t.Fatal("a refusal keeps the token")
+	}
+	// The flat shows up in the lease table (any server): the cutover goes ahead.
+	mock.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": "aa:bb:cc:dd:ee:01", "address": "10.5.50.23", "status": "bound"})
+	if _, _, err := f.m.ConsumeJoinStage(tok, mt, "x", false, StageCutover); err != nil {
+		t.Fatal(err)
+	}
+	// Forcing skips the check.
+	f2 := newFixture(t, nil)
+	s2 := f2.joined("Block B")
+	f2.m.SetAccessMode(s2.ID, store.AccessIPoE)
+	tok, _, _ = f2.m.MintJoinStage(s2.ID, StageCutover)
+	if _, _, err := f2.m.ConsumeJoinForce(tok, mt, "x", false, StageCutover, true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestObserveCutoverKeepsTheUnregisteredRangeOff(t *testing.T) {
+	f := newFixture(t, nil)
+	s := f.joined("Block A")
+	f.m.SetAccessMode(s.ID, store.AccessIPoEObserve)
+	out, err := f.consume(s.ID, StageCutover)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, `address-list enable [find where list="ftn-unreg"`) {
+		t.Fatal("observe must not wall the unregistered range")
+	}
+	f.m.SetAccessMode(s.ID, store.AccessIPoE)
+	out, err = f.consume(s.ID, StageCutover)
+	if err != nil || !strings.Contains(out, `address-list enable [find where list="ftn-unreg"`) {
+		t.Fatalf("ipoe walls it in the switch: %v", err)
+	}
+}
+
+func TestSetAccessModeRefusesHotspotWhileTheRouterRunsFtnDHCP(t *testing.T) {
+	f := newFixture(t, nil)
+	s := f.joined("Block A")
+	f.start()
+	f.m.SetAccessMode(s.ID, store.AccessIPoE)
+	f.m.Reload(s.ID)
+	f.m.Router(s.ID)
+	mock := f.mocks[s.ID]
+	mock.SeedRow("/ip/dhcp-server", routeros.Row{"name": "ftn-dhcp", "disabled": "false"})
+	if err := f.m.SetAccessMode(s.ID, store.AccessHotspot); !errors.Is(err, ErrRouterIsIPoE) {
+		t.Fatalf("%v", err)
+	}
+	if f.site(s.ID).AccessMode != store.AccessIPoE {
+		t.Fatal("mode changed")
+	}
+	// Observe and ipoe are fine either way; hotspot is fine once ftn-dhcp is off.
+	for _, r := range mock.Table("/ip/dhcp-server") {
+		mock.SetRow(context.Background(), "/ip/dhcp-server", r[".id"], map[string]string{"disabled": "true"})
+	}
+	if err := f.m.SetAccessMode(s.ID, store.AccessHotspot); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestJoinCommandForce(t *testing.T) {
+	got := JoinCommandForce("https://b.example", "T", true, StageCutover)
+	if !strings.Contains(got, `/j/T?stage=cutover&force=1"`) {
+		t.Fatal(got)
 	}
 }

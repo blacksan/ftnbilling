@@ -241,3 +241,15 @@ func TestDismissStaysDismissedAndCreateFromDevice(t *testing.T) {
 		t.Fatalf("%v", q)
 	}
 }
+
+func TestCreateFromDeviceWithABadPackageCreatesNothing(t *testing.T) {
+	e := newEnv(t)
+	e.ipoe(t, store.AccessIPoE)
+	_, err := e.svc.CreateFromDevice(context.Background(), DeviceAccountInput{SiteID: e.site, MAC: "00:15:EB:00:00:77", Flat: "Flat 9", PackageID: "nope"})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if _, ok := e.svc.AccountByMAC("00:15:EB:00:00:77"); ok {
+		t.Fatal("a half-made account was left behind")
+	}
+}

@@ -484,9 +484,10 @@ func TestAdoptLeasesAndAddressReuse(t *testing.T) {
 	a := e.flat(t, "Flat 1", macA)
 	b := e.flat(t, "Flat 2", macB2)
 	e.flat(t, "Flat 3", macC)
+	// Flat 1 holds .23, inside the unregistered pool (.10-.59): it must not keep it.
 	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": macA, "active-address": "10.5.50.23", "address": "10.5.50.23", "status": "bound", "dynamic": "true", "server": "dhcp-hotspot"})
-	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": macB2, "active-address": "10.5.50.24", "address": "10.5.50.24", "status": "bound", "dynamic": "true"})
-	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": "00:11:22:33:44:99", "address": "10.5.50.30", "status": "bound", "dynamic": "true"})
+	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": macB2, "active-address": "10.5.50.74", "address": "10.5.50.74", "status": "bound", "dynamic": "true"})
+	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": "00:11:22:33:44:99", "address": "10.5.50.80", "status": "bound", "dynamic": "true"})
 	res, err := e.svc.AdoptLeases(context.Background(), e.site)
 	if err != nil {
 		t.Fatal(err)
@@ -494,19 +495,55 @@ func TestAdoptLeasesAndAddressReuse(t *testing.T) {
 	if len(res.Adopted) != 2 || len(res.Skipped) != 1 {
 		t.Fatalf("%+v", res)
 	}
-	if e.get(a).IP != "10.5.50.23" || e.get(b).IP != "10.5.50.24" {
-		t.Fatalf("%q %q", e.get(a).IP, e.get(b).IP)
+	if got := e.get(a).IP; got != "10.5.50.60" {
+		t.Fatalf("a lease in the unregistered pool must become the first free static address, got %q", got)
 	}
-	// Flat 3 has none and later gets one from the static range, which skips adopted ones.
+	if e.get(b).IP != "10.5.50.74" {
+		t.Fatalf("%q", e.get(b).IP)
+	}
+	// Flat 3 has none and later gets one from the static range, which skips the used ones.
 	if n, err := e.svc.EnsureIPs(e.site); err != nil || n != 1 {
 		t.Fatalf("%d %v", n, err)
 	}
-	if got, _ := e.svc.AccountByMAC(macC); got.IP != "10.5.50.60" {
+	if got, _ := e.svc.AccountByMAC(macC); got.IP != "10.5.50.61" {
 		t.Fatalf("%q", got.IP)
 	}
 	// Adopting again changes nothing.
-	if res, _ := e.svc.AdoptLeases(context.Background(), e.site); len(res.Adopted) != 0 || res.Unchanged != 2 {
+	if res, _ := e.svc.AdoptLeases(context.Background(), e.site); len(res.Adopted) != 0 || res.Unchanged != 1 {
 		t.Fatalf("%+v", res)
+	}
+}
+
+// An address outside the static range is never kept: the reconciler gives the flat a fresh one.
+func TestEnsureIPsReallocatesAddressesOutsideTheStaticRange(t *testing.T) {
+	e := newEnv(t)
+	a := e.flat(t, "Flat 1", macA)
+	e.st.Update(func(d *store.Data) error {
+		x := d.Accounts[a.ID]
+		x.IP = "10.5.50.23"
+		d.Accounts[a.ID] = x
+		return nil
+	})
+	e.ipoe(t, store.AccessIPoE)
+	e.reconcile(t)
+	if got := e.get(a).IP; got != "10.5.50.60" {
+		t.Fatalf("%q", got)
+	}
+	l := find(t, e.rt.Table("/ip/dhcp-server/lease"), "mac-address", macA)
+	if l["address"] != "10.5.50.60" {
+		t.Fatalf("lease %v", l)
+	}
+}
+
+// A foreign static lease's address is not handed out to a new flat.
+func TestFreeIPAvoidsForeignStaticLeaseAddresses(t *testing.T) {
+	e := newEnv(t)
+	e.ipoe(t, store.AccessIPoE)
+	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": "00:11:22:33:44:99", "address": "10.5.50.60", "dynamic": "false", "server": "ftn-dhcp"})
+	e.reconcile(t)
+	a := e.flat(t, "Flat 1", macA)
+	if a.IP == "10.5.50.60" {
+		t.Fatalf("the router's own static lease holds %s", a.IP)
 	}
 }
 

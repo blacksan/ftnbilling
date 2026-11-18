@@ -43,6 +43,8 @@ type ScriptInput struct {
 	// "cleanup" deletes the disabled hotspot objects after the cutover was
 	// confirmed. See ipoe_script.go.
 	Stage string
+	// Observe: the cutover leaves the unregistered range unwalled and suspends nobody.
+	Observe bool
 	// Accounts are the flats the cutover script writes (static lease and
 	// queue each), rendered from the accounts table.
 	Accounts []LeaseSeed
@@ -201,3 +203,10 @@ func JoinCommandStage(base, token string, checkCert bool, stage string) string {
 
 // NoCheckQuery is the query string of the no-certificate-check join command.
 const NoCheckQuery = "?nocheck=1"
+
+// JoinCommandForce is JoinCommandStage for a cutover the admin chose to run
+// although some paying flats have not been seen on the router yet.
+func JoinCommandForce(base, token string, checkCert bool, stage string) string {
+	cmd := JoinCommandStage(base, token, checkCert, stage)
+	return strings.Replace(cmd, "?stage="+stage, "?stage="+stage+"&force=1", 1)
+}

@@ -19,6 +19,13 @@
 :do { /ip/dhcp-server/remove [find where interface=$ifc and disabled=yes and name!="{{.DHCPServer}}"] } on-error={ :put "   old DHCP server: left in place" }
 :do { /ip/pool/remove [find where name="pool-hotspot"] } on-error={ :put "   pool-hotspot: left in place (still in use?)" }
 :do { /ip/hotspot/walled-garden/ip/remove [find where comment="ftn: portal"] } on-error={}
+# Flat isolation and REST-port blocking were "ftn: hs" rules; keep them as "ftn: ipoe" rules first.
+:if ([:len [/ip/firewall/filter/find where comment="ftn: ipoe isolate flats"]] = 0) do={
+{{.IsolateRule}}
+}
+:if ([:len [/ip/firewall/filter/find where comment="ftn: ipoe block rest"]] = 0) do={
+{{.BlockRestRule}}
+}
 /ip/firewall/filter remove [find where comment~"^ftn: hs"]
 
 :put "ftn cleanup 3/3: deleting the rollback script"
