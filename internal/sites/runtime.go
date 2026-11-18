@@ -57,6 +57,7 @@ func (m *Manager) watchJoin(ctx context.Context, rt *Runtime) {
 				return nil
 			})
 			m.log.Info("building joined: its router answered", "site", id)
+			m.autoFixAfterJoin(ctx, id)
 			return
 		}
 		select {
@@ -65,4 +66,31 @@ func (m *Manager) watchJoin(ctx context.Context, rt *Runtime) {
 		case <-t.C:
 		}
 	}
+}
+
+// autoFixAfterJoin runs the non-confirm automatic setup fixes once, a little
+// after the router first answered (the join script may still be finishing).
+// It never blocks the runtime: it runs in its own goroutine and stops with ctx.
+func (m *Manager) autoFixAfterJoin(ctx context.Context, siteID string) {
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		if m.autoFixDelay > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(m.autoFixDelay):
+			}
+		}
+		c, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		out, err := m.ApplyAutoFixes(c, siteID)
+		if err != nil {
+			m.log.Warn("post-join setup fixes skipped", "site", siteID, "err", err)
+			return
+		}
+		for _, o := range out {
+			m.log.Info("post-join setup fix", "site", siteID, "check", o.ID, "applied", o.Applied, "err", o.Err)
+		}
+	}()
 }
