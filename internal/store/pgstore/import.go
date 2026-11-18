@@ -16,7 +16,7 @@ import (
 
 // Tables lists every data table in report order.
 var Tables = []string{"sites", "packages", "customers", "equipment", "accounts", "tenancies", "site_contacts", "orders", "vouchers",
-	"payments", "devices", "tasks", "equipment_events", "notes", "events"}
+	"payments", "devices", "tasks", "equipment_events", "notes", "settings", "events", "admin_users", "admin_sessions", "api_devices"}
 
 // Counts are row counts per table plus the sum of applied payments.
 type Counts struct {
@@ -24,6 +24,11 @@ type Counts struct {
 	AppliedKES int64          `json:"applied_kes"`
 	// Closed counts closed accounts (they are rows of "accounts").
 	Closed int `json:"closed_accounts"`
+	// MACConflicts counts open accounts flagged mac_conflict (see store.Conflicts).
+	MACConflicts int `json:"mac_conflicts"`
+	// SchemaVersion is the database's schema version (0 = none yet). Tables
+	// newer than it are counted as zero.
+	SchemaVersion int `json:"schema_version"`
 }
 
 // CountsOf counts what Import would write for d.
@@ -32,8 +37,9 @@ func CountsOf(d *store.Data) Counts {
 		"sites": len(d.Sites), "packages": len(d.Packages), "customers": len(d.Customers), "equipment": len(d.Equipment),
 		"accounts": len(d.Accounts) + len(d.ClosedAccounts), "tenancies": len(d.Tenancies), "site_contacts": len(d.Contacts),
 		"orders": len(d.Orders), "vouchers": len(d.Vouchers), "payments": len(d.Payments), "devices": len(d.Devices), "tasks": len(d.Tasks),
-		"equipment_events": len(d.EquipmentEvents), "notes": len(d.Notes), "events": len(d.Events),
-	}, Closed: len(d.ClosedAccounts)}
+		"equipment_events": len(d.EquipmentEvents), "notes": len(d.Notes), "settings": len(d.Settings), "events": len(d.Events),
+		"admin_users": len(d.AdminUsers), "admin_sessions": len(d.AdminSessions), "api_devices": len(d.APIDevices),
+	}, Closed: len(d.ClosedAccounts), MACConflicts: len(d.MACConflicts())}
 	for _, p := range d.Payments {
 		if p.Status == store.PayApplied {
 			c.AppliedKES += int64(p.AmountKES)
@@ -42,21 +48,60 @@ func CountsOf(d *store.Data) Counts {
 	return c
 }
 
-// Counts reads the live row counts and applied sum from the database.
+// Counts reads the live row counts and applied sum from the database. It
+// also works on a database older than this program (db-check on an old dump,
+// the backup drill): tables and columns that do not exist yet count as zero and
+// SchemaVersion says how old it is.
 func (b *Backend) Counts(ctx context.Context) (Counts, error) {
 	c := Counts{Rows: map[string]int{}}
+	exists := func(table string) (bool, error) {
+		var reg *string
+		err := b.pool.QueryRow(ctx, "SELECT to_regclass($1)::text", table).Scan(&reg)
+		return reg != nil, err
+	}
+	if ok, err := exists("schema_migrations"); err != nil {
+		return c, err
+	} else if ok {
+		if err := b.pool.QueryRow(ctx, "SELECT coalesce(max(version), 0) FROM schema_migrations").Scan(&c.SchemaVersion); err != nil {
+			return c, err
+		}
+	}
+	have := map[string]bool{}
 	for _, t := range Tables {
+		ok, err := exists(t)
+		if err != nil {
+			return c, err
+		}
+		have[t] = ok
+		if !ok {
+			c.Rows[t] = 0
+			continue
+		}
 		var n int
 		if err := b.pool.QueryRow(ctx, "SELECT count(*) FROM "+t).Scan(&n); err != nil {
 			return c, err
 		}
 		c.Rows[t] = n
 	}
-	if err := b.pool.QueryRow(ctx, "SELECT coalesce(sum(amount_kes), 0) FROM payments WHERE status = 'applied'").Scan(&c.AppliedKES); err != nil {
-		return c, err
+	if have["payments"] {
+		if err := b.pool.QueryRow(ctx, "SELECT coalesce(sum(amount_kes), 0) FROM payments WHERE status = 'applied'").Scan(&c.AppliedKES); err != nil {
+			return c, err
+		}
 	}
-	if err := b.pool.QueryRow(ctx, "SELECT count(*) FROM accounts WHERE closed_at IS NOT NULL").Scan(&c.Closed); err != nil {
-		return c, err
+	if have["accounts"] {
+		if err := b.pool.QueryRow(ctx, "SELECT count(*) FROM accounts WHERE closed_at IS NOT NULL").Scan(&c.Closed); err != nil {
+			return c, err
+		}
+		var hasCol bool
+		if err := b.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+			WHERE table_schema = current_schema() AND table_name = 'accounts' AND column_name = 'mac_conflict')`).Scan(&hasCol); err != nil {
+			return c, err
+		}
+		if hasCol {
+			if err := b.pool.QueryRow(ctx, "SELECT count(*) FROM accounts WHERE mac_conflict AND closed_at IS NULL").Scan(&c.MACConflicts); err != nil {
+				return c, err
+			}
+		}
 	}
 	return c, nil
 }
@@ -120,6 +165,21 @@ var ErrNotEmpty = errors.New("the database already holds data; use -force to rep
 // Import loads d into an empty database in one transaction (COPY), records
 // meta, and verifies row counts and the applied-payments sum afterwards.
 func (b *Backend) Import(ctx context.Context, d *store.Data, opt ImportOptions) (Counts, error) {
+	// A JSON file is a copy made elsewhere and possibly long ago: browser
+	// sessions are not carried over and every app device must sign in again
+	// (its tokens are dropped and it is marked revoked).
+	cp := *d
+	cp.AdminSessions = map[string]store.AdminSession{}
+	cp.APIDevices = make(map[string]store.APIDevice, len(d.APIDevices))
+	for k, x := range d.APIDevices {
+		x.AccessHash, x.RefreshHash, x.RefreshPrevHash = "", "", ""
+		x.AccessExpiresAt, x.RefreshExpiresAt = time.Time{}, time.Time{}
+		if x.RevokedAt.IsZero() {
+			x.RevokedAt, x.RevokedReason = time.Now().UTC(), "imported from a JSON file: sign in again"
+		}
+		cp.APIDevices[k] = x
+	}
+	d = &cp
 	want := CountsOf(d)
 	if problems := store.Validate(d); len(problems) > 0 {
 		return want, &ValidationError{Problems: problems}
@@ -191,6 +251,18 @@ func (b *Backend) Import(ctx context.Context, d *store.Data, opt ImportOptions) 
 		return want, err
 	}
 	if err := copyRows(ctx, tx, notesC, mapVals(d.Notes)); err != nil {
+		return want, err
+	}
+	if err := copyRows(ctx, tx, settingsC, mapVals(d.Settings)); err != nil {
+		return want, err
+	}
+	if err := copyRows(ctx, tx, adminUsersC, mapVals(d.AdminUsers)); err != nil {
+		return want, err
+	}
+	if err := copyRows(ctx, tx, adminSessionsC, mapVals(d.AdminSessions)); err != nil {
+		return want, err
+	}
+	if err := copyRows(ctx, tx, apiDevicesC, mapVals(d.APIDevices)); err != nil {
 		return want, err
 	}
 	if err := copyRows(ctx, tx, eventsC, d.Events); err != nil {

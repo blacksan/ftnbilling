@@ -94,7 +94,17 @@ func (s *SMTP) Send(ctx context.Context, m Message) (string, error) {
 	if implicit {
 		conn = tls.Client(conn, tcfg)
 	}
-	_ = conn.SetDeadline(time.Now().Add(2 * s.timeout()))
+	// The whole exchange ends by the caller's deadline when it has one (the
+	// web server's write timeout is 30 s), and never later than twice the
+	// connection timeout. A cancelled context closes the connection, which
+	// also ends a TLS handshake or a read that is waiting.
+	dl := time.Now().Add(2 * s.timeout())
+	if cd, ok := ctx.Deadline(); ok && cd.Before(dl) {
+		dl = cd
+	}
+	_ = conn.SetDeadline(dl)
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
 	c, err := smtp.NewClient(conn, s.Host)
 	if err != nil {
 		conn.Close()

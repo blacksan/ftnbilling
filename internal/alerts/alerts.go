@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ispbill/internal/fleet"
@@ -29,7 +30,14 @@ const (
 	RuleLoss    = "loss"
 	RuleLatency = "latency"
 	RuleOLTDown = "olt_down"
+	// RuleBackup is the one server-wide rule: it is not in RuleOrder (no
+	// threshold to edit) and has no building. It fires at once and is cleared
+	// when the backup check reports no problem.
+	RuleBackup = "backup_stale"
 )
+
+// ServerName stands in for the building of a server-wide alert.
+const ServerName = "This server"
 
 // RuleOrder is the display order.
 var RuleOrder = []string{RuleOffline, RuleWANSat, RuleLoss, RuleLatency, RuleOLTDown}
@@ -47,6 +55,8 @@ func Label(rule string) string {
 		return "High latency"
 	case RuleOLTDown:
 		return "OLT port down"
+	case RuleBackup:
+		return "Backup problem"
 	}
 	return rule
 }
@@ -87,7 +97,6 @@ type Rule struct {
 type Settings struct {
 	Rules         map[string]Rule `json:"rules"`
 	Email         bool            `json:"email"`
-	Telegram      bool            `json:"telegram"`
 	WhatsApp      bool            `json:"whatsapp"`
 	CooldownMin   int             `json:"cooldown_min"` // per key, between two "problem" messages
 	RepeatEnabled bool            `json:"repeat_enabled"`
@@ -108,7 +117,7 @@ func DefaultSettings() Settings {
 			RuleLatency: {Enabled: true, Threshold: 150, HoldMin: 10},
 			RuleOLTDown: {Enabled: true, HoldMin: 2},
 		},
-		Email: true, Telegram: true, WhatsApp: true,
+		Email: true, WhatsApp: true,
 		CooldownMin: 60, RepeatHours: 6, OutageNotice: "manual", AutoMin: 30,
 	}
 }
@@ -213,7 +222,6 @@ type Sink interface {
 // Targets are where admin messages go. A channel with no entries is skipped.
 type Targets struct {
 	Email    []string
-	Telegram []string
 	WhatsApp []string
 }
 
@@ -227,6 +235,8 @@ type Options struct {
 	Now     func() time.Time
 	Every   time.Duration // default 30s
 	Lang    string
+	// Backup reports a problem with the nightly backup ("" = fine). Optional.
+	Backup func(now time.Time) string
 }
 
 // Engine evaluates the rules.
@@ -237,6 +247,17 @@ type Engine struct {
 	mu    sync.Mutex
 	d     fileData
 	dirty bool
+	lang  atomic.Pointer[string] // WhatsApp template language, changeable at run time
+}
+
+// SetLang changes the WhatsApp template language of new admin alerts.
+func (e *Engine) SetLang(l string) { e.lang.Store(&l) }
+
+func (e *Engine) langOr() string {
+	if p := e.lang.Load(); p != nil {
+		return *p
+	}
+	return e.o.Lang
 }
 
 // New loads alerts.json (missing is fine; a corrupt file is logged and replaced).
@@ -499,7 +520,7 @@ func (e *Engine) Evaluate(now time.Time) {
 	}
 	// A building that is gone (removed, paused, not joined) closes its alerts silently.
 	for k, a := range e.d.Active {
-		if _, ok := byID[a.SiteID]; !ok {
+		if _, ok := byID[a.SiteID]; !ok && a.Rule != RuleBackup {
 			e.resolveLocked(k, a, now, false)
 		}
 	}
@@ -558,8 +579,28 @@ func (e *Engine) Evaluate(now time.Time) {
 			}
 		}
 	}
+	e.evalBackupLocked(now)
 	e.notifyLocked(sites, set, now)
 	e.dirty = true
+}
+
+// evalBackupLocked raises or clears the server-wide backup alert.
+func (e *Engine) evalBackupLocked(now time.Time) {
+	if e.o.Backup == nil {
+		return
+	}
+	key := RuleBackup + ":"
+	problem := e.o.Backup(now)
+	a := e.d.Active[key]
+	switch {
+	case problem != "" && a == nil:
+		e.d.Active[key] = &Alert{Key: key, Rule: RuleBackup, State: Firing, Since: now, FiredAt: now, Detail: problem}
+		e.dirty = true
+	case problem != "":
+		a.Detail = problem
+	case a != nil:
+		e.resolveLocked(key, a, now, true)
+	}
 }
 
 // resolveLocked closes an alert. A recovery message goes out only if the
@@ -594,6 +635,9 @@ func (e *Engine) resolveLocked(key string, a *Alert, now time.Time, announce boo
 }
 
 func (e *Engine) siteName(id string) string {
+	if id == "" {
+		return ServerName
+	}
 	for _, s := range e.o.In.Sites() {
 		if s.ID == id {
 			return s.Name
@@ -609,7 +653,7 @@ func (e *Engine) cooldownOK(key string, set Settings, now time.Time) bool {
 
 // notifyLocked sends the problem messages that are due.
 func (e *Engine) notifyLocked(sites []store.Site, set Settings, now time.Time) {
-	names := map[string]string{}
+	names := map[string]string{"": ServerName}
 	for _, s := range sites {
 		names[s.ID] = s.Name
 	}
@@ -712,17 +756,10 @@ func (e *Engine) compose(status, rule, building, detail, dedupe string, at time.
 			out = append(out, m)
 		}
 	}
-	if set.Telegram {
-		for _, to := range tg.Telegram {
-			m := base
-			m.Channel, m.To, m.Text, m.DedupeKey = notify.ChanTelegram, to, text, dk("telegram", to)
-			out = append(out, m)
-		}
-	}
 	if set.WhatsApp {
 		for _, to := range tg.WhatsApp {
 			m := base
-			m.Channel, m.To, m.Template, m.Lang, m.DedupeKey = notify.ChanWhatsApp, to, notify.TplAdminAlert, e.o.Lang, dk("whatsapp", to)
+			m.Channel, m.To, m.Template, m.Lang, m.DedupeKey = notify.ChanWhatsApp, to, notify.TplAdminAlert, e.langOr(), dk("whatsapp", to)
 			m.Params = []string{status, rule, building, detail, timeText(at)}
 			m.Text = text
 			out = append(out, m)
@@ -745,7 +782,7 @@ func (e *Engine) TestMessage(channel string) (notify.Message, bool) {
 	e.mu.Lock()
 	set := e.d.Settings
 	e.mu.Unlock()
-	set.Email, set.Telegram, set.WhatsApp = true, true, true
+	set.Email, set.WhatsApp = true, true
 	for _, m := range e.compose("PROBLEM", "Test alert", "Test building", "this is a test from the Alerts page", "", e.now(), "", set) {
 		if m.Channel == channel {
 			m.Kind = notify.KindTest

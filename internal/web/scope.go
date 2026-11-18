@@ -64,7 +64,7 @@ func (s *Server) adminSiteSelect(w http.ResponseWriter, r *http.Request) {
 	}
 	if ok {
 		http.SetCookie(w, &http.Cookie{Name: siteCookie, Value: v, Path: "/admin", HttpOnly: true,
-			SameSite: http.SameSiteStrictMode, MaxAge: 365 * 24 * 3600})
+			Secure: s.secureCookies(), SameSite: http.SameSiteStrictMode, MaxAge: 365 * 24 * 3600})
 	}
 	http.Redirect(w, r, safeNext(r.URL.Query().Get("next")), http.StatusSeeOther)
 }
@@ -75,7 +75,7 @@ func safeNext(n string) string {
 	if err != nil || u.Host != "" || u.Scheme != "" || !strings.HasPrefix(u.Path, "/admin") || strings.HasPrefix(n, "//") || strings.ContainsAny(n, "\r\n\\") {
 		return "/admin"
 	}
-	if u.Path == "/admin/logout" {
+	if u.Path == "/admin/logout" || strings.HasPrefix(u.Path, "/admin/login") {
 		return "/admin"
 	}
 	return u.RequestURI()

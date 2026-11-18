@@ -41,7 +41,6 @@ DATA=$ROOT/var/lib/$APP
 ETC=$ROOT/etc/$APP
 ENVF=$ETC/$APP.env
 WGCONF=$ROOT/etc/wireguard/wg0.conf
-WGADMINCONF=$ROOT/etc/wireguard/wg-admin.conf
 CADDYF=$ROOT/etc/caddy/Caddyfile
 SRC=$ROOT/opt/$APP/src
 LOCALDIR=$ROOT/var/backups/$APP/weekly
@@ -145,18 +144,6 @@ write_state() { # status snapshot bytes sha256 error
     "$1" "$(date -u +%FT%TZ)" "$(json_escape "$HOST")" "$(json_escape "${2:-}")" "${3:-0}" "${4:-}" "$KEEP_WEEKS" \
     "$(json_escape "${5:-}")" >"$STATE.tmp"
   mv -f "$STATE.tmp" "$STATE"
-}
-
-notify_failure() {
-  local tok chat msg
-  tok=$(envval TELEGRAM_BOT_TOKEN); chat=$(envval TELEGRAM_CHAT_ID)
-  [ -n "$tok" ] && [ -n "$chat" ] || return 0
-  command -v curl >/dev/null || return 0
-  msg="Backup FAILED on $HOST: $1"
-  # The token goes in through stdin so it never shows up in the process list.
-  printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$tok" |
-    curl -fsS -m 20 -K - --data-urlencode "chat_id=$chat" --data-urlencode "text=$msg" \
-      >/dev/null 2>&1 || warn "could not send the Telegram message"
 }
 
 rclone_ver_ok() { # rclone present and >= 1.60
@@ -313,10 +300,9 @@ job_exit() {
   if [ "$rc" -ne 0 ] && [ -n "$JOB" ]; then
     ERRMSG=${ERRMSG:-"exit status $rc"}
     case "$JOB" in
-      run) write_state failed "${SNAP:-}" 0 "" "$ERRMSG" || true; notify_failure "$ERRMSG";;
-      dump) status_set "error=$ERRMSG" || true; notify_failure "database dump: $ERRMSG";;
-      drill) status_set "drill_at=$(date -u +%FT%TZ)" drill_ok=false "drill_msg=$ERRMSG" || true
-             notify_failure "restore drill: $ERRMSG";;
+      run) write_state failed "${SNAP:-}" 0 "" "$ERRMSG" || true;;
+      dump) status_set "error=$ERRMSG" || true;;
+      drill) status_set "drill_at=$(date -u +%FT%TZ)" drill_ok=false "drill_msg=$ERRMSG" || true;;
     esac
   fi
 }
@@ -470,7 +456,6 @@ cmd_run() {
   done
   [ -d "$ETC" ] && cp -a "$ETC/." "$top/etc-$APP/"
   [ -f "$WGCONF" ] && cp -a "$WGCONF" "$top/wireguard/"
-  [ -f "$WGADMINCONF" ] && cp -a "$WGADMINCONF" "$top/wireguard/"
   [ -f "$CADDYF" ] && cp -a "$CADDYF" "$top/caddy/"
 
   dburl=$(envval DATABASE_URL)
@@ -581,10 +566,9 @@ Nothing on this server was changed. To put it back, step by step:
   2. Billing data:          sudo cp -a $dir/data/. /var/lib/$APP/
                             sudo chown -R $APP:$APP /var/lib/$APP
   3. Settings:              sudo cp -a $dir/etc-$APP/. /etc/$APP/
-  4. WireGuard (same keys, so routers and your admin devices keep working):
+  4. WireGuard (same key, so the routers keep working):
                             sudo cp -a $dir/wireguard/wg0.conf /etc/wireguard/wg0.conf
-                            sudo cp -a $dir/wireguard/wg-admin.conf /etc/wireguard/wg-admin.conf
-                            sudo systemctl restart wg-quick@wg0 wg-quick@wg-admin
+                            sudo systemctl restart wg-quick@wg0
   5. Caddy (optional):      sudo cp -a $dir/caddy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
   6. PostgreSQL (only if the folder contains database.dump; the installer has
      already made the empty database and role, DATABASE_URL is in the env file):

@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ispbill/internal/store"
@@ -20,15 +21,30 @@ import (
 var EAT = time.FixedZone("EAT", 3*3600)
 
 const (
-	maxAttempts   = 8
-	baseBackoff   = 30 * time.Second
-	maxBackoff    = time.Hour
-	dedupeKeep    = 90 * 24 * time.Hour
-	finishedKeep  = 60 * 24 * time.Hour
-	maxFinished   = 5000
-	quietFromHour = 21 // tenant reminders go out from 07:00 until 21:00 EAT
-	quietToHour   = 7
+	maxAttempts  = 8
+	baseBackoff  = 30 * time.Second
+	maxBackoff   = time.Hour
+	dedupeKeep   = 90 * 24 * time.Hour
+	finishedKeep = 60 * 24 * time.Hour
+	maxFinished  = 5000
 )
+
+// Quiet hours (EAT): tenant reminders go out from quietTo until quietFrom.
+// Defaults are 21:00 and 07:00; Settings > WhatsApp can change them live.
+var quietFromHour, quietToHour atomic.Int32
+
+func init() { quietFromHour.Store(21); quietToHour.Store(7) }
+
+// SetQuietHours sets the quiet window: it starts at fromHour (0-23) and ends
+// at toHour (0-23) EAT, wrapping past midnight when fromHour > toHour. Equal
+// hours switch quiet hours off.
+func SetQuietHours(fromHour, toHour int) {
+	quietFromHour.Store(int32(fromHour))
+	quietToHour.Store(int32(toHour))
+}
+
+// QuietHours returns the current quiet window.
+func QuietHours() (fromHour, toHour int) { return int(quietFromHour.Load()), int(quietToHour.Load()) }
 
 // Options configures an Outbox.
 type Options struct {
@@ -46,9 +62,9 @@ type Options struct {
 }
 
 // DefaultIntervals are the per-channel rate limits: WhatsApp 5 per second,
-// Telegram 1 per second, SMTP 1 every 2 seconds.
+// SMTP 1 every 2 seconds.
 func DefaultIntervals() map[string]time.Duration {
-	return map[string]time.Duration{ChanWhatsApp: 200 * time.Millisecond, ChanTelegram: time.Second, ChanEmail: 2 * time.Second}
+	return map[string]time.Duration{ChanWhatsApp: 200 * time.Millisecond, ChanEmail: 2 * time.Second}
 }
 
 // Pause records why a channel stopped (bad credentials).
@@ -109,8 +125,28 @@ func Open(o Options) (*Outbox, error) {
 		if fd.Paused != nil {
 			b.pause = fd.Paused
 		}
+		b.dropRemovedChannels()
 	}
 	return b, nil
+}
+
+// removedChannels are channels this version no longer has. Messages still
+// queued on them are cancelled when the outbox opens, so they are neither
+// retried forever nor silently deleted.
+var removedChannels = []string{"telegram"}
+
+func (b *Outbox) dropRemovedChannels() {
+	for _, ch := range removedChannels {
+		for i := range b.msgs {
+			if b.msgs[i].Channel == ch && b.msgs[i].Status == StatusQueued {
+				b.msgs[i].Status, b.msgs[i].LastErr, b.dirty = StatusCancelled, "channel removed", true
+			}
+		}
+		if _, ok := b.pause[ch]; ok {
+			delete(b.pause, ch)
+			b.dirty = true
+		}
+	}
 }
 
 // SetValidate installs the tenant Validate hook (after construction, because
@@ -128,6 +164,20 @@ func (b *Outbox) SetSender(channel string, s Sender) {
 		b.o.Senders = map[string]Sender{}
 	}
 	b.o.Senders[channel] = s
+	b.mu.Unlock()
+}
+
+// RemoveSender stops a channel from sending (its queued messages stay queued).
+func (b *Outbox) RemoveSender(channel string) {
+	b.mu.Lock()
+	delete(b.o.Senders, channel)
+	b.mu.Unlock()
+}
+
+// SetWADailyLimit changes the tenant WhatsApp cap per EAT day (0 = no cap).
+func (b *Outbox) SetWADailyLimit(n int) {
+	b.mu.Lock()
+	b.o.WADailyLimit = n
 	b.mu.Unlock()
 }
 
@@ -149,8 +199,15 @@ func newID() string {
 // QuietNow reports whether a time is in the tenant quiet hours (21:00 to
 // 07:00 EAT).
 func QuietNow(t time.Time) bool {
+	from, to := QuietHours()
 	h := t.In(EAT).Hour()
-	return h >= quietFromHour || h < quietToHour
+	switch {
+	case from == to:
+		return false
+	case from > to:
+		return h >= from || h < to
+	}
+	return h >= from && h < to
 }
 
 // NextOpen returns the next 07:00 EAT at or after t when t is in quiet hours,
@@ -160,7 +217,8 @@ func NextOpen(t time.Time) time.Time {
 		return t
 	}
 	e := t.In(EAT)
-	open := time.Date(e.Year(), e.Month(), e.Day(), quietToHour, 0, 0, 0, EAT)
+	_, to := QuietHours()
+	open := time.Date(e.Year(), e.Month(), e.Day(), to, 0, 0, 0, EAT)
 	if !open.After(e) {
 		open = open.AddDate(0, 0, 1)
 	}
@@ -543,7 +601,7 @@ func (b *Outbox) Save() error {
 // once more and returns when ctx is cancelled.
 func (b *Outbox) Run(ctx context.Context) {
 	var wg sync.WaitGroup
-	for _, ch := range []string{ChanEmail, ChanTelegram, ChanWhatsApp} {
+	for _, ch := range []string{ChanEmail, ChanWhatsApp} {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

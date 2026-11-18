@@ -25,8 +25,11 @@ var ErrOldFormat = errors.New("ispbill.json is in an old or unknown data format"
 // FormatVersion is the data format. 2 = flat accounts locked to an ONT MAC
 // (single building); 3 = adds Sites and a SiteID on every row; 4 = adds
 // customers, tenancies, equipment, contacts, notes, closed accounts and event
-// sequence numbers.
-const FormatVersion = 4
+// sequence numbers; 5 = adds admin settings (and the admin password hash);
+// 6 = adds IPoE and sign-in data: Account.MACConflict and IP, Site.AccessMode,
+// Event.Actor and IP, admin users, admin sessions and API devices, and makes
+// an ONT MAC unique across all buildings.
+const FormatVersion = 6
 
 const (
 	OrderPending = "pending"
@@ -43,6 +46,14 @@ const (
 const (
 	SiteModeWG  = "wg"  // joined over WireGuard
 	SiteModeEnv = "env" // legacy / container mode: router settings come from the environment
+)
+
+// Site access modes (Site.AccessMode). Hotspot is the original captive-portal
+// model; the IPoE modes are driven by the provisioning reconciler.
+const (
+	AccessHotspot     = "hotspot"
+	AccessIPoEObserve = "ipoe_observe" // computes and reports, never suspends
+	AccessIPoE        = "ipoe"
 )
 
 // Site is one building: one MikroTik router with its own hotspot.
@@ -88,6 +99,10 @@ type Site struct {
 	Lat     float64   `json:"lat,omitempty"` // 0 = unset
 	Lng     float64   `json:"lng,omitempty"`
 	GoLive  time.Time `json:"go_live,omitempty"`
+
+	// AccessMode is hotspot (default), ipoe_observe or ipoe. Empty is stored
+	// as hotspot.
+	AccessMode string `json:"access_mode,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -135,6 +150,13 @@ type Account struct {
 	Code   string `json:"code"`
 	Flat   string `json:"flat"`
 	MAC    string `json:"mac"`
+	// MACConflict marks an open account whose MAC was found on another open
+	// account (or malformed) by a migration. It is never provisioned and is
+	// excluded from the MAC uniqueness rule until somebody fixes the MAC.
+	MACConflict bool `json:"mac_conflict,omitempty"`
+	// IP is the static address given to the flat (IPoE); empty = none yet.
+	// Unique per building among open accounts.
+	IP     string `json:"ip,omitempty"`
 	Tenant string `json:"tenant,omitempty"`
 	Phone  string `json:"phone,omitempty"`
 	Notes  string `json:"notes,omitempty"`
@@ -227,10 +249,15 @@ type Payment struct {
 // Device is a MAC that opened the portal (or showed up as a hotspot host)
 // without a matching account.
 type Device struct {
-	SiteID    string    `json:"site_id"`
-	MAC       string    `json:"mac"`
-	IP        string    `json:"ip,omitempty"`
-	Source    string    `json:"source"` // portal, hotspot-host
+	SiteID string `json:"site_id"`
+	MAC    string `json:"mac"`
+	IP     string `json:"ip,omitempty"`
+	Source string `json:"source"` // portal, hotspot-host, dhcp, arp
+	// Vendor (from the MAC prefix), HostName (DHCP) and Online (lease bound or
+	// ARP complete recently) help the operator pick the right MAC.
+	Vendor    string    `json:"vendor,omitempty"`
+	HostName  string    `json:"host_name,omitempty"`
+	Online    bool      `json:"online,omitempty"`
 	FirstSeen time.Time `json:"first_seen"`
 	LastSeen  time.Time `json:"last_seen"`
 	Hits      int       `json:"hits"`
@@ -264,6 +291,9 @@ type Event struct {
 	CustomerID  string    `json:"customer_id,omitempty"`
 	EquipmentID string    `json:"equipment_id,omitempty"`
 	Msg         string    `json:"msg"`
+	// Actor and IP say who did it and from where (audit events).
+	Actor string `json:"actor,omitempty"`
+	IP    string `json:"ip,omitempty"`
 }
 
 // Customer is a person (or business) who takes internet service, kept apart
@@ -391,6 +421,15 @@ type Note struct {
 	Time        time.Time `json:"time"`
 }
 
+// Setting is one admin-edited setting. Enc means Value is sealed with the
+// settings secretbox (see internal/secretbox); otherwise it is plain text.
+type Setting struct {
+	Key       string    `json:"key"`
+	Value     string    `json:"value"`
+	Enc       bool      `json:"enc,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // maxEvents is how many events stay in memory (a database keeps them all).
 const maxEvents = 300
 
@@ -418,6 +457,14 @@ type Data struct {
 	EquipmentEvents map[string]EquipmentEvent `json:"equipment_events"`
 	Notes           map[string]Note           `json:"notes"`
 	EventSeq        int64                     `json:"event_seq"` // last Event.Seq handed out
+
+	// Format 5: admin settings (key -> row), including the admin password hash.
+	Settings map[string]Setting `json:"settings"`
+
+	// Format 6: sign-in. Users, browser sessions and API devices (phones).
+	AdminUsers    map[string]AdminUser    `json:"admin_users"`
+	AdminSessions map[string]AdminSession `json:"admin_sessions"`
+	APIDevices    map[string]APIDevice    `json:"api_devices"`
 }
 
 func (d *Data) init() {
@@ -467,6 +514,18 @@ func (d *Data) init() {
 	if d.Notes == nil {
 		d.Notes = map[string]Note{}
 	}
+	if d.Settings == nil {
+		d.Settings = map[string]Setting{}
+	}
+	if d.AdminUsers == nil {
+		d.AdminUsers = map[string]AdminUser{}
+	}
+	if d.AdminSessions == nil {
+		d.AdminSessions = map[string]AdminSession{}
+	}
+	if d.APIDevices == nil {
+		d.APIDevices = map[string]APIDevice{}
+	}
 }
 
 // AddEvent appends a lifecycle event, assigning its sequence number and
@@ -498,18 +557,59 @@ func (d *Data) AccountByCode(code string) (Account, bool) {
 // DeviceKey is the key of d.Devices.
 func DeviceKey(siteID, mac string) string { return siteID + "|" + mac }
 
-// AccountByMAC expects a normalised MAC (AA:BB:CC:DD:EE:FF). MACs are only
-// unique inside one building.
-func (d *Data) AccountByMAC(siteID, mac string) (Account, bool) {
+// AccountByMAC finds the open account that owns a MAC, in any building. It
+// expects a normalised MAC (AA:BB:CC:DD:EE:FF). Accounts flagged MACConflict
+// do not own their MAC and are skipped; see MACConflicts to list them.
+func (d *Data) AccountByMAC(mac string) (Account, bool) {
 	if mac == "" {
 		return Account{}, false
 	}
 	for _, a := range d.Accounts {
-		if a.SiteID == siteID && strings.EqualFold(a.MAC, mac) {
+		if !a.MACConflict && strings.EqualFold(a.MAC, mac) {
 			return a, true
 		}
 	}
 	return Account{}, false
+}
+
+// OpenAccountsByMAC lists every open account with the MAC, flagged ones
+// included, the owner first.
+func (d *Data) OpenAccountsByMAC(mac string) []Account {
+	var out []Account
+	for _, a := range d.Accounts {
+		if mac != "" && strings.EqualFold(a.MAC, mac) {
+			out = append(out, a)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].MACConflict != out[j].MACConflict {
+			return !out[i].MACConflict
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+// MACConflicts lists the open accounts flagged MACConflict, by building name
+// then natural flat order.
+func (d *Data) MACConflicts() []Account {
+	var out []Account
+	for _, a := range d.Accounts {
+		if a.MACConflict {
+			out = append(out, a)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		si, sj := d.Sites[out[i].SiteID].Name, d.Sites[out[j].SiteID].Name
+		if si != sj {
+			return NaturalLess(si, sj)
+		}
+		if out[i].Flat != out[j].Flat {
+			return NaturalLess(out[i].Flat, out[j].Flat)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
 }
 
 func (d *Data) OrderByCheckoutID(id string) (Order, bool) {

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ispbill/internal/alerts"
@@ -13,6 +14,8 @@ import (
 	"ispbill/internal/fleet"
 	"ispbill/internal/metrics"
 	"ispbill/internal/notify"
+	"ispbill/internal/payments"
+	"ispbill/internal/settings"
 	"ispbill/internal/sites"
 	"ispbill/internal/store"
 	"ispbill/internal/web"
@@ -47,36 +50,66 @@ func (a alertInputs) Live(id string) (metrics.Live, metrics.Config, bool) {
 	return col.Snapshot(), col.Config(), true
 }
 
+// mpesaConf maps the effective configuration to the Daraja client's.
+func mpesaConf(c config.Config) payments.MpesaConfig {
+	return payments.MpesaConfig{
+		BaseURL: c.MpesaBaseURL(), Key: c.MpesaKey, Secret: c.MpesaSecret, Shortcode: c.MpesaShortcode, C2BShortcode: c.MpesaC2BShortcode,
+		Passkey: c.MpesaPasskey, PublicBaseURL: c.PublicBaseURL, CallbackToken: c.MpesaCallbackToken, PrevToken: c.MpesaCallbackTokenPrev, PrevUntil: c.MpesaCallbackTokenPrevUntil, UnknownRef: c.MpesaUnknownRef,
+		Enabled: c.MpesaEnabled(),
+	}
+}
+
+// resumeOnNewWAToken returns a function to call with every applied WhatsApp
+// configuration. The outbox pauses the channel when Meta refuses the token; a
+// new token (or phone number ID) is the fix, so the pause ends when one is
+// saved. The first call only records the starting values: a pause kept from
+// before a restart must not end just because the service started again.
+func resumeOnNewWAToken(resume func(channel string)) func(config.Config) {
+	var mu sync.Mutex
+	var token, phoneID string
+	first := true
+	return func(c config.Config) {
+		mu.Lock()
+		changed := !first && c.WhatsAppConfigured() && (c.WAToken != token || c.WAPhoneNumberID != phoneID)
+		first, token, phoneID = false, c.WAToken, c.WAPhoneNumberID
+		mu.Unlock()
+		if changed {
+			resume(notify.ChanWhatsApp)
+		}
+	}
+}
+
+func payHintOf(c config.Config) string {
+	if c.MpesaShortcode != "" {
+		return "M-Pesa Paybill " + c.MpesaShortcode
+	}
+	return "M-Pesa"
+}
+
 // startOps starts the fleet monitor, the alert engine, the outbox and the
 // tenant message scanners. Each saves its file when ctx ends; wg tracks them.
-func startOps(ctx context.Context, wg *sync.WaitGroup, cfg config.Config, st *store.Store, svc *billing.Service, mgr *sites.Manager, log *slog.Logger) (web.Ops, error) {
-	senders := map[string]notify.Sender{}
-	if cfg.EmailConfigured() {
-		senders[notify.ChanEmail] = &notify.SMTP{Host: cfg.SMTPHost, Port: cfg.SMTPPort, User: cfg.SMTPUser, Pass: cfg.SMTPPass, From: cfg.SMTPFrom}
-	}
-	if cfg.TelegramConfigured() {
-		senders[notify.ChanTelegram] = &notify.Telegram{Token: cfg.TelegramToken}
-	}
-	if cfg.WhatsAppConfigured() {
-		senders[notify.ChanWhatsApp] = &notify.WhatsApp{Token: cfg.WAToken, PhoneNumberID: cfg.WAPhoneNumberID, APIVersion: cfg.WAAPIVersion, Lang: cfg.WALang}
-	}
-	box, err := notify.Open(notify.Options{Path: filepath.Join(cfg.DataDir, "outbox.json"), Senders: senders, Log: log, WADailyLimit: cfg.WADailyLimit})
+// Everything the Settings pages can change is applied through setm's appliers,
+// so a save takes effect without a restart.
+func startOps(ctx context.Context, wg *sync.WaitGroup, setm *settings.Manager, mp *payments.Mpesa, st *store.Store, svc *billing.Service, mgr *sites.Manager, log *slog.Logger) (web.Ops, error) {
+	cfg := setm.Effective()
+	box, err := notify.Open(notify.Options{Path: filepath.Join(cfg.DataDir, "outbox.json"), Senders: map[string]notify.Sender{}, Log: log, WADailyLimit: cfg.WADailyLimit})
 	if err != nil {
 		return web.Ops{}, err
 	}
 	prober := fleet.New(fleet.Options{Store: st, Net: mgr, Path: filepath.Join(cfg.DataDir, "fleet.json"), Log: log})
+	backupPath := filepath.Join(cfg.DataDir, "backup-status.json")
+	var live atomic.Pointer[config.Config]
+	live.Store(&cfg)
 	engine := alerts.New(alerts.Options{
 		Path: filepath.Join(cfg.DataDir, "alerts.json"), In: alertInputs{st, mgr, prober}, Out: box, Log: log, Lang: cfg.WALang,
+		Backup: func(now time.Time) string { return alerts.BackupProblem(backupPath, now) },
 		Targets: func() alerts.Targets {
-			return alerts.Targets{Email: emailTargets(cfg), Telegram: telegramTargets(cfg), WhatsApp: waTargets(cfg)}
+			c := *live.Load()
+			return alerts.Targets{Email: emailTargets(c), WhatsApp: waTargets(c)}
 		},
 	})
-	payHint := "M-Pesa"
-	if cfg.MpesaShortcode != "" {
-		payHint = "M-Pesa Paybill " + cfg.MpesaShortcode
-	}
 	tenant := notify.NewTenant(notify.TenantOptions{
-		Store: st, Box: box, Log: log, Lang: cfg.WALang, Policy: svc.Policy, PayHint: payHint, MinConfirmKES: cfg.WAMinConfirmKES,
+		Store: st, Box: box, Log: log, Lang: cfg.WALang, Policy: svc.Policy, PayHint: payHintOf(cfg), MinConfirmKES: cfg.WAMinConfirmKES,
 		Mode:      func() string { return engine.Settings().OutageNotice },
 		AutoAfter: func() time.Duration { return time.Duration(engine.Settings().AutoMin) * time.Minute },
 		OfflineFiredAt: func(id string) (time.Time, time.Time, bool) {
@@ -97,11 +130,41 @@ func startOps(ctx context.Context, wg *sync.WaitGroup, cfg config.Config, st *st
 		OutageEnd: prober.OutageEnd,
 	})
 	svc.SetCreditHook(tenant.Kick)
-	var inbound *notify.Inbound
-	if cfg.WAAppSecret != "" && cfg.WAVerifyToken != "" && cfg.WhatsAppConfigured() {
-		inbound = notify.NewInbound(notify.InboundOptions{Store: st, Box: box, Log: log, AppSecret: cfg.WAAppSecret, VerifyToken: cfg.WAVerifyToken,
-			SupportPhone: cfg.SupportPhone, PayHint: payHint})
-	}
+	// The webhook handler always exists; it answers 404 until both secrets are set.
+	inbound := notify.NewInbound(notify.InboundOptions{Store: st, Box: box, Log: log, AppSecret: cfg.WAAppSecret, VerifyToken: cfg.WAVerifyToken,
+		SupportPhone: cfg.SupportPhone, PayHint: payHintOf(cfg)})
+
+	// Appliers: run after every Save or Revert of the section, and once now.
+	setm.OnApply(settings.SecMpesa, func(c config.Config) {
+		mp.SetConfig(mpesaConf(c))
+		tenant.SetPayHint(payHintOf(c))
+		inbound.SetReplyInfo(payHintOf(c), c.SupportPhone)
+	})
+	waResume := resumeOnNewWAToken(box.Resume)
+	setm.OnApply(settings.SecWhatsApp, func(c config.Config) {
+		live.Store(&c)
+		waResume(c)
+		if c.WhatsAppConfigured() {
+			box.SetSender(notify.ChanWhatsApp, &notify.WhatsApp{Token: c.WAToken, PhoneNumberID: c.WAPhoneNumberID, APIVersion: c.WAAPIVersion, Lang: c.WALang})
+		} else {
+			box.RemoveSender(notify.ChanWhatsApp)
+		}
+		box.SetWADailyLimit(c.WADailyLimit)
+		notify.SetQuietHours(c.WAQuietFrom, c.WAQuietTo)
+		engine.SetLang(c.WALang)
+		tenant.SetLang(c.WALang)
+		tenant.SetMinConfirmKES(c.WAMinConfirmKES)
+		inbound.SetSecrets(c.WAAppSecret, c.WAVerifyToken)
+	})
+	setm.OnApply(settings.SecEmail, func(c config.Config) {
+		live.Store(&c)
+		if c.EmailConfigured() {
+			box.SetSender(notify.ChanEmail, &notify.SMTP{Host: c.SMTPHost, Port: c.SMTPPort, User: c.SMTPUser, Pass: c.SMTPPass, From: c.SMTPFrom, Implicit: c.SMTPImplicit})
+		} else {
+			box.RemoveSender(notify.ChanEmail)
+		}
+	})
+	setm.ApplyAll()
 
 	run := func(f func(context.Context)) {
 		wg.Add(1)
@@ -110,10 +173,8 @@ func startOps(ctx context.Context, wg *sync.WaitGroup, cfg config.Config, st *st
 	run(box.Run)
 	run(prober.Run)
 	run(engine.Run)
-	if cfg.WhatsAppConfigured() {
-		run(tenant.Run) // tenant messages need the WhatsApp channel
-	}
-	log.Info("monitoring started", "email", cfg.EmailConfigured(), "telegram", cfg.TelegramConfigured(), "whatsapp", cfg.WhatsAppConfigured())
+	run(tenant.Run) // sends nothing while the WhatsApp channel has no sender
+	log.Info("monitoring started", "email", cfg.EmailConfigured(), "whatsapp", cfg.WhatsAppConfigured())
 	return web.Ops{Fleet: prober, Alerts: engine, Box: box, Tenant: tenant, Inbound: inbound}, nil
 }
 
@@ -122,13 +183,6 @@ func emailTargets(cfg config.Config) []string {
 		return nil
 	}
 	return cfg.AlertEmailTo
-}
-
-func telegramTargets(cfg config.Config) []string {
-	if !cfg.TelegramConfigured() {
-		return nil
-	}
-	return []string{cfg.TelegramChatID}
 }
 
 func waTargets(cfg config.Config) []string {

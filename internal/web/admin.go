@@ -2,10 +2,7 @@ package web
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,19 +13,10 @@ import (
 	"ispbill/internal/store"
 )
 
-const csrfCookie = "ispbill_csrf"
-
 func (s *Server) adminRoutes(mux *http.ServeMux) {
 	get := func(p string, h http.HandlerFunc) { mux.Handle("GET "+p, s.admin(h)) }
 	post := func(p string, h http.HandlerFunc) { mux.Handle("POST "+p, s.admin(h)) }
 	get("/admin", s.adminDashboard)
-	// Log out: always 401, so the browser forgets the cached password.
-	mux.HandleFunc("GET /admin/logout", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("WWW-Authenticate", `Basic realm="ispbill admin", charset="UTF-8"`)
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, `<!doctype html><meta name="viewport" content="width=device-width"><body style="font:16px system-ui;background:#0d1117;color:#e6e9ef;display:grid;place-items:center;height:90vh"><div>Logged out. <a style="color:#8b83ff" href="/admin">Log in again</a></div>`)
-	})
 	get("/admin/site/select", s.adminSiteSelect)
 	post("/admin/accounts/move", s.adminAccountMove)
 	s.siteRoutes(get, post)
@@ -43,10 +31,6 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	post("/admin/accounts/package", s.adminAccountPackage)
 	post("/admin/accounts/endplan", s.adminAccountEndPlan)
 	post("/admin/accounts/delete", s.adminAccountDelete)
-	get("/admin/devices", s.adminDevices)
-	post("/admin/devices/create", s.adminDeviceCreate)
-	post("/admin/devices/attach", s.adminDeviceAttach)
-	post("/admin/devices/dismiss", s.adminDeviceDismiss)
 	get("/admin/payments", s.adminPayments)
 	get("/admin/payments.csv", s.adminPaymentsCSV)
 	get("/admin/payments/record", s.adminRecordForm)
@@ -62,57 +46,16 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	get("/admin/vouchers", s.adminVouchers)
 	post("/admin/vouchers/generate", s.adminGenVouchers)
 	get("/admin/vouchers/print", s.adminPrintVouchers)
-	get("/admin/settings", s.adminSettings)
+	s.securityRoutes(get, post)
+	s.settingsRoutes(get, post)
 	s.crmRoutes(get, post)
 	s.metricsRoutes(get, post)
 	s.opsRoutes(get, post)
 }
 
-// admin enforces basic auth and, for POST, the CSRF double-submit check.
-func (s *Server) admin(h http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.adminAllowed(r) {
-			// The admin is served only to loopback and the admin tunnel,
-			// never to the router tunnels or the internet.
-			http.NotFound(w, r)
-			return
-		}
-		u, p, ok := r.BasicAuth()
-		userOK := safeEq(u, s.cfg.AdminUser)
-		passOK := safeEq(p, s.cfg.AdminPass)
-		if !ok || !userOK || !passOK {
-			w.Header().Set("WWW-Authenticate", `Basic realm="ispbill admin", charset="UTF-8"`)
-			http.Error(w, "authentication required", http.StatusUnauthorized)
-			return
-		}
-		c, err := r.Cookie(csrfCookie)
-		token := ""
-		if err == nil {
-			token = c.Value
-		}
-		if r.Method == http.MethodPost {
-			if token == "" || !safeEq(r.PostFormValue("_csrf"), token) {
-				http.Error(w, "CSRF check failed", http.StatusForbidden)
-				return
-			}
-		} else if token == "" {
-			b := make([]byte, 16)
-			rand.Read(b)
-			token = hex.EncodeToString(b)
-			http.SetCookie(w, &http.Cookie{Name: csrfCookie, Value: token, Path: "/admin",
-				HttpOnly: true, SameSite: http.SameSiteStrictMode})
-		}
-		r = r.WithContext(context.WithValue(r.Context(), csrfKey{}, token))
-		h(w, r)
-	})
-}
-
-type csrfKey struct{}
-
-func csrfOf(r *http.Request) string { t, _ := r.Context().Value(csrfKey{}).(string); return t }
-
 type adminPage struct {
 	Brand, Active, CSRF, Flash string
+	User, Role                 string       // who is signed in
 	Sites                      []store.Site // live buildings, for the switcher
 	Site                       string       // selected building id, "" = all
 	SiteName                   string
@@ -129,6 +72,9 @@ type adminPage struct {
 
 func (s *Server) page(r *http.Request, active string) adminPage {
 	p := adminPage{Brand: s.cfg.BrandName, Active: active, CSRF: csrfOf(r), Flash: r.URL.Query().Get("msg"), Data: map[string]any{}}
+	if u, ok := userOf(r); ok {
+		p.User, p.Role = u.Username, u.Role
+	}
 	p.FlashBad = strings.HasPrefix(p.Flash, "Error")
 	p.Now = s.svc.Now().In(billing.EAT).Format("Mon 02 Jan, 15:04")
 	sc := s.scopeOf(r)
@@ -149,12 +95,8 @@ func (s *Server) page(r *http.Request, active string) adminPage {
 	if s.ops.Box != nil {
 		p.FailedMsgs = s.ops.Box.Counts()["failed"]
 	}
+	p.UnregCount = s.svc.UnregisteredOnline(sc.Has) // online, unregistered devices only
 	s.st.View(func(d *store.Data) {
-		for _, dv := range d.Devices {
-			if sc.Has(dv.SiteID) {
-				p.UnregCount++
-			}
-		}
 		for _, pay := range d.Payments {
 			if pay.Status == store.PayUnmatched && (pay.SiteID == "" || sc.Has(pay.SiteID)) {
 				p.UnmatchedCount++
@@ -269,7 +211,7 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
 	routerOK, routerMsg := s.routerSummary(ctx, sc)
 	p.Data = map[string]any{"Total": total, "Active": active, "Soon": soon, "Expired": expired, "New": newAcc, "Suspended": susp,
 		"Today": today, "Month": month, "Pending": pending, "Events": events, "Tasks": tasks,
-		"RouterOK": routerOK, "RouterErr": routerMsg, "TestMode": s.cfg.TestMode, "Mpesa": s.cfg.MpesaEnabled(),
+		"RouterOK": routerOK, "RouterErr": routerMsg, "TestMode": s.cfg.TestMode, "Mpesa": s.live().MpesaEnabled(),
 		"SiteNames": p.Data["SiteNames"], "ShowSite": p.Data["ShowSite"]}
 	s.render(w, "admin_dashboard", p)
 }
@@ -471,60 +413,6 @@ func (s *Server) adminAccountKick(w http.ResponseWriter, r *http.Request) {
 	id := r.PostFormValue("id")
 	a, _ := s.svc.GetAccount(id)
 	s.back(w, r, s.accountURL(id), msgOr(s.svc.Kick(r.Context(), a.SiteID, a.Code), "Session ended (the flat logs in again by itself if still active)"))
-}
-
-// ---- unregistered devices ---------------------------------------------------------
-
-func (s *Server) adminDevices(w http.ResponseWriter, r *http.Request) {
-	p := s.page(r, "devices")
-	sc := s.scopeOf(r)
-	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
-	defer cancel()
-	if !sc.All { // refreshing asks one router; "all buildings" shows what is already known
-		if err := s.svc.RefreshHosts(ctx, sc.ID); err != nil {
-			p.Data["HostErr"] = err.Error()
-		}
-	}
-	var devs []store.Device
-	var accts []store.Account
-	s.st.View(func(d *store.Data) {
-		for _, dv := range d.DeviceList() {
-			if sc.Has(dv.SiteID) {
-				devs = append(devs, dv)
-			}
-		}
-		for _, a := range d.AccountList() {
-			if sc.Has(a.SiteID) {
-				accts = append(accts, a)
-			}
-		}
-	})
-	p.UnregCount = len(devs)
-	p.Data["Devices"], p.Data["Accounts"] = devs, accts
-	s.render(w, "admin_devices", p)
-}
-
-func (s *Server) adminDeviceCreate(w http.ResponseWriter, r *http.Request) {
-	a, err := s.svc.CreateAccount(billing.AccountInput{Flat: r.PostFormValue("flat"), MAC: r.PostFormValue("mac"), Tenant: r.PostFormValue("tenant"), SiteID: s.siteFor(r)})
-	if err != nil {
-		s.back(w, r, "/admin/devices", "Error: "+err.Error())
-		return
-	}
-	s.back(w, r, "/admin/accounts/view?code="+a.Code, "Account created: "+a.Flat+" ("+a.Code+")")
-}
-
-func (s *Server) adminDeviceAttach(w http.ResponseWriter, r *http.Request) {
-	id := r.PostFormValue("account")
-	err := s.svc.ChangeMAC(r.Context(), id, r.PostFormValue("mac"))
-	if err != nil {
-		s.back(w, r, "/admin/devices", "Error: "+err.Error())
-		return
-	}
-	s.back(w, r, s.accountURL(id), "Device attached: the account now uses this MAC")
-}
-
-func (s *Server) adminDeviceDismiss(w http.ResponseWriter, r *http.Request) {
-	s.back(w, r, "/admin/devices", msgOr(s.svc.DismissDevice(s.siteFor(r), r.PostFormValue("mac")), "Dismissed (it comes back if it opens the portal again)"))
 }
 
 // ---- payments ledger ----------------------------------------------------------------
@@ -789,33 +677,6 @@ func (s *Server) adminPrintVouchers(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 	s.render(w, "admin_print", map[string]any{"Brand": s.cfg.BrandName, "Vouchers": list, "Pkgs": pkgs, "Batch": batch, "Support": s.cfg.SupportPhone})
-}
-
-// ---- settings / info ---------------------------------------------------------------
-
-func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
-	p := s.page(r, "settings")
-	pol := s.svc.Policy()
-	base := s.cfg.PublicBaseURL
-	if base == "" {
-		base = "https://YOUR-PUBLIC-URL"
-	}
-	tok := ""
-	if s.cfg.MpesaCallbackToken != "" {
-		tok = "?t=TOKEN"
-	}
-	p.Data = map[string]any{
-		"Policy": pol, "Cfg": s.cfg, "Mpesa": s.cfg.MpesaEnabled(),
-		"CBStk": base + "/pay/cb/stk" + tok, "CBVal": base + "/pay/cb/c2b/validate" + tok, "CBConf": base + "/pay/cb/c2b/confirm" + tok,
-		"Support":    s.cfg.SupportPhone,
-		"WGEndpoint": s.cfg.WGEndpoint, "WGSubnet": s.cfg.WGSubnet, "JoinTTL": s.cfg.JoinTokenTTL.String(),
-		"Stray": s.mgr.Stray(), "Backup": s.backupStatus(), "DBKind": s.st.Kind(), "DBErr": errString(s.st.Healthy()),
-		"AdminCIDR": s.cfg.AdminAllowCIDR,
-	}
-	if env, ok := s.envSite(); ok {
-		p.Data["Env"] = s.mgr.Effective(env)
-	}
-	s.render(w, "admin_settings", p)
 }
 
 func (s *Server) adminDeletePackage(w http.ResponseWriter, r *http.Request) {

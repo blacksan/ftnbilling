@@ -16,6 +16,9 @@ import (
 
 const mac1 = "AA:BB:CC:DD:EE:01"
 
+// macB is the second building's flat: a MAC is unique across all buildings.
+const macB = "AA:BB:CC:DD:EE:0B"
+
 type env struct {
 	svc     *Service
 	st      *store.Store
@@ -228,7 +231,7 @@ func TestCreateAccountRules(t *testing.T) {
 
 func TestUnknownMACGetsNoAccountAndIsRecorded(t *testing.T) {
 	e := newEnv(t)
-	if _, ok := e.svc.AccountByMAC(e.site, "AA:BB:CC:DD:EE:77"); ok {
+	if _, ok := e.svc.AccountByMAC("AA:BB:CC:DD:EE:77"); ok {
 		t.Fatal("unknown MAC must not match")
 	}
 	e.svc.NoteDevice(e.site, "AA:BB:CC:DD:EE:77", "10.5.50.9", "portal")
@@ -417,10 +420,10 @@ func TestChangeMACUpdatesRouterUserAndKicksOldSession(t *testing.T) {
 		t.Fatal("account not updated")
 	}
 	// The old ONT's MAC is now unregistered; the new one maps to the account.
-	if _, ok := e.svc.AccountByMAC(e.site, mac1); ok {
+	if _, ok := e.svc.AccountByMAC(mac1); ok {
 		t.Fatal("old MAC still mapped")
 	}
-	if got, ok := e.svc.AccountByMAC(e.site, "AA:BB:CC:DD:EE:99"); !ok || got.ID != a.ID {
+	if got, ok := e.svc.AccountByMAC("AA:BB:CC:DD:EE:99"); !ok || got.ID != a.ID {
 		t.Fatal("new MAC not mapped")
 	}
 }

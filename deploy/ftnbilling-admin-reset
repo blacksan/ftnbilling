@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Recover access to the admin of the Fast Tech Net billing server.
+# Installed as /usr/local/sbin/ftnbilling-admin-reset by deploy/install.sh.
+#
+#   sudo ftnbilling-admin-reset                remove the password saved in Settings,
+#                                              so ADMIN_PASS from the settings file
+#                                              works again. Refused when ADMIN_PASS
+#                                              is empty or "admin" (the service
+#                                              could not start): use --generate
+#   sudo ftnbilling-admin-reset --generate     set a new random password and print
+#                                              it once
+#   sudo ftnbilling-admin-reset --setup-code   make a one-time setup code (printed
+#                                              once). Sign in with the password and
+#                                              this code to set up the authenticator
+#   sudo ftnbilling-admin-reset --reset-totp   remove the authenticator and the
+#                                              recovery codes; the next sign-in sets
+#                                              them up again (needs a setup code)
+#   sudo ftnbilling-admin-reset --revoke-sessions
+#                                              sign every browser and phone out
+#
+# Options can be combined, for example: --generate --setup-code --revoke-sessions.
+# It loads the settings file and runs the program as the service user. After a
+# any option it stops the service, runs the program, and starts the service
+# again (also when the program fails), so the running service cannot overwrite
+# the change from its own copy. Works with PostgreSQL and the JSON file alike.
+#
+# Test/override variables (all optional): FTN_ENV_FILE, FTN_BIN, FTN_USER,
+# FTN_NO_RESTART=1 (do not stop or start the service), FTN_ADMIN_RESET_NOROOT=1.
+set -euo pipefail
+
+APP=ftnbilling
+ENVF=${FTN_ENV_FILE:-/etc/$APP/$APP.env}
+BIN=${FTN_BIN:-/usr/local/bin/$APP}
+RUNAS=${FTN_USER:-$APP}
+
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; }
+
+args=()
+for a in "$@"; do
+  case "$a" in
+    --generate|-g) args+=(-generate) ;;
+    --setup-code) args+=(-setup-code) ;;
+    --reset-totp) args+=(-reset-totp) ;;
+    --revoke-sessions) args+=(-revoke-sessions) ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+  esac
+done
+[ "${FTN_ADMIN_RESET_NOROOT:-0}" = 1 ] || [ "$(id -u)" = 0 ] || die "run as root (sudo $APP-admin-reset)"
+[ -r "$ENVF" ] || die "$ENVF not found or unreadable"
+[ -x "$BIN" ] || die "$BIN not found"
+
+# Export every KEY=VALUE of the settings file (not sourced: values may hold spaces).
+while IFS= read -r line || [ -n "$line" ]; do
+  line=${line%$'\r'}
+  case "$line" in ''|'#'*) continue ;; esac
+  key=${line%%=*}
+  case "$key" in *[!A-Za-z0-9_]*|'') continue ;; esac
+  val=${line#*=}
+  case "$val" in \"*\") val=${val#\"}; val=${val%\"} ;; \'*\') val=${val#\'}; val=${val%\'} ;; esac
+  export "$key=$val"
+done <"$ENVF"
+
+# The running service keeps its own copy of the admin data and would write it
+# back over the change, so it is stopped for every option and always started
+# again, even when the program fails or this script is interrupted.
+stopped=0
+svc_start() {
+  if [ "$stopped" = 1 ]; then stopped=0; systemctl start "$APP" && echo "the service was started again"; fi
+}
+if [ "${FTN_NO_RESTART:-0}" != 1 ] && command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "$APP" 2>/dev/null; then
+  trap svc_start EXIT
+  systemctl stop "$APP" || die "could not stop $APP"
+  stopped=1
+fi
+
+rc=0
+if [ "$(id -un)" = "$RUNAS" ]; then
+  out=$("$BIN" admin-reset-password "${args[@]}" 2>&1) || rc=$?
+else
+  out=$(runuser -u "$RUNAS" -- "$BIN" admin-reset-password "${args[@]}" 2>&1) || rc=$?
+fi
+if [ "$rc" != 0 ]; then
+  printf '%s\n' "$out" >&2
+  if printf '%s' "$out" | grep -q 'flag provided but not defined'; then
+    die "this program version does not support that option yet (it comes with the new sign-in); update the program with the installer first"
+  fi
+  [ "${#args[@]}" -gt 0 ] || echo "If ADMIN_PASS in $ENVF is empty or \"admin\", run: sudo $APP-admin-reset --generate" >&2
+  die "nothing was changed"
+fi
+printf '%s\n' "$out"

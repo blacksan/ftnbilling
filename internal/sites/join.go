@@ -1,6 +1,7 @@
 package sites
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -63,6 +64,23 @@ func randomAlnum(n int) (string, error) {
 // earlier one, and returns the plaintext token (shown once; only its hash is
 // stored). It is refused unless PUBLIC_BASE_URL is https, or ALLOW_INSECURE_JOIN is set.
 func (m *Manager) MintJoin(siteID string) (token string, expires time.Time, err error) {
+	return m.MintJoinStage(siteID, "")
+}
+
+// stagePrefix binds a token to its stage: a cutover command cannot be made to
+// run the join (which rotates the router's keys), nor the other way round.
+func stagePrefix(stage string) string {
+	switch stage {
+	case StageCutover:
+		return "cut."
+	case StageCleanup:
+		return "cln."
+	}
+	return ""
+}
+
+// MintJoinStage is MintJoin for a stage: the token only works for that stage.
+func (m *Manager) MintJoinStage(siteID, stage string) (token string, expires time.Time, err error) {
 	if !strings.HasPrefix(m.cfg.PublicBaseURL, "https://") && !m.cfg.AllowInsecureJoin {
 		return "", time.Time{}, ErrInsecureBase
 	}
@@ -73,6 +91,7 @@ func (m *Manager) MintJoin(siteID string) (token string, expires time.Time, err 
 	if err != nil {
 		return "", time.Time{}, err
 	}
+	token = stagePrefix(stage) + token
 	now := m.now()
 	expires = now.Add(m.cfg.JoinTokenTTL)
 	err = m.st.Update(func(d *store.Data) error {
@@ -121,14 +140,68 @@ func (m *Manager) ConsumeJoin(token, userAgent, from string) (script []byte, sit
 // ConsumeJoinOpts is ConsumeJoin with noCheck: the router fetched the script
 // without certificate checking, so the script's own downloads skip it too.
 func (m *Manager) ConsumeJoinOpts(token, userAgent, from string, noCheck bool) (script []byte, siteID string, err error) {
+	return m.ConsumeJoinStage(token, userAgent, from, noCheck, "")
+}
+
+// ConsumeJoinStage is ConsumeJoinOpts for a stage of the IPoE rollout (see
+// ScriptInput.Stage). "" and "join" make the router's keys and password, like
+// the old join; "cutover" and "cleanup" only render what the database holds
+// (the router is already joined, so no key is touched and none is in the script).
+func (m *Manager) ConsumeJoinStage(token, userAgent, from string, noCheck bool, stage string) (script []byte, siteID string, err error) {
+	return m.ConsumeJoinForce(token, userAgent, from, noCheck, stage, false)
+}
+
+// ConsumeJoinForce is ConsumeJoinStage with force: the cutover is rendered
+// even though some paying flats have not been seen on the router (see
+// UnseenEntitled).
+func (m *Manager) ConsumeJoinForce(token, userAgent, from string, noCheck bool, stage string, force bool) (script []byte, siteID string, err error) {
+	switch stage {
+	case "", StageJoin, StageCutover, StageCleanup:
+	default:
+		return nil, "", ErrJoinInvalid
+	}
 	if token == "" || len(token) > 128 {
 		return nil, "", ErrJoinInvalid
 	}
 	if m.cfg.JoinRequireMikrotikUA && !strings.HasPrefix(strings.ToLower(userAgent), "mikrotik") {
 		return nil, "", ErrJoinInvalid
 	}
+	if !strings.HasPrefix(token, stagePrefix(stage)) || (stagePrefix(stage) == "" && (strings.HasPrefix(token, "cut.") || strings.HasPrefix(token, "cln."))) {
+		return nil, "", ErrJoinInvalid // the token belongs to another stage
+	}
 	want := HashToken(token)
 	now := m.now()
+	if stage == StageCutover && !force {
+		// Read the router before the token is used up: a refusal leaves it valid.
+		var sid string
+		m.st.View(func(d *store.Data) {
+			for _, s := range d.Sites {
+				if s.Join.Hash != "" && subtle.ConstantTimeCompare([]byte(want), []byte(s.Join.Hash)) == 1 && !s.Removed && s.Join.UsedAt.IsZero() && now.Before(s.Join.ExpiresAt) {
+					sid = s.ID
+				}
+			}
+		})
+		confirmed := false
+		m.st.View(func(d *store.Data) { confirmed = sid != "" && billing.SiteMark(d, sid, billing.MarkCutoverConfirmed) })
+		if confirmed {
+			return nil, "", fmt.Errorf("%w: already cut over (the cutover was confirmed); changes are applied by the server now. Run it again only if you mean to (force)", ErrCannotRender)
+		}
+		if sid != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			unseen, uerr := m.UnseenEntitled(ctx, sid)
+			unmanaged, merr := m.UnmanagedDevices(ctx, sid)
+			cancel()
+			if uerr != nil {
+				return nil, "", fmt.Errorf("%w: could not read the router's leases to check the flats (%v); fix the connection or force the cutover", ErrCannotRender, uerr)
+			}
+			if merr == nil && len(unmanaged) > 0 {
+				return nil, "", fmt.Errorf("%w: the router has devices the server does not know, which would be cut off: %s. Check them, or force the cutover (they are then copied as static entries)", ErrCannotRender, strings.Join(unmanaged, "; "))
+			}
+			if len(unseen) > 0 {
+				return nil, "", fmt.Errorf("%w: these paying flats have not been seen on the router (no lease or ARP entry with their MAC), so they would lose service: %s. Fix their MAC, or force the cutover", ErrCannotRender, strings.Join(unseen, "; "))
+			}
+		}
+	}
 	err = m.st.Update(func(d *store.Data) error {
 		var site store.Site
 		found := false
@@ -140,6 +213,9 @@ func (m *Manager) ConsumeJoinOpts(token, userAgent, from string, noCheck bool) (
 		}
 		if !found || !site.Join.UsedAt.IsZero() || !now.Before(site.Join.ExpiresAt) {
 			return ErrJoinInvalid
+		}
+		if stage == StageCutover || stage == StageCleanup {
+			return m.renderLaterStage(d, site, stage, now, from, noCheck, force, &script, &siteID)
 		}
 		priv, pub, err := wg.GenerateKeypair()
 		if err != nil {
@@ -163,6 +239,7 @@ func (m *Manager) ConsumeJoinOpts(token, userAgent, from string, noCheck bool) (
 		script, err = RenderJoinScript(ScriptInput{
 			Site: ApplyDefaults(m.cfg, site), PrivateKey: priv, RESTPass: pass, ServerPub: m.cfg.WGPublicKey,
 			Endpoint: m.cfg.WGEndpoint, WGSubnet: m.pfx, PublicBase: m.cfg.PublicBaseURL, PublicIP: m.cfg.PublicIP, Generated: now, NoCheck: noCheck,
+			Stage: stage,
 		})
 		if err != nil {
 			return fmt.Errorf("could not render the join script: %w", err)
@@ -173,6 +250,10 @@ func (m *Manager) ConsumeJoinOpts(token, userAgent, from string, noCheck bool) (
 	})
 	if err != nil {
 		return nil, "", err
+	}
+	if stage == StageCutover || stage == StageCleanup {
+		m.log.Info("ipoe script handed out", "site", siteID, "stage", stage, "from", from)
+		return script, siteID, nil
 	}
 	if err := m.ApplyPeers(); err != nil {
 		m.log.Warn("could not write the WireGuard peers file", "site", siteID, "err", err)

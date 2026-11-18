@@ -26,6 +26,10 @@ type fakeDaraja struct {
 	stkBody  map[string]any
 	stkAuth  string
 	respCode string
+	regBody  map[string]string // last RegisterURL body
+	regCode  string            // ResponseCode to answer RegisterURL with
+	queryRes string            // ResultCode to answer STK queries with ("" = still processing)
+	queryRaw string            // when set, the exact body of the STK query answer
 }
 
 func (f *fakeDaraja) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +53,26 @@ func (f *fakeDaraja) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			code = "0"
 		}
 		w.Write([]byte(`{"MerchantRequestID":"m1","CheckoutRequestID":"ws_CO_123","ResponseCode":"` + code + `","ResponseDescription":"ok"}`))
+	case "/mpesa/c2b/v2/registerurl":
+		b, _ := io.ReadAll(r.Body)
+		json.Unmarshal(b, &f.regBody)
+		if f.regCode != "" {
+			w.WriteHeader(400)
+			w.Write([]byte(`{"errorCode":"500.003.1001","errorMessage":"` + f.regCode + `"}`))
+			return
+		}
+		w.Write([]byte(`{"ResponseCode":"0","ResponseDescription":"Success"}`))
+	case "/mpesa/stkpushquery/v1/query":
+		if f.queryRaw != "" {
+			w.Write([]byte(f.queryRaw))
+			return
+		}
+		if f.queryRes == "" {
+			w.WriteHeader(500)
+			w.Write([]byte(`{"errorCode":"500.001.1001","errorMessage":"The transaction is being processed"}`))
+			return
+		}
+		w.Write([]byte(`{"ResponseCode":"0","ResponseDescription":"ok","ResultCode":"` + f.queryRes + `","ResultDesc":"done"}`))
 	default:
 		http.NotFound(w, r)
 	}
@@ -382,7 +406,7 @@ func TestC2BAmountMatchesTheAccountsOwnSitePrices(t *testing.T) {
 	svc.SyncProfiles(ctx, siteB)
 	mp := payments.NewMpesa(payments.MpesaConfig{PublicBaseURL: "https://example.org", Enabled: true}, svc, r.st, log)
 	mp.SetClock(func() time.Time { return r.now })
-	bAcct, err := svc.CreateAccount(billing.AccountInput{SiteID: siteB, Flat: "Flat 3B", MAC: ontMAC})
+	bAcct, err := svc.CreateAccount(billing.AccountInput{SiteID: siteB, Flat: "Flat 3B", MAC: "AA:BB:CC:DD:EE:0B"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 
+	"ispbill/internal/billing"
 	"ispbill/internal/store"
 )
 
@@ -25,7 +26,10 @@ func (s *Server) routerFileRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /routeros/hotspot/{site}/{name}", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		var ok bool
-		s.st.View(func(d *store.Data) { st, found := d.Sites[r.PathValue("site")]; ok = found && !st.Removed })
+		s.st.View(func(d *store.Data) {
+			st, found := d.Sites[r.PathValue("site")]
+			ok = found && !st.Removed && !billing.IPoE(st)
+		})
 		if !hotspotFiles[name] || !ok {
 			http.NotFound(w, r)
 			return

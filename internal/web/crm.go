@@ -419,14 +419,14 @@ func (s *Server) adminEquipmentSave(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminEquipmentImport(w http.ResponseWriter, r *http.Request) {
 	res, err := s.svc.ImportEquipment(r.PostFormValue("lines"))
 	if err != nil {
-		s.back(w, r, "/admin/equipment", "Error: "+err.Error())
+		s.back(w, r, nextOr(r, "/admin/equipment"), "Error: "+err.Error())
 		return
 	}
 	msg := "Imported " + strconv.Itoa(res.Added) + " items"
 	if len(res.Skipped) > 0 {
 		msg += ". Skipped: " + strings.Join(res.Skipped, "; ")
 	}
-	s.back(w, r, "/admin/equipment", msg)
+	s.back(w, r, nextOr(r, "/admin/equipment"), msg)
 }
 
 func (s *Server) adminEquipmentAssign(w http.ResponseWriter, r *http.Request) {

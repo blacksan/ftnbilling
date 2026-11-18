@@ -71,3 +71,19 @@ func autoImport(ctx context.Context, b *pgstore.Backend, cfg config.Config, log 
 	log.Info("import finished", "rows", counts.Rows, "applied_kes", counts.AppliedKES, "file_moved_to", filepath.Base(to))
 	return nil
 }
+
+// openPostgresShared opens the database without the single-writer lock and
+// without migrating, for the small admin commands that may run while the
+// service is up (each change is one transaction on a settings row).
+func openPostgresShared(ctx context.Context, cfg config.Config) (*store.Store, error) {
+	b, err := pgstore.Open(ctx, cfg.DatabaseURL, pgstore.Options{NoLock: true, NoMigrate: true, Wait: 10 * time.Second})
+	if err != nil {
+		return nil, err
+	}
+	st, err := store.OpenWith(b)
+	if err != nil {
+		b.Close()
+		return nil, err
+	}
+	return st, nil
+}

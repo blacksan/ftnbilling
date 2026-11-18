@@ -15,3 +15,7 @@ import (
 func openPostgres(context.Context, config.Config, *slog.Logger) (*store.Store, error) {
 	return nil, errors.New("DATABASE_URL is set, but this build has no Postgres support (built with -tags nopg)")
 }
+
+func openPostgresShared(context.Context, config.Config) (*store.Store, error) {
+	return nil, errors.New("DATABASE_URL is set, but this build has no Postgres support (built with -tags nopg)")
+}

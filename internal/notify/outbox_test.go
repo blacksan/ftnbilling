@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -52,9 +53,9 @@ func noon() time.Time { return time.Date(2026, 11, 18, 12, 0, 0, 0, EAT) }
 
 func newBox(t *testing.T, c *clock, f *fake, mut func(*Options)) *Outbox {
 	t.Helper()
-	o := Options{Path: filepath.Join(t.TempDir(), "outbox.json"), Senders: map[string]Sender{ChanWhatsApp: f, ChanTelegram: f, ChanEmail: f},
+	o := Options{Path: filepath.Join(t.TempDir(), "outbox.json"), Senders: map[string]Sender{ChanWhatsApp: f, ChanEmail: f},
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: c.Now,
-		Intervals: map[string]time.Duration{ChanWhatsApp: 200 * time.Millisecond, ChanTelegram: time.Second, ChanEmail: 2 * time.Second}}
+		Intervals: map[string]time.Duration{ChanWhatsApp: 200 * time.Millisecond, ChanEmail: 2 * time.Second}}
 	if mut != nil {
 		mut(&o)
 	}
@@ -68,7 +69,7 @@ func newBox(t *testing.T, c *clock, f *fake, mut func(*Options)) *Outbox {
 func TestDedupe(t *testing.T) {
 	c := &clock{t: noon()}
 	b := newBox(t, c, &fake{}, nil)
-	m := Message{Channel: ChanTelegram, To: "1", Text: "x", DedupeKey: "k1"}
+	m := Message{Channel: ChanEmail, To: "1", Text: "x", DedupeKey: "k1"}
 	if _, ok := b.Enqueue(m); !ok {
 		t.Fatal("first enqueue")
 	}
@@ -76,7 +77,7 @@ func TestDedupe(t *testing.T) {
 		t.Fatal("duplicate must be ignored")
 	}
 	// still a duplicate after it was sent and after a reload
-	b.Step(context.Background(), ChanTelegram)
+	b.Step(context.Background(), ChanEmail)
 	if _, ok := b.Enqueue(m); ok {
 		t.Fatal("duplicate after send")
 	}
@@ -112,10 +113,10 @@ func TestBackoffAndGiveUp(t *testing.T) {
 		f.errs = append(f.errs, errors.New("network down"))
 	}
 	b := newBox(t, c, f, nil)
-	b.Enqueue(Message{Channel: ChanTelegram, To: "1", Text: "x"})
+	b.Enqueue(Message{Channel: ChanEmail, To: "1", Text: "x"})
 	ctx := context.Background()
 	for i := 1; i <= maxAttempts; i++ {
-		if !b.Step(ctx, ChanTelegram) {
+		if !b.Step(ctx, ChanEmail) {
 			t.Fatalf("attempt %d should have been made", i)
 		}
 		m := b.List(Filter{})[0]
@@ -125,7 +126,7 @@ func TestBackoffAndGiveUp(t *testing.T) {
 			}
 			// not due yet
 			c.Add(backoff(i) - time.Second)
-			if b.Step(ctx, ChanTelegram) {
+			if b.Step(ctx, ChanEmail) {
 				t.Fatal("sent before the backoff elapsed")
 			}
 			c.Add(time.Second)
@@ -141,8 +142,8 @@ func TestPermanentFailsAtOnceAndRetry(t *testing.T) {
 	c := &clock{t: noon()}
 	f := &fake{errs: []error{Permanent("recipient not on WhatsApp")}}
 	b := newBox(t, c, f, nil)
-	b.Enqueue(Message{Channel: ChanTelegram, To: "1", Text: "x"})
-	b.Step(context.Background(), ChanTelegram)
+	b.Enqueue(Message{Channel: ChanEmail, To: "1", Text: "x"})
+	b.Step(context.Background(), ChanEmail)
 	m := b.List(Filter{})[0]
 	if m.Status != StatusFailed || m.Attempts != 1 {
 		t.Fatalf("%+v", m)
@@ -151,7 +152,7 @@ func TestPermanentFailsAtOnceAndRetry(t *testing.T) {
 		t.Fatal("retry")
 	}
 	c.Add(2 * time.Second)
-	b.Step(context.Background(), ChanTelegram)
+	b.Step(context.Background(), ChanEmail)
 	if m := b.List(Filter{})[0]; m.Status != StatusSent {
 		t.Fatalf("%+v", m)
 	}
@@ -164,34 +165,34 @@ func TestAuthErrorPausesChannel(t *testing.T) {
 	c := &clock{t: noon()}
 	f := &fake{errs: []error{Auth("token expired")}}
 	b := newBox(t, c, f, nil)
-	b.Enqueue(Message{Channel: ChanTelegram, To: "1", Text: "a"})
-	b.Enqueue(Message{Channel: ChanTelegram, To: "1", Text: "b"})
+	b.Enqueue(Message{Channel: ChanEmail, To: "1", Text: "a"})
+	b.Enqueue(Message{Channel: ChanEmail, To: "1", Text: "b"})
 	ctx := context.Background()
-	b.Step(ctx, ChanTelegram)
-	if _, p := b.Paused()[ChanTelegram]; !p {
+	b.Step(ctx, ChanEmail)
+	if _, p := b.Paused()[ChanEmail]; !p {
 		t.Fatal("channel must be paused")
 	}
 	c.Add(time.Hour)
-	if b.Step(ctx, ChanTelegram) || f.count() != 0 {
+	if b.Step(ctx, ChanEmail) || f.count() != 0 {
 		t.Fatal("a paused channel sends nothing")
 	}
-	b.Resume(ChanTelegram)
+	b.Resume(ChanEmail)
 	for i := 0; i < 2; i++ {
 		c.Add(2 * time.Second)
-		b.Step(ctx, ChanTelegram)
+		b.Step(ctx, ChanEmail)
 	}
 	if f.count() != 2 {
 		t.Fatalf("sent %d after resume", f.count())
 	}
 	// Direct success lifts a pause too.
 	f.errs = []error{Auth("again")}
-	b.Enqueue(Message{Channel: ChanTelegram, To: "1", Text: "c"})
+	b.Enqueue(Message{Channel: ChanEmail, To: "1", Text: "c"})
 	c.Add(2 * time.Second)
-	b.Step(ctx, ChanTelegram)
+	b.Step(ctx, ChanEmail)
 	if len(b.Paused()) != 1 {
 		t.Fatal("paused again")
 	}
-	if err := b.Direct(ctx, Message{Channel: ChanTelegram, To: "1", Text: "test"}); err != nil || len(b.Paused()) != 0 {
+	if err := b.Direct(ctx, Message{Channel: ChanEmail, To: "1", Text: "test"}); err != nil || len(b.Paused()) != 0 {
 		t.Fatalf("direct: %v %v", err, b.Paused())
 	}
 }
@@ -314,9 +315,9 @@ func TestRetentionAndPersistence(t *testing.T) {
 	c := &clock{t: noon()}
 	f := &fake{}
 	b := newBox(t, c, f, nil)
-	b.Enqueue(Message{Channel: ChanTelegram, To: "1", Text: "old"})
-	b.Step(context.Background(), ChanTelegram)
-	b.Enqueue(Message{Channel: ChanTelegram, To: "1", Text: "still queued", NotBefore: c.Now().Add(1000 * time.Hour)})
+	b.Enqueue(Message{Channel: ChanEmail, To: "1", Text: "old"})
+	b.Step(context.Background(), ChanEmail)
+	b.Enqueue(Message{Channel: ChanEmail, To: "1", Text: "still queued", NotBefore: c.Now().Add(1000 * time.Hour)})
 	c.Add(61 * 24 * time.Hour)
 	if err := b.Save(); err != nil {
 		t.Fatal(err)
@@ -346,15 +347,15 @@ func TestCancelAndDelivery(t *testing.T) {
 	c := &clock{t: noon()}
 	f := &fake{}
 	b := newBox(t, c, f, nil)
-	m, _ := b.Enqueue(Message{Channel: ChanTelegram, To: "1", Text: "x"})
+	m, _ := b.Enqueue(Message{Channel: ChanEmail, To: "1", Text: "x"})
 	if !b.Cancel(m.ID) {
 		t.Fatal("cancel")
 	}
-	if b.Step(context.Background(), ChanTelegram) {
+	if b.Step(context.Background(), ChanEmail) {
 		t.Fatal("cancelled message was sent")
 	}
-	m2, _ := b.Enqueue(Message{Channel: ChanTelegram, To: "1", Text: "y"})
-	b.Step(context.Background(), ChanTelegram)
+	m2, _ := b.Enqueue(Message{Channel: ChanEmail, To: "1", Text: "y"})
+	b.Step(context.Background(), ChanEmail)
 	got, _ := b.Get(m2.ID)
 	if got.ProviderID == "" || !b.SetDelivery(got.ProviderID, "delivered", "") {
 		t.Fatal("delivery")
@@ -362,5 +363,34 @@ func TestCancelAndDelivery(t *testing.T) {
 	b.SetDelivery(got.ProviderID, "sent", "") // a late, lower status must not move it back
 	if got, _ = b.Get(m2.ID); got.Delivery != "delivered" {
 		t.Fatal(got.Delivery)
+	}
+}
+
+// A queued message of a removed channel (telegram) is cancelled when the
+// outbox opens, its pause entry is dropped, and the message stays visible.
+func TestRemovedChannelMessagesCancelledOnOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	old := `{"messages":[{"id":"a1","channel":"telegram","kind":"admin_alert","to":"-1","text":"x","status":"queued"},` +
+		`{"id":"a2","channel":"telegram","kind":"admin_alert","to":"-1","text":"y","status":"sent"},` +
+		`{"id":"a3","channel":"email","kind":"admin_alert","to":"a@x","text":"z","status":"queued"}],` +
+		`"keys":{},"paused":{"telegram":{"reason":"401","at":"2026-01-01T00:00:00Z"}}}`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Open(Options{Path: path, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m1, _ := b.Get("a1")
+	m2, _ := b.Get("a2")
+	m3, _ := b.Get("a3")
+	if m1.Status != StatusCancelled || m1.LastErr != "channel removed" || m2.Status != StatusSent || m3.Status != StatusQueued {
+		t.Fatalf("%+v %+v %+v", m1, m2, m3)
+	}
+	if len(b.Paused()) != 0 {
+		t.Fatalf("pause kept: %v", b.Paused())
+	}
+	if err := b.Save(); err != nil {
+		t.Fatal(err)
 	}
 }

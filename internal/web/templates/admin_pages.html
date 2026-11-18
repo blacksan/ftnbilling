@@ -74,15 +74,22 @@
 {{template "afoot"}}{{end}}
 
 {{define "admin_devices"}}{{template "ahead" .}}
-<p class="muted">MACs that opened the portal, or that the hotspot has seen, without a matching account. Each flat's ONT shows up as one MAC. Create an account for it, or attach it to an existing account (an ONT swap).</p>
-{{if .Data.HostErr}}<p class="bad">Could not read hotspot hosts from the router: {{.Data.HostErr}}</p>{{end}}
-<div class="tw"><table><tr>{{if .Data.ShowSite}}<th>Building</th>{{end}}<th>MAC</th><th>Last IP</th><th>Last seen (EAT)</th><th>Seen</th><th>Source</th><th>Create account</th><th>Attach to existing</th><th></th></tr>
-{{$d := .}}{{range .Data.Devices}}{{$mac := .MAC}}{{$dsite := .SiteID}}<tr>{{if $d.Data.ShowSite}}<td>{{index $d.Data.SiteNames .SiteID}}</td>{{end}}<td><b>{{.MAC}}</b></td><td>{{.IP}}</td><td>{{eat .LastSeen}}</td><td>{{.Hits}}x</td><td>{{.Source}}</td>
-<td><form class="row" method="post" action="/admin/devices/create"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$dsite}}"><input type="hidden" name="mac" value="{{$mac}}"><input name="flat" placeholder="Flat 3B" required size="9"><button>Create account for this MAC</button></form></td>
-<td><form class="row" method="post" action="/admin/devices/attach"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="mac" value="{{$mac}}"><select name="account">{{range $d.Data.Accounts}}{{if eq .SiteID $dsite}}<option value="{{.ID}}">{{.Flat}} ({{.Code}})</option>{{end}}{{end}}</select><button>Attach</button></form></td>
+<p class="muted">Devices on the building network that have no account: online ones first. Each flat's ONT shows as one MAC. <b>Attach</b> gives a device to an existing flat (an ONT swap), <b>Create account</b> makes a new flat, <b>Dismiss</b> hides a device that is not a customer (it comes back if it opens the portal).</p>
+{{if .Data.HostErr}}<p class="bad">Could not read the router: {{.Data.HostErr}}</p>{{end}}
+<p>{{if .Data.OnlineOnly}}Showing online devices only. <a href="/admin/devices">Show all</a>{{else}}Showing all devices, online first. <a href="/admin/devices?online=1">Show online only</a>{{end}} &middot; <a href="/admin/devices{{if .Data.OnlineOnly}}?online=1{{end}}">Refresh</a></p>
+<div class="tw"><table><tr>{{if .Data.ShowSite}}<th>Building</th>{{end}}<th>Device</th><th>Seen</th><th>Attach to account</th><th>Create account</th><th></th></tr>
+{{$d := .}}{{range $i, $r := .Data.Rows}}{{$mac := $r.MAC}}{{$dsite := $r.SiteID}}<tr>{{if $d.Data.ShowSite}}<td>{{$r.SiteName}}</td>{{end}}
+<td><span class="pill {{if $r.Online}}active{{else}}expired{{end}}">{{if $r.Online}}online{{else}}offline{{end}}</span> <b>{{$r.MAC}}</b><br><span class="muted">{{if $r.Vendor}}{{$r.Vendor}}{{else}}unknown vendor{{end}}{{if $r.HostName}} &middot; {{$r.HostName}}{{end}}{{if $r.IP}} &middot; {{$r.IP}}{{end}}</span></td>
+<td>{{eat $r.LastSeen}}<br><span class="muted">{{$r.Hits}}x via {{$r.Source}}</span></td>
+<td>{{if $r.Suggested}}<form method="post" action="/admin/devices/attach" style="margin-bottom:6px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$dsite}}"><input type="hidden" name="mac" value="{{$mac}}"><input type="hidden" name="acct" value="{{$r.Suggested.Code}}">
+<span class="bad">Possible ONT swap: {{$r.Suggested.Flat}}</span> <span class="muted">{{$r.Suggested.Reason}}</span> <button>Replace MAC of {{$r.Suggested.Flat}}</button></form>{{end}}
+<form class="row" method="post" action="/admin/devices/attach"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$dsite}}"><input type="hidden" name="mac" value="{{$mac}}">
+<input name="acct" list="pk{{$i}}" placeholder="search flat or code" required size="16" autocomplete="off"><datalist id="pk{{$i}}">{{range $r.Pick}}<option value="{{.Code}}">{{.Flat}}{{if .Stale}} (MAC not seen lately){{end}}</option>{{end}}</datalist><button>Attach</button></form></td>
+<td><form class="row" method="post" action="/admin/devices/create"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$dsite}}"><input type="hidden" name="mac" value="{{$mac}}">
+<input name="flat" placeholder="Flat 3B" required size="8"><input name="tenant" placeholder="tenant (optional)" size="12"><select name="package"><option value="">no plan yet</option>{{range $d.Data.Pkgs}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select><button>Create</button></form></td>
 <td><form class="i" method="post" action="/admin/devices/dismiss"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$dsite}}"><input type="hidden" name="mac" value="{{$mac}}"><button>Dismiss</button></form></td></tr>
-{{else}}<tr><td colspan="9">None. Every device that opened the portal has an account.</td></tr>{{end}}</table></div>
-<p class="muted">Attaching changes that account's ONT MAC to this device and ends the old session.</p>
+{{else}}<tr><td colspan="6">None. Every device on the network has an account.</td></tr>{{end}}</table></div>
+<p class="muted">Attaching changes that flat's MAC to this device; the router lease follows within seconds. A MAC that already belongs to another flat is refused and the error names it.</p>
 {{template "afoot"}}{{end}}
 
 {{define "admin_payments"}}{{template "ahead" .}}{{$F := .Data.F}}
@@ -157,8 +164,8 @@
 {{$d := .}}{{range .Data.Vouchers}}<tr><td><b>{{.Code}}</b></td><td>{{if .SiteID}}{{index $d.Data.SiteNames .SiteID}}{{else}}any{{end}}</td><td>{{(pkgOf $d.Data.PkgMap .PackageID).Name}}</td><td><a href="/admin/vouchers/print?batch={{.Batch}}">{{.Batch}}</a></td><td>{{if .Used}}used {{eat .UsedAt}}{{else}}unused{{end}}</td></tr>
 {{else}}<tr><td colspan="5">No vouchers yet.</td></tr>{{end}}</table></div>{{template "afoot"}}{{end}}
 
-{{define "admin_settings"}}{{template "ahead" .}}
-<p class="muted">Read-only. These values come from the container's environment variables (see README). Change them in the router's env list and restart the container.</p>
+{{define "admin_settings"}}{{template "ahead" .}}{{template "set_tabs" .}}
+<div class="card"><b>Sign-in</b><p class="muted">Passwords, the authenticator, signed-in browsers and phones, and users are managed on the <a href="/admin/security">Security</a> page. Locked out? On the server run <code>sudo ftnbilling-admin-reset</code> (add <code>--generate</code> for a new random password).</p></div>
 <div class="grid2">
 <div class="card"><b>Lifecycle rules</b><table>
 <tr><td>Reminder before expiry</td><td>{{if .Data.Policy.ReminderDays}}{{.Data.Policy.ReminderDays}} days before (plans longer than that){{else}}off{{end}} <code>REMINDER_DAYS</code></td></tr>
@@ -169,12 +176,10 @@
 <tr><td>Upgrades</td><td>take effect immediately; the new package's time is added from the current expiry</td></tr>
 <tr><td>Suspension</td><td>manual, from the account page</td></tr></table></div>
 <div class="card"><b>Payments</b><table>
-<tr><td>M-Pesa Daraja</td><td>{{if .Data.Mpesa}}enabled{{else}}disabled (credentials not set){{end}}</td></tr>
+<tr><td>M-Pesa Daraja</td><td>{{if .Data.Mpesa}}enabled{{else}}disabled (credentials not set){{end}} <a href="/admin/settings/mpesa">M-Pesa settings</a></td></tr><tr><td>WhatsApp</td><td>{{if .Data.WAOn}}set up{{else}}not set up{{end}} <a href="/admin/settings/whatsapp">WhatsApp settings</a></td></tr><tr><td>Email</td><td>{{if .Data.EmailOn}}set up{{else}}not set up{{end}} <a href="/admin/settings/email">Email settings</a></td></tr>
 <tr><td>Test payments</td><td>{{if .Data.Cfg.TestMode}}<span class="bad">ON (free access!)</span>{{else}}off{{end}}</td></tr>
 <tr><td>Paybill account number</td><td>the flat's account code</td></tr>
-<tr><td>STK result URL</td><td><code>{{.Data.CBStk}}</code></td></tr>
-<tr><td>C2B validation URL</td><td><code>{{.Data.CBVal}}</code></td></tr>
-<tr><td>C2B confirmation URL</td><td><code>{{.Data.CBConf}}</code></td></tr>
+<tr><td>Callback URLs</td><td>see <a href="/admin/settings/mpesa">M-Pesa settings</a></td></tr>
 <tr><td>Support phone shown</td><td>{{if .Data.Support}}{{.Data.Support}}{{else}}not set (SUPPORT_PHONE){{end}}</td></tr></table></div>
 <div class="card"><b>Database and backups</b><table>
 <tr><td>Customer database</td><td>{{if eq .Data.DBKind "postgres"}}PostgreSQL{{else}}JSON file (set <code>DATABASE_URL</code> to use PostgreSQL){{end}}{{if .Data.DBErr}} <span class="bad">not healthy: {{.Data.DBErr}}</span>{{else}} <span class="ok">healthy</span>{{end}}</td></tr>
@@ -185,7 +190,7 @@
 <tr><td>Last Drive upload</td><td>{{if .UploadAt.IsZero}}never{{else}}{{eat .UploadAt}}{{if .UploadOK}}{{if deref .UploadOK}} <span class="ok">ok</span>{{else}} <span class="bad">FAILED</span>{{end}}{{end}}{{end}}</td></tr>
 {{if .Error}}<tr><td>Problem</td><td class="bad">{{.Error}}</td></tr>{{end}}{{end}}{{end}}</table></div>
 <div class="card"><b>Admin access</b><table>
-<tr><td>Allowed networks</td><td>this server (SSH tunnel) and {{.Data.AdminCIDR}} <code>ADMIN_ALLOW_CIDR</code></td></tr>
+<tr><td>Admin access</td><td>public, with a password and an authenticator code (not from the routers' tunnel)</td></tr>
 <tr><td>Refused</td><td>router tunnels ({{.Data.WGSubnet}}) and the public internet</td></tr></table></div>
 <div class="card"><b>Router connections</b><table>
 <tr><td>Buildings</td><td>each building has its own router and settings: <a href="/admin/sites">Buildings</a></td></tr>

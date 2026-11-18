@@ -38,13 +38,16 @@ type app struct {
 	cookie *http.Cookie // extra admin cookie (building selection)
 	csrf   string
 	cl     *http.Client
+	srv    *web.Server
+	owner  *who
+	br     *browser
 }
 
 func newApp(t *testing.T, testMode bool) *app { return newAppCfg(t, testMode, nil) }
 
 func newAppCfg(t *testing.T, testMode bool, mut func(*config.Config)) *app {
 	t.Helper()
-	cfg := config.Config{BrandName: "Building WiFi", TestMode: testMode, AdminUser: "admin", AdminPass: pw, RouterMock: true,
+	cfg := config.Config{BrandName: "Building WiFi", TestMode: testMode, AdminUser: "admin", AdminPass: pw, RouterMock: true, DataKey: testKey,
 		SupportPhone: "0700 111 222", WANInterface: "ether1", OLTInterface: "sfp-sfpplus1", WANCapacityMbps: 500, OLTCapacityMbps: 10000, FUPTB: 15,
 		NetflowAddr: "off", CustomerSubnet: "10.5.50.0/24", PingTargets: []string{"8.8.8.8", "1.1.1.1"}}
 	if mut != nil {
@@ -73,13 +76,14 @@ func newAppCfg(t *testing.T, testMode bool, mut func(*config.Config)) *app {
 		"test":    &payments.Test{Enabled_: testMode, Delay: 30 * time.Millisecond, C: svc},
 		"voucher": payments.Voucher{C: svc}, "mpesa": mp,
 	}
-	ts := httptest.NewServer(web.New(cfg, st, svc, prov, mp, mgr, log).Handler())
+	srv := web.New(cfg, st, svc, prov, mp, mgr, log)
+	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	a := &app{ts: ts, st: st, svc: svc, rt: rt, mgr: mgr, site: envID,
-		cl: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
-	// Prime the CSRF cookie.
-	resp := a.admin("GET", "/admin", nil)
-	resp.Body.Close()
+	a := &app{ts: ts, st: st, svc: svc, rt: rt, mgr: mgr, site: envID, srv: srv,
+		cl: &http.Client{CheckRedirect: noRedirect}}
+	a.owner = seedUser(t, srv, st, "admin", store.RoleOwner, pw)
+	a.br = signIn(t, ts, srv, st, a.owner)
+	a.csrf = a.br.CSRF
 	return a
 }
 
@@ -90,35 +94,27 @@ func body(t *testing.T, r *http.Response) string {
 	return string(b)
 }
 
-// admin performs an authenticated request; POST forms get the CSRF token added.
+// admin performs a signed-in request; POST forms get the CSRF token added.
 func (a *app) admin(method, path string, form url.Values) *http.Response {
 	var rd io.Reader
 	if method == "POST" {
 		if form == nil {
 			form = url.Values{}
 		}
-		form.Set("_csrf", a.csrf)
+		form.Set("_csrf", a.br.CSRF)
 		rd = strings.NewReader(form.Encode())
 	}
 	req, _ := http.NewRequest(method, a.ts.URL+path, rd)
-	req.SetBasicAuth("admin", pw)
 	if method == "POST" {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
-	if a.csrf != "" {
-		req.AddCookie(&http.Cookie{Name: "ispbill_csrf", Value: a.csrf})
-	}
+	req.AddCookie(a.br.Cookie)
 	if a.cookie != nil {
 		req.AddCookie(a.cookie)
 	}
 	resp, err := a.cl.Do(req)
 	if err != nil {
 		panic(err)
-	}
-	for _, c := range resp.Cookies() {
-		if c.Name == "ispbill_csrf" {
-			a.csrf = c.Value
-		}
 	}
 	return resp
 }
@@ -182,42 +178,47 @@ func (a *app) account(t *testing.T, flat string) store.Account {
 func TestAdminAuthAndCSRF(t *testing.T) {
 	a := newApp(t, true)
 	c := a.cl
+	// Signed out, every admin page sends the browser to the login page.
 	for _, p := range []string{"/admin", "/admin/accounts", "/admin/devices", "/admin/payments", "/admin/payments.csv", "/admin/payments/record",
-		"/admin/unmatched", "/admin/metrics", "/admin/metrics.csv", "/admin/metrics/flat?code=X", "/admin/settings"} {
+		"/admin/unmatched", "/admin/metrics", "/admin/metrics.csv", "/admin/metrics/flat?code=X", "/admin/settings", "/admin/security"} {
 		resp, _ := c.Get(a.ts.URL + p)
-		if resp.StatusCode != 401 || resp.Header.Get("WWW-Authenticate") == "" {
-			t.Errorf("%s without auth: %d", p, resp.StatusCode)
+		resp.Body.Close()
+		if resp.StatusCode != 303 || !strings.HasPrefix(resp.Header.Get("Location"), "/admin/login") || resp.Header.Get("WWW-Authenticate") != "" {
+			t.Errorf("%s without a session: %d %q", p, resp.StatusCode, resp.Header.Get("Location"))
 		}
 	}
+	// Basic auth no longer opens anything.
 	req, _ := http.NewRequest("GET", a.ts.URL+"/admin", nil)
-	req.SetBasicAuth("admin", "wrong")
-	if resp, _ := c.Do(req); resp.StatusCode != 401 {
-		t.Fatalf("wrong pass: %d", resp.StatusCode)
+	req.SetBasicAuth("admin", pw)
+	if resp, _ := c.Do(req); resp.StatusCode != 303 {
+		t.Fatalf("basic auth: %d", resp.StatusCode)
 	}
 	html := a.adminGet(t, "/admin/packages")
 	if m := regexp.MustCompile(`name="_csrf" value="([0-9a-f]+)"`).FindStringSubmatch(html); m == nil || m[1] != a.csrf {
 		t.Fatalf("token not embedded: %v", m)
 	}
-	post := func(token string, withCookie bool) int {
+	post := func(token string, withSession bool) int {
 		form := url.Values{"name": {"Promo"}, "duration": {"30"}, "speed": {"3"}, "price": {"5"}, "_csrf": {token}}
 		req, _ := http.NewRequest("POST", a.ts.URL+"/admin/packages/save", strings.NewReader(form.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.SetBasicAuth("admin", pw)
-		if withCookie {
-			req.AddCookie(&http.Cookie{Name: "ispbill_csrf", Value: a.csrf})
+		if withSession {
+			req.AddCookie(a.br.Cookie)
 		}
 		r, _ := c.Do(req)
 		r.Body.Close()
 		return r.StatusCode
 	}
-	if post("", true) != 403 || post("deadbeef", true) != 403 || post(a.csrf, false) != 403 {
+	if post("", true) != 403 || post("deadbeef", true) != 403 {
 		t.Error("CSRF must be enforced")
+	}
+	if code := post(a.csrf, false); code != 303 {
+		t.Errorf("a valid token without a session must go to the login page, got %d", code)
 	}
 	// Every state-changing admin POST is covered, including the new ones.
 	for _, p := range []string{"/admin/accounts/create", "/admin/payments/record", "/admin/devices/create", "/admin/unmatched/assign", "/admin/accounts/mac", "/admin/metrics/demo"} {
 		req, _ := http.NewRequest("POST", a.ts.URL+p, strings.NewReader("flat=x"))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.SetBasicAuth("admin", pw)
+		req.AddCookie(a.br.Cookie)
 		if r, _ := c.Do(req); r.StatusCode != 403 {
 			t.Errorf("POST %s without token: %d", p, r.StatusCode)
 		}
@@ -237,7 +238,7 @@ func TestAdminAuthAndCSRF(t *testing.T) {
 		t.Errorf("profile not pushed: %+v", p)
 	}
 	resp, _ := c.PostForm(a.ts.URL+"/admin/packages/save", url.Values{"_csrf": {a.csrf}})
-	if resp.StatusCode != 401 {
+	if resp.StatusCode != 303 {
 		t.Errorf("unauth post: %d", resp.StatusCode)
 	}
 }
@@ -266,7 +267,7 @@ func TestUnknownMACRefusedAndListedAsUnregistered(t *testing.T) {
 		t.Error("no mac")
 	}
 	list := a.adminGet(t, "/admin/devices")
-	if !strings.Contains(list, "AA:BB:CC:DD:EE:77") || !strings.Contains(list, "10.5.50.9") || !strings.Contains(list, "Create account for this MAC") || !strings.Contains(list, "Attach") {
+	if !strings.Contains(list, "AA:BB:CC:DD:EE:77") || !strings.Contains(list, "10.5.50.9") || !strings.Contains(list, "/admin/devices/create") || !strings.Contains(list, "Attach") {
 		t.Fatalf("unregistered list: %s", list)
 	}
 	// Hotspot hosts that are not authorised show up too.

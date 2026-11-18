@@ -30,25 +30,41 @@ func (e *env) payAt(t *testing.T, a store.Account, pkg string) {
 	}
 }
 
-func TestSameMACAndFlatInTwoSites(t *testing.T) {
+func TestSameFlatInTwoSitesButMACIsGlobal(t *testing.T) {
 	e := newEnv(t)
 	b, _ := e.addSite(t, "Block B")
 	a1 := e.flat(t, "Flat 1", mac1)
-	b1 := e.flatAt(t, b, "Flat 1", mac1)
+	b1 := e.flatAt(t, b, "Flat 1", "AA:BB:CC:DD:EE:21")
 	if a1.ID == b1.ID || a1.Code == b1.Code || a1.SiteID != e.site || b1.SiteID != b {
 		t.Fatalf("%+v %+v", a1, b1)
 	}
-	if got, ok := e.svc.AccountByMAC(b, mac1); !ok || got.ID != b1.ID {
-		t.Fatal("lookup by site B")
+	// One MAC, one open account, in any building.
+	if got, ok := e.svc.AccountByMAC(mac1); !ok || got.ID != a1.ID {
+		t.Fatal("global lookup")
 	}
-	if got, _ := e.svc.AccountByMAC(e.site, mac1); got.ID != a1.ID {
-		t.Fatal("lookup by site A")
+	_, err := e.svc.CreateAccount(AccountInput{SiteID: b, Flat: "Flat 2", MAC: "aa-bb-cc-dd-ee-01"})
+	var dup *DuplicateMACError
+	if !errors.Is(err, ErrDuplicateMAC) || !errors.Is(err, store.ErrDuplicateMAC) || !errors.As(err, &dup) {
+		t.Fatalf("duplicate MAC in another building: %v", err)
+	}
+	if dup.AccountID != a1.ID || dup.Code != a1.Code || dup.Flat != "Flat 1" || dup.SiteID != e.site || dup.SiteName == "" {
+		t.Fatalf("owner details: %+v", dup)
+	}
+	if err := e.svc.ChangeMAC(context.Background(), b1.ID, mac1); !errors.As(err, &dup) || dup.AccountID != a1.ID {
+		t.Fatalf("ChangeMAC onto another building's MAC: %v", err)
+	}
+	// Closing the owner frees the MAC for any building.
+	if err := e.svc.DeleteAccount(context.Background(), a1.ID, a1.Code); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.CreateAccount(AccountInput{SiteID: b, Flat: "Flat 2", MAC: mac1}); err != nil {
+		t.Fatalf("MAC of a closed account must be free: %v", err)
 	}
 	// Still unique inside a building.
 	if _, err := e.svc.CreateAccount(AccountInput{SiteID: b, Flat: "flat 1", MAC: "AA:BB:CC:DD:EE:09"}); err == nil {
 		t.Fatal("duplicate label inside a building")
 	}
-	if _, err := e.svc.CreateAccount(AccountInput{SiteID: b, Flat: "Flat 2", MAC: mac1}); !errors.Is(err, ErrDuplicateMAC) {
+	if _, err := e.svc.CreateAccount(AccountInput{SiteID: b, Flat: "Flat 3", MAC: mac1}); !errors.Is(err, ErrDuplicateMAC) {
 		t.Fatalf("duplicate MAC inside a building: %v", err)
 	}
 	if _, err := e.svc.CreateAccount(AccountInput{SiteID: "nope", Flat: "Flat 2", MAC: "AA:BB:CC:DD:EE:0A"}); !errors.Is(err, ErrNoSite) {
@@ -74,7 +90,7 @@ func TestPaymentsTouchOnlyTheirSitesRouter(t *testing.T) {
 		t.Fatal(err)
 	}
 	a1 := e.flatAt(t, e.site, "Flat 1", mac1)
-	b1 := e.flatAt(t, b, "Flat 1", mac1)
+	b1 := e.flatAt(t, b, "Flat 1", macB)
 	e.payAt(t, a1, "1 Day")
 	if _, ok := e.rt.GetUser(a1.Code); !ok {
 		t.Fatal("site A router must hold the user")
@@ -142,7 +158,7 @@ func TestSlowSiteDoesNotDelayAnother(t *testing.T) {
 	e.svc.SyncProfiles(ctx, e.site)
 	e.svc.SyncProfiles(ctx, bID)
 	a1 := e.flatAt(t, e.site, "Flat 1", mac1)
-	b1 := e.flatAt(t, bID, "Flat 1", mac1)
+	b1 := e.flatAt(t, bID, "Flat 1", macB)
 	// Queue work on both (suspend/unsuspend does not need payment: use credit directly in the store).
 	dayID := e.pkg("1 Day").ID
 	e.st.Update(func(d *store.Data) error {
@@ -184,7 +200,7 @@ func TestFailingSiteKeepsItsTasksAndOthersSucceed(t *testing.T) {
 	e.svc.SyncProfiles(context.Background(), b)
 	rtB.SetFail(errors.New("tunnel down"))
 	a1 := e.flatAt(t, e.site, "Flat 1", mac1)
-	b1 := e.flatAt(t, b, "Flat 1", mac1)
+	b1 := e.flatAt(t, b, "Flat 1", macB)
 	e.payAt(t, a1, "1 Day")
 	e.payAt(t, b1, "1 Day") // router fails; the payment still counts
 	if _, ok := e.rt.GetUser(a1.Code); !ok {
@@ -206,7 +222,7 @@ func TestTasksOfPausedOrUnjoinedSiteWaitWithoutAttempts(t *testing.T) {
 	e := newEnv(t)
 	b, rtB := e.addSite(t, "Block B")
 	e.svc.SyncProfiles(context.Background(), b)
-	b1 := e.flatAt(t, b, "Flat 1", mac1)
+	b1 := e.flatAt(t, b, "Flat 1", macB)
 	e.st.Update(func(d *store.Data) error {
 		s := d.Sites[b]
 		s.Disabled = true
@@ -278,9 +294,9 @@ func TestMoveAccount(t *testing.T) {
 	if err := e.svc.MoveAccount(ctx, a2.ID, b); err == nil || !strings.Contains(err.Error(), "already has an account") {
 		t.Fatalf("label clash: %v", err)
 	}
-	e.flatAt(t, b, "Flat 9", "AA:BB:CC:DD:EE:03")
 	a3 := e.flatAt(t, e.site, "Flat 3", "AA:BB:CC:DD:EE:03")
-	if err := e.svc.MoveAccount(ctx, a3.ID, b); !errors.Is(err, ErrDuplicateMAC) {
+	// The MAC rule is global, so a building can never already hold a move's MAC.
+	if _, err := e.svc.CreateAccount(AccountInput{SiteID: b, Flat: "Flat 9", MAC: "AA:BB:CC:DD:EE:03"}); !errors.Is(err, ErrDuplicateMAC) {
 		t.Fatalf("mac clash: %v", err)
 	}
 	if err := e.svc.MoveAccount(ctx, a3.ID, "nope"); !errors.Is(err, ErrNoSite) {
@@ -420,7 +436,7 @@ func TestHiddenPackagesAndPriceOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	a1 := e.flatAt(t, e.site, "Flat 1", mac1)
-	b1 := e.flatAt(t, b, "Flat 1", mac1)
+	b1 := e.flatAt(t, b, "Flat 1", macB)
 	oa, err := e.svc.CreateOrder(OrderInput{AccountID: a1.ID, PackageID: day.ID, Method: "test"})
 	if err != nil || oa.AmountKES != 50 {
 		t.Fatalf("A pays the shared price: %+v %v", oa, err)
@@ -520,7 +536,7 @@ func TestVoucherSiteRestriction(t *testing.T) {
 	b, _ := e.addSite(t, "Block B")
 	e.svc.SyncProfiles(context.Background(), b)
 	a1 := e.flatAt(t, e.site, "Flat 1", mac1)
-	b1 := e.flatAt(t, b, "Flat 1", mac1)
+	b1 := e.flatAt(t, b, "Flat 1", macB)
 	day := e.pkg("1 Day")
 	_, vs, err := e.svc.GenerateVouchers(day.ID, b, 2)
 	if err != nil || vs[0].SiteID != b {

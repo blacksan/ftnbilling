@@ -101,7 +101,7 @@ func newRig(t *testing.T, n int) *rig {
 func (r *rig) engine(path string) *Engine {
 	return New(Options{Path: path, In: r.in, Out: r.out, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return r.now },
 		Targets: func() Targets {
-			return Targets{Email: []string{"a@x.example"}, Telegram: []string{"-100"}, WhatsApp: []string{"254712345678"}}
+			return Targets{Email: []string{"a@x.example"}, WhatsApp: []string{"254712345678"}}
 		}})
 }
 
@@ -186,12 +186,12 @@ func TestHoldTimes(t *testing.T) {
 	// offline: 5 minutes
 	r.down("s0")
 	r.run(4*time.Minute+30*time.Second, nil)
-	if r.e.OpenCount("") != 0 || r.problems(notify.ChanTelegram) != 0 {
+	if r.e.OpenCount("") != 0 || r.problems(notify.ChanEmail) != 0 {
 		t.Fatal("offline must wait 5 minutes")
 	}
 	r.run(60*time.Second, nil)
-	if r.e.OpenCount("s0") != 1 || r.problems(notify.ChanTelegram) != 1 {
-		t.Fatalf("offline should fire after 5 minutes: open=%d msgs=%v", r.e.OpenCount(""), r.out.texts(notify.ChanTelegram))
+	if r.e.OpenCount("s0") != 1 || r.problems(notify.ChanEmail) != 1 {
+		t.Fatalf("offline should fire after 5 minutes: open=%d msgs=%v", r.e.OpenCount(""), r.out.texts(notify.ChanEmail))
 	}
 	r.up("s0")
 	r.step(30 * time.Second)
@@ -263,16 +263,16 @@ func TestRecoveryOnlyAfterFiringWasSent(t *testing.T) {
 	if h := r.e.History(10); len(h) != 1 || h[0].Notified {
 		t.Fatalf("history %+v", h)
 	}
-	// normal: problem then recovery, on all three channels
+	// normal: problem then recovery, on both channels
 	r.e.Unmute("s0")
 	r.run(12*time.Minute, func() { r.ping("s0", 20, 20) })
-	for _, ch := range []string{notify.ChanEmail, notify.ChanTelegram, notify.ChanWhatsApp} {
+	for _, ch := range []string{notify.ChanEmail, notify.ChanWhatsApp} {
 		if r.problems(ch) != 1 || r.recoveries(ch) != 0 {
 			t.Fatalf("%s: %v", ch, r.out.texts(ch))
 		}
 	}
 	r.run(time.Minute, func() { r.ping("s0", 0, 20) })
-	for _, ch := range []string{notify.ChanEmail, notify.ChanTelegram, notify.ChanWhatsApp} {
+	for _, ch := range []string{notify.ChanEmail, notify.ChanWhatsApp} {
 		if r.problems(ch) != 1 || r.recoveries(ch) != 1 {
 			t.Fatalf("%s: %v", ch, r.out.texts(ch))
 		}
@@ -295,25 +295,25 @@ func TestCooldownAndRepeat(t *testing.T) {
 	bad := func() { r.ping("s0", 20, 20) }
 	good := func() { r.ping("s0", 0, 20) }
 	r.run(11*time.Minute, bad) // fires at ~10 min: first problem message
-	if r.problems(notify.ChanTelegram) != 1 {
+	if r.problems(notify.ChanEmail) != 1 {
 		t.Fatal("first")
 	}
 	r.run(time.Minute, good)   // recovers
 	r.run(11*time.Minute, bad) // fires again about 23 minutes after the start
-	if r.problems(notify.ChanTelegram) != 1 {
-		t.Fatalf("cooldown of 60 minutes must hold back the second problem message: %v", r.out.texts(notify.ChanTelegram))
+	if r.problems(notify.ChanEmail) != 1 {
+		t.Fatalf("cooldown of 60 minutes must hold back the second problem message: %v", r.out.texts(notify.ChanEmail))
 	}
 	if _, ok := r.e.Firing(RuleLoss, "s0"); !ok {
 		t.Fatal("it is firing, just not announced")
 	}
 	r.run(50*time.Minute, bad) // 60 minutes after the first message the cooldown is over
-	if r.problems(notify.ChanTelegram) != 2 {
-		t.Fatalf("after the cooldown it is announced: %v", r.out.texts(notify.ChanTelegram))
+	if r.problems(notify.ChanEmail) != 2 {
+		t.Fatalf("after the cooldown it is announced: %v", r.out.texts(notify.ChanEmail))
 	}
 	// no repeats by default
 	r.run(8*time.Hour, bad)
-	if r.problems(notify.ChanTelegram) != 2 {
-		t.Fatalf("repeat is off by default: %d", r.problems(notify.ChanTelegram))
+	if r.problems(notify.ChanEmail) != 2 {
+		t.Fatalf("repeat is off by default: %d", r.problems(notify.ChanEmail))
 	}
 	s := r.e.Settings()
 	s.RepeatEnabled = true
@@ -321,19 +321,19 @@ func TestCooldownAndRepeat(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.run(time.Minute, bad) // the last message is over 6 hours old: one repeat at once
-	if got := r.problems(notify.ChanTelegram); got != 3 {
+	if got := r.problems(notify.ChanEmail); got != 3 {
 		t.Fatalf("a repeat: %d", got)
 	}
 	r.run(5*time.Hour, bad)
-	if got := r.problems(notify.ChanTelegram); got != 3 {
+	if got := r.problems(notify.ChanEmail); got != 3 {
 		t.Fatalf("not again before 6 hours: %d", got)
 	}
 	r.run(time.Hour+time.Minute, bad)
-	if got := r.problems(notify.ChanTelegram); got != 4 {
+	if got := r.problems(notify.ChanEmail); got != 4 {
 		t.Fatalf("the second repeat after 6 hours: %d", got)
 	}
-	if !strings.Contains(r.out.texts(notify.ChanTelegram)[3], "still firing") {
-		t.Fatal(r.out.texts(notify.ChanTelegram)[3])
+	if !strings.Contains(r.out.texts(notify.ChanEmail)[3], "still firing") {
+		t.Fatal(r.out.texts(notify.ChanEmail)[3])
 	}
 }
 
@@ -352,8 +352,8 @@ func TestOfflineFreezesOtherRules(t *testing.T) {
 	if len(act) != 1 || act[0].Rule != RuleOffline || act[0].State != Firing {
 		t.Fatalf("only the offline alert exists: %+v", act)
 	}
-	if r.problems(notify.ChanTelegram) != 1 {
-		t.Fatalf("one message: %v", r.out.texts(notify.ChanTelegram))
+	if r.problems(notify.ChanEmail) != 1 {
+		t.Fatalf("one message: %v", r.out.texts(notify.ChanEmail))
 	}
 	// A rule that was already firing stays put (neither resolved nor repeated) while offline.
 	r2 := newRig(t, 1)
@@ -363,7 +363,7 @@ func TestOfflineFreezesOtherRules(t *testing.T) {
 	}
 	r2.down("s0")
 	r2.run(10*time.Minute, func() { r2.wan("s0", 10) })
-	if _, ok := r2.e.Firing(RuleWANSat, "s0"); !ok || r2.recoveries(notify.ChanTelegram) != 0 {
+	if _, ok := r2.e.Firing(RuleWANSat, "s0"); !ok || r2.recoveries(notify.ChanEmail) != 0 {
 		t.Fatal("frozen: a firing alert is not resolved by readings taken while offline")
 	}
 }
@@ -378,12 +378,12 @@ func TestStormGuard(t *testing.T) {
 	r.step(20 * time.Second)
 	r.down("s3")
 	r.run(6*time.Minute, nil)
-	for _, ch := range []string{notify.ChanEmail, notify.ChanTelegram, notify.ChanWhatsApp} {
+	for _, ch := range []string{notify.ChanEmail, notify.ChanWhatsApp} {
 		if r.problems(ch) != 1 {
 			t.Fatalf("%s: a storm is one message, got %v", ch, r.out.texts(ch))
 		}
 	}
-	if txt := r.out.texts(notify.ChanTelegram)[0]; !strings.Contains(txt, "4 of 5 buildings") || !strings.Contains(txt, "Site 0") || !strings.Contains(txt, "Site 3") {
+	if txt := r.out.texts(notify.ChanEmail)[0]; !strings.Contains(txt, "4 of 5 buildings") || !strings.Contains(txt, "Site 0") || !strings.Contains(txt, "Site 3") {
 		t.Fatal(txt)
 	}
 	if r.e.OpenCount("") != 4 {
@@ -394,21 +394,21 @@ func TestStormGuard(t *testing.T) {
 	r.up("s1")
 	r.up("s2")
 	r.step(30 * time.Second)
-	if r.recoveries(notify.ChanTelegram) != 0 {
+	if r.recoveries(notify.ChanEmail) != 0 {
 		t.Fatal("not yet")
 	}
 	r.up("s3")
 	r.step(30 * time.Second)
-	if r.recoveries(notify.ChanTelegram) != 1 || r.problems(notify.ChanTelegram) != 1 {
-		t.Fatalf("%v", r.out.texts(notify.ChanTelegram))
+	if r.recoveries(notify.ChanEmail) != 1 || r.problems(notify.ChanEmail) != 1 {
+		t.Fatalf("%v", r.out.texts(notify.ChanEmail))
 	}
 	// Two of five is not a storm: individual messages.
 	r2 := newRig(t, 5)
 	r2.down("s0")
 	r2.down("s1")
 	r2.run(6*time.Minute, nil)
-	if r2.problems(notify.ChanTelegram) != 2 {
-		t.Fatalf("%v", r2.out.texts(notify.ChanTelegram))
+	if r2.problems(notify.ChanEmail) != 2 {
+		t.Fatalf("%v", r2.out.texts(notify.ChanEmail))
 	}
 	// Three of ten is under half: individual messages.
 	r3 := newRig(t, 10)
@@ -416,8 +416,8 @@ func TestStormGuard(t *testing.T) {
 	r3.down("s1")
 	r3.down("s2")
 	r3.run(6*time.Minute, nil)
-	if r3.problems(notify.ChanTelegram) != 3 {
-		t.Fatalf("%v", r3.out.texts(notify.ChanTelegram))
+	if r3.problems(notify.ChanEmail) != 3 {
+		t.Fatalf("%v", r3.out.texts(notify.ChanEmail))
 	}
 	// Buildings going down 10 minutes apart are not a storm.
 	r4 := newRig(t, 3)
@@ -427,8 +427,8 @@ func TestStormGuard(t *testing.T) {
 	r4.run(10*time.Minute, nil)
 	r4.down("s2")
 	r4.run(10*time.Minute, nil)
-	if r4.problems(notify.ChanTelegram) != 3 {
-		t.Fatalf("%v", r4.out.texts(notify.ChanTelegram))
+	if r4.problems(notify.ChanEmail) != 3 {
+		t.Fatalf("%v", r4.out.texts(notify.ChanEmail))
 	}
 }
 
@@ -438,16 +438,16 @@ func TestMuteLifecycle(t *testing.T) {
 	r.down("s0")
 	r.down("s1")
 	r.run(10*time.Minute, nil)
-	if r.problems(notify.ChanTelegram) != 1 || !strings.Contains(r.out.texts(notify.ChanTelegram)[0], "Site 1") {
-		t.Fatalf("only the unmuted building is announced: %v", r.out.texts(notify.ChanTelegram))
+	if r.problems(notify.ChanEmail) != 1 || !strings.Contains(r.out.texts(notify.ChanEmail)[0], "Site 1") {
+		t.Fatalf("only the unmuted building is announced: %v", r.out.texts(notify.ChanEmail))
 	}
 	if len(r.e.Mutes()) != 1 {
 		t.Fatal("mutes")
 	}
 	// When the mute expires and the building is still down, it is announced.
 	r.run(25*time.Minute, nil)
-	if r.problems(notify.ChanTelegram) != 2 {
-		t.Fatalf("after the mute: %v", r.out.texts(notify.ChanTelegram))
+	if r.problems(notify.ChanEmail) != 2 {
+		t.Fatalf("after the mute: %v", r.out.texts(notify.ChanEmail))
 	}
 	if len(r.e.Mutes()) != 0 {
 		t.Fatal("expired mute is gone")
@@ -458,7 +458,7 @@ func TestPersistenceNoDuplicateAfterRestart(t *testing.T) {
 	r := newRig(t, 1)
 	r.down("s0")
 	r.run(6*time.Minute, nil)
-	if r.problems(notify.ChanTelegram) != 1 {
+	if r.problems(notify.ChanEmail) != 1 {
 		t.Fatal("setup")
 	}
 	s := r.e.Settings()
@@ -482,7 +482,7 @@ func TestPersistenceNoDuplicateAfterRestart(t *testing.T) {
 	}
 	r.up("s0")
 	r.step(30 * time.Second)
-	if r.recoveries(notify.ChanTelegram) != 1 {
+	if r.recoveries(notify.ChanEmail) != 1 {
 		t.Fatal("the recovery still goes out after a restart")
 	}
 }

@@ -41,18 +41,28 @@ type Config struct {
 	MpesaKey       string
 	MpesaSecret    string
 	MpesaShortcode string
-	MpesaPasskey   string
+	// MpesaC2BShortcode is the shortcode C2B URLs are registered for when it
+	// differs from MpesaShortcode (the Daraja sandbox needs this). "" = same.
+	MpesaC2BShortcode string
+	// MpesaUnknownRef: "reject" (default) bounces a Paybill payment whose
+	// account number matches no flat; "accept" takes it into Unmatched.
+	MpesaUnknownRef string
+	MpesaPasskey    string
 	// MpesaCallbackToken is required once M-Pesa is configured (see Validate).
 	// Daraja callback URLs carry ?t=<token> and callbacks without it are
 	// refused (Daraja callbacks are unsigned, so this stops forged "payments").
 	MpesaCallbackToken string
+	// MpesaCallbackTokenPrev is the token this one replaced. It keeps working
+	// until MpesaCallbackTokenPrevUntil, so payments Safaricom still sends to
+	// the registered URLs are not lost. Set by the settings manager only.
+	MpesaCallbackTokenPrev      string
+	MpesaCallbackTokenPrevUntil time.Time
 
 	// Multi-building (WireGuard) settings. WGPublicKey is the server's public
 	// key (the installer generates the private key); routers peer with it.
 	WGPublicKey           string
 	WGEndpoint            string // host:port the routers dial; defaults to PUBLIC_IP:51820
 	WGSubnet              string // tunnel subnet, server at .1
-	AdminAllowCIDR        string // networks (besides loopback) the admin is served to; the wg-admin tunnel
 	WGDumpPath            string // written by the root status timer
 	JoinTokenTTL          time.Duration
 	AllowInsecureJoin     bool // permit minting join links when PUBLIC_BASE_URL is not https (bench only)
@@ -89,21 +99,19 @@ type Config struct {
 	SMTPHost, SMTPUser, SMTPPass, SMTPFrom string
 	SMTPPort                               int
 	AlertEmailTo                           []string
-	TelegramToken, TelegramChatID          string
 	WAToken, WAPhoneNumberID               string
 	WAAdminNumbers                         []string // normalised 2547XXXXXXXX
 	WAAPIVersion, WALang                   string
 	WAAppSecret, WAVerifyToken             string // optional inbound webhook
 	WADailyLimit                           int    // tenant messages per day (admin alerts are exempt)
 	WAMinConfirmKES                        int    // smallest payment that gets a confirmation
+	WAQuietFrom, WAQuietTo                 int    // tenant quiet hours, EAT: from 21 to 7 by default
+	SMTPImplicit                           bool   // TLS from the first byte (port 465 always is)
 }
 
-// EmailConfigured, TelegramConfigured and WhatsAppConfigured tell which
+// EmailConfigured and WhatsAppConfigured tell which
 // notification channels have their secrets in the environment.
-func (c Config) EmailConfigured() bool { return c.SMTPHost != "" && c.SMTPFrom != "" }
-func (c Config) TelegramConfigured() bool {
-	return c.TelegramToken != "" && c.TelegramChatID != ""
-}
+func (c Config) EmailConfigured() bool    { return c.SMTPHost != "" && c.SMTPFrom != "" }
 func (c Config) WhatsAppConfigured() bool { return c.WAToken != "" && c.WAPhoneNumberID != "" }
 
 // Load reads the configuration using getenv (os.Getenv in production).
@@ -136,6 +144,8 @@ func Load(getenv func(string) string) (Config, error) {
 		MpesaSecret:        get("MPESA_CONSUMER_SECRET", ""),
 		MpesaShortcode:     get("MPESA_SHORTCODE", ""),
 		MpesaPasskey:       get("MPESA_PASSKEY", ""),
+		MpesaC2BShortcode:  get("MPESA_C2B_SHORTCODE", ""),
+		MpesaUnknownRef:    strings.ToLower(get("MPESA_UNKNOWN_REF", "reject")),
 		MpesaCallbackToken: get("MPESA_CALLBACK_TOKEN", ""),
 	}
 	var errs []error
@@ -175,10 +185,8 @@ func Load(getenv func(string) string) (Config, error) {
 		c.WGEndpoint = c.PublicIP + ":51820"
 	}
 	c.WGSubnet = get("WG_SUBNET", "10.99.0.0/22")
-	c.AdminAllowCIDR = get("ADMIN_ALLOW_CIDR", "10.98.0.0/24")
-	if _, err := netip.ParsePrefix(c.AdminAllowCIDR); err != nil {
-		errs = append(errs, errors.New("ADMIN_ALLOW_CIDR must be an IPv4 CIDR, e.g. 10.98.0.0/24"))
-	}
+	// ADMIN_ALLOW_CIDR (the old wg-admin network) is no longer read: the admin
+	// pages are public and protected by sign-in, so old env lines are ignored.
 	c.WGDumpPath = get("WG_DUMP_PATH", "/run/ftnbilling/wg0.dump")
 	c.JoinTokenTTL = dur("JOIN_TOKEN_TTL", 30*time.Minute)
 	c.AllowInsecureJoin = parseBool(getenv("ALLOW_INSECURE_JOIN"))
@@ -232,20 +240,16 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 	}
 	c.AlertEmailTo = splitList(get("ALERT_EMAIL_TO", ""))
-	c.TelegramToken, c.TelegramChatID = get("TELEGRAM_BOT_TOKEN", ""), get("TELEGRAM_CHAT_ID", "")
 	c.WAToken, c.WAPhoneNumberID = get("WA_TOKEN", ""), get("WA_PHONE_NUMBER_ID", "")
 	c.WAAPIVersion, c.WALang = get("WA_API_VERSION", "v23.0"), get("WA_LANG", "en")
 	c.WAAppSecret, c.WAVerifyToken = get("WA_APP_SECRET", ""), get("WA_VERIFY_TOKEN", "")
 	for _, n := range splitList(get("WA_ADMIN_NUMBERS", "")) {
-		n = strings.TrimPrefix(strings.NewReplacer(" ", "", "-", "").Replace(n), "+")
-		if len(n) == 10 && n[0] == '0' {
-			n = "254" + n[1:]
-		}
-		if len(n) < 11 || len(n) > 15 || strings.Trim(n, "0123456789") != "" {
-			errs = append(errs, fmt.Errorf("WA_ADMIN_NUMBERS: %q is not an international number like 254712345678", n))
+		norm, err := NormalizeWANumber(n)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("WA_ADMIN_NUMBERS: %v", err))
 			continue
 		}
-		c.WAAdminNumbers = append(c.WAAdminNumbers, n)
+		c.WAAdminNumbers = append(c.WAAdminNumbers, norm)
 	}
 	c.WADailyLimit, c.WAMinConfirmKES = 240, 250
 	for k, dst := range map[string]*int{"WA_DAILY_LIMIT": &c.WADailyLimit, "WA_MIN_CONFIRM_KES": &c.WAMinConfirmKES} {
@@ -258,6 +262,18 @@ func Load(getenv func(string) string) (Config, error) {
 			*dst = n
 		}
 	}
+	c.WAQuietFrom, c.WAQuietTo = 21, 7
+	for k, dst := range map[string]*int{"WA_QUIET_FROM": &c.WAQuietFrom, "WA_QUIET_TO": &c.WAQuietTo} {
+		if v := get(k, ""); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 || n > 23 {
+				errs = append(errs, fmt.Errorf("%s must be an hour from 0 to 23", k))
+				continue
+			}
+			*dst = n
+		}
+	}
+	c.SMTPImplicit = parseBool(getenv("SMTP_IMPLICIT"))
 	c.FlowEvery = dur("METRICS_FLOW_EVERY", 60*time.Second)
 	c.PortEvery = dur("METRICS_PORT_EVERY", 30*time.Second)
 	c.PingEvery = dur("METRICS_PING_EVERY", 60*time.Second)
@@ -272,12 +288,15 @@ func Load(getenv func(string) string) (Config, error) {
 // Validate refuses unsafe or incomplete configurations.
 func (c Config) Validate() error {
 	var errs []error
-	if c.AdminPass == "" || c.AdminPass == "admin" {
-		errs = append(errs, errors.New("ADMIN_PASS must be set and must not be \"admin\""))
-	}
+	// ADMIN_PASS is no longer required here: the admin password may live in
+	// the database (Settings > General). main calls CheckAdminPass when the
+	// database holds no password.
 	// ROUTER_PASS is no longer required here: buildings joined over WireGuard
 	// carry their own credentials. main refuses to start only when a legacy
 	// env-mode building exists and ROUTER_PASS is empty.
+	if c.MpesaUnknownRef != "reject" && c.MpesaUnknownRef != "accept" {
+		errs = append(errs, fmt.Errorf("MPESA_UNKNOWN_REF must be reject or accept, got %q", c.MpesaUnknownRef))
+	}
 	if c.MpesaEnv != "sandbox" && c.MpesaEnv != "production" {
 		errs = append(errs, fmt.Errorf("MPESA_ENV must be sandbox or production, got %q", c.MpesaEnv))
 	}
@@ -287,6 +306,17 @@ func (c Config) Validate() error {
 			"Generate one (for example: openssl rand -hex 24), put it in the env file, and register the three callback URLs with ?t=<token> appended"))
 	}
 	return errors.Join(errs...)
+}
+
+// CheckAdminPass reports whether the ADMIN_PASS environment value may be used
+// as the admin password. It is only consulted while no password is stored in
+// the database.
+func (c Config) CheckAdminPass() error {
+	if c.AdminPass == "" || c.AdminPass == "admin" {
+		return errors.New("no admin password is set: put ADMIN_PASS (not \"admin\") in the environment file, " +
+			"or run `ispbill admin-reset-password -generate` to set one in the database")
+	}
+	return nil
 }
 
 // MpesaEnabled is true only when every Daraja setting is present.
@@ -302,6 +332,26 @@ func (c Config) MpesaBaseURL() string {
 	}
 	return "https://sandbox.safaricom.co.ke"
 }
+
+// NormalizeWANumber turns 0712345678, +254 712 345 678 and 254712345678 into
+// 254712345678, or says why the text is not an international number.
+func NormalizeWANumber(n string) (string, error) {
+	raw := n
+	n = strings.TrimPrefix(strings.NewReplacer(" ", "", "-", "").Replace(strings.TrimSpace(n)), "+")
+	if len(n) == 10 && n[0] == '0' {
+		n = "254" + n[1:]
+	}
+	if len(n) < 11 || len(n) > 15 || strings.Trim(n, "0123456789") != "" {
+		return "", fmt.Errorf("%q is not an international number like 254712345678", raw)
+	}
+	return n, nil
+}
+
+// SplitList splits on commas, semicolons and newlines and trims each item.
+func SplitList(s string) []string { return splitList(s) }
+
+// ParseBool reads 1, true, yes or on (any case) as true; anything else is false.
+func ParseBool(s string) bool { return parseBool(s) }
 
 func splitList(s string) []string {
 	var out []string

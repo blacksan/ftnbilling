@@ -7,6 +7,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -131,6 +133,9 @@ func TestCLICommands(t *testing.T) {
 	if out, err := run("migrate"); err != nil || !strings.Contains(out, "schema version") {
 		t.Fatalf("migrate: %q %v", out, err)
 	}
+	if out, err := run("migrate", "-check"); err != nil || !strings.Contains(out, "schema version") {
+		t.Fatalf("migrate -check: %q %v", out, err)
+	}
 	out, err := run("import-json")
 	if err != nil || !strings.Contains(out, "format 3") || !strings.Contains(out, "applied payments") {
 		t.Fatalf("import-json: %q %v", out, err)
@@ -179,5 +184,56 @@ func TestCLICommands(t *testing.T) {
 	}
 	if _, err := run("frobnicate"); err == nil {
 		t.Fatal("unknown command must fail")
+	}
+}
+
+// B2: on Postgres the CLI changes nothing while the service answers: its stale
+// in-memory rows would be written back over the change.
+func TestCLIRefusesAuthChangesWhileServiceRunsOnPostgres(t *testing.T) {
+	u := schemaURL(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })}
+	go srv.Serve(ln)
+	env := func(k string) string {
+		switch k {
+		case "LISTEN_ADDR":
+			return ln.Addr().String()
+		case "DATABASE_URL":
+			return u
+		}
+		return cliEnv(t.TempDir())(k)
+	}
+	env = func(base func(string) string, dir string) func(string) string {
+		return func(k string) string {
+			if k == "DATA_DIR" {
+				return dir
+			}
+			return base(k)
+		}
+	}(env, t.TempDir())
+	var out bytes.Buffer
+	if _, err := runCLI([]string{"migrate"}, env, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"admin-reset-password", "-generate"}, {"admin-reset-password", "-setup-code"}, {"admin-reset-password", "-reset-totp"}, {"admin-reset-password", "-revoke-sessions"}} {
+		out.Reset()
+		_, err := runCLI(args, env, &out)
+		if err == nil || !strings.Contains(err.Error(), "ftnbilling-admin-reset") {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+	// Reading is fine, and nothing was created by the refusals.
+	out.Reset()
+	if _, err := runCLI([]string{"admin-status", "-json"}, env, &out); err != nil || strings.TrimSpace(out.String()) != `{"owner":"","totp_enrolled":false}` {
+		t.Fatalf("status: %v %q", err, out.String())
+	}
+	// With the service stopped, the same command works.
+	srv.Close()
+	out.Reset()
+	if _, err := runCLI([]string{"admin-reset-password", "-generate"}, env, &out); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
 	}
 }

@@ -26,6 +26,10 @@ func fillValue(v reflect.Value, name string) {
 		v.SetFloat(1.5)
 	case reflect.Bool:
 		v.SetBool(true)
+	case reflect.Slice: // []string (recovery codes)
+		sl := reflect.MakeSlice(v.Type(), 1, 1)
+		sl.Index(0).SetString("x" + strings.ToLower(name))
+		v.Set(sl)
 	case reflect.Map:
 		m := reflect.MakeMap(v.Type())
 		k := reflect.New(v.Type().Key()).Elem()
@@ -100,7 +104,27 @@ func TestCodecsCoverEveryField(t *testing.T) {
 	guardCodec(t, tasksC)
 	guardCodec(t, eqEventsC)
 	guardCodec(t, notesC)
+	guardCodec(t, settingsC)
 	guardCodec(t, eventsC)
+	guardCodec(t, adminUsersC)
+	guardCodec(t, adminSessionsC)
+	guardCodec(t, apiDevicesC)
+}
+
+// alterAdds lists the column names added to table by "ALTER TABLE name ... ADD COLUMN col".
+func alterAdds(sql, table string) []string {
+	var out []string
+	for _, stmt := range strings.Split(sql, ";") {
+		stmt = strings.Join(strings.Fields(stmt), " ")
+		i := strings.Index(stmt, "ALTER TABLE "+table+" ")
+		if i < 0 {
+			continue
+		}
+		for _, part := range strings.Split(stmt[i:], "ADD COLUMN ")[1:] {
+			out = append(out, strings.Fields(part)[0])
+		}
+	}
+	return out
 }
 
 func TestCodecColumnsExist(t *testing.T) {
@@ -115,13 +139,18 @@ func TestCodecColumnsExist(t *testing.T) {
 	}
 	for name, cols := range map[string][]string{"sites": sitesC.cols, "packages": packagesC.cols, "customers": customersC.cols, "equipment": equipmentC.cols,
 		"accounts": accountsC.cols, "tenancies": tenanciesC.cols, "site_contacts": contactsC.cols, "orders": ordersC.cols, "vouchers": vouchersC.cols,
-		"payments": paymentsC.cols, "devices": devicesC.cols, "tasks": tasksC.cols, "equipment_events": eqEventsC.cols, "notes": notesC.cols, "events": eventsC.cols} {
+		"payments": paymentsC.cols, "devices": devicesC.cols, "tasks": tasksC.cols, "equipment_events": eqEventsC.cols, "notes": notesC.cols, "settings": settingsC.cols, "events": eventsC.cols,
+		"admin_users": adminUsersC.cols, "admin_sessions": adminSessionsC.cols, "api_devices": apiDevicesC.cols} {
 		i := strings.Index(all.String(), "CREATE TABLE "+name+" (")
 		if i < 0 {
 			t.Fatalf("table %s not in migrations", name)
 		}
 		body := all.String()[i:]
 		body = body[:strings.Index(body, ");")+1]
+		// Columns added later by ALTER TABLE (migration 0004 and after).
+		for _, a := range alterAdds(all.String(), name) {
+			body += ", " + a + " "
+		}
 		for _, c := range cols {
 			if !strings.Contains(body, " "+c+" ") && !strings.Contains(body, "("+c+" ") && !strings.Contains(body, ", "+c+" ") && !strings.Contains(body, "\n  "+c+" ") {
 				t.Errorf("table %s has no column %s", name, c)
@@ -195,11 +224,11 @@ func TestCodecRoundTripEveryField(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback(ctx)
-	roundTrip(t, ctx, tx, sitesC, func(v *store.Site) { v.Mode = "wg"; v.Lat, v.Lng = 12.5, 40.25 }, store.Site.Norm)
+	roundTrip(t, ctx, tx, sitesC, func(v *store.Site) { v.Mode = "wg"; v.Lat, v.Lng = 12.5, 40.25; v.AccessMode = store.AccessIPoEObserve }, store.Site.Norm)
 	roundTrip(t, ctx, tx, packagesC, nil, store.Package.Norm)
 	roundTrip(t, ctx, tx, customersC, nil, store.Customer.Norm)
 	roundTrip(t, ctx, tx, equipmentC, func(v *store.Equipment) { v.Kind, v.Status = "ont", "installed" }, store.Equipment.Norm)
-	roundTrip(t, ctx, tx, accountsC, nil, store.Account.Norm)
+	roundTrip(t, ctx, tx, accountsC, func(v *store.Account) { v.MAC = "AA:BB:CC:DD:EE:FF"; v.IP = "10.20.0.7" }, store.Account.Norm)
 	roundTrip(t, ctx, tx, tenanciesC, func(v *store.Tenancy) { v.MoveOut = v.MoveIn.Add(time.Hour) }, store.Tenancy.Norm)
 	roundTrip(t, ctx, tx, contactsC, func(v *store.Contact) { v.Role = "agent" }, store.Contact.Norm)
 	roundTrip(t, ctx, tx, ordersC, func(v *store.Order) { v.Status = "paid" }, store.Order.Norm)
@@ -209,5 +238,9 @@ func TestCodecRoundTripEveryField(t *testing.T) {
 	roundTrip(t, ctx, tx, tasksC, nil, store.Task.Norm)
 	roundTrip(t, ctx, tx, eqEventsC, func(v *store.EquipmentEvent) { v.Kind = "assigned" }, store.EquipmentEvent.Norm)
 	roundTrip(t, ctx, tx, notesC, nil, store.Note.Norm)
+	roundTrip(t, ctx, tx, settingsC, nil, store.Setting.Norm)
 	roundTrip(t, ctx, tx, eventsC, nil, store.Event.Norm)
+	roundTrip(t, ctx, tx, adminUsersC, func(v *store.AdminUser) { v.Role = "operator" }, store.AdminUser.Norm)
+	roundTrip(t, ctx, tx, adminSessionsC, nil, store.AdminSession.Norm)
+	roundTrip(t, ctx, tx, apiDevicesC, nil, store.APIDevice.Norm)
 }

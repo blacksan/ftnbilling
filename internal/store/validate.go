@@ -59,12 +59,24 @@ func Validate(d *Data) []string {
 	}
 	sort.Strings(dup)
 	out = append(out, dup...)
-	// Duplicate (building, MAC) among open accounts.
+	// Duplicate MAC among open accounts, across all buildings. Accounts
+	// flagged MACConflict are excluded (see Conflicts).
 	macs := map[string][]Account{}
+	ips := map[string][]Account{}
 	for _, a := range d.Accounts {
+		if a.MACConflict {
+			continue
+		}
 		if a.MAC != "" {
-			k := a.SiteID + "|" + strings.ToUpper(a.MAC)
+			if !macShape.MatchString(strings.ToUpper(a.MAC)) {
+				add("The ONT MAC %q of flat %q in %s is not written like AA:BB:CC:DD:EE:FF.", a.MAC, a.Flat, site(a.SiteID))
+			}
+			k := strings.ToUpper(a.MAC)
 			macs[k] = append(macs[k], a)
+		}
+		if a.IP != "" {
+			k := a.SiteID + "|" + a.IP
+			ips[k] = append(ips[k], a)
 		}
 	}
 	var dm []string
@@ -72,10 +84,20 @@ func Validate(d *Data) []string {
 		if len(as) > 1 {
 			var flats []string
 			for _, a := range as {
+				flats = append(flats, a.Flat+" in "+site(a.SiteID))
+			}
+			sort.Strings(flats)
+			dm = append(dm, fmt.Sprintf("The ONT MAC %s is on more than one open flat (%s). A MAC can belong to only one open flat in all buildings.", as[0].MAC, strings.Join(flats, " and ")))
+		}
+	}
+	for _, as := range ips {
+		if len(as) > 1 {
+			var flats []string
+			for _, a := range as {
 				flats = append(flats, a.Flat)
 			}
 			sort.Strings(flats)
-			dm = append(dm, fmt.Sprintf("The ONT MAC %s is on more than one flat in %s (%s). A MAC can belong to only one open flat per building.", as[0].MAC, site(as[0].SiteID), strings.Join(flats, " and ")))
+			dm = append(dm, fmt.Sprintf("The IP address %s is on more than one open flat in %s (%s).", as[0].IP, site(as[0].SiteID), strings.Join(flats, " and ")))
 		}
 	}
 	sort.Strings(dm)
@@ -207,6 +229,35 @@ func Validate(d *Data) []string {
 			add("Contact %q has an unknown role %q.", c.Name, c.Role)
 		}
 	}
+	users := map[string]string{}
+	for _, u := range d.AdminUsers {
+		switch u.Role {
+		case RoleOwner, RoleOperator, RoleViewer:
+		default:
+			add("User %q has an unknown role %q.", u.Username, u.Role)
+		}
+		if o, ok := users[strings.ToLower(u.Username)]; ok {
+			add("Two users are called %q (%s and %s).", u.Username, o, u.ID)
+		}
+		users[strings.ToLower(u.Username)] = u.ID
+	}
+	for _, x := range d.AdminSessions {
+		if _, ok := d.AdminUsers[x.UserID]; !ok {
+			add("A sign-in session points at a user that does not exist.")
+		}
+	}
+	for _, x := range d.APIDevices {
+		if _, ok := d.AdminUsers[x.UserID]; !ok {
+			add("An app device (%s) points at a user that does not exist.", x.Name)
+		}
+	}
+	for _, s := range d.Sites {
+		switch s.AccessMode {
+		case "", AccessHotspot, AccessIPoEObserve, AccessIPoE:
+		default:
+			add("Building %q has access mode %q.", s.Name, s.AccessMode)
+		}
+	}
 	for _, t := range d.Tenancies {
 		if _, ok := d.Customers[t.CustomerID]; !ok {
 			add("A tenancy points at a customer that does not exist.")
@@ -214,6 +265,23 @@ func Validate(d *Data) []string {
 		if _, ok := lookupAccount(d, t.AccountID); !ok {
 			add("A tenancy points at an account that does not exist.")
 		}
+	}
+	return out
+}
+
+// Conflicts lists, in plain words, the open accounts flagged MACConflict: a
+// MAC used by another open account (in any building) or malformed. They stay
+// in the data, are not provisioned and do not block an import; db-check prints
+// this list until they are fixed.
+func Conflicts(d *Data) []string {
+	var out []string
+	for _, a := range d.MACConflicts() {
+		who := ""
+		if o, ok := d.AccountByMAC(a.MAC); ok && o.ID != a.ID {
+			who = fmt.Sprintf(", used by flat %s (%s) in %s", o.Flat, o.Code, d.Sites[o.SiteID].Name)
+		}
+		out = append(out, fmt.Sprintf("Flat %s (%s) in %s has MAC %q%s. Not provisioned until the MAC is fixed.",
+			a.Flat, a.Code, d.Sites[a.SiteID].Name, a.MAC, who))
 	}
 	return out
 }
