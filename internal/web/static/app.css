@@ -506,3 +506,12 @@ body.vprint{background:#fff;color:#000;padding:16px;font:14px var(--f-sans)}
 .vprint .vb img{height:30px;width:auto}
 .vprint .v b{display:block;font:700 22px var(--f-mono);letter-spacing:2px;margin:6px 0}
 @media print{.vprint .np{display:none}}
+
+/* router set-up job: the next action, and the typed-name migration start */
+.next-action{display:grid;gap:4px;padding:14px 16px;margin:0 0 14px;border-radius:var(--r2);background:var(--surface-2,var(--bg));border:1px solid var(--line-strong);border-left-width:4px}
+.next-action b{font:700 18px var(--f-display,var(--f-sans))}
+.next-action span{color:var(--muted);font-size:13px}
+.next-action.ok{border-color:var(--ok);background:var(--ok-soft)}
+.next-action.bad{border-color:var(--bad);background:var(--bad-soft)}
+.migrate{margin-top:12px;display:grid;gap:8px}.migrate p{margin:0;color:var(--muted)}
+.clients-search{align-items:center;margin:0 0 12px}.clients-search input[type=search]{flex:1;min-width:240px}

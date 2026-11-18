@@ -33,6 +33,7 @@ func (s *Server) siteRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/sites/mode", s.adminSiteMode)
 	post("/admin/sites/adopt", s.adminSiteAdopt)
 	post("/admin/sites/confirm", s.adminSiteConfirm)
+	post("/admin/sites/reboot", s.adminSiteReboot)
 	post("/admin/sites/script", s.adminSiteScript)
 	s.deviceRoutes(get, post)
 }

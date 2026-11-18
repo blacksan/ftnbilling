@@ -4,7 +4,7 @@
 {{if $o.TestMode}}<div class="banner" role="alert"><b>TEST_MODE is on.</b> Test payments grant free access.</div>{{end}}
 <div class="stats">
 {{template "stat" (dict "K" "Money in today" "V" (kes $o.Today) "S" (printf "Yesterday %s" (kes $o.Yesterday)) "Icon" "cash" "Feature" true "Spark" $o.Spark "Href" "/admin/payments")}}
-{{template "stat" (dict "K" "Active flats" "V" $o.Active "Of" (printf "of %d" $o.TotalAccts) "S" (printf "%d ending soon" $o.Soon) "Icon" "accounts" "Tone" "ok" "Href" "/admin/accounts?tab=active")}}
+{{template "stat" (dict "K" "Active flats" "V" $o.Active "Of" (printf "of %d" $o.TotalAccts) "S" (printf "%d end within 7 days" $o.Expiring7) "Icon" "accounts" "Tone" "ok" "Href" "/admin/accounts?tab=active")}}
 {{template "stat" (dict "K" "Online now" "V" $o.Online "S" "flats pulling traffic" "Icon" "live" "Tone" "teal" "Href" "/admin/live")}}
 {{template "stat" (dict "K" "Routers online" "V" $o.RoutersOnline "Of" (printf "of %d" $o.RoutersTotal) "S" (printf "%d need a look" (sub $o.RoutersTotal $o.RoutersOnline)) "Icon" "sites" "Tone" "info" "Href" "/admin/routers")}}
 {{template "stat" (dict "K" "Unmatched" "V" $o.Unmatched "S" "payments to assign" "Icon" "unmatched" "Tone" (cond (gt $o.Unmatched 0) "warn" "plum") "Href" "/admin/unmatched")}}

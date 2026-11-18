@@ -138,8 +138,10 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 			}
 			return m
 		},
-		"bps": fmtBps,
-		"sub": func(a, b int) int { return a - b },
+		"bps":   fmtBps,
+		"f64":   func(v int64) float64 { return float64(v) },
+		"bytes": fmtBytes,
+		"sub":   func(a, b int) int { return a - b },
 		"cond": func(c bool, a, b any) any {
 			if c {
 				return a

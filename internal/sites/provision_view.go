@@ -221,6 +221,23 @@ func (m *Manager) CreateRouter(in SiteInput, serving bool) (store.Site, error) {
 	return s, nil
 }
 
+// ServingIntent is ServingCustomers with a default for routers that predate the
+// question: a router that was never asked is serving customers if it still
+// uses the hotspot.
+func (m *Manager) ServingIntent(s store.Site) bool {
+	var v string
+	var ok bool
+	m.st.View(func(d *store.Data) {
+		var set store.Setting
+		set, ok = d.Settings[servingKey(s.ID)]
+		v = set.Value
+	})
+	if ok {
+		return v == "yes"
+	}
+	return s.AccessMode == "" || s.AccessMode == store.AccessHotspot
+}
+
 // JoinIntentOf is the intent of the router's join line.
 func (m *Manager) JoinIntentOf(siteID string) JoinIntent {
 	if m.ServingCustomers(siteID) {
