@@ -66,7 +66,7 @@ type Config struct {
 	WGDumpPath            string // written by the root status timer
 	JoinTokenTTL          time.Duration
 	AllowInsecureJoin     bool // permit minting join links when PUBLIC_BASE_URL is not https (bench only)
-	JoinRequireMikrotikUA bool // only a User-Agent starting with "Mikrotik" consumes a join token
+	JoinRequireMikrotikUA bool // only a RouterOS fetch User-Agent ("RouterOS 7.x" or "Mikrotik/6.x") consumes a join token
 	SiteName              string
 
 	// Metrics / QoE collector.
