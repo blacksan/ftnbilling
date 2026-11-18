@@ -27,8 +27,8 @@ const (
 	// staleAfter: an account whose MAC was not seen for this long is a
 	// candidate for "possible ONT swap / wrong MAC".
 	staleAfter = 24 * time.Hour
-	// onlineWindow: a device only counts as online while it was seen this recently.
-	onlineWindow = 3 * time.Minute
+	// OnlineWindow: a device only counts as online while it was seen this recently.
+	OnlineWindow = 3 * time.Minute
 )
 
 type devObs struct {
@@ -200,7 +200,7 @@ func (s *Service) Unregistered(siteID string, onlineOnly bool) []UnregDevice {
 		}
 	})
 	for _, dv := range devs {
-		online := dv.Online && now.Sub(dv.LastSeen) <= onlineWindow
+		online := dv.Online && now.Sub(dv.LastSeen) <= OnlineWindow
 		if onlineOnly && !online {
 			continue
 		}
@@ -226,7 +226,7 @@ func (s *Service) UnregisteredOnline(has func(siteID string) bool) int {
 	now := s.now()
 	s.st.View(func(d *store.Data) {
 		for _, dv := range d.Devices {
-			if dv.Source != SourceDismissed && dv.Online && now.Sub(dv.LastSeen) <= onlineWindow && (has == nil || has(dv.SiteID)) {
+			if dv.Source != SourceDismissed && dv.Online && now.Sub(dv.LastSeen) <= OnlineWindow && (has == nil || has(dv.SiteID)) {
 				n++
 			}
 		}

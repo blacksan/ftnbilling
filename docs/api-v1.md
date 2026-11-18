@@ -79,7 +79,7 @@ Payment {"key","site_id","method","status","amount_kes","phone","name","bill_ref
 
 ## Addendum H: unregistered devices (pick the MAC from what asked for an address)
 
-Supersedes the `GET /unregistered` row above. `GET /unregistered?site=&online=` returns `{items:[{site_id,site_name,mac,vendor,host_name,ip,source,online,first_seen,last_seen,hits,suggested_account:{id,code,flat}|null}]}`. `source` is `dhcp`, `arp`, `portal` or `hotspot-host`; `online` is true when the lease is bound or ARP was complete within the last 2 minutes; `vendor` and `host_name` are blank when unknown; `online=true` filters to online devices. Sorted online first, then `last_seen` newest first.
+Supersedes the `GET /unregistered` row above. `GET /unregistered?site=&online=` returns `{items:[{site_id,site_name,mac,vendor,host_name,ip,source,online,first_seen,last_seen,hits,suggested_account:{id,code,flat}|null}]}`. `source` is `dhcp`, `arp`, `portal` or `hotspot-host`; `online` is true when the lease is bound or ARP was complete within the last 3 minutes; `vendor` and `host_name` are blank when unknown; `online=true` filters to online devices. Sorted online first, then `last_seen` newest first.
 
 | Method/path | Body | Result |
 |---|---|---|
@@ -97,7 +97,7 @@ Supersedes the `GET /unregistered` row above. `GET /unregistered?site=&online=` 
 - Payment `status` is one of `matched`, `unmatched`, `refunded`, `ignored` (the store's `applied` is shown as `matched`). The app lists the queue with `GET /payments?status=unmatched`. Methods include `cash` (manual payments without a transaction code get a `CASH-...` key).
 - Account detail: `customer` is always an object `{id,name,phone,email}` (`id` is empty and name/phone come from the account when no customer record is linked); `events` are `{time,msg,actor}` (last 20); `usage.month_bytes`.
 - `lease_status` is `bound`, `waiting` or `none`. Account `state` is `active`, `expired`, `suspended` or `new`.
-- `/unregistered` items include `site_name` and a nullable `suggested_account` `{id,code,flat}`: in that building, an open account with no MAC first, else an account whose MAC has not been seen for over 24 h. `?online=true` is accepted (`online` = seen within the last 2 minutes and flagged online).
+- `/unregistered` items include `site_name` and a nullable `suggested_account` `{id,code,flat}`: in that building, an open account with no MAC first, else an account whose MAC has not been seen for over 24 h. `?online=true` is accepted (`online` = seen within the last 3 minutes and flagged online).
 - `POST /sites/{id}/unregistered/refresh` answers 202 `{queued:true}`.
 - `Idempotency-Key`: the identical stored status and body are replayed (header `Idempotent-Replayed: true`) for 24 h per device; only answers below 500 are kept; the same key with a different request is 400 `bad_request`. The store is in memory, so a server restart forgets it.
 - `GET /audit?limit=&cursor=`: newest first; the cursor is opaque (`s<seq>`); owner only.

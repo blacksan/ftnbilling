@@ -86,7 +86,7 @@ func (s *Server) apiAudit(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 // deviceOnline: the router saw the device recently. The flag is written by the
 // reconciler on every pass, so it is trusted only while its time is fresh (2 minutes, as the contract says).
 func deviceOnline(dv store.Device, now time.Time) bool {
-	return dv.Online && now.Sub(dv.LastSeen) <= 2*time.Minute
+	return dv.Online && now.Sub(dv.LastSeen) <= billing.OnlineWindow // same rule as the web page
 }
 
 type apiSuggested struct {
@@ -149,6 +149,11 @@ func (s *Server) apiUnregistered(w http.ResponseWriter, r *http.Request, c *apiC
 			names[st.ID] = st.Name
 		}
 		for _, dv := range d.DeviceList() {
+			// Dismissed devices stay in the store as markers (so a later sighting
+			// doesn't revive them); they are never listed.
+			if dv.Source == billing.SourceDismissed {
+				continue
+			}
 			if _, live := names[dv.SiteID]; live && (site == "" || dv.SiteID == site) {
 				devs = append(devs, dv)
 			}
