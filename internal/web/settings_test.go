@@ -28,6 +28,7 @@ import (
 // with a fake router (so the tools have something to talk to).
 type setRig struct {
 	ts   *httptest.Server
+	srv  *web.Server
 	st   *store.Store
 	m    *settings.Manager
 	mp   *payments.Mpesa
@@ -67,7 +68,7 @@ func newSetRig(t *testing.T) *setRig {
 	srv.SetSettings(m)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	r := &setRig{ts: ts, st: st, m: m, mp: mp, rt: mgr.MockRouter(),
+	r := &setRig{ts: ts, srv: srv, st: st, m: m, mp: mp, rt: mgr.MockRouter(),
 		cl: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	st.View(func(d *store.Data) { r.site = d.Sites[envID] })
 	r.do("GET", "/admin", nil, pw).Body.Close()
