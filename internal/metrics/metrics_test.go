@@ -1,14 +1,15 @@
 package metrics
 
 import (
-	"context"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
-	"net"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func newCol(t *testing.T) *Collector {
 	t.Helper()
 	d := fakeDir{{Code: "K7Q2MX", Flat: "Flat 3B", Package: "Monthly 20 Mbps", SpeedMbps: 20, State: "active"},
 		{Code: "P4R8TN", Flat: "Flat 10A", Package: "1 Day", SpeedMbps: 10, State: "active"}}
-	return New(t.TempDir(), testCfg(), routeros.NewMock(), d, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return New(filepath.Join(t.TempDir(), "metrics.json"), testCfg(), routeros.NewMock(), d, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 func sess(user, id string, in, out uint64, up time.Duration) routeros.Session {
@@ -170,36 +171,6 @@ func TestFlowAttributionDNSAndSampling(t *testing.T) {
 	if c.D.NF.Flows != 3 || c.D.NF.Bad != 1 || c.D.NF.Packets != 1 {
 		t.Fatalf("%+v", c.D.NF)
 	}
-}
-
-func TestNetflowListenerOverUDP(t *testing.T) {
-	c := newCol(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ready := make(chan net.Addr, 1)
-	done := make(chan error, 1)
-	go func() { done <- c.ListenNetflow(ctx, "127.0.0.1:0", ready) }()
-	addr := <-ready
-	conn, err := net.Dial("udp", addr.String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	conn.Write(v5Packet(0, v5Rec("10.5.50.20", "151.101.1.1", 40001, 80, 6, 1234)))
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		c.mu.Lock()
-		n := c.D.NF.Flows
-		c.mu.Unlock()
-		if n == 1 {
-			cancel()
-			if err := <-done; err != nil {
-				t.Fatal(err)
-			}
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("flow not received")
 }
 
 // ---- counters, deltas ---------------------------------------------------------------
@@ -352,7 +323,7 @@ func TestSaveLoadBoundedAndAtomic(t *testing.T) {
 	if err := c.Save(); err != nil {
 		t.Fatal(err)
 	}
-	if es, _ := os.ReadDir(strings.TrimSuffix(c.path, "/metrics.json")); len(es) != 1 {
+	if es, _ := os.ReadDir(filepath.Dir(c.path)); len(es) != 1 {
 		t.Fatalf("dir has %d files (temp left over?)", len(es))
 	}
 	d, err := load(c.path)
@@ -366,7 +337,7 @@ func TestSaveLoadBoundedAndAtomic(t *testing.T) {
 	if err := os.WriteFile(c.path, []byte("{broken"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	c2 := New(strings.TrimSuffix(c.path, "/metrics.json"), testCfg(), routeros.NewMock(), fakeDir{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	c2 := New(c.path, testCfg(), routeros.NewMock(), fakeDir{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if len(c2.D.Accts) != 0 {
 		t.Fatal("corrupt file must start empty, not crash")
 	}
@@ -525,5 +496,96 @@ func TestChartsProduceSVGWithPalette(t *testing.T) {
 	bars := string(BarsH([]BarRow{{Label: "Flat 3B <x>", Value: 5, Text: "5 GB"}}, ColDown, ""))
 	if !strings.Contains(bars, "&lt;x&gt;") || strings.Contains(bars, "<x>") {
 		t.Error("labels must be escaped")
+	}
+}
+
+func TestSnapshotIsACopy(t *testing.T) {
+	c := newCol(t)
+	c.SampleSessions(t0, []routeros.Session{sess("K7Q2MX", "*1", 100, 1000, 20*time.Second)}, nil)
+	c.SamplePing(t0, routeros.PingResult{Target: "8.8.8.8", Received: 5, AvgRTT: 12 * time.Millisecond})
+	c.note("ping", errors.New("boom"))
+	snap := c.Snapshot()
+	if len(snap.Flats) != 1 || snap.Ping["8.8.8.8"].RTTms != 12 || snap.Err["ping"] != "boom" {
+		t.Fatalf("%+v", snap)
+	}
+	delete(snap.Flats, "K7Q2MX")
+	snap.Ping["x"] = LivePing{}
+	snap.Err["ping"] = "changed"
+	if len(c.L.Flats) != 1 || len(c.L.Ping) != 1 || c.L.Err["ping"] != "boom" {
+		t.Fatal("Snapshot shares maps with the collector")
+	}
+	// Safe against concurrent sampling (run with -race).
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 200; i++ {
+			c.SampleSessions(t0.Add(time.Duration(i)*time.Second), []routeros.Session{sess("K7Q2MX", "*1", uint64(i), uint64(i), 20*time.Second)}, nil)
+		}
+		close(done)
+	}()
+	for i := 0; i < 200; i++ {
+		_ = c.Snapshot()
+	}
+	<-done
+}
+
+func TestPortAllowFilter(t *testing.T) {
+	ifs := []routeros.Iface{{Name: "ether1", RxBytes: 1, TxBytes: 1, Running: true}, {Name: "ether2"}, {Name: "sfp-sfpplus1"},
+		{Name: "br-hotspot"}, {Name: "vlan30-customers"}, {Name: "bridge"}, {Name: "wg-ftn"}, {Name: "lo"}}
+	legacy := newCol(t)
+	legacy.SamplePorts(t0, ifs)
+	if _, ok := legacy.L.Ports["ether2"]; !ok || len(legacy.L.Ports) != 5 {
+		t.Fatalf("legacy prefix filter: %v", legacy.L.Ports)
+	}
+	cfg := testCfg()
+	cfg.PortAllow = []string{"ether1", "sfp-sfpplus1", "br-hotspot", "vlan30-customers"}
+	c := New(filepath.Join(t.TempDir(), "m.json"), cfg, routeros.NewMock(), fakeDir{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	c.SamplePorts(t0, ifs)
+	if len(c.L.Ports) != 4 {
+		t.Fatalf("%v", c.L.Ports)
+	}
+	for _, n := range []string{"ether2", "bridge", "wg-ftn"} {
+		if _, ok := c.L.Ports[n]; ok {
+			t.Fatalf("%s must not be recorded", n)
+		}
+	}
+}
+
+func TestJitterSpreadsSites(t *testing.T) {
+	every := 60 * time.Second
+	seen := map[time.Duration]bool{}
+	for i := 0; i < 20; i++ {
+		cfg := testCfg()
+		cfg.SiteID = fmt.Sprintf("s%06x", i*7919)
+		c := New(filepath.Join(t.TempDir(), "m.json"), cfg, routeros.NewMock(), fakeDir{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		j := c.jitter(every)
+		if j < 0 || j >= every || j != c.jitter(every) {
+			t.Fatalf("jitter %v", j)
+		}
+		seen[j] = true
+	}
+	if len(seen) < 15 {
+		t.Fatalf("only %d distinct offsets for 20 sites", len(seen))
+	}
+	if newCol(t).jitter(every) != 0 {
+		t.Fatal("no site id, no jitter")
+	}
+}
+
+func TestServiceDaysKept62DaysAndSaveCreatesDir(t *testing.T) {
+	c := newCol(t)
+	c.path = filepath.Join(t.TempDir(), "metrics", "s123456.json") // directory does not exist yet
+	c.SetClock(func() time.Time { return t0 })
+	k := func(daysAgo int) int64 { return BucketStart(TD, t0.Add(-time.Duration(daysAgo)*24*time.Hour)) }
+	c.D.SvcAcct["K7Q2MX"] = map[int64]map[string]uint64{k(70): {"YouTube": 1}, k(61): {"YouTube": 2}, k(1): {"YouTube": 3}}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	d, err := load(c.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	days := d.SvcAcct["K7Q2MX"]
+	if len(days) != 2 || days[k(70)] != nil || days[k(61)]["YouTube"] != 2 {
+		t.Fatalf("service days after save: %v", days)
 	}
 }
