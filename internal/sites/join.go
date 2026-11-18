@@ -115,6 +115,12 @@ func (m *Manager) RevokeJoin(siteID string) error {
 // used. Afterwards it rewrites the WireGuard peers and restarts the building's
 // runtime. The router's private key exists only in the returned script.
 func (m *Manager) ConsumeJoin(token, userAgent, from string) (script []byte, siteID string, err error) {
+	return m.ConsumeJoinOpts(token, userAgent, from, false)
+}
+
+// ConsumeJoinOpts is ConsumeJoin with noCheck: the router fetched the script
+// without certificate checking, so the script's own downloads skip it too.
+func (m *Manager) ConsumeJoinOpts(token, userAgent, from string, noCheck bool) (script []byte, siteID string, err error) {
 	if token == "" || len(token) > 128 {
 		return nil, "", ErrJoinInvalid
 	}
@@ -156,7 +162,7 @@ func (m *Manager) ConsumeJoin(token, userAgent, from string) (script []byte, sit
 		site.JoinedAt = time.Time{} // the next successful ping marks it joined again
 		script, err = RenderJoinScript(ScriptInput{
 			Site: ApplyDefaults(m.cfg, site), PrivateKey: priv, RESTPass: pass, ServerPub: m.cfg.WGPublicKey,
-			Endpoint: m.cfg.WGEndpoint, WGSubnet: m.pfx, PublicBase: m.cfg.PublicBaseURL, PublicIP: m.cfg.PublicIP, Generated: now,
+			Endpoint: m.cfg.WGEndpoint, WGSubnet: m.pfx, PublicBase: m.cfg.PublicBaseURL, PublicIP: m.cfg.PublicIP, Generated: now, NoCheck: noCheck,
 		})
 		if err != nil {
 			return fmt.Errorf("could not render the join script: %w", err)

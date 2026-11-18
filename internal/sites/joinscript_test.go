@@ -55,6 +55,7 @@ func TestJoinScriptGolden(t *testing.T) {
 			in.Site.Provision, in.Site.VLANID, in.Site.BenchPort = true, 30, "ether5"
 		}},
 		{"join_provision_vlan0.rsc", func(in *ScriptInput) { in.Site.Provision = true }},
+		{"join_nocheck.rsc", func(in *ScriptInput) { in.NoCheck = true }},
 		{"join_legacy.rsc", func(in *ScriptInput) {
 			in.Site.LegacyContainer = true
 			in.Site.Name = `Old "main" building $1`
@@ -176,8 +177,26 @@ func TestJoinCommand(t *testing.T) {
 		t.Fatal(got)
 	}
 	fb := JoinCommand("https://b.example", "T", false)
-	if !strings.Contains(fb, "check-certificate=no") {
+	if !strings.Contains(fb, "check-certificate=no") || !strings.Contains(fb, `url="https://b.example/j/T?nocheck=1"`) {
 		t.Fatal("fallback: ", fb)
+	}
+}
+
+func TestJoinScriptCertificateChecks(t *testing.T) {
+	render := func(noCheck bool) string {
+		in := baseInput()
+		in.NoCheck = noCheck
+		b, err := RenderJoinScript(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	if s := render(false); strings.Contains(s, "check-certificate=no") || strings.Count(s, "check-certificate=yes") != 1 {
+		t.Error("default script must check certificates for the page downloads")
+	}
+	if s := render(true); strings.Contains(s, "check-certificate=yes") || strings.Count(s, "check-certificate=no") != 1 {
+		t.Error("no-check script must skip the check for the page downloads")
 	}
 }
 

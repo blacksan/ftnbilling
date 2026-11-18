@@ -110,7 +110,7 @@
 :do {
   :local dir [/ip/hotspot/profile/get [find where name="{{.HotspotProfile}}"] html-directory]
   :foreach f in={ {{range $i, $f := .PageFiles}}{{if $i}};{{end}}"{{$f}}"{{end}} } do={
-    /tool/fetch url=("{{.PublicBase}}/routeros/hotspot/{{.SiteID}}/" . $f) dst-path=($dir . "/" . $f){{if .HTTPSBase}} check-certificate=yes{{end}}
+    /tool/fetch url=("{{.PublicBase}}/routeros/hotspot/{{.SiteID}}/" . $f) dst-path=($dir . "/" . $f){{if .HTTPSBase}} check-certificate={{if .NoCheck}}no{{else}}yes{{end}}{{end}}
   }
 {{- if .PublicIP}}
   /ip/hotspot/walled-garden/ip remove [find where comment="ftn: portal"]

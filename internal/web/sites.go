@@ -38,7 +38,7 @@ func (s *Server) joinScript(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
-	script, siteID, err := s.mgr.ConsumeJoin(r.PathValue("token"), r.UserAgent(), realIP(r))
+	script, siteID, err := s.mgr.ConsumeJoinOpts(r.PathValue("token"), r.UserAgent(), realIP(r), r.URL.Query().Get("nocheck") == "1")
 	switch {
 	case errors.Is(err, sites.ErrJoinInvalid):
 		http.NotFound(w, r)

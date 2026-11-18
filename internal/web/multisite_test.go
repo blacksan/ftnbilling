@@ -294,6 +294,38 @@ func TestJoinEndpoint(t *testing.T) {
 	}
 }
 
+// The "no certificate check" command asks for ?nocheck=1, and then the script's
+// own page downloads skip the check too; the normal command keeps it.
+func TestJoinEndpointNoCheckVariant(t *testing.T) {
+	m := newMulti(t)
+	token := func(name string) (string, string) {
+		site, err := m.mgr.CreateSite(sites.SiteInput{Name: name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		page := body(t, m.admin("POST", "/admin/sites/join", url.Values{"id": {site.ID}}))
+		i := strings.Index(page, "/j/")
+		if i < 0 {
+			t.Fatalf("no command on the page: %.300s", page)
+		}
+		rest := page[i+3:]
+		return rest[:strings.IndexAny(rest, "\"' <&?")], page
+	}
+	tok, page := token("Delta")
+	if !strings.Contains(page, "/j/"+tok+"?nocheck=1") {
+		t.Fatalf("the fallback command lacks ?nocheck=1: %.600s", page)
+	}
+	r, script := m.joinGet(tok+"?nocheck=1", "Mikrotik/7.15 Fetch")
+	if r.StatusCode != 200 || strings.Contains(script, "check-certificate=yes") || !strings.Contains(script, "check-certificate=no") {
+		t.Fatalf("nocheck script %d: wants check-certificate=no on the page downloads", r.StatusCode)
+	}
+	tok2, _ := token("Epsilon")
+	r, script = m.joinGet(tok2, "Mikrotik/7.15 Fetch")
+	if r.StatusCode != 200 || strings.Contains(script, "check-certificate=no") || !strings.Contains(script, "check-certificate=yes") {
+		t.Fatalf("default script %d: wants check-certificate=yes", r.StatusCode)
+	}
+}
+
 func TestJoinEndpointIsRateLimited(t *testing.T) {
 	m := newMulti(t)
 	got429 := false

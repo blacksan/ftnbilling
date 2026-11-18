@@ -33,6 +33,10 @@ type ScriptInput struct {
 	PublicBase string // https://billing.example.co.ke
 	PublicIP   string
 	Generated  time.Time
+	// NoCheck is set when the admin used the "no certificate check" command
+	// (router with a wrong clock or no CA store): the page downloads in
+	// section 6 then skip the check too, or they would fail for the same reason.
+	NoCheck bool
 }
 
 // scriptData is the template view of ScriptInput.
@@ -57,6 +61,7 @@ type scriptData struct {
 	HTTPSBase                                               bool
 	PageFiles                                               []string
 	NetflowPort                                             int
+	NoCheck                                                 bool
 }
 
 // rq escapes a value for use inside a RouterOS double-quoted string.
@@ -119,7 +124,7 @@ func RenderJoinScript(in ScriptInput) ([]byte, error) {
 		OLTInterface: s.OLTInterface, WANList: s.WANList, Bridge: HotspotBridge, CustomerIface: s.OLTInterface,
 		VLANID: s.VLANID, BenchPort: s.BenchPort, HotspotServer: s.HotspotServer, HotspotProfile: HotspotProf,
 		PublicBase: strings.TrimRight(in.PublicBase, "/"), PublicIP: in.PublicIP, HTTPSBase: u.Scheme == "https",
-		PageFiles: PageFiles, NetflowPort: 2055,
+		PageFiles: PageFiles, NetflowPort: 2055, NoCheck: in.NoCheck,
 	}
 	if s.VLANID > 0 {
 		d.VLANName = fmt.Sprintf("vlan%d-customers", s.VLANID)
@@ -152,11 +157,16 @@ func splitEndpoint(ep string) (string, int, error) {
 
 // JoinCommand is the one-line paste shown to the admin. The fallback skips
 // certificate checking and is for routers with a wrong clock or no CA store.
+// It asks for /j/{token}?nocheck=1 so the script it receives skips the check
+// for its own page downloads as well.
 func JoinCommand(base, token string, checkCert bool) string {
 	chk, q := "yes", ""
 	if !checkCert {
-		chk, q = "no", ""
+		chk, q = "no", NoCheckQuery
 	}
 	return fmt.Sprintf(`/tool/fetch url="%s/j/%s%s" dst-path=ftn-join.rsc check-certificate=%s; :delay 1s; /import ftn-join.rsc`,
 		strings.TrimRight(base, "/"), token, q, chk)
 }
+
+// NoCheckQuery is the query string of the no-certificate-check join command.
+const NoCheckQuery = "?nocheck=1"
