@@ -2,10 +2,10 @@ package ke.co.ftw.ftnadmin.ui.nav
 
 import ke.co.ftw.ftnadmin.ui.common.LoadingSpinner
 import android.net.Uri
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -46,9 +46,11 @@ fun AppNav() {
     val lock by container.appLock.state.collectAsStateWithLifecycle()
 
     val s = settings
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    // Surface (not Box.background) so LocalContentColor = onBackground for every screen below,
+    // including ones that don't wrap themselves in a Scaffold (onboarding, lock).
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         if (s == null || !loaded || lock == LockState.Unknown) {
-            LoadingSpinner(Modifier.align(Alignment.Center))
+            Box(Modifier.fillMaxSize()) { LoadingSpinner(Modifier.align(Alignment.Center)) }
         } else {
             val gate = when {
                 !s.onboardingDone || summary == null -> Routes.ONBOARDING
