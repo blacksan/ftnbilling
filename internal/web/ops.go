@@ -18,6 +18,8 @@ type Ops struct {
 	Alerts *alerts.Engine
 	Box    *notify.Outbox
 	Tenant *notify.Tenant
+	// Inbound serves /wa/webhook; set only when WA_APP_SECRET and WA_VERIFY_TOKEN are.
+	Inbound *notify.Inbound
 }
 
 // SetOps installs the Phase 2 services. Call it before Handler.

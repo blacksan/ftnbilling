@@ -97,6 +97,11 @@ func startOps(ctx context.Context, wg *sync.WaitGroup, cfg config.Config, st *st
 		OutageEnd: prober.OutageEnd,
 	})
 	svc.SetCreditHook(tenant.Kick)
+	var inbound *notify.Inbound
+	if cfg.WAAppSecret != "" && cfg.WAVerifyToken != "" && cfg.WhatsAppConfigured() {
+		inbound = notify.NewInbound(notify.InboundOptions{Store: st, Box: box, Log: log, AppSecret: cfg.WAAppSecret, VerifyToken: cfg.WAVerifyToken,
+			SupportPhone: cfg.SupportPhone, PayHint: payHint})
+	}
 
 	run := func(f func(context.Context)) {
 		wg.Add(1)
@@ -109,7 +114,7 @@ func startOps(ctx context.Context, wg *sync.WaitGroup, cfg config.Config, st *st
 		run(tenant.Run) // tenant messages need the WhatsApp channel
 	}
 	log.Info("monitoring started", "email", cfg.EmailConfigured(), "telegram", cfg.TelegramConfigured(), "whatsapp", cfg.WhatsAppConfigured())
-	return web.Ops{Fleet: prober, Alerts: engine, Box: box, Tenant: tenant}, nil
+	return web.Ops{Fleet: prober, Alerts: engine, Box: box, Tenant: tenant, Inbound: inbound}, nil
 }
 
 func emailTargets(cfg config.Config) []string {

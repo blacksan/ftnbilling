@@ -1,10 +1,12 @@
 package web_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -69,6 +71,7 @@ func newOpsRig(t *testing.T) *opsRig {
 		c.WAToken, c.WAPhoneNumberID, c.WAAdminNumbers, c.WADailyLimit = "tok", "1234", []string{"254700111222"}, 240
 		c.TelegramToken, c.TelegramChatID = "1:A", "-1001234567"
 		c.SMTPHost, c.SMTPFrom = "smtp.example", "alerts@ftn.example"
+		c.WAAppSecret, c.WAVerifyToken = "appsecret", "vtoken"
 	}, func(cfg config.Config, st *store.Store, mgr *sites.Manager, svc *billing.Service) web.Ops {
 		log := slog.New(slog.NewTextHandler(io.Discard, nil))
 		box, err := notify.Open(notify.Options{Path: filepath.Join(cfg.DataDir, "outbox.json"), Log: log,
@@ -88,7 +91,8 @@ func newOpsRig(t *testing.T) *opsRig {
 			Targets: func() alerts.Targets { return alerts.Targets{Telegram: []string{"-1001234567"}} }})
 		ten := notify.NewTenant(notify.TenantOptions{Store: st, Box: box, Log: log, Policy: svc.Policy, PayHint: "M-Pesa Paybill 123456", MinConfirmKES: 250,
 			OpenOutage: func(id string) (time.Time, bool) { o, ok := fl.OpenOutage(id); return o.Start, ok }, OutageEnd: fl.OutageEnd})
-		r.ops = web.Ops{Fleet: fl, Alerts: eng, Box: box, Tenant: ten}
+		in := notify.NewInbound(notify.InboundOptions{Store: st, Box: box, AppSecret: cfg.WAAppSecret, VerifyToken: cfg.WAVerifyToken, SupportPhone: "0700 111 222", PayHint: "M-Pesa Paybill 123456"})
+		r.ops = web.Ops{Fleet: fl, Alerts: eng, Box: box, Tenant: ten, Inbound: in}
 		return r.ops
 	})
 	return r
@@ -371,5 +375,69 @@ func TestAccountWhatsAppForm(t *testing.T) {
 	})
 	if n != 1 {
 		t.Fatal("create with WhatsApp same as phone")
+	}
+}
+
+func TestWhatsAppWebhookRoutes(t *testing.T) {
+	r := newOpsRig(t)
+	a := r.joined(t, "Alpha Court", "10.99.0.2", true)
+	acct, _ := r.svc.CreateAccount(billing.AccountInput{SiteID: a.ID, Flat: "Flat 1", MAC: "AA:BB:CC:00:00:01", WhatsApp: "0712345678"})
+	get := func(q string) (int, string) {
+		resp, err := http.Get(r.ts.URL + "/wa/webhook?" + q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return resp.StatusCode, string(b)
+	}
+	if code, b := get("hub.mode=subscribe&hub.verify_token=vtoken&hub.challenge=777"); code != 200 || b != "777" {
+		t.Fatalf("handshake: %d %q", code, b)
+	}
+	if code, _ := get("hub.mode=subscribe&hub.verify_token=nope&hub.challenge=777"); code != 403 {
+		t.Fatalf("wrong token: %d", code)
+	}
+	post := func(body []byte, sig string) int {
+		req, _ := http.NewRequest("POST", r.ts.URL+"/wa/webhook", bytes.NewReader(body))
+		if sig != "" {
+			req.Header.Set("X-Hub-Signature-256", sig)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	body := []byte(`{"entry":[{"changes":[{"value":{"messages":[{"from":"254712345678","id":"wamid.1","type":"text","text":{"body":"STOP"}}]}}]}]}`)
+	if code := post(body, ""); code != 403 {
+		t.Fatalf("unsigned: %d", code)
+	}
+	if code := post(body, notify.Sign("wrong", body)); code != 403 {
+		t.Fatalf("badly signed: %d", code)
+	}
+	if got, _ := r.svc.GetAccount(acct.ID); got.WAOptOut {
+		t.Fatal("an unsigned request must change nothing")
+	}
+	if code := post(body, notify.Sign("appsecret", body)); code != 200 {
+		t.Fatalf("signed: %d", code)
+	}
+	if got, _ := r.svc.GetAccount(acct.ID); !got.WAOptOut {
+		t.Fatal("STOP over the webhook sets the opt-out")
+	}
+	if code := post([]byte("not json"), notify.Sign("appsecret", []byte("not json"))); code != 200 {
+		t.Fatalf("a signed bad payload still gets 200: %d", code)
+	}
+}
+
+func TestWebhookNotRegisteredWithoutSecrets(t *testing.T) {
+	m := newMulti(t) // no Ops, no secrets
+	resp, err := http.Get(m.ts.URL + "/wa/webhook?hub.mode=subscribe&hub.verify_token=x&hub.challenge=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Fatalf("the route must not exist: %d", resp.StatusCode)
 	}
 }

@@ -117,6 +117,7 @@ func (s *Server) Handler() http.Handler {
 	s.portalRoutes(mux)
 	s.routerFileRoutes(mux)
 	s.callbackRoutes(mux)
+	s.waRoutes(mux)
 	s.adminRoutes(mux)
 	return s.middleware(mux)
 }
