@@ -98,6 +98,7 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 		"eatNow": func() string { return svc.Now().In(billing.EAT).Format("2006-01-02T15:04") },
 		"inc":    func(i int) int { return i + 1 },
 		"day":    day,
+		"stat":   func(v string) string { return strings.ReplaceAll(v, "_", " ") },
 		"deref":  func(b *bool) bool { return b != nil && *b },
 		"last4":  lastFour,
 		"pct": func(a, b float64) float64 {

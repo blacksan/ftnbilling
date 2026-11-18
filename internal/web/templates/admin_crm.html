@@ -3,8 +3,8 @@
 {{if .Data.Q}}{{with .Data.R}}{{$d := $.Data}}{{if not .Total}}<div class="card">Nothing found for <b>{{.Query}}</b>. Phone numbers match with or without the leading 0; MACs with or without colons.</div>{{end}}
 {{if .Customers}}<h3>Customers ({{len .Customers}})</h3><div class="tw"><table><tr><th>Name</th><th>Phone</th><th>Email</th></tr>{{range .Customers}}<tr><td><a href="/admin/customers/view?id={{.ID}}"><b>{{.Name}}</b></a></td><td>{{.Phone}}</td><td>{{.Email}}</td></tr>{{end}}</table></div>{{end}}
 {{if .Accounts}}<h3>Accounts ({{len .Accounts}})</h3><div class="tw"><table><tr><th>Flat</th><th>Code</th><th>Tenant</th><th>ONT MAC</th></tr>{{range .Accounts}}<tr><td><a href="/admin/accounts/view?code={{.Code}}"><b>{{.Flat}}</b></a> <span class="muted">{{index $d.SiteOf .SiteID}}</span></td><td><code>{{.Code}}</code></td><td>{{.Tenant}} <span class="muted">{{.Phone}}</span></td><td>{{.MAC}}</td></tr>{{end}}</table></div>{{end}}
-{{if .Equipment}}<h3>Equipment ({{len .Equipment}})</h3><div class="tw"><table><tr><th>Kind</th><th>Serial</th><th>MAC</th><th>Model</th><th>Status</th></tr>{{range .Equipment}}<tr><td>{{.Kind}}</td><td><a href="/admin/equipment/view?id={{.ID}}"><b>{{if .Serial}}{{.Serial}}{{else}}(no serial){{end}}</b></a></td><td>{{.MAC}}</td><td>{{.Model}}</td><td><span class="pill {{.Status}}">{{.Status}}</span></td></tr>{{end}}</table></div>{{end}}
-{{if .Payments}}<h3>Payments ({{len .Payments}})</h3><div class="tw"><table><tr><th>Paid (EAT)</th><th>Code</th><th>Method</th><th class="n">KES</th><th>Payer</th><th>Flat</th><th>Status</th></tr>{{range .Payments}}<tr><td>{{eat .PaidAt}}</td><td><a href="/admin/payments?q={{.Key}}">{{.Key}}</a></td><td>{{.Method}}</td><td class="n">{{.AmountKES}}</td><td>{{.Phone}} {{.Name}}</td><td>{{with index $d.AcctOf .AccountID}}<a href="/admin/accounts/view?code={{.Code}}">{{.Flat}}</a>{{end}}</td><td><span class="pill {{.Status}}">{{.Status}}</span></td></tr>{{end}}</table></div>{{end}}
+{{if .Equipment}}<h3>Equipment ({{len .Equipment}})</h3><div class="tw"><table><tr><th>Kind</th><th>Serial</th><th>MAC</th><th>Model</th><th>Status</th></tr>{{range .Equipment}}<tr><td>{{.Kind}}</td><td><a href="/admin/equipment/view?id={{.ID}}"><b>{{if .Serial}}{{.Serial}}{{else}}(no serial){{end}}</b></a></td><td>{{.MAC}}</td><td>{{.Model}}</td><td><span class="pill {{.Status}}">{{stat .Status}}</span></td></tr>{{end}}</table></div>{{end}}
+{{if .Payments}}<h3>Payments ({{len .Payments}})</h3><div class="tw"><table><tr><th>Paid (EAT)</th><th>Code</th><th>Method</th><th class="n">KES</th><th>Payer</th><th>Flat</th><th>Status</th></tr>{{range .Payments}}<tr><td>{{eat .PaidAt}}</td><td><a href="/admin/payments?q={{.Key}}">{{.Key}}</a></td><td>{{.Method}}</td><td class="n">{{.AmountKES}}</td><td>{{.Phone}} {{.Name}}</td><td>{{with index $d.AcctOf .AccountID}}<a href="/admin/accounts/view?code={{.Code}}">{{.Flat}}</a>{{end}}</td><td><span class="pill {{.Status}}">{{stat .Status}}</span></td></tr>{{end}}</table></div>{{end}}
 {{if .Buildings}}<h3>Buildings ({{len .Buildings}})</h3><div class="tw"><table>{{range .Buildings}}<tr><td><a href="/admin/sites/view?id={{.ID}}"><b>{{.Name}}</b></a></td><td>{{.Address}}</td></tr>{{end}}</table></div>{{end}}
 {{end}}{{end}}
 {{template "afoot"}}{{end}}
@@ -47,10 +47,10 @@
 {{if and (not .Data.Anon) .Data.Free}}<div class="card"><b>Move into a flat</b><form method="post" action="/admin/customers/link" class="row" style="margin-top:6px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$C.ID}}">
 <label>Flat<select name="account">{{range .Data.Free}}<option value="{{.ID}}">{{.Flat}} ({{.Code}}){{if .CustomerID}} - occupied{{end}}</option>{{end}}</select></label><label>Move-in date<input type="date" name="move_in"></label><button>Link</button></form>
 <p class="muted" style="margin:6px 0 0">If the flat has a tenant, their tenancy ends on the move-in date.</p></div>{{end}}
-{{if $P.Equipment}}<h3>Equipment at their flats</h3><div class="tw"><table><tr><th>Kind</th><th>Serial</th><th>MAC</th><th>Flat</th><th>Status</th></tr>{{range $P.Equipment}}<tr><td>{{.Kind}}</td><td><a href="/admin/equipment/view?id={{.ID}}">{{if .Serial}}{{.Serial}}{{else}}(no serial){{end}}</a></td><td>{{.MAC}}</td><td>{{(acctOf $P.Accounts .AccountID).Flat}}</td><td><span class="pill {{.Status}}">{{.Status}}</span></td></tr>{{end}}</table></div>{{end}}
+{{if $P.Equipment}}<h3>Equipment at their flats</h3><div class="tw"><table><tr><th>Kind</th><th>Serial</th><th>MAC</th><th>Flat</th><th>Status</th></tr>{{range $P.Equipment}}<tr><td>{{.Kind}}</td><td><a href="/admin/equipment/view?id={{.ID}}">{{if .Serial}}{{.Serial}}{{else}}(no serial){{end}}</a></td><td>{{.MAC}}</td><td>{{(acctOf $P.Accounts .AccountID).Flat}}</td><td><span class="pill {{.Status}}">{{stat .Status}}</span></td></tr>{{end}}</table></div>{{end}}
 <h3>Payments</h3>
 <div class="tw"><table><tr><th>Paid (EAT)</th><th>Code</th><th>Method</th><th class="n">KES</th><th>Flat</th><th>Status</th></tr>
-{{range $P.Payments}}<tr><td>{{eat .PaidAt}}</td><td>{{.Key}}</td><td>{{.Method}}</td><td class="n">{{.AmountKES}}</td><td>{{(acctOf $P.Accounts .AccountID).Flat}}</td><td><span class="pill {{.Status}}">{{.Status}}</span></td></tr>
+{{range $P.Payments}}<tr><td>{{eat .PaidAt}}</td><td>{{.Key}}</td><td>{{.Method}}</td><td class="n">{{.AmountKES}}</td><td>{{(acctOf $P.Accounts .AccountID).Flat}}</td><td><span class="pill {{.Status}}">{{stat .Status}}</span></td></tr>
 {{else}}<tr><td colspan="6">No payments yet.</td></tr>{{end}}</table></div>
 <h3>History</h3>
 {{if not .Data.Anon}}<form method="post" action="/admin/customers/note" class="row" style="margin-bottom:8px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$C.ID}}"><label style="flex:1">Add a note<input name="text" style="width:100%" maxlength="1000" required></label><button>Add note</button></form>{{end}}
@@ -64,9 +64,9 @@
 <form method="get" action="/admin/equipment" class="row" style="margin-bottom:12px"><label>Find<input name="q" value="{{.Data.Q}}" placeholder="serial, MAC, model, flat" size="26"></label>
 <label>Kind<select name="kind"><option value="">All</option>{{range .Data.Kinds}}<option value="{{.}}"{{if eq . $d.Data.Kind}} selected{{end}}>{{.}}</option>{{end}}</select></label>
 <label>Status<select name="status"><option value="">All</option>{{range .Data.Statuses}}<option value="{{.}}"{{if eq . $d.Data.Status}} selected{{end}}>{{.}}</option>{{end}}</select></label><button>Filter</button></form>
-<div class="tiles">{{range .Data.Statuses}}<div class="tile{{if eq . "faulty"}} warn{{end}}">{{.}}<b>{{index $d.Data.Counts .}}</b></div>{{end}}</div>
+<div class="tiles">{{range .Data.Statuses}}<div class="tile{{if eq . "faulty"}} warn{{end}}">{{stat .}}<b>{{index $d.Data.Counts .}}</b></div>{{end}}</div>
 <div class="tw"><table><tr>{{if .Data.ShowSite}}<th>Building</th>{{end}}<th>Kind</th><th>Serial</th><th>MAC</th><th>Model</th><th>Status</th><th>Installed at</th></tr>
-{{range .Data.Rows}}<tr>{{if $d.Data.ShowSite}}<td>{{.Site}}</td>{{end}}<td>{{.E.Kind}}</td><td><a href="/admin/equipment/view?id={{.E.ID}}"><b>{{if .E.Serial}}{{.E.Serial}}{{else}}(no serial){{end}}</b></a></td><td>{{.E.MAC}}</td><td>{{.E.Model}}</td><td><span class="pill {{.E.Status}}">{{.E.Status}}</span></td>
+{{range .Data.Rows}}<tr>{{if $d.Data.ShowSite}}<td>{{.Site}}</td>{{end}}<td>{{.E.Kind}}</td><td><a href="/admin/equipment/view?id={{.E.ID}}"><b>{{if .E.Serial}}{{.E.Serial}}{{else}}(no serial){{end}}</b></a></td><td>{{.E.MAC}}</td><td>{{.E.Model}}</td><td><span class="pill {{.E.Status}}">{{stat .E.Status}}</span></td>
 <td>{{if .A.Code}}<a href="/admin/accounts/view?code={{.A.Code}}">{{.A.Flat}}</a>{{else if .Site}}{{.Site}}{{end}}</td></tr>
 {{else}}<tr><td colspan="7">No equipment matches.</td></tr>{{end}}</table></div>
 <div class="grid2">
@@ -78,7 +78,7 @@
 {{template "afoot"}}{{end}}
 
 {{define "admin_equipment_view"}}{{template "ahead" .}}{{$E := .Data.E}}{{$d := .}}
-<h2>{{$E.Kind}} {{if $E.Serial}}{{$E.Serial}}{{else}}<span class="muted">(no serial)</span>{{end}} <span class="pill {{$E.Status}}">{{$E.Status}}</span></h2>
+<h2>{{$E.Kind}} {{if $E.Serial}}{{$E.Serial}}{{else}}<span class="muted">(no serial)</span>{{end}} <span class="pill {{$E.Status}}">{{stat $E.Status}}</span></h2>
 <p><a href="/admin/equipment">&larr; all equipment</a></p>
 <div class="tiles"><div class="tile">Installed at<b style="font-size:19px">{{if .Data.Acct.Code}}<a href="/admin/accounts/view?code={{.Data.Acct.Code}}">{{.Data.Acct.Flat}}</a>{{else if .Data.SiteName}}{{.Data.SiteName}}{{else}}not installed{{end}}</b>{{if .Data.Cust.Name}}<small><a href="/admin/customers/view?id={{.Data.Cust.ID}}">{{.Data.Cust.Name}}</a></small>{{end}}</div>
 <div class="tile">MAC<b style="font-size:19px">{{if $E.MAC}}{{$E.MAC}}{{else}}-{{end}}</b><small>{{$E.Model}}{{if $E.Firmware}} &middot; firmware {{$E.Firmware}}{{end}}</small></div>
@@ -100,7 +100,7 @@
 <h3>History</h3>
 <form method="post" action="/admin/equipment/note" class="row" style="margin-bottom:8px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><label style="flex:1">Add a note<input name="text" style="width:100%" maxlength="300" required></label><button>Add note</button></form>
 <div class="tw"><table><tr><th>When (EAT)</th><th>What</th><th>Status</th><th>Flat</th><th>Note</th></tr>
-{{range .Data.Hist}}<tr><td>{{eat .Ev.Time}}</td><td>{{.Ev.Kind}}</td><td>{{if .Ev.FromStatus}}{{.Ev.FromStatus}} &rarr; {{end}}{{.Ev.ToStatus}}</td><td>{{if .A.Code}}<a href="/admin/accounts/view?code={{.A.Code}}">{{.A.Flat}}</a>{{end}}</td><td style="white-space:normal">{{.Ev.Note}}</td></tr>
+{{range .Data.Hist}}<tr><td>{{eat .Ev.Time}}</td><td>{{.Ev.Kind}}</td><td>{{if and .Ev.FromStatus (ne .Ev.FromStatus .Ev.ToStatus)}}{{stat .Ev.FromStatus}} &rarr; {{end}}{{stat .Ev.ToStatus}}</td><td>{{if .A.Code}}<a href="/admin/accounts/view?code={{.A.Code}}">{{.A.Flat}}</a>{{end}}</td><td style="white-space:normal">{{.Ev.Note}}</td></tr>
 {{else}}<tr><td colspan="5">No history yet.</td></tr>{{end}}</table></div>
 {{template "afoot"}}{{end}}
 
@@ -110,8 +110,8 @@
 {{if .Data.Cust.ID}}<p style="margin:6px 0"><a href="/admin/customers/view?id={{.Data.Cust.ID}}"><b>{{.Data.Cust.Name}}</b></a> <span class="muted">{{.Data.Cust.Phone}}</span></p>
 <form method="post" action="/admin/customers/moveout" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="account" value="{{$A.ID}}"><input type="hidden" name="next" value="{{.Next}}"><input type="date" name="move_out" aria-label="move-out date"><button>Tenant moved out</button></form>
 <p class="muted" style="margin:6px 0 0">Moving out vacates the flat; the customer record and payments stay.</p>{{else}}<p class="muted" style="margin:4px 0">{{if $A.Tenant}}Typed-in tenant: {{$A.Tenant}} {{$A.Phone}}. Link a customer record to keep their history.{{else}}Vacant.{{end}}</p>{{end}}
-<form method="post" action="/admin/accounts/customer" class="row" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
-<label>{{if .Data.Cust.ID}}Replace with{{else}}Existing customer{{end}}<select name="customer"><option value="">new customer (fill in below)</option>{{range .Data.Custs}}<option value="{{.ID}}">{{.Name}}{{if .Phone}} - {{.Phone}}{{end}}</option>{{end}}</select></label><label>Move-in<input type="date" name="move_in"></label></div>
+<form method="post" action="/admin/accounts/customer" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
+<div class="row"><label>{{if .Data.Cust.ID}}Replace with{{else}}Existing customer{{end}}<select name="customer"><option value="">new customer (fill in below)</option>{{range .Data.Custs}}<option value="{{.ID}}">{{.Name}}{{if .Phone}} - {{.Phone}}{{end}}</option>{{end}}</select></label><label>Move-in<input type="date" name="move_in"></label></div>
 <div class="row" style="margin-top:6px"><label>New name<input name="name" value="{{if not .Data.Cust.ID}}{{$A.Tenant}}{{end}}"></label><label>Phone<input name="phone" value="{{if not .Data.Cust.ID}}{{$A.Phone}}{{end}}"></label><button>Link</button></div></form></div>
 <div class="card"><b>Location in the building</b>
 <form method="post" action="/admin/accounts/location" class="row" style="margin-top:6px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
@@ -120,7 +120,7 @@
 <label>Port<input name="port" type="number" min="0" max="128" value="{{if $A.SplitterPort}}{{$A.SplitterPort}}{{end}}" style="width:70px"></label><button>Save</button></form></div></div>
 <div class="card"><b>Equipment at this flat</b>
 <div class="tw" style="margin-top:6px"><table><tr><th>Kind</th><th>Serial</th><th>MAC</th><th>Model</th><th>Status</th><th></th></tr>
-{{range .Data.Equip}}<tr><td>{{.Kind}}</td><td><a href="/admin/equipment/view?id={{.ID}}">{{if .Serial}}{{.Serial}}{{else}}(no serial){{end}}</a></td><td>{{.MAC}}</td><td>{{.Model}}</td><td><span class="pill {{.Status}}">{{.Status}}</span></td>
+{{range .Data.Equip}}<tr><td>{{.Kind}}</td><td><a href="/admin/equipment/view?id={{.ID}}">{{if .Serial}}{{.Serial}}{{else}}(no serial){{end}}</a></td><td>{{.MAC}}</td><td>{{.Model}}</td><td><span class="pill {{.Status}}">{{stat .Status}}</span></td>
 <td><form method="post" action="/admin/equipment/return" class="row"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><input type="hidden" name="next" value="{{$d.Next}}"><select name="status" aria-label="status"><option value="returned">returned</option><option value="in_stock">in stock</option><option value="faulty">faulty</option><option value="retired">retired</option></select><button>Remove</button></form></td></tr>
 {{else}}<tr><td colspan="6">None recorded.</td></tr>{{end}}</table></div>
 {{if .Data.Stock}}<form method="post" action="/admin/equipment/assign" class="row" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="account" value="{{$A.ID}}"><input type="hidden" name="next" value="{{.Next}}">

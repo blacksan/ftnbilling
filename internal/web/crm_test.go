@@ -90,6 +90,11 @@ func TestCustomersEquipmentSearchAndAccountCards(t *testing.T) {
 			t.Errorf("account page lacks %q", want)
 		}
 	}
+	for _, tag := range []string{"form", "div", "table"} {
+		if o, c := strings.Count(card, "<"+tag), strings.Count(card, "</"+tag+">"); o != c {
+			t.Errorf("account page has %d <%s> but %d closing tags", o, tag, c)
+		}
+	}
 	// Location card.
 	if l := a.adminPost(t, "/admin/accounts/location", url.Values{"id": {acct.ID}, "floor": {"3"}, "odb": {"ODB-3A"}, "port": {"5"}}); !strings.Contains(l, "Location saved") {
 		t.Fatal(l)
