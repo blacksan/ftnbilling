@@ -121,3 +121,21 @@ func TestNotificationSettings(t *testing.T) {
 		t.Fatal("bad SMTP_PORT must be refused")
 	}
 }
+
+func TestDatabaseSettings(t *testing.T) {
+	base := map[string]string{"ADMIN_PASS": "s3cret!"}
+	c, err := Load(env(base))
+	if err != nil || c.DatabaseURL != "" || c.DataKey != nil || c.DBCommitTimeout != 5*time.Second {
+		t.Fatalf("defaults: %+v %v", c, err)
+	}
+	key := "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=" // 32 bytes
+	c, err = Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "DATABASE_URL": "postgres://u:p@/db?host=/var/run/postgresql", "DATA_KEY": key, "DB_COMMIT_TIMEOUT": "9s"}))
+	if err != nil || c.DatabaseURL == "" || len(c.DataKey) != 32 || c.DBCommitTimeout != 9*time.Second {
+		t.Fatalf("set: %+v %v", c, err)
+	}
+	for _, bad := range []string{"not base64!", "c2hvcnQ="} { // not base64; 5 bytes
+		if _, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "DATA_KEY": bad})); err == nil {
+			t.Errorf("DATA_KEY=%q must be refused", bad)
+		}
+	}
+}

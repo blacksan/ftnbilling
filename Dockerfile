@@ -5,9 +5,9 @@
 FROM --platform=$BUILDPLATFORM golang:1.24 AS build
 ARG TARGETOS TARGETARCH
 WORKDIR /src
-COPY go.mod ./
 COPY . .
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/ispbill ./cmd/ispbill
+# -tags nopg: the router image uses the JSON file, so the Postgres driver is left out.
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags nopg -trimpath -ldflags="-s -w" -o /out/ispbill ./cmd/ispbill
 RUN mkdir -p /out/data /out/tmp && chmod 1777 /out/tmp
 
 FROM scratch

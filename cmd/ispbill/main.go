@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -23,6 +24,13 @@ import (
 )
 
 func main() {
+	if handled, err := runCLI(os.Args[1:], os.Getenv, os.Stdout); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	if err := run(log); err != nil {
 		log.Error("fatal", "err", err)
@@ -35,10 +43,13 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	st, err := store.Open(cfg.DataDir)
+	openCtx, openCancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+	st, err := openStore(openCtx, cfg, log)
+	openCancel()
 	if err != nil {
 		return err
 	}
+	defer st.Close()
 	if cfg.RouterMock {
 		log.Warn("ROUTER_MOCK=true: using an in-memory fake router")
 	}

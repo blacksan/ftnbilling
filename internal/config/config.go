@@ -73,6 +73,12 @@ type Config struct {
 	DNSEvery        time.Duration // DNS cache refresh
 	SaveEvery       time.Duration // per-site metrics file flush
 
+	// Database. DatabaseURL empty = the JSON file in DataDir. DataKey is the
+	// AES-256 key for the optional national-ID field (nil = feature off).
+	DatabaseURL     string
+	DataKey         []byte
+	DBCommitTimeout time.Duration
+
 	// Lifecycle (shown on the admin settings page).
 	ReminderDays     int
 	ReminderOnExpiry bool
@@ -179,6 +185,16 @@ func Load(getenv func(string) string) (Config, error) {
 	if c.WGPublicKey != "" {
 		if b, err := base64.StdEncoding.DecodeString(c.WGPublicKey); err != nil || len(b) != 32 {
 			errs = append(errs, errors.New("WG_PUBLIC_KEY must be a 44-character WireGuard public key"))
+		}
+	}
+	c.DatabaseURL = get("DATABASE_URL", "")
+	c.DBCommitTimeout = dur("DB_COMMIT_TIMEOUT", 5*time.Second)
+	if k := get("DATA_KEY", ""); k != "" {
+		b, err := base64.StdEncoding.DecodeString(k)
+		if err != nil || len(b) != 32 {
+			errs = append(errs, errors.New("DATA_KEY must be base64 of exactly 32 random bytes (generate one with: openssl rand -base64 32)"))
+		} else {
+			c.DataKey = b
 		}
 	}
 	c.CustomerSubnet = get("CUSTOMER_SUBNET", "10.5.50.0/24")
