@@ -386,6 +386,9 @@ func TestDiffBudget(t *testing.T) {
 	if testing.Short() {
 		t.Skip()
 	}
+	if raceBuild {
+		t.Skip("timing budget is meaningful only without the race detector")
+	}
 	r20 := testing.Benchmark(BenchmarkDiff20k)
 	r200 := testing.Benchmark(BenchmarkDiff200k)
 	t.Logf("diff per update: 20k rows %v, 200k rows %v", time.Duration(r20.NsPerOp()), time.Duration(r200.NsPerOp()))

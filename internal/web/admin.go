@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"crypto/rand"
-	"encoding/csv"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -64,6 +63,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	post("/admin/vouchers/generate", s.adminGenVouchers)
 	get("/admin/vouchers/print", s.adminPrintVouchers)
 	get("/admin/settings", s.adminSettings)
+	s.crmRoutes(get, post)
 	s.metricsRoutes(get, post)
 	s.opsRoutes(get, post)
 }
@@ -383,6 +383,7 @@ func (s *Server) adminAccount(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p.Data["MoveTo"] = others
+	s.accountCards(p.Data, a, s.scopeOf(r))
 	s.render(w, "admin_account", p)
 }
 
@@ -556,9 +557,23 @@ func (s *Server) payRows(sc scope, status string, limit int) []payRow {
 
 func (s *Server) adminPayments(w http.ResponseWriter, r *http.Request) {
 	p := s.page(r, "payments")
-	st := r.URL.Query().Get("status")
-	p.Data["Rows"] = s.payRows(s.scopeOf(r), st, 500)
-	p.Data["Status"] = st
+	f, form := s.payFilter(r)
+	rows, tot := s.svc.FilterPayments(f)
+	const limit = 500
+	shown := rows
+	if len(shown) > limit {
+		shown = shown[:limit]
+	}
+	var out []payRow
+	s.st.View(func(d *store.Data) {
+		for _, pay := range shown {
+			a, _ := d.AnyAccount(pay.AccountID)
+			out = append(out, payRow{pay, a, d.Packages[pay.PackageID]})
+		}
+	})
+	p.Data["Rows"], p.Data["Status"], p.Data["F"], p.Data["Tot"] = out, form.Status, form, tot
+	p.Data["Methods"], p.Data["Total"], p.Data["Limit"] = s.paymentMethods(), len(rows), limit
+	p.Data["Query"] = r.URL.RawQuery
 	s.render(w, "admin_payments", p)
 }
 
@@ -572,25 +587,13 @@ func csvSafe(v string) string {
 func (s *Server) adminPaymentsCSV(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="payments-ledger.csv"`)
-	cw := csv.NewWriter(w)
-	cw.Write([]string{"key", "paid_at_eat", "recorded_at_eat", "method", "status", "amount_kes", "account_code", "flat", "building", "package", "payer_phone", "payer_name", "bill_ref", "order_id", "note"})
-	f := func(t time.Time) string {
-		if t.IsZero() {
-			return ""
-		}
-		return t.In(billing.EAT).Format("2006-01-02 15:04:05")
-	}
-	sc := s.scopeOf(r)
+	f, _ := s.payFilter(r)
+	rows, _ := s.svc.FilterPayments(f)
 	names := map[string]string{}
-	for _, st := range sc.Sites {
+	for _, st := range s.scopeOf(r).Sites {
 		names[st.ID] = st.Name
 	}
-	for _, row := range s.payRows(sc, "", 0) {
-		p := row.P
-		cw.Write([]string{csvSafe(p.Key), f(p.PaidAt), f(p.CreatedAt), p.Method, p.Status, strconv.Itoa(p.AmountKES), row.A.Code,
-			csvSafe(row.A.Flat), csvSafe(names[p.SiteID]), csvSafe(row.Pkg.Name), csvSafe(p.Phone), csvSafe(p.Name), csvSafe(p.BillRef), p.OrderID, csvSafe(p.Note)})
-	}
-	cw.Flush()
+	s.writePaymentsCSV(w, rows, names)
 }
 
 func (s *Server) adminRecordForm(w http.ResponseWriter, r *http.Request) {
@@ -806,7 +809,8 @@ func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 		"CBStk": base + "/pay/cb/stk" + tok, "CBVal": base + "/pay/cb/c2b/validate" + tok, "CBConf": base + "/pay/cb/c2b/confirm" + tok,
 		"Support":    s.cfg.SupportPhone,
 		"WGEndpoint": s.cfg.WGEndpoint, "WGSubnet": s.cfg.WGSubnet, "JoinTTL": s.cfg.JoinTokenTTL.String(),
-		"Stray": s.mgr.Stray(),
+		"Stray": s.mgr.Stray(), "Backup": s.backupStatus(), "DBKind": s.st.Kind(), "DBErr": errString(s.st.Healthy()),
+		"AdminCIDR": s.cfg.AdminAllowCIDR,
 	}
 	if env, ok := s.envSite(); ok {
 		p.Data["Env"] = s.mgr.Effective(env)

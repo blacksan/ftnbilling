@@ -65,6 +65,9 @@ func run(log *slog.Logger) error {
 		OnJoined: func(siteID string) { svc.MarkProfilesDirty(siteID) },
 	})
 	svc = billing.NewService(st, mgr, log)
+	if err := svc.SetDataKey(cfg.DataKey); err != nil {
+		return fmt.Errorf("DATA_KEY: %w", err)
+	}
 	svc.SetPolicy(billing.Policy{ReminderDays: cfg.ReminderDays, ReminderOnExpiry: cfg.ReminderOnExpiry})
 	if err := svc.SeedPackages(); err != nil {
 		return err

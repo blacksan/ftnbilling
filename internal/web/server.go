@@ -97,6 +97,9 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 		"f2":     func(v float64) string { return fmt.Sprintf("%.2f", v) },
 		"eatNow": func() string { return svc.Now().In(billing.EAT).Format("2006-01-02T15:04") },
 		"inc":    func(i int) int { return i + 1 },
+		"day":    day,
+		"deref":  func(b *bool) bool { return b != nil && *b },
+		"last4":  lastFour,
 		"pct": func(a, b float64) float64 {
 			if b <= 0 {
 				return 0
@@ -177,6 +180,7 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"ok": true, "router_ok": online == len(runnable), "sites_total": len(all), "sites_online": online,
 		"test_mode": s.cfg.TestMode, "mpesa_enabled": s.cfg.MpesaEnabled(),
+		"db": s.st.Kind(), "db_ok": s.st.Healthy() == nil,
 	})
 }
 

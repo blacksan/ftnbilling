@@ -38,6 +38,7 @@ type PaymentTotals struct {
 func (s *Service) FilterPayments(f PaymentFilter) (rows []store.Payment, tot PaymentTotals) {
 	tot.ByMethod = map[string]int{}
 	q := strings.ToLower(strings.TrimSpace(f.Q))
+	full, digits := phoneForms(f.Q)
 	var to time.Time
 	if !f.To.IsZero() {
 		to = f.To.Add(24 * time.Hour)
@@ -58,7 +59,7 @@ func (s *Service) FilterPayments(f PaymentFilter) (rows []store.Payment, tot Pay
 			if q != "" {
 				a, _ := d.AnyAccount(p.AccountID)
 				hay := strings.ToLower(p.Key + "|" + p.Phone + "|" + p.Name + "|" + p.BillRef + "|" + a.Code + "|" + a.Flat)
-				if !strings.Contains(hay, q) {
+				if !strings.Contains(hay, q) && !phoneMatch(p.Phone, full, digits) {
 					continue
 				}
 			}
@@ -323,14 +324,26 @@ func (s *Service) ListCustomers(q, state string, in func(siteID string) bool, si
 			if state == "current" && row.Former || state == "former" && !row.Former {
 				continue
 			}
-			if siteID != "" || !row.Former {
+			// Buildings the customer is or was in: current flats, then past tenancies.
+			var sites []string
+			for _, a := range row.Accounts {
+				sites = append(sites, a.SiteID)
+			}
+			for _, t := range d.Tenancies {
+				if t.CustomerID == c.ID {
+					if a, ok := d.AnyAccount(t.AccountID); ok {
+						sites = append(sites, a.SiteID)
+					}
+				}
+			}
+			if len(sites) > 0 { // never lived anywhere: no building to filter by
 				ok := false
-				for _, a := range row.Accounts {
-					if (siteID == "" || a.SiteID == siteID) && in(a.SiteID) {
+				for _, sid := range sites {
+					if (siteID == "" || sid == siteID) && in(sid) {
 						ok = true
 					}
 				}
-				if !ok && (siteID != "" || len(row.Accounts) > 0) {
+				if !ok {
 					continue
 				}
 			}

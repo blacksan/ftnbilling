@@ -44,6 +44,29 @@
 {{if not .Data.Env}}<div class="tile {{if .Data.Status.Handshake}}good{{end}}">WireGuard<b style="font-size:19px">{{if .Data.Status.Handshake}}up{{else if .Data.Status.WGKnown}}no handshake{{else}}unknown{{end}}</b><small>{{if .Data.Status.Handshake}}last handshake {{.Data.Status.HandshakeAge}} s ago{{end}}</small></div>{{end}}
 <div class="tile">Tenant portal<b style="font-size:15px;word-break:break-all">{{.Data.Portal}}</b><small>the router's login page sends tenants here</small></div></div>
 
+{{with .Data.Rep}}{{$r := .}}
+<div class="tiles"><div class="tile">Flats<b>{{.Flats}}</b><small>{{.Occupied}} occupied, {{.Vacant}} vacant</small></div>
+<div class="tile good">Active<b>{{.Active}}</b><small>{{.Expired}} expired, {{.Suspended}} suspended, {{.New}} new</small></div>
+<div class="tile">Revenue this month<b>{{kes .ThisMonth}}</b><small>last month {{kes .LastMonth}}</small></div>
+<div class="tile">Equipment<b>{{index .ByStatus "installed"}}</b><small>installed &middot; {{index .ByStatus "in_stock"}} in stock &middot; {{index .ByStatus "faulty"}} faulty</small></div></div>
+<div class="grid2">
+<div class="card"><b>Building profile</b>
+<form method="post" action="/admin/sites/profile" style="margin-top:6px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
+<label class="muted">Address<br><input name="address" value="{{$s.Address}}" style="width:100%" maxlength="200" placeholder="Street, estate, town"></label>
+<div class="row" style="margin-top:8px"><label>Latitude<input name="lat" value="{{if $s.Lat}}{{$s.Lat}}{{end}}" size="12" placeholder="-1.2864"></label><label>Longitude<input name="lng" value="{{if $s.Lng}}{{$s.Lng}}{{end}}" size="12" placeholder="36.8172"></label><label>Went live<input type="date" name="go_live" value="{{day $s.GoLive}}"></label><button>Save profile</button></div></form>
+{{if $s.Lat}}<p class="muted" style="margin:8px 0 0"><a href="https://www.openstreetmap.org/?mlat={{$s.Lat}}&amp;mlon={{$s.Lng}}#map=18/{{$s.Lat}}/{{$s.Lng}}" target="_blank" rel="noopener noreferrer">Open on the map</a></p>{{end}}
+<hr><b>Network equipment</b><table style="margin-top:4px">
+{{range .Router}}<tr><td>Router</td><td><a href="/admin/equipment/view?id={{.ID}}">{{if .Serial}}{{.Serial}}{{else}}{{.Model}}{{end}}</a> <span class="muted">{{.Model}} {{.MAC}}</span></td></tr>{{end}}
+{{range .OLT}}<tr><td>OLT</td><td><a href="/admin/equipment/view?id={{.ID}}">{{if .Serial}}{{.Serial}}{{else}}{{.Model}}{{end}}</a> <span class="muted">{{.Model}} {{.MAC}}</span></td></tr>{{end}}
+{{if not (or .Router .OLT)}}<tr><td class="muted">None recorded. <a href="/admin/equipment">Add the router and OLT</a> to this building.</td></tr>{{end}}</table></div>
+<div class="card"><b>Contacts</b>
+<div class="tw" style="margin-top:6px"><table>{{range .Contacts}}<tr><td><b>{{.Role}}</b></td><td>{{.Name}}</td><td>{{.Phone}}{{if .Email}} <span class="muted">{{.Email}}</span>{{end}}</td>
+<td><form method="post" action="/admin/sites/contacts/delete" class="i"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$s.ID}}"><input type="hidden" name="cid" value="{{.ID}}"><button>Remove</button></form></td></tr>
+{{else}}<tr><td class="muted">No contacts yet.</td></tr>{{end}}</table></div>
+<form method="post" action="/admin/sites/contacts/save" class="row" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$s.ID}}">
+<label>Role<select name="role">{{range $d.Data.Roles}}<option>{{.}}</option>{{end}}</select></label><label>Name<input name="name" required size="14"></label><label>Phone<input name="phone" size="12"></label><button>Add contact</button></form></div></div>
+<div class="card"><b>Revenue by month</b><div class="tw" style="margin-top:6px"><table><tr><th>Month</th><th class="n">Payments</th><th class="n">KES</th></tr>{{range .Months}}<tr><td>{{.Month}}</td><td class="n">{{.Payments}}</td><td class="n">{{.KES}}</td></tr>{{end}}</table></div></div>
+{{end}}
 <div class="grid2">
 <div class="card"><b>Details</b>
 <form method="post" action="/admin/sites/update" style="margin-top:6px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">

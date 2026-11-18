@@ -175,6 +175,10 @@ func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site,
 		}
 	})
 	p.Data["Pkgs"], p.Data["Accounts"] = pkgs, accts
+	if rep, ok := s.svc.Building(st.ID); ok {
+		p.Data["Rep"] = rep
+	}
+	p.Data["Roles"] = []string{store.RoleLandlord, store.RoleCaretaker, store.RoleAgent, store.RoleSecurity, store.RoleOther}
 	if cmd != "" {
 		w.Header().Set("Cache-Control", "no-store")
 	}

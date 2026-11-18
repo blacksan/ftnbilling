@@ -66,6 +66,7 @@
 {{if .Data.MoveTo}}<div class="card"><b>Move to another building</b><p class="muted" style="margin:4px 0">Removes the router user here and creates it in the new building. Its ONT must be on the new building's network. Past payments keep their old building. Type the account code <b>{{$A.Code}}</b> to confirm.</p>
 <form method="post" action="/admin/accounts/move" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <label>New building<select name="to">{{range .Data.MoveTo}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label><input name="confirm" placeholder="type code" size="8" required autocomplete="off" style="text-transform:uppercase"><button>Move account</button></form></div>{{end}}
+{{template "acct_cards" .}}
 <h3>Payments for this flat</h3>
 <div class="tw"><table><tr><th>Paid (EAT)</th><th>Code</th><th>Method</th><th class="n">Amount</th><th>Package</th><th>Status</th><th>Note</th></tr>
 {{$d := .}}{{range .Data.Payments}}<tr><td>{{eat .PaidAt}}</td><td>{{.Key}}</td><td>{{.Method}}</td><td class="n">{{.AmountKES}}</td><td>{{(pkgOf $d.Data.PkgMap .PackageID).Name}}</td><td><span class="pill {{.Status}}">{{.Status}}</span></td><td>{{.Note}}</td></tr>
@@ -84,9 +85,16 @@
 <p class="muted">Attaching changes that account's ONT MAC to this device and ends the old session.</p>
 {{template "afoot"}}{{end}}
 
-{{define "admin_payments"}}{{template "ahead" .}}
-<p><span class="seg"><a href="/admin/payments"{{if not .Data.Status}} class="on"{{end}}>All</a><a href="/admin/payments?status=applied"{{if eq .Data.Status "applied"}} class="on"{{end}}>Applied</a><a href="/admin/payments?status=unmatched"{{if eq .Data.Status "unmatched"}} class="on"{{end}}>Unmatched</a><a href="/admin/payments?status=refunded"{{if eq .Data.Status "refunded"}} class="on"{{end}}>Refunded</a><a href="/admin/payments?status=ignored"{{if eq .Data.Status "ignored"}} class="on"{{end}}>Ignored</a></span>
-&nbsp; <a href="/admin/payments.csv">Download CSV</a> &middot; <a href="/admin/payments/record">Record M-Pesa payment</a></p>
+{{define "admin_payments"}}{{template "ahead" .}}{{$F := .Data.F}}
+<form method="get" action="/admin/payments" class="row" style="margin-bottom:12px">
+<label>From<input type="date" name="from" value="{{$F.From}}"></label><label>To<input type="date" name="to" value="{{$F.To}}"></label>
+<label>Method<select name="method"><option value="">All</option>{{range .Data.Methods}}<option{{if eq . $F.Method}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+<label>Status<select name="status"><option value="">All</option>{{range seq "applied" "unmatched" "refunded" "ignored"}}<option{{if eq . $F.Status}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+<label>Search<input name="q" value="{{$F.Q}}" placeholder="code, phone, name, flat" size="22"></label><button>Filter</button> <a href="/admin/payments">clear</a></form>
+<div class="tiles"><div class="tile good">Money received<b>{{kes .Data.Tot.Revenue}}</b><small>real payments only; vouchers and admin grants are free time</small></div>
+<div class="tile">Payments shown<b>{{.Data.Tot.Count}}</b><small>{{if gt .Data.Total .Data.Limit}}first {{.Data.Limit}} listed; the CSV has all{{else}}all of them{{end}}</small></div>
+{{range .Data.Tot.MethodSeq}}<div class="tile">{{.}}<b style="font-size:19px">{{kes (index $.Data.Tot.ByMethod .)}}</b></div>{{end}}</div>
+<p><a href="/admin/payments.csv{{if .Data.Query}}?{{.Data.Query}}{{end}}">Download CSV{{if .Data.Query}} (these filters){{end}}</a> &middot; <a href="/admin/payments/record">Record M-Pesa payment</a></p>
 <div class="tw"><table><tr>{{if .Data.ShowSite}}<th>Building</th>{{end}}<th>Paid (EAT)</th><th>Transaction code</th><th>Method</th><th class="n">KES</th><th>Flat</th><th>Package</th><th>Payer</th><th>Status</th><th>Note</th></tr>
 {{$d := .}}{{range .Data.Rows}}<tr>{{if $d.Data.ShowSite}}<td>{{index $d.Data.SiteNames .P.SiteID}}</td>{{end}}<td>{{eat .P.PaidAt}}</td><td>{{.P.Key}}</td><td>{{.P.Method}}</td><td class="n">{{.P.AmountKES}}</td><td>{{if .A.Code}}<a href="/admin/accounts/view?code={{.A.Code}}">{{.A.Flat}}</a>{{else}}{{.P.BillRef}}{{end}}</td><td>{{.Pkg.Name}}</td><td>{{.P.Phone}} {{.P.Name}}</td><td><span class="pill {{.P.Status}}">{{.P.Status}}</span></td><td>{{.P.Note}}</td></tr>
 {{else}}<tr><td colspan="10">No payments yet.</td></tr>{{end}}</table></div>
@@ -168,6 +176,17 @@
 <tr><td>C2B validation URL</td><td><code>{{.Data.CBVal}}</code></td></tr>
 <tr><td>C2B confirmation URL</td><td><code>{{.Data.CBConf}}</code></td></tr>
 <tr><td>Support phone shown</td><td>{{if .Data.Support}}{{.Data.Support}}{{else}}not set (SUPPORT_PHONE){{end}}</td></tr></table></div>
+<div class="card"><b>Database and backups</b><table>
+<tr><td>Customer database</td><td>{{if eq .Data.DBKind "postgres"}}PostgreSQL{{else}}JSON file (set <code>DATABASE_URL</code> to use PostgreSQL){{end}}{{if .Data.DBErr}} <span class="bad">not healthy: {{.Data.DBErr}}</span>{{else}} <span class="ok">healthy</span>{{end}}</td></tr>
+{{with .Data.Backup}}{{if not .Present}}<tr><td>Backups</td><td class="muted">no status file yet (written by <code>ftnbilling-backup</code> after each dump)</td></tr>
+{{else if .ReadFailed}}<tr><td>Backups</td><td class="bad">backup-status.json could not be read</td></tr>
+{{else}}<tr><td>Last dump</td><td>{{if .DumpAt.IsZero}}never{{else}}{{eat .DumpAt}}{{end}}{{if .DumpFile}} <code>{{.DumpFile}}</code>{{end}}{{if .Stale}} <span class="bad">older than 36 hours</span>{{else}} <span class="ok">recent</span>{{end}}</td></tr>
+<tr><td>Last restore drill</td><td>{{if .DrillAt.IsZero}}never{{else}}{{eat .DrillAt}}{{if .DrillOK}}{{if deref .DrillOK}} <span class="ok">passed</span>{{else}} <span class="bad">FAILED</span> {{.DrillMsg}}{{end}}{{end}}{{end}}</td></tr>
+<tr><td>Last Drive upload</td><td>{{if .UploadAt.IsZero}}never{{else}}{{eat .UploadAt}}{{if .UploadOK}}{{if deref .UploadOK}} <span class="ok">ok</span>{{else}} <span class="bad">FAILED</span>{{end}}{{end}}{{end}}</td></tr>
+{{if .Error}}<tr><td>Problem</td><td class="bad">{{.Error}}</td></tr>{{end}}{{end}}{{end}}</table></div>
+<div class="card"><b>Admin access</b><table>
+<tr><td>Allowed networks</td><td>this server (SSH tunnel) and {{.Data.AdminCIDR}} <code>ADMIN_ALLOW_CIDR</code></td></tr>
+<tr><td>Refused</td><td>router tunnels ({{.Data.WGSubnet}}) and the public internet</td></tr></table></div>
 <div class="card"><b>Router connections</b><table>
 <tr><td>Buildings</td><td>each building has its own router and settings: <a href="/admin/sites">Buildings</a></td></tr>
 <tr><td>WireGuard endpoint</td><td>{{if .Data.WGEndpoint}}{{.Data.WGEndpoint}}{{else}}not set{{end}} <code>WG_ENDPOINT</code></td></tr>
