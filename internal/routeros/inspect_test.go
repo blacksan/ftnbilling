@@ -88,3 +88,20 @@ func TestMockInspector(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestMockAddRowHonoursPlaceBefore(t *testing.T) {
+	m := NewMock()
+	ctx := context.Background()
+	a := m.SeedRow("/ip/firewall/filter", Row{"comment": "a"})
+	m.SeedRow("/ip/firewall/filter", Row{"comment": "b"})
+	if _, err := m.AddRow(ctx, "/ip/firewall/filter", map[string]string{"comment": "x", "place-before": a}); err != nil {
+		t.Fatal(err)
+	}
+	rows := m.Table("/ip/firewall/filter")
+	if len(rows) != 3 || rows[0]["comment"] != "x" || rows[0]["place-before"] != "" {
+		t.Fatalf("%v", rows)
+	}
+	if _, err := m.AddRow(ctx, "/ip/firewall/filter", map[string]string{"comment": "y", "place-before": "*FFFF"}); err == nil {
+		t.Fatal("an unknown place-before is an error")
+	}
+}

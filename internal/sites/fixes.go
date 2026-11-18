@@ -65,10 +65,21 @@ const ActorSystem = "system"
 
 // ---- the allowlisted writer ----------------------------------------------------------------
 
+// rowWriter is the only part of the router client a fix may use to write:
+// row operations. Command POSTs go through routeros.Inspector (call).
+type rowWriter interface {
+	AddRow(ctx context.Context, path string, body map[string]string) (string, error)
+	SetRow(ctx context.Context, path, id string, diff map[string]string) error
+	RemoveRow(ctx context.Context, path, id string) error
+}
+
 type fixWriter struct {
-	rt      routeros.Client
-	insp    routeros.Inspector
-	ifaces  map[string]bool // the OLT and bench ports of this building
+	rt        rowWriter
+	insp      routeros.Inspector
+	ifaces    map[string]bool // the OLT and bench ports of this building
+	custIface string          // the customer interface, for the DNS accept rules
+	// orphans judges a hotspot row at the moment of removal (nil: removal refused).
+	orphans func(path string, row routeros.Row) bool
 	applied []string
 }
 
@@ -126,6 +137,20 @@ func (w *fixWriter) addRow(ctx context.Context, path string, body map[string]str
 		if body["comment"] != netflowComment {
 			return forbid("a traffic-flow target without the ftn: netflow comment")
 		}
+	case "/ip/firewall/filter":
+		// Only the permanent "let customers ask the router for DNS" accepts.
+		if body["comment"] != custDNSComment || body["chain"] != "input" || body["action"] != "accept" ||
+			body["dst-port"] != "53" || (body["protocol"] != "udp" && body["protocol"] != "tcp") ||
+			w.custIface == "" || body["in-interface"] != w.custIface {
+			return forbid("a firewall rule that is not an \"" + custDNSComment + "\" accept for the customer interface")
+		}
+		for k := range body {
+			switch k {
+			case "chain", "action", "dst-port", "protocol", "in-interface", "comment", "place-before":
+			default:
+				return forbid("firewall rule property " + k)
+			}
+		}
 	default:
 		return forbid(path)
 	}
@@ -155,10 +180,12 @@ func (w *fixWriter) removeRow(ctx context.Context, path string, row routeros.Row
 		if err := w.allowedRow(path, row); err != nil {
 			return err
 		}
-	case "/ip/hotspot/user":
-	case "/ip/hotspot/ip-binding":
+	case "/ip/hotspot/user", "/ip/hotspot/ip-binding":
 		if strings.HasPrefix(row["comment"], "ftn:") {
-			return forbid("an IP binding the server made")
+			return forbid("a row the server made")
+		}
+		if w.orphans == nil || !w.orphans(path, row) {
+			return forbid("a hotspot row that is not a leftover (an account holds it)")
 		}
 	default:
 		return forbid(path)
@@ -172,6 +199,7 @@ type fixEnv struct {
 	m       *Manager
 	site    store.Site // effective
 	w       *fixWriter
+	rd      rowReader // reads before writing
 	confirm bool
 	role    string
 	partial bool // an automatic run: do only what needs no confirmation
@@ -182,6 +210,7 @@ type fixFunc func(ctx context.Context, fe *fixEnv) error
 // fixers is the allowlist of named fixes, by check id.
 var fixers = map[string]fixFunc{
 	CheckDNS:         fixDNS,
+	CheckCustDNS:     fixCustDNS,
 	CheckOLT:         fixOLT,
 	CheckBench:       fixBench,
 	CheckOrphans:     fixOrphans,
@@ -191,7 +220,7 @@ var fixers = map[string]fixFunc{
 // freshRead re-reads what a fix depends on and fails (router unreachable)
 // when any of it cannot be read.
 func (fe *fixEnv) freshRead(ctx context.Context, singles, tables []string) (*snapshot, error) {
-	sn := readSnapshot(ctx, fe.w.rt, singles, tables)
+	sn := readSnapshot(ctx, fe.rd, singles, tables)
 	for _, p := range append(append([]string(nil), singles...), tables...) {
 		if err := sn.errs[p]; err != nil {
 			return nil, fmt.Errorf("%w: reading %s: %v", ErrRouterUnreachable, p, shortErr(err))
@@ -204,16 +233,42 @@ func changed(format string, a ...any) error {
 	return fmt.Errorf("%w: %s", ErrPreconditionChanged, fmt.Sprintf(format, a...))
 }
 
+var dnsTables = []string{"/ip/firewall/filter", "/ip/firewall/raw", "/interface/list/member", "/ip/route", "/ip/dhcp-client", "/ip/address", "/ip/hotspot", "/ip/dhcp-server"}
+
+// readTolerant reads tables whose failure is acceptable (the packages may be absent).
+func (fe *fixEnv) readTolerant(ctx context.Context, singles, tables []string, into *snapshot) {
+	sn := readSnapshot(ctx, fe.rd, singles, tables)
+	for k, v := range sn.one {
+		into.one[k] = v
+	}
+	for k, v := range sn.rows {
+		into.rows[k] = v
+	}
+	for k, v := range sn.errs {
+		into.errs[k] = v
+	}
+}
+
+// customer finds the customer interface in a snapshot.
+func (fe *fixEnv) customer(sn *snapshot) custInfo {
+	plan, err := PlanSubnet(fe.site.CustomerSubnet)
+	if err != nil {
+		return custInfo{}
+	}
+	return detectCustomer(sn, plan)
+}
+
 func fixDNS(ctx context.Context, fe *fixEnv) error {
-	sn, err := fe.freshRead(ctx, []string{"/ip/dns"}, []string{"/ip/firewall/filter"})
+	sn, err := fe.freshRead(ctx, []string{"/ip/dns"}, dnsTables)
 	if err != nil {
 		return err
 	}
+	fe.readTolerant(ctx, []string{"/ipv6/settings"}, []string{"/ipv6/firewall/filter", "/interface/pppoe-client", "/interface"}, sn)
 	if yes(sn.single("/ip/dns")["allow-remote-requests"]) {
 		return nil // somebody already did it
 	}
-	if ok, why := dnsDropsWAN(sn.tbl("/ip/firewall/filter"), fe.site.WANList, fe.site.WANInterface); !ok {
-		return changed("the firewall is no longer shown to drop DNS from the WAN (%s)", why)
+	if ok, why := dnsSafe(sn, fe.site, fe.customer(sn).safeSet()); !ok {
+		return changed("it is no longer shown to be safe to turn on DNS (%s)", why)
 	}
 	if err := fe.w.call(ctx, "/ip/dns/set", map[string]string{"allow-remote-requests": "yes"}); err != nil {
 		return err
@@ -222,8 +277,41 @@ func fixDNS(ctx context.Context, fe *fixEnv) error {
 	return nil
 }
 
+func fixCustDNS(ctx context.Context, fe *fixEnv) error {
+	sn, err := fe.freshRead(ctx, nil, []string{"/ip/firewall/filter", "/interface/list/member", "/ip/address", "/ip/hotspot", "/ip/dhcp-server", "/interface/bridge"})
+	if err != nil {
+		return err
+	}
+	cust := fe.customer(sn)
+	if !cust.found {
+		return changed("the customer interface is not found")
+	}
+	bad, why := custDNSProblems(sn, cust)
+	if len(bad) == 0 {
+		return nil
+	}
+	for _, r := range sn.tbl("/ip/firewall/filter") {
+		if r["comment"] == custDNSComment {
+			return changed("a %q rule exists but does not take effect (%s)", custDNSComment, why)
+		}
+	}
+	fe.w.custIface = cust.iface
+	before, hasBefore := firstStaticInput(sn.tbl("/ip/firewall/filter"))
+	for _, proto := range bad {
+		body := map[string]string{"chain": "input", "in-interface": cust.iface, "protocol": proto, "dst-port": "53", "action": "accept", "comment": custDNSComment}
+		if hasBefore {
+			body["place-before"] = before
+		}
+		if err := fe.w.addRow(ctx, "/ip/firewall/filter", body); err != nil {
+			return err
+		}
+		fe.w.note("firewall: accept %s DNS from %s", proto, cust.iface)
+	}
+	return nil
+}
+
 var oltTables = []string{"/interface/bridge/port", "/interface/vlan", "/interface/list/member", "/ip/address",
-	"/ip/dhcp-server", "/ip/dhcp-client", "/ip/hotspot", "/interface/bridge/host"}
+	"/ip/dhcp-server", "/ip/dhcp-client", "/ip/hotspot", "/interface/bridge/host", "/interface/bridge"}
 
 func fixOLT(ctx context.Context, fe *fixEnv) error {
 	sn, err := fe.freshRead(ctx, nil, oltTables)
@@ -238,9 +326,12 @@ func fixOLT(ctx context.Context, fe *fixEnv) error {
 		return changed("%s", strings.Join(a.hard, "; "))
 	case len(a.unknown) > 0:
 		return changed("%s", strings.Join(a.unknown, "; "))
-	case len(a.learned) > 0:
+	}
+	// A port that sits in some other bridge than the customer bridge, or has
+	// devices talking through it, is only taken out with an owner's confirm.
+	if other, learned := otherBridges(a, fe.customer(sn)), a.learned; len(other) > 0 || len(learned) > 0 {
 		if !fe.confirm {
-			return fmt.Errorf("%w: devices are learned on %s (%s)", ErrConfirmRequired, a.iface, strings.Join(a.learned, ", "))
+			return fmt.Errorf("%w: %s is in bridge %s, devices learned: %s", ErrConfirmRequired, a.iface, orNone(other), orNone(learned))
 		}
 		if fe.role != store.RoleOwner {
 			return ErrNeedsOwner
@@ -457,6 +548,9 @@ func (m *Manager) applyFix(ctx context.Context, siteID, checkID string, confirm 
 	if item.Fix.Role == store.RoleOwner && roleRank(actor) < 2 {
 		return res, ErrNeedsOwner
 	}
+	if actor == ActorSystem && item.Fix.Kind != FixAuto && !partial {
+		return res, fmt.Errorf("%w: the server does not run this by itself", ErrConfirmRequired)
+	}
 	if item.Fix.Kind == FixConfirm && !confirm && !partial {
 		msg := item.Fix.ConfirmText
 		if msg == "" {
@@ -468,6 +562,10 @@ func (m *Manager) applyFix(ctx context.Context, siteID, checkID string, confirm 
 	rt := m.Router(siteID)
 	insp, _ := rt.(routeros.Inspector)
 	w := &fixWriter{rt: rt, insp: insp, ifaces: map[string]bool{}}
+	w.orphans = func(path string, row routeros.Row) bool {
+		_, ok := orphanOf(path, row, m.accountIndex()) // judged now, on the row itself
+		return ok
+	}
 	for _, n := range []string{eff.OLTInterface, eff.BenchPort} {
 		if n != "" {
 			w.ifaces[n] = true
@@ -477,7 +575,7 @@ func (m *Manager) applyFix(ctx context.Context, siteID, checkID string, confirm 
 	if actor == ActorSystem {
 		role = store.RoleOperator
 	}
-	fe := &fixEnv{m: m, site: eff, w: w, confirm: confirm, role: role, partial: partial}
+	fe := &fixEnv{m: m, site: eff, w: w, rd: rt, confirm: confirm, role: role, partial: partial}
 	werr := fn(ctx, fe)
 	res.Applied = append(res.Applied, w.applied...)
 	if len(w.applied) > 0 || werr != nil {

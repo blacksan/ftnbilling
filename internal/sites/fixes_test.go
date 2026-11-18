@@ -16,7 +16,7 @@ func (f *fixture) fixEnv(s store.Site, m routeros.Client, confirm bool, role str
 	eff := f.m.Effective(s)
 	insp, _ := m.(routeros.Inspector)
 	w := &fixWriter{rt: m, insp: insp, ifaces: map[string]bool{eff.OLTInterface: true, eff.BenchPort: true}}
-	return &fixEnv{m: f.m, site: eff, w: w, confirm: confirm, role: role}
+	return &fixEnv{m: f.m, site: eff, w: w, rd: m, confirm: confirm, role: role}
 }
 
 func hasTable(m *routeros.Mock, path, key, val string) bool {
@@ -148,7 +148,7 @@ func TestFixDNS(t *testing.T) {
 
 func TestFixOLTPortAutomatic(t *testing.T) {
 	f, s, m := checkSite(t, nil)
-	liveOLT(m)
+	liveOLTIn(m, "br-hotspot")
 	res, err := f.m.ApplyFix(context.Background(), s.ID, CheckOLT, false, store.RoleOperator)
 	if err != nil || res.Item.Status != StatusOK || len(res.Applied) != 1 || !strings.Contains(res.Applied[0], "sfp-sfpplus1") {
 		t.Fatalf("%+v %v", res, err)
@@ -401,7 +401,7 @@ func TestFixRouterRefusedAndUnreachableErrors(t *testing.T) {
 	f, s, m := checkSite(t, nil)
 	f.m.opt.NewClient = func(store.Site) routeros.Client { return refusing{m} }
 	f.m.Reload(s.ID)
-	liveOLT(m)
+	liveOLTIn(m, "br-hotspot")
 	_, err := f.m.ApplyFix(context.Background(), s.ID, CheckOLT, false, store.RoleOperator)
 	var rr *RouterRefusedError
 	if !errors.As(err, &rr) || !strings.Contains(rr.Msg, "cannot remove: in use") {
@@ -425,7 +425,7 @@ func TestAutoFixRunsOnceAfterTheFirstJoinAnswer(t *testing.T) {
 	m := routeros.NewMock()
 	f.mocks[s.ID] = m
 	seedHealthy(m)
-	liveOLT(m)
+	liveOLTIn(m, "br-hotspot")
 	f.start() // the router answers its first ping: the building counts as joined
 	deadline := time.Now().Add(5 * time.Second)
 	for hasTable(m, "/interface/bridge/port", "interface", "sfp-sfpplus1") {
