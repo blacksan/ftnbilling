@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 
@@ -15,9 +18,41 @@ func TestAdminPassRules(t *testing.T) {
 	}
 }
 
-func TestRouterPassRequiredUnlessMock(t *testing.T) {
-	if _, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!"})); err == nil {
-		t.Fatal("ROUTER_PASS required")
+func TestRouterPassNoLongerRequired(t *testing.T) {
+	c, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!"}))
+	if err != nil {
+		t.Fatalf("a fresh multi-building server has no ROUTER_PASS: %v", err)
+	}
+	if c.RouterURLSet {
+		t.Fatal("ROUTER_URL was not set")
+	}
+	c, _ = Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_URL": "http://172.17.0.1:8081/"}))
+	if !c.RouterURLSet || c.RouterURL != "http://172.17.0.1:8081" {
+		t.Fatalf("%+v", c)
+	}
+}
+
+func TestWireGuardSettings(t *testing.T) {
+	c, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "PUBLIC_IP": "203.0.113.5"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.WGSubnet != "10.99.0.0/22" || c.WGEndpoint != "203.0.113.5:51820" || c.JoinTokenTTL != 30*time.Minute ||
+		c.AllowInsecureJoin || !c.JoinRequireMikrotikUA || c.SiteName != "" {
+		t.Fatalf("%+v", c)
+	}
+	c, err = Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "WG_ENDPOINT": "198.51.100.1:51999", "JOIN_TOKEN_TTL": "10m",
+		"ALLOW_INSECURE_JOIN": "true", "JOIN_REQUIRE_MIKROTIK_UA": "false", "SITE_NAME": "Block A",
+		"WG_PUBLIC_KEY": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}))
+	if err != nil || c.WGEndpoint != "198.51.100.1:51999" || c.JoinTokenTTL != 10*time.Minute || !c.AllowInsecureJoin ||
+		c.JoinRequireMikrotikUA || c.SiteName != "Block A" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	for _, bad := range []map[string]string{{"WG_SUBNET": "nope"}, {"WG_PUBLIC_KEY": "short"}, {"WG_SUBNET": "10.99.0.0/31"}} {
+		bad["ADMIN_PASS"] = "s3cret!"
+		if _, err := Load(env(bad)); err == nil {
+			t.Fatalf("%v must be refused", bad)
+		}
 	}
 }
 
