@@ -1,6 +1,7 @@
 package web_test
 
 import (
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -10,10 +11,14 @@ import (
 	"time"
 )
 
-// get runs a Basic auth GET /admin as client ip (through X-Forwarded-For).
-func (r *setRig) getAs(ip, user, pass string) int {
-	req, _ := http.NewRequest("GET", r.ts.URL+"/admin", nil)
-	req.SetBasicAuth(user, pass)
+// attempt posts the login form as client ip (through X-Forwarded-For) and
+// returns the status and body. The login CSRF cookie is fetched once per rig.
+func (r *setRig) attempt(ip, user, pass string) (int, string, http.Header) {
+	lc := r.loginCookie()
+	form := url.Values{"username": {user}, "password": {pass}, "_csrf": {lc.Value}}
+	req, _ := http.NewRequest("POST", r.ts.URL+"/admin/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(lc)
 	if ip != "" {
 		req.Header.Set("X-Forwarded-For", ip)
 	}
@@ -21,17 +26,35 @@ func (r *setRig) getAs(ip, user, pass string) int {
 	if err != nil {
 		panic(err)
 	}
+	b, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	return resp.StatusCode
+	return resp.StatusCode, string(b), resp.Header
+}
+
+var lcOnce sync.Map
+
+func (r *setRig) loginCookie() *http.Cookie {
+	if v, ok := lcOnce.Load(r); ok {
+		return v.(*http.Cookie)
+	}
+	resp, err := r.cl.Get(r.ts.URL + "/admin/login")
+	if err != nil {
+		panic(err)
+	}
+	resp.Body.Close()
+	for _, c := range resp.Cookies() {
+		if strings.HasSuffix(c.Name, "ftn_lc") {
+			lcOnce.Store(r, c)
+			return c
+		}
+	}
+	panic("no login cookie")
 }
 
 // Twenty parallel wrong passwords from one address: at most five reach the
 // pbkdf2 check, the rest are told to wait.
 func TestLoginParallelAttemptsAreLimited(t *testing.T) {
 	r := newSetRig(t)
-	if err := r.m.SetAdminPassword(longPW, "test"); err != nil {
-		t.Fatal(err)
-	}
 	var evals atomic.Int32
 	r.srv.SetHashVerifier(func(string, string) bool {
 		evals.Add(1)
@@ -44,7 +67,7 @@ func TestLoginParallelAttemptsAreLimited(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			switch r.getAs("", "admin", "wrong-password-x") {
+			switch code, _, _ := r.attempt("", "admin", "wrong-password-x"); code {
 			case 401:
 				c401.Add(1)
 			case 429:
@@ -58,9 +81,10 @@ func TestLoginParallelAttemptsAreLimited(t *testing.T) {
 	if evals.Load() > 5 || other.Load() != 0 || c429.Load() < 15 || c401.Load() > 5 {
 		t.Fatalf("evaluations=%d 401=%d 429=%d other=%d", evals.Load(), c401.Load(), c429.Load(), other.Load())
 	}
-	// And the address stays blocked afterwards, even for the right password.
-	if c := r.getAs("", "admin", longPW); c != 429 {
-		t.Fatalf("blocked address: %d", c)
+	// The address stays blocked, even for the right password, and is told for how long.
+	code, _, h := r.attempt("", "admin", pw)
+	if code != 429 || h.Get("Retry-After") == "" {
+		t.Fatalf("blocked address: %d retry-after=%q", code, h.Get("Retry-After"))
 	}
 }
 
@@ -68,18 +92,18 @@ func TestLoginParallelAttemptsAreLimited(t *testing.T) {
 // checks get 429 at once.
 func TestLoginBusySlotAnswers429(t *testing.T) {
 	r := newSetRig(t)
-	r.m.SetAdminPassword(longPW, "test")
 	release := make(chan struct{})
 	var started atomic.Int32
 	r.srv.SetHashVerifier(func(string, string) bool { started.Add(1); <-release; return false })
 	var wg sync.WaitGroup
-	codes := make(chan int, 6)
-	// Five different addresses so the per-address limit is not what stops them.
+	codes := make(chan int, 8)
+	// Different addresses, so the per-address limit is not what stops them.
 	for i := 0; i < 6; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			codes <- r.getAs("127.0.0."+string(rune('1'+i)), "admin", "wrong-password-x")
+			c, _, _ := r.attempt("127.0.0."+string(rune('1'+i)), "admin", "wrong-password-x")
+			codes <- c
 		}(i)
 	}
 	deadline := time.Now().Add(3 * time.Second)
@@ -99,84 +123,90 @@ func TestLoginBusySlotAnswers429(t *testing.T) {
 func TestEmptyPasswordIsNotCounted(t *testing.T) {
 	r := newSetRig(t)
 	for i := 0; i < 12; i++ {
-		if c := r.getAs("", "admin", ""); c != 401 {
+		if c, _, _ := r.attempt("", "admin", ""); c != 401 {
 			t.Fatalf("empty password: %d", c)
 		}
 	}
-	if c := r.getAs("", "admin", pw); c != 200 {
+	if c, _, _ := r.attempt("", "admin", pw); c != 303 {
 		t.Fatalf("owner locked out by empty passwords: %d", c)
 	}
 }
 
-// A mistyped "current password" on an action has its own counter: it never
-// blocks the admin's page loads.
-func TestReauthFailuresDoNotBlockLogin(t *testing.T) {
+// Five wrong passwords from one address block it; a different address is not
+// affected; the first address stays blocked even with the right password.
+func TestPerAddressLockout(t *testing.T) {
 	r := newSetRig(t)
-	for i := 0; i < 8; i++ {
-		code, msg, _ := r.post("/admin/settings/password", url.Values{"current_password": {"nope"}, "new_password": {longPW}, "confirm_password": {longPW}})
-		if code != 303 || !strings.HasPrefix(msg, "Error") {
-			t.Fatalf("attempt %d: %d %q", i, code, msg)
+	for i := 0; i < 5; i++ {
+		if c, _, _ := r.attempt("203.0.113.5", "admin", "wrong-password-x"); c != 401 {
+			t.Fatalf("attempt %d: %d", i, c)
 		}
 	}
-	if c := r.getAs("", "admin", pw); c != 200 {
-		t.Fatalf("page loads blocked by mistyped current passwords: %d", c)
+	code, body, h := r.attempt("203.0.113.5", "admin", pw)
+	if code != 429 || h.Get("Retry-After") == "" || !strings.Contains(body, "Too many") {
+		t.Fatalf("sixth attempt: %d %q", code, h.Get("Retry-After"))
 	}
-	// The re-auth field itself is limited, so it cannot be used to guess.
-	code, msg, _ := r.post("/admin/settings/password", url.Values{"current_password": {pw}, "new_password": {longPW}, "confirm_password": {longPW}})
-	if code != 303 || !strings.HasPrefix(msg, "Error") || r.m.HasAdminPassword() {
-		t.Fatalf("re-auth not limited: %d %q", code, msg)
+	if c, _, _ := r.attempt("203.0.113.6", "admin", pw); c != 303 {
+		t.Fatalf("another address: %d", c)
 	}
 }
 
-// The global limit must not lock the owner out: a remembered login, and an
-// address that logged in before, are exempt from it.
+// Guessing at one account from many addresses blocks strangers for that
+// account, while an address that signed in as it lately keeps working.
+func TestPerAccountLockoutSparesKnownAddress(t *testing.T) {
+	r := newSetRig(t)
+	signInFrom(t, r.ts, r.srv, r.st, r.who, "198.51.100.1") // a full sign-in trusts the address
+	// The 30 failures needed to trip the account limit also hit the global limit
+	// for unknown addresses; so use few addresses: 2 failures each from 5 of them.
+	for i := 0; i < 10; i++ {
+		ip := "192.0.2." + string(rune('1'+i/2))
+		if c, _, _ := r.attempt(ip, "admin", "wrong-password-x"); c != 401 {
+			t.Fatalf("guess %d: %d", i, c)
+		}
+	}
+	if c, _, _ := r.attempt("192.0.2.99", "admin", pw); c != 429 {
+		t.Fatalf("a stranger after 10 failures on the account: %d", c)
+	}
+	if c, _, _ := r.attempt("198.51.100.1", "admin", pw); c != 303 {
+		t.Fatalf("the known address was locked out: %d", c)
+	}
+}
+
+// An unknown user and a wrong password look the same, and cost the same checks.
+func TestNoUserEnumeration(t *testing.T) {
+	r := newSetRig(t)
+	var evals atomic.Int32
+	r.srv.SetHashVerifier(func(string, string) bool { evals.Add(1); return false })
+	c1, b1, _ := r.attempt("203.0.113.1", "admin", "wrong-password-x")
+	c2, b2, _ := r.attempt("203.0.113.2", "nobody", "wrong-password-x")
+	if c1 != c2 || c1 != 401 {
+		t.Fatalf("status differs: %d vs %d", c1, c2)
+	}
+	strip := func(s string) string {
+		i := strings.Index(s, `name="_csrf"`)
+		if i < 0 {
+			return s
+		}
+		return s[:i] + s[strings.Index(s[i:], ">")+i:]
+	}
+	norm := func(s string) string { return strings.ReplaceAll(strip(s), "nobody", "admin") }
+	if norm(b1) != norm(b2) {
+		t.Fatal("the pages differ between a wrong password and an unknown user")
+	}
+	if evals.Load() != 2 {
+		t.Fatalf("an unknown user must still cost a password check: %d checks", evals.Load())
+	}
+}
+
+// The global limit must not lock the owner out: an address that signed in
+// before is exempt; a stranger waits.
 func TestGlobalLimitDoesNotLockOwnerOut(t *testing.T) {
 	r := newSetRig(t)
-	r.m.SetAdminPassword(longPW, "test")
-	if c := r.getAs("127.0.0.7", "admin", longPW); c != 200 {
-		t.Fatalf("first login: %d", c)
-	}
+	signInFrom(t, r.ts, r.srv, r.st, r.who, "127.0.0.7")
 	r.srv.AuthInjectFailures("127.0.0.9", 40)
-	if c := r.getAs("127.0.0.7", "admin", longPW); c != 200 {
-		t.Fatalf("remembered login blocked by the global limit: %d", c)
+	if c, _, _ := r.attempt("127.0.0.7", "admin", pw); c != 303 {
+		t.Fatalf("a known address was blocked by the global limit: %d", c)
 	}
-	r.srv.AuthFlush()
-	if c := r.getAs("127.0.0.7", "admin", longPW); c != 200 {
-		t.Fatalf("known address blocked by the global limit: %d", c)
-	}
-	if c := r.getAs("127.0.0.50", "admin", "wrong-password-x"); c != 429 {
+	if c, _, _ := r.attempt("127.0.0.50", "admin", "wrong-password-x"); c != 429 {
 		t.Fatalf("a stranger guessing should wait under the global limit: %d", c)
-	}
-}
-
-// A remembered login is bound to the hash it was verified against: after the
-// password changes, neither an old entry nor a slow check that finishes late
-// can bring the old password back.
-func TestAuthCacheTiedToHash(t *testing.T) {
-	r := newSetRig(t)
-	r.m.SetAdminPassword(longPW, "test")
-	oldHash := r.m.AdminHash()
-	started, release := make(chan struct{}), make(chan struct{})
-	r.srv.SetHashVerifier(func(string, string) bool { close(started); <-release; return true })
-	done := make(chan int)
-	go func() { done <- r.getAs("", "admin", longPW) }()
-	<-started
-	const newPW = "another-long-password-77"
-	if err := r.m.SetAdminPassword(newPW, "test"); err != nil {
-		t.Fatal(err)
-	}
-	r.srv.AuthFlush()
-	close(release) // the slow check of the old password finishes after the flush
-	<-done
-	r.srv.SetHashVerifier(func(h, p string) bool { return p == newPW })
-	if c := r.getAs("", "admin", longPW); c != 401 {
-		t.Fatalf("old password accepted after the change: %d", c)
-	}
-	r.srv.AuthRemember("admin", longPW, oldHash)
-	if c := r.getAs("", "admin", longPW); c != 401 {
-		t.Fatalf("an entry bound to the old hash was honoured: %d", c)
-	}
-	if c := r.getAs("", "admin", newPW); c != 200 {
-		t.Fatalf("new password: %d", c)
 	}
 }

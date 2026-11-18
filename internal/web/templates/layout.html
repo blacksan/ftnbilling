@@ -20,5 +20,5 @@ button.alt{background:#0e1a33;color:#fff}button.grey{background:#667;color:#fff}
 {{define "hidden"}}<input type="hidden" name="site" value="{{.Site}}"><input type="hidden" name="mac" value="{{.MAC}}"><input type="hidden" name="ip" value="{{.IP}}"><input type="hidden" name="dst" value="{{.Dst}}">{{end}}
 {{define "top"}}<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Brand}}</title><link rel="icon" type="image/svg+xml" href="/favicon.svg">{{template "portalcss"}}{{end}}
 {{define "head"}}{{template "top" .}}</head><body><main>{{end}}
-{{define "foot"}}</main></body></html>{{end}}
+{{define "foot"}}<p class="muted" style="text-align:center;margin-top:24px"><a href="/admin/login" rel="nofollow">Admin login</a></p></main></body></html>{{end}}
 {{define "brandbar"}}<div class="brandbar"><img src="/brand/logo-white-text.svg" alt="{{.}}"></div>{{end}}

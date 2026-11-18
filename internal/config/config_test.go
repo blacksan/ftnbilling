@@ -182,3 +182,13 @@ func TestNormalizeWANumber(t *testing.T) {
 		}
 	}
 }
+
+// Old environment files still carry ADMIN_ALLOW_CIDR; it is ignored now (the
+// admin pages have their own sign-in), not refused.
+func TestOldAdminAllowCIDRIsIgnored(t *testing.T) {
+	for _, v := range []string{"10.98.0.0/24", "not a cidr", ""} {
+		if _, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ADMIN_ALLOW_CIDR": v, "ROUTER_MOCK": "true"})); err != nil {
+			t.Errorf("ADMIN_ALLOW_CIDR=%q: %v", v, err)
+		}
+	}
+}

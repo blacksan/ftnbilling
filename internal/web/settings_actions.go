@@ -57,35 +57,6 @@ func nextOr(r *http.Request, def string) string {
 	return def
 }
 
-// ---- password -------------------------------------------------------------------------------
-
-func (s *Server) settingsPassword(w http.ResponseWriter, r *http.Request) {
-	to := "/admin/settings"
-	if s.noManager(w, r, to) {
-		return
-	}
-	if !s.reauth(w, r, to) {
-		return
-	}
-	pw, again := r.PostFormValue("new_password"), r.PostFormValue("confirm_password")
-	if pw != again {
-		s.back(w, r, to, "Error: the two new passwords differ")
-		return
-	}
-	if err := settings.CheckNewPassword(pw, s.live().AdminUser); err != nil {
-		s.back(w, r, to, "Error: "+err.Error())
-		return
-	}
-	if err := s.setm.SetAdminPassword(pw, realIP(r)); err != nil {
-		s.back(w, r, to, "Error: "+err.Error())
-		return
-	}
-	s.auth.Flush()
-	// The browser still holds the old password: send it through the logout
-	// page, which asks for the new one.
-	http.Redirect(w, r, "/admin/logout", http.StatusSeeOther)
-}
-
 // tokenChangeOK guards the M-Pesa callback token. In production Safaricom
 // keeps the URLs it was given, and registering new ones fails ("URLs are
 // already registered") until the old ones are deleted through the Daraja
@@ -354,7 +325,7 @@ func (s *Server) settingsMpesaSTKPoll(w http.ResponseWriter, r *http.Request) {
 	}
 	t, ok := s.mpesa.TestStatus(id)
 	if !ok {
-		writeJSON(w, map[string]any{"status": "unknown", "detail": "this test is not known (the server restarted?)"})
+		jsonOut(w, map[string]any{"status": "unknown", "detail": "this test is not known (the server restarted?)"})
 		return
 	}
 	if t.Status == "pending" && time.Since(t.Started) > 5*time.Second {
@@ -367,7 +338,7 @@ func (s *Server) settingsMpesaSTKPoll(w http.ResponseWriter, r *http.Request) {
 	if t.Status == "pending" && time.Since(t.Started) > 2*time.Minute {
 		t.Status, t.Detail = "failed", "no answer after 2 minutes: the prompt expired or the phone was off"
 	}
-	writeJSON(w, map[string]any{"status": t.Status, "detail": t.Detail, "receipt": t.Receipt})
+	jsonOut(w, map[string]any{"status": t.Status, "detail": t.Detail, "receipt": t.Receipt})
 }
 
 func (s *Server) settingsMpesaRotate(w http.ResponseWriter, r *http.Request) {

@@ -1,12 +1,8 @@
 package web
 
 import (
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"net/http"
-	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,46 +11,51 @@ import (
 )
 
 const (
-	authCacheTTL    = 12 * time.Hour
-	authCacheMax    = 16
 	loginWindow     = 15 * time.Minute
-	loginPerIP      = 5
-	loginGlobal     = 30
+	loginPerIP      = 5  // failed attempts per client address per window
+	loginPerUser    = 10 // failed attempts per account name per window
+	loginGlobal     = 30 // failed attempts in a window from addresses that never signed in
 	loginLimiterCap = 5000
+	trustFor        = 7 * 24 * time.Hour // how long a successful sign-in keeps its address trusted
 )
 
-// adminAuth checks the admin's Basic credentials.
+// adminAuth guards the credential checks of the admin pages and the API.
 //
-// The password is the pbkdf2 hash in the database once one is set (the
-// ADMIN_PASS environment value is then ignored); until then ADMIN_PASS applies.
-// pbkdf2 at 600k rounds takes about 0.3 s on one core, and Basic auth sends the
-// password with every request, so a verified login is remembered for 12 hours
-// as an HMAC, under a per-process random key, of the user, the password and
-// the stored hash it was verified against (a password change therefore
-// invalidates it, even if a slow check was running at that moment). Slow
-// checks run one at a time, a few may wait for their turn, and the rest are
-// told to come back (429).
+// Every attempt to prove a credential (password, authenticator code, recovery
+// code, setup code) first reserves a slot, per client address and per account
+// name, and counts as a failure while it is in flight, so parallel requests
+// cannot all pass a check made before any of them finished. Only a completed
+// sign-in (both factors) clears the failures: a correct password alone does
+// not, or an attacker holding the password could guess authenticator codes
+// forever by signing in again between guesses.
 //
-// Failed attempts are limited per client address (and, for addresses that
-// have never logged in, globally). An attempt is reserved atomically before
-// any hashing starts and counts as a failure while it is in flight, so
-// parallel requests cannot all pass a check made before any of them finished.
+// The per-account limit blocks addresses that have not signed in as that
+// account lately; an address that has keeps working, so somebody hammering the
+// owner's name cannot lock the owner out of the office. A name that does not
+// exist is limited exactly like one that does.
+//
+// Password hashing (PBKDF2, 600k rounds, about 0.3 s) runs one at a time; a
+// few requests may wait for the slot and the rest are told to come back (429),
+// so a flood cannot exhaust the CPU.
 type adminAuth struct {
 	s *Server
 
-	key []byte
 	sem chan struct{}
 
 	// verifyHash is settings.VerifyPassword; tests replace it to count runs.
 	verifyHash func(hash, pass string) bool
 
+	dummyOnce sync.Once
+	dummy     string // a valid hash nobody knows the password of
+
 	mu      sync.Mutex
-	cache   map[string]time.Time // hex HMAC(user NUL pass NUL hash) -> expiry
 	waiting int                  // checks waiting for the pbkdf2 slot
-	login   tracker              // Basic auth attempts
+	login   tracker              // all sign-in attempts, by address
+	user    tracker              // all sign-in attempts, by account name
 	reauth  tracker              // "current password" fields on forms
-	okIP    map[string]time.Time // address -> last success (exempt from the global limit)
-	warned  map[string]time.Time // ip -> window start already audited
+	okIP    map[string]time.Time // address -> last full sign-in (exempt from the global limit)
+	okUser  map[string]time.Time // name|address -> last full sign-in (exempt from the account limit)
+	warned  map[string]time.Time // address -> window start already audited
 }
 
 // maxWaiters is how many slow checks may queue for the pbkdf2 slot; waitSlot
@@ -64,7 +65,7 @@ const (
 	waitSlot   = 4 * time.Second
 )
 
-// tracker counts failed attempts per address, plus attempts in flight.
+// tracker counts failed attempts per key, plus attempts in flight.
 type tracker struct {
 	perIP       map[string][]time.Time
 	inflight    map[string]int
@@ -79,49 +80,9 @@ func newTracker(per, global int) tracker {
 }
 
 func newAdminAuth(s *Server) *adminAuth {
-	k := make([]byte, 32)
-	if _, err := rand.Read(k); err != nil {
-		panic(err)
-	}
-	return &adminAuth{s: s, key: k, sem: make(chan struct{}, 1), cache: map[string]time.Time{}, verifyHash: settings.VerifyPassword,
-		login: newTracker(loginPerIP, loginGlobal), reauth: newTracker(loginPerIP, 0),
-		okIP: map[string]time.Time{}, warned: map[string]time.Time{}}
-}
-
-func (a *adminAuth) mac(user, pass, hash string) string {
-	m := hmac.New(sha256.New, a.key)
-	for _, p := range []string{user, pass, hash} {
-		m.Write([]byte(p))
-		m.Write([]byte{0})
-	}
-	return hex.EncodeToString(m.Sum(nil))
-}
-
-func (a *adminAuth) cached(sum string, now time.Time) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	exp, ok := a.cache[sum]
-	if ok && !now.Before(exp) {
-		delete(a.cache, sum)
-		return false
-	}
-	return ok
-}
-
-func (a *adminAuth) remember(sum string, now time.Time) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if len(a.cache) >= authCacheMax {
-		a.cache = map[string]time.Time{}
-	}
-	a.cache[sum] = now.Add(authCacheTTL)
-}
-
-// Flush forgets every remembered login (after a password change).
-func (a *adminAuth) Flush() {
-	a.mu.Lock()
-	a.cache = map[string]time.Time{}
-	a.mu.Unlock()
+	return &adminAuth{s: s, sem: make(chan struct{}, 1), verifyHash: settings.VerifyPassword,
+		login: newTracker(loginPerIP, loginGlobal), user: newTracker(loginPerUser, 0), reauth: newTracker(loginPerIP, 0),
+		okIP: map[string]time.Time{}, okUser: map[string]time.Time{}, warned: map[string]time.Time{}}
 }
 
 func prune(ts []time.Time, now time.Time) []time.Time {
@@ -134,10 +95,10 @@ func prune(ts []time.Time, now time.Time) []time.Time {
 	return keep
 }
 
-// reserve claims an attempt slot for ip, counting in-flight attempts as
+// reserve claims an attempt slot for key, counting in-flight attempts as
 // failures. It reports whether the attempt may go on, and otherwise for how
-// long ip must wait. trusted addresses are exempt from the global limit.
-// The caller holds a.mu.
+// long to wait. trusted callers are exempt from the global limit.
+// The caller holds the auth mutex.
 func (t *tracker) reserve(ip string, now time.Time, trusted bool) (bool, time.Duration) {
 	t.perIP[ip] = prune(t.perIP[ip], now)
 	t.all = prune(t.all, now)
@@ -160,7 +121,7 @@ func (t *tracker) reserve(ip string, now time.Time, trusted bool) (bool, time.Du
 
 // release ends a reservation. failed attempts stay on the books; others
 // (success, or a check that never ran) are dropped, and a success also clears
-// the address's earlier failures.
+// the key's earlier failures.
 func (t *tracker) release(ip string, now time.Time, failed, success bool) {
 	if t.inflight[ip]--; t.inflight[ip] <= 0 {
 		delete(t.inflight, ip)
@@ -177,7 +138,7 @@ func (t *tracker) release(ip string, now time.Time, failed, success bool) {
 	}
 }
 
-// outcome of one credential check.
+// outcome of a refused or busy credential check.
 type outcome struct {
 	ok      bool
 	limited bool          // refused by the failure limit
@@ -185,93 +146,84 @@ type outcome struct {
 	wait    time.Duration // for Retry-After
 }
 
-// hashNow returns the stored password hash ("" = ADMIN_PASS from the environment).
-func (a *adminAuth) hashNow() string {
-	if a.s.setm != nil {
-		return a.s.setm.AdminHash()
+func userKey(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if len(name) > 64 {
+		name = name[:64]
 	}
-	return ""
+	return name
 }
 
-// check verifies user and pass for the client ip against tracker t. An empty
-// password is refused at once and counts for nothing. A cache hit succeeds
-// without touching the limits.
-func (a *adminAuth) check(user, pass, ip string, t *tracker) outcome {
-	if pass == "" {
-		return outcome{}
-	}
-	live := a.s.live()
-	userOK := safeEq(user, live.AdminUser)
-	hash := a.hashNow()
-	var sum string
-	if hash != "" {
-		sum = a.mac(user, pass, hash)
-		if userOK && a.cached(sum, time.Now()) {
-			a.noteOK(ip, time.Now())
-			return outcome{ok: true}
-		}
-	}
+// attempt is one reserved credential check.
+type attempt struct {
+	a        *adminAuth
+	ip, user string
+	skipUser bool
+	ended    bool
+}
+
+// begin reserves a slot for a credential check by ip against the named
+// account. The caller must end the attempt exactly once.
+func (a *adminAuth) begin(ip, name string) (*attempt, outcome) {
+	user := userKey(name)
 	now := time.Now()
 	a.mu.Lock()
-	trusted := false
-	if at, ok := a.okIP[ip]; ok && now.Sub(at) < authCacheTTL {
-		trusted = true
+	defer a.mu.Unlock()
+	trustedIP := false
+	if at, ok := a.okIP[ip]; ok && now.Sub(at) < trustFor {
+		trustedIP = true
 	}
-	ok, wait := t.reserve(ip, now, trusted)
-	a.mu.Unlock()
+	trustedUser := false
+	if at, ok := a.okUser[user+"|"+ip]; ok && now.Sub(at) < trustFor {
+		trustedUser = true
+	}
+	ok, wait := a.login.reserve(ip, now, trustedIP)
 	if !ok {
-		return outcome{limited: true, wait: wait}
+		return nil, outcome{limited: true, wait: wait}
 	}
-	done := func(failed, success bool) {
-		a.mu.Lock()
-		t.release(ip, time.Now(), failed, success)
-		if success {
-			a.okIP[ip] = time.Now()
-			if len(a.okIP) > 1000 {
-				a.okIP = map[string]time.Time{ip: time.Now()}
-			}
-		}
-		a.mu.Unlock()
+	att := &attempt{a: a, ip: ip, user: user}
+	if user == "" || trustedUser {
+		att.skipUser = true
+		return att, outcome{ok: true}
 	}
-	if hash == "" {
-		// No database password yet: ADMIN_PASS from the environment, which
-		// must be a real one (config refuses an empty or "admin" one at start).
-		good := a.s.cfg.CheckAdminPass() == nil && safeEq(pass, a.s.cfg.AdminPass) && userOK
-		done(!good, good)
-		return outcome{ok: good}
+	if ok, wait := a.user.reserve(user, now, false); !ok {
+		a.login.release(ip, now, false, false)
+		return nil, outcome{limited: true, wait: wait}
 	}
-	if !userOK {
-		done(true, false)
-		return outcome{}
-	}
-	// The slow path: one pbkdf2 at a time, a few may wait, the rest come back later.
-	if !a.acquire() {
-		done(false, false)
-		return outcome{busy: true, wait: 2 * time.Second}
-	}
-	// Another request may have verified the same login while this one waited.
-	if a.cached(sum, time.Now()) {
-		<-a.sem
-		done(false, true)
-		return outcome{ok: true}
-	}
-	good := a.verifyHash(hash, pass)
-	<-a.sem
-	if good {
-		a.remember(sum, time.Now())
-	}
-	done(!good, good)
-	return outcome{ok: good}
+	return att, outcome{ok: true}
 }
 
-// noteOK records that ip has presented the right password lately.
-func (a *adminAuth) noteOK(ip string, now time.Time) {
-	a.mu.Lock()
-	a.okIP[ip] = now
-	if len(a.okIP) > 1000 {
-		a.okIP = map[string]time.Time{ip: now}
+// end settles the attempt. failed counts against the address and the account;
+// success (a completed sign-in) clears both and trusts the address; neither
+// leaves the books as they were (a correct password that still needs a second
+// factor).
+func (t *attempt) end(failed, success bool) {
+	if t.ended {
+		return
 	}
-	a.mu.Unlock()
+	t.ended = true
+	a := t.a
+	now := time.Now()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.login.release(t.ip, now, failed, success)
+	if !t.skipUser {
+		a.user.release(t.user, now, failed, success)
+	} else if success && t.user != "" {
+		delete(a.user.perIP, t.user)
+	}
+	if success {
+		a.okIP[t.ip] = now
+		if t.user != "" {
+			a.okUser[t.user+"|"+t.ip] = now
+		}
+		if len(a.okIP) > 1000 {
+			a.okIP = map[string]time.Time{t.ip: now}
+		}
+		if len(a.okUser) > 1000 {
+			a.okUser = map[string]time.Time{t.user + "|" + t.ip: now}
+		}
+	}
 }
 
 // acquire takes the pbkdf2 slot: at once if free, else after a short wait if
@@ -300,6 +252,35 @@ func (a *adminAuth) acquire() bool {
 	}
 }
 
+// dummyHash is a real hash of a random password: unknown and disabled users
+// are checked against it, so the time taken does not tell whether the name
+// exists.
+func (a *adminAuth) dummyHash() string {
+	a.dummyOnce.Do(func() {
+		pw, _ := settings.RandomPassword()
+		if h, err := settings.HashPassword(pw); err == nil {
+			a.dummy = h
+		}
+	})
+	return a.dummy
+}
+
+// password reports whether pass is the password of u. exists=false (no such
+// user), a disabled user and a user without a password never succeed, but cost
+// the same time. busy means the pbkdf2 slot stayed taken.
+func (a *adminAuth) password(u store.AdminUser, exists bool, pass string) (ok, busy bool) {
+	hash := a.dummyHash()
+	if exists && u.PassHash != "" {
+		hash = u.PassHash
+	}
+	if !a.acquire() {
+		return false, true
+	}
+	good := a.verifyHash(hash, pass)
+	<-a.sem
+	return good && exists && !u.Disabled && u.PassHash != "", false
+}
+
 // auditBlocked writes one audit event per client per window.
 func (a *adminAuth) auditBlocked(ip string, now time.Time) {
 	a.mu.Lock()
@@ -312,46 +293,30 @@ func (a *adminAuth) auditBlocked(ip string, now time.Time) {
 		a.warned = map[string]time.Time{ip: now}
 	}
 	a.mu.Unlock()
-	_ = a.s.st.Update(func(d *store.Data) error {
-		d.AddEvent(store.Event{Time: now, Kind: "audit", Msg: "admin login blocked: too many wrong passwords from " + ip})
-		return nil
-	})
+	a.s.authn.AuditNow("", ip, "sign-in blocked: too many failed attempts from "+ip)
 }
 
 // checkPassword verifies the "current password" a form carries, against the
-// same source as the login. Its failures are counted apart from logins, so a
-// mistyped field never blocks the admin's own page loads. An empty password
-// is refused without counting.
+// signed-in user's own password. Its failures are counted apart from sign-ins,
+// so a mistyped field never blocks the admin's own page loads. An empty
+// password is refused without counting.
 func (s *Server) checkPassword(r *http.Request, pass string) bool {
-	return s.auth.check(s.live().AdminUser, pass, realIP(r), &s.auth.reauth).ok
-}
-
-// authenticate runs the Basic auth check for the admin. It writes the response
-// itself when the request is refused and reports whether to continue.
-func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) bool {
-	u, p, ok := r.BasicAuth()
-	challenge := func() {
-		w.Header().Set("WWW-Authenticate", `Basic realm="ispbill admin", charset="UTF-8"`)
-		http.Error(w, "authentication required", http.StatusUnauthorized)
-	}
-	if !ok {
-		challenge()
+	u, ok := userOf(r)
+	if pass == "" || !ok {
 		return false
 	}
+	a := s.auth
 	ip := realIP(r)
-	out := s.auth.check(u, p, ip, &s.auth.login)
-	switch {
-	case out.ok:
-		return true
-	case out.limited:
-		s.auth.auditBlocked(ip, time.Now())
-		w.Header().Set("Retry-After", strconv.Itoa(int(out.wait.Seconds())+1))
-		http.Error(w, "too many wrong passwords: try again later", http.StatusTooManyRequests)
-	case out.busy:
-		w.Header().Set("Retry-After", strconv.Itoa(int(out.wait.Seconds())+1))
-		http.Error(w, "the server is busy checking passwords: try again in a moment", http.StatusTooManyRequests)
-	default:
-		challenge()
+	now := time.Now()
+	a.mu.Lock()
+	ok2, _ := a.reauth.reserve(ip, now, true)
+	a.mu.Unlock()
+	if !ok2 {
+		return false
 	}
-	return false
+	good, busy := a.password(u, true, pass)
+	a.mu.Lock()
+	a.reauth.release(ip, time.Now(), !good && !busy, good)
+	a.mu.Unlock()
+	return good
 }

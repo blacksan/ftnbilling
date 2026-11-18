@@ -63,7 +63,6 @@ type Config struct {
 	WGPublicKey           string
 	WGEndpoint            string // host:port the routers dial; defaults to PUBLIC_IP:51820
 	WGSubnet              string // tunnel subnet, server at .1
-	AdminAllowCIDR        string // networks (besides loopback) the admin is served to; the wg-admin tunnel
 	WGDumpPath            string // written by the root status timer
 	JoinTokenTTL          time.Duration
 	AllowInsecureJoin     bool // permit minting join links when PUBLIC_BASE_URL is not https (bench only)
@@ -186,10 +185,8 @@ func Load(getenv func(string) string) (Config, error) {
 		c.WGEndpoint = c.PublicIP + ":51820"
 	}
 	c.WGSubnet = get("WG_SUBNET", "10.99.0.0/22")
-	c.AdminAllowCIDR = get("ADMIN_ALLOW_CIDR", "10.98.0.0/24")
-	if _, err := netip.ParsePrefix(c.AdminAllowCIDR); err != nil {
-		errs = append(errs, errors.New("ADMIN_ALLOW_CIDR must be an IPv4 CIDR, e.g. 10.98.0.0/24"))
-	}
+	// ADMIN_ALLOW_CIDR (the old wg-admin network) is no longer read: the admin
+	// pages are public and protected by sign-in, so old env lines are ignored.
 	c.WGDumpPath = get("WG_DUMP_PATH", "/run/ftnbilling/wg0.dump")
 	c.JoinTokenTTL = dur("JOIN_TOKEN_TTL", 30*time.Minute)
 	c.AllowInsecureJoin = parseBool(getenv("ALLOW_INSECURE_JOIN"))

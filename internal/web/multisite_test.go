@@ -66,7 +66,7 @@ func newMultiOps(t *testing.T, mut func(*config.Config), mkOps func(cfg config.C
 	_, pub, _ := wg.GenerateKeypair()
 	cfg := config.Config{BrandName: "Building WiFi", TestMode: true, AdminUser: "admin", AdminPass: pw,
 		SupportPhone: "0700 111 222", NetflowAddr: "off", PingTargets: []string{"8.8.8.8"},
-		WGPublicKey: pub, WGEndpoint: "203.0.113.10:51820", WGSubnet: "10.99.0.0/22", AdminAllowCIDR: "10.98.0.0/24", JoinTokenTTL: 30 * time.Minute,
+		WGPublicKey: pub, WGEndpoint: "203.0.113.10:51820", WGSubnet: "10.99.0.0/22", DataKey: testKey, JoinTokenTTL: 30 * time.Minute,
 		JoinRequireMikrotikUA: true, PublicBaseURL: "https://billing.example.co.ke", DataDir: t.TempDir(),
 		FlowEvery: time.Hour, PortEvery: time.Hour, PingEvery: time.Hour, DNSEvery: time.Hour, SaveEvery: time.Hour}
 	if mut != nil {
@@ -101,9 +101,10 @@ func newMultiOps(t *testing.T, mut func(*config.Config), mkOps func(cfg config.C
 	}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	m.app = &app{ts: ts, st: st, svc: svc, mgr: mgr,
-		cl: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
-	m.admin("GET", "/admin", nil).Body.Close()
+	m.app = &app{ts: ts, st: st, svc: svc, mgr: mgr, srv: srv, cl: &http.Client{CheckRedirect: noRedirect}}
+	m.owner = seedUser(t, srv, st, "admin", store.RoleOwner, pw)
+	m.br = signIn(t, ts, srv, st, m.owner)
+	m.csrf = m.br.CSRF
 	return m
 }
 
@@ -203,34 +204,44 @@ func TestMoveAccountThroughTheAdmin(t *testing.T) {
 	}
 }
 
-func TestAdminServedOnlyToLoopbackAndAdminNet(t *testing.T) {
+// /admin is public now (it has its own sign-in); only the routers' WireGuard
+// subnet is shut out, of /admin and of /api/v1.
+func TestAdminAndAPINotServedToRouterTunnel(t *testing.T) {
 	m := newMulti(t)
-	for ip, want := range map[string]int{
-		"10.99.0.5":    404, // a router tunnel
-		"198.51.100.7": 404, // the internet
-		"10.98.0.5":    200, // an admin WireGuard peer
-		"10.98.1.5":    404, // outside the admin /24
-		"127.0.0.1":    200,
-	} {
-		req, _ := http.NewRequest("GET", m.ts.URL+"/admin", nil)
-		req.SetBasicAuth("admin", pw)
+	get := func(ip, path string, cookie bool) int {
+		req, _ := http.NewRequest("GET", m.ts.URL+path, nil)
 		req.Header.Set("X-Forwarded-For", ip)
+		if cookie {
+			req.AddCookie(m.br.Cookie)
+		}
 		r, err := m.cl.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
 		r.Body.Close()
-		if r.StatusCode != want {
-			t.Errorf("admin from %s: %d, want %d", ip, r.StatusCode, want)
+		return r.StatusCode
+	}
+	for _, p := range []string{"/admin", "/admin/login", "/admin/accounts", "/admin/security", "/api/v1/me", "/api/v1/accounts", "/api/v1/auth/login"} {
+		if got := get("10.99.0.5", p, true); got != 404 {
+			t.Errorf("%s from the tunnel: %d, want 404", p, got)
 		}
 	}
-	// no forwarded header: the test client is on loopback
-	req, _ := http.NewRequest("GET", m.ts.URL+"/admin", nil)
-	req.SetBasicAuth("admin", pw)
-	r, _ := m.cl.Do(req)
-	r.Body.Close()
-	if r.StatusCode != 200 {
-		t.Errorf("admin from loopback: %d", r.StatusCode)
+	// Anywhere else: signed out gets the login page; signed in gets /admin.
+	if got := get("198.51.100.7", "/admin/login", false); got != 200 {
+		t.Errorf("login from the internet: %d", got)
+	}
+	if got := get("198.51.100.7", "/admin", false); got != 303 {
+		t.Errorf("/admin signed out: %d", got)
+	}
+	if got := get("198.51.100.7", "/admin", true); got != 200 {
+		t.Errorf("/admin signed in: %d", got)
+	}
+	if got := get("127.0.0.1", "/admin", true); got != 200 {
+		t.Errorf("/admin from loopback: %d", got)
+	}
+	// The portal itself is still served to the tunnel's neighbours (the customers).
+	if got := get("10.99.0.5", "/healthz", false); got == 404 {
+		t.Errorf("healthz from the tunnel: %d", got)
 	}
 }
 

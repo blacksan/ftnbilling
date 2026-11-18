@@ -158,15 +158,7 @@
 {{else}}<tr><td colspan="5">No vouchers yet.</td></tr>{{end}}</table></div>{{template "afoot"}}{{end}}
 
 {{define "admin_settings"}}{{template "ahead" .}}{{template "set_tabs" .}}
-<div class="card"><b>Admin password</b>
-{{if .Data.HasHash}}<p class="muted">The password is stored here (hashed). The ADMIN_PASS value in the environment file is ignored.</p>
-{{else}}<p class="muted">Right now the password comes from ADMIN_PASS in the environment file{{if not .Data.EnvPassOK}} (<span class="bad">it is empty or a placeholder, so nobody can log in</span>){{end}}. Set one here and the environment value stops working.</p>{{end}}
-{{if .Data.HasKey}}<form method="post" action="/admin/settings/password" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}">
-<label>Current password<input type="password" name="current_password" autocomplete="current-password"></label>
-<label>New password (12 or more characters)<input type="password" name="new_password" autocomplete="new-password"></label>
-<label>New password again<input type="password" name="confirm_password" autocomplete="new-password"></label><button>Change password</button></form>
-{{else}}<p class="bad">Saving settings and passwords here needs DATA_KEY in the environment file. Add it and restart once.</p>{{end}}
-<p class="muted">Locked out? On the server run <code>sudo ftnbilling-admin-reset</code> (add <code>--generate</code> for a new random password).</p></div>
+<div class="card"><b>Sign-in</b><p class="muted">Passwords, the authenticator, signed-in browsers and phones, and users are managed on the <a href="/admin/security">Security</a> page. Locked out? On the server run <code>sudo ftnbilling-admin-reset</code> (add <code>--generate</code> for a new random password).</p></div>
 <div class="grid2">
 <div class="card"><b>Lifecycle rules</b><table>
 <tr><td>Reminder before expiry</td><td>{{if .Data.Policy.ReminderDays}}{{.Data.Policy.ReminderDays}} days before (plans longer than that){{else}}off{{end}} <code>REMINDER_DAYS</code></td></tr>
@@ -191,7 +183,7 @@
 <tr><td>Last Drive upload</td><td>{{if .UploadAt.IsZero}}never{{else}}{{eat .UploadAt}}{{if .UploadOK}}{{if deref .UploadOK}} <span class="ok">ok</span>{{else}} <span class="bad">FAILED</span>{{end}}{{end}}{{end}}</td></tr>
 {{if .Error}}<tr><td>Problem</td><td class="bad">{{.Error}}</td></tr>{{end}}{{end}}{{end}}</table></div>
 <div class="card"><b>Admin access</b><table>
-<tr><td>Allowed networks</td><td>this server (SSH tunnel) and {{.Data.AdminCIDR}} <code>ADMIN_ALLOW_CIDR</code></td></tr>
+<tr><td>Admin access</td><td>public, with a password and an authenticator code (not from the routers' tunnel)</td></tr>
 <tr><td>Refused</td><td>router tunnels ({{.Data.WGSubnet}}) and the public internet</td></tr></table></div>
 <div class="card"><b>Router connections</b><table>
 <tr><td>Buildings</td><td>each building has its own router and settings: <a href="/admin/sites">Buildings</a></td></tr>

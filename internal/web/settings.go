@@ -18,7 +18,6 @@ import (
 
 func (s *Server) settingsRoutes(get, post func(string, http.HandlerFunc)) {
 	get("/admin/settings", s.adminSettings)
-	post("/admin/settings/password", s.settingsPassword)
 	post("/admin/settings/revert", s.settingsRevert)
 
 	get("/admin/settings/whatsapp", s.settingsWhatsApp)
@@ -55,15 +54,13 @@ func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 	p := s.page(r, "settings")
 	live := s.live()
 	pol := s.svc.Policy()
-	hasHash := s.setm != nil && s.setm.HasAdminPassword()
 	p.Data = map[string]any{
 		"Policy": pol, "Cfg": s.cfg, "Mpesa": live.MpesaEnabled(),
 		"Support":    s.cfg.SupportPhone,
 		"WGEndpoint": s.cfg.WGEndpoint, "WGSubnet": s.cfg.WGSubnet, "JoinTTL": s.cfg.JoinTokenTTL.String(),
 		"Stray": s.mgr.Stray(), "Backup": s.backupStatus(), "DBKind": s.st.Kind(), "DBErr": errString(s.st.Healthy()),
-		"AdminCIDR": s.cfg.AdminAllowCIDR,
-		"HasHash":   hasHash, "EnvPassOK": s.cfg.CheckAdminPass() == nil, "HasKey": len(s.cfg.DataKey) > 0,
-		"Listen": s.cfg.ListenAddr, "PublicURL": s.cfg.PublicBaseURL, "AdminUser": live.AdminUser,
+		"HasKey": len(s.cfg.DataKey) > 0,
+		"Listen": s.cfg.ListenAddr, "PublicURL": s.cfg.PublicBaseURL, "AdminUser": p.User,
 		"Problems": s.problems(), "Tabs": s.settingsTabs("general"),
 		"WAOn": live.WhatsAppConfigured(), "EmailOn": live.EmailConfigured(),
 	}

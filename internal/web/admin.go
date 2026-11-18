@@ -2,10 +2,7 @@ package web
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,19 +13,10 @@ import (
 	"ispbill/internal/store"
 )
 
-const csrfCookie = "ispbill_csrf"
-
 func (s *Server) adminRoutes(mux *http.ServeMux) {
 	get := func(p string, h http.HandlerFunc) { mux.Handle("GET "+p, s.admin(h)) }
 	post := func(p string, h http.HandlerFunc) { mux.Handle("POST "+p, s.admin(h)) }
 	get("/admin", s.adminDashboard)
-	// Log out: always 401, so the browser forgets the cached password.
-	mux.HandleFunc("GET /admin/logout", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("WWW-Authenticate", `Basic realm="ispbill admin", charset="UTF-8"`)
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, `<!doctype html><meta name="viewport" content="width=device-width"><body style="font:16px system-ui;background:#0d1117;color:#e6e9ef;display:grid;place-items:center;height:90vh"><div>Logged out. <a style="color:#8b83ff" href="/admin">Log in again</a></div>`)
-	})
 	get("/admin/site/select", s.adminSiteSelect)
 	post("/admin/accounts/move", s.adminAccountMove)
 	s.siteRoutes(get, post)
@@ -62,52 +50,16 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	get("/admin/vouchers", s.adminVouchers)
 	post("/admin/vouchers/generate", s.adminGenVouchers)
 	get("/admin/vouchers/print", s.adminPrintVouchers)
+	s.securityRoutes(get, post)
 	s.settingsRoutes(get, post)
 	s.crmRoutes(get, post)
 	s.metricsRoutes(get, post)
 	s.opsRoutes(get, post)
 }
 
-// admin enforces basic auth and, for POST, the CSRF double-submit check.
-func (s *Server) admin(h http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.adminAllowed(r) {
-			// The admin is served only to loopback and the admin tunnel,
-			// never to the router tunnels or the internet.
-			http.NotFound(w, r)
-			return
-		}
-		if !s.authenticate(w, r) {
-			return
-		}
-		c, err := r.Cookie(csrfCookie)
-		token := ""
-		if err == nil {
-			token = c.Value
-		}
-		if r.Method == http.MethodPost {
-			if token == "" || !safeEq(r.PostFormValue("_csrf"), token) {
-				http.Error(w, "CSRF check failed", http.StatusForbidden)
-				return
-			}
-		} else if token == "" {
-			b := make([]byte, 16)
-			rand.Read(b)
-			token = hex.EncodeToString(b)
-			http.SetCookie(w, &http.Cookie{Name: csrfCookie, Value: token, Path: "/admin",
-				HttpOnly: true, SameSite: http.SameSiteStrictMode})
-		}
-		r = r.WithContext(context.WithValue(r.Context(), csrfKey{}, token))
-		h(w, r)
-	})
-}
-
-type csrfKey struct{}
-
-func csrfOf(r *http.Request) string { t, _ := r.Context().Value(csrfKey{}).(string); return t }
-
 type adminPage struct {
 	Brand, Active, CSRF, Flash string
+	User, Role                 string       // who is signed in
 	Sites                      []store.Site // live buildings, for the switcher
 	Site                       string       // selected building id, "" = all
 	SiteName                   string
@@ -124,6 +76,9 @@ type adminPage struct {
 
 func (s *Server) page(r *http.Request, active string) adminPage {
 	p := adminPage{Brand: s.cfg.BrandName, Active: active, CSRF: csrfOf(r), Flash: r.URL.Query().Get("msg"), Data: map[string]any{}}
+	if u, ok := userOf(r); ok {
+		p.User, p.Role = u.Username, u.Role
+	}
 	p.FlashBad = strings.HasPrefix(p.Flash, "Error")
 	p.Now = s.svc.Now().In(billing.EAT).Format("Mon 02 Jan, 15:04")
 	sc := s.scopeOf(r)
