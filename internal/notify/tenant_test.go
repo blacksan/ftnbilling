@@ -47,7 +47,7 @@ func newTrig(t *testing.T) *trig {
 			return s, s.Add(5 * time.Minute), ok
 		},
 		OutageEnd: func(id string, s time.Time) (time.Time, bool) {
-			e, ok := r.ends[id+"|"+s.Format(time.RFC3339)]
+			e, ok := r.ends[id+"|"+s.UTC().Format(time.RFC3339)]
 			return e, ok
 		}})
 	return r
@@ -250,7 +250,7 @@ func TestOutageNoticeManualAutoAndResolved(t *testing.T) {
 	if len(r.kinds(KindOutageResolved)) != 0 {
 		t.Fatal("still down")
 	}
-	r.ends["s1|"+start.Format(time.RFC3339)] = r.c.Now()
+	r.ends["s1|"+start.UTC().Format(time.RFC3339)] = r.c.Now()
 	r.ten.Scan()
 	r.ten.Scan()
 	res := r.kinds(KindOutageResolved)
@@ -267,7 +267,7 @@ func TestOutageNoticeManualAutoAndResolved(t *testing.T) {
 		t.Fatalf("auto mode notifies s2's two tenants: %d", len(got))
 	}
 	// an outage that ended before the notice went out is skipped
-	r.ends["s2|"+start2.Format(time.RFC3339)] = r.c.Now()
+	r.ends["s2|"+start2.UTC().Format(time.RFC3339)] = r.c.Now()
 	r.pump(4)
 	if got := r.box.Find(func(m Message) bool {
 		return m.Kind == KindOutageNotice && m.SiteID == "s2" && m.Status == StatusSkipped
