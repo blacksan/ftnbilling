@@ -521,3 +521,49 @@ func TestProductionTokenChangeNeedsConfirmation(t *testing.T) {
 		t.Errorf("expired previous token still works: %d", code)
 	}
 }
+
+// With a mail password stored, pointing the mail settings at another server
+// (host, port or user) needs the current admin password, so the stored
+// password is not handed to a server chosen without it.
+func TestEmailServerChangeNeedsPasswordWhenOneIsStored(t *testing.T) {
+	r := newSetRig(t)
+	_, msg, _ := r.post("/admin/settings/email", url.Values{"smtp.host": {"smtp.example.com"}, "smtp.port": {"587"}, "smtp.user": {"me"},
+		"smtp.pass": {"mail-secret-1234"}, "smtp.from": {"billing@example.com"}, "current_password": {pw}})
+	if !strings.HasPrefix(msg, "Saved") {
+		t.Fatalf("first save: %q", msg)
+	}
+	for name, form := range map[string]url.Values{
+		"host":       {"smtp.host": {"evil.example.net"}},
+		"port":       {"smtp.port": {"2525"}},
+		"user":       {"smtp.user": {"someone-else"}},
+		"clear user": {"smtp.user": {""}},
+	} {
+		_, msg, _ = r.post("/admin/settings/email", form)
+		if !strings.HasPrefix(msg, "Error") {
+			t.Errorf("%s changed without the password: %q", name, msg)
+		}
+	}
+	c := r.m.Effective()
+	if c.SMTPHost != "smtp.example.com" || c.SMTPPort != 587 || c.SMTPUser != "me" {
+		t.Fatalf("settings changed anyway: %+v", c.SMTPHost)
+	}
+	// Unrelated changes, and the same values again, need nothing.
+	_, msg, _ = r.post("/admin/settings/email", url.Values{"smtp.host": {"smtp.example.com"}, "smtp.port": {"587"}, "smtp.user": {"me"}, "smtp.from": {"bills@example.com"}})
+	if !strings.HasPrefix(msg, "Saved") {
+		t.Fatalf("a harmless change was refused: %q", msg)
+	}
+	// With the password the host can change.
+	_, msg, _ = r.post("/admin/settings/email", url.Values{"smtp.host": {"smtp.other.com"}, "current_password": {pw}})
+	if !strings.HasPrefix(msg, "Saved") || r.m.Effective().SMTPHost != "smtp.other.com" {
+		t.Fatalf("host change with the password: %q", msg)
+	}
+}
+
+// Without a stored mail password the first setup needs no re-authentication.
+func TestEmailFirstSetupNeedsNoPassword(t *testing.T) {
+	r := newSetRig(t)
+	_, msg, _ := r.post("/admin/settings/email", url.Values{"smtp.host": {"smtp.example.com"}, "smtp.port": {"587"}})
+	if !strings.HasPrefix(msg, "Saved") {
+		t.Fatalf("%q", msg)
+	}
+}

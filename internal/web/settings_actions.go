@@ -124,6 +124,23 @@ func (s *Server) saveSection(w http.ResponseWriter, r *http.Request, section, to
 			needPass = true
 		}
 	}
+	// The stored mail password is sent to whatever server is saved. Pointing
+	// it at another host, port or user would hand the password to that
+	// server, so such a change needs the current password.
+	if section == settings.SecEmail && s.setm.Effective().SMTPPass != "" {
+		cur := s.setm.Effective()
+		for _, key := range []string{"smtp.host", "smtp.port", "smtp.user"} {
+			d, _ := settings.Lookup(key)
+			v, present := values[key]
+			v = strings.TrimSpace(v)
+			if !present || d == nil || (v == "" && d.Kind == settings.KNumber) { // a blank number means "leave it"
+				continue
+			}
+			if v != d.Get(cur) {
+				needPass = true
+			}
+		}
+	}
 	if needPass && !s.reauth(w, r, to) {
 		return nil, false
 	}
