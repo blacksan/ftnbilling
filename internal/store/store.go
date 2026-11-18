@@ -1,18 +1,16 @@
-// Package store is a tiny JSON-file database: one mutex, atomic writes.
+// Package store is the in-memory database of ispbill. Every read and write
+// goes through View and Update; a Backend (a JSON file by default, Postgres
+// when DATABASE_URL is set) makes each Update durable.
 package store
 
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 )
@@ -24,9 +22,11 @@ var ErrNoChange = errors.New("no change")
 // incompatible version (the PIN/subscriber model).
 var ErrOldFormat = errors.New("ispbill.json is in an old or unknown data format")
 
-// FormatVersion is the on-disk data format. 2 = flat accounts locked to an
-// ONT MAC (single building); 3 = adds Sites and a SiteID on every row.
-const FormatVersion = 3
+// FormatVersion is the data format. 2 = flat accounts locked to an ONT MAC
+// (single building); 3 = adds Sites and a SiteID on every row; 4 = adds
+// customers, tenancies, equipment, contacts, notes, closed accounts and event
+// sequence numbers.
+const FormatVersion = 4
 
 const (
 	OrderPending = "pending"
@@ -79,8 +79,15 @@ type Site struct {
 	// LegacyContainer makes the script stop the old ispbill/tailscale containers.
 	LegacyContainer bool `json:"legacy_container,omitempty"`
 
-	// PkgOverrides adjust the shared package list for this building, by package ID.
+	// PkgOverrides adjust the shared package list for this building, by package
+	// ID. The map is always reassigned, never edited in place.
 	PkgOverrides map[string]PkgOverride `json:"pkg_overrides,omitempty"`
+
+	// Building profile.
+	Address string    `json:"address,omitempty"`
+	Lat     float64   `json:"lat,omitempty"` // 0 = unset
+	Lng     float64   `json:"lng,omitempty"`
+	GoLive  time.Time `json:"go_live,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -148,7 +155,20 @@ type Account struct {
 	RemindedFor time.Time `json:"reminded_for,omitempty"`
 	ExpiredFor  time.Time `json:"expired_for,omitempty"`
 
+	// CustomerID is the current occupant. Tenant, Phone, WhatsApp and
+	// WAOptOut above stay authoritative for messaging and are copied from
+	// the customer when it is saved or linked.
+	CustomerID string `json:"customer_id,omitempty"`
+	// Location inside the building.
+	Floor        string `json:"floor,omitempty"`
+	ODB          string `json:"odb,omitempty"`
+	SplitterID   string `json:"splitter_id,omitempty"` // equipment id of the splitter
+	SplitterPort int    `json:"splitter_port,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
+	// ClosedAt is set when the account is closed (it then lives in
+	// Data.ClosedAccounts).
+	ClosedAt time.Time `json:"closed_at,omitempty"`
 }
 
 type Order struct {
@@ -195,6 +215,7 @@ type Payment struct {
 	Name       string    `json:"name,omitempty"`
 	BillRef    string    `json:"bill_ref,omitempty"` // what the payer typed as account number
 	AccountID  string    `json:"account_id,omitempty"`
+	CustomerID string    `json:"customer_id,omitempty"` // the occupant when the money was credited
 	PackageID  string    `json:"package_id,omitempty"`
 	OrderID    string    `json:"order_id,omitempty"`
 	Note       string    `json:"note,omitempty"`
@@ -232,15 +253,145 @@ type Task struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Event is a lifecycle note (reminder due, expired). No SMS is sent yet.
+// Event is a lifecycle note (reminder due, expired, audit). Seq is assigned
+// by AddEvent and never reused.
 type Event struct {
-	Time      time.Time `json:"time"`
-	SiteID    string    `json:"site_id,omitempty"`
-	Kind      string    `json:"kind"` // reminder_due, expired, info
-	AccountID string    `json:"account_id,omitempty"`
-	Msg       string    `json:"msg"`
+	Seq         int64     `json:"seq,omitempty"`
+	Time        time.Time `json:"time"`
+	SiteID      string    `json:"site_id,omitempty"`
+	Kind        string    `json:"kind"` // reminder_due, expired, info, audit
+	AccountID   string    `json:"account_id,omitempty"`
+	CustomerID  string    `json:"customer_id,omitempty"`
+	EquipmentID string    `json:"equipment_id,omitempty"`
+	Msg         string    `json:"msg"`
 }
 
+// Customer is a person (or business) who takes internet service, kept apart
+// from the flat so that a flat can change hands and a person can have several.
+type Customer struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Phone    string `json:"phone,omitempty"`
+	Phone2   string `json:"phone2,omitempty"`
+	WhatsApp string `json:"whatsapp,omitempty"`
+	Email    string `json:"email,omitempty"`
+	Notes    string `json:"notes,omitempty"`
+	WAOptOut bool   `json:"wa_opt_out,omitempty"`
+	// The national ID is optional and kept encrypted (see billing.Secretbox):
+	// ciphertext, the last four digits, and a keyed hash for exact search.
+	NationalIDEnc   string    `json:"national_id_enc,omitempty"`
+	NationalIDHMAC  string    `json:"national_id_hmac,omitempty"`
+	NationalIDLast4 string    `json:"national_id_last4,omitempty"`
+	AnonymizedAt    time.Time `json:"anonymized_at,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at,omitempty"`
+}
+
+// Tenancy links a customer to an account over time. MoveOut zero = current.
+type Tenancy struct {
+	ID         string    `json:"id"`
+	CustomerID string    `json:"customer_id"`
+	AccountID  string    `json:"account_id"`
+	Note       string    `json:"note,omitempty"`
+	MoveIn     time.Time `json:"move_in"`
+	MoveOut    time.Time `json:"move_out,omitempty"`
+}
+
+// Contact is a person tied to a building: landlord, caretaker, agent...
+type Contact struct {
+	ID        string    `json:"id"`
+	SiteID    string    `json:"site_id"`
+	Role      string    `json:"role"`
+	Name      string    `json:"name"`
+	Phone     string    `json:"phone,omitempty"`
+	Email     string    `json:"email,omitempty"`
+	Notes     string    `json:"notes,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Contact roles.
+const (
+	RoleLandlord  = "landlord"
+	RoleCaretaker = "caretaker"
+	RoleAgent     = "agent"
+	RoleSecurity  = "security"
+	RoleOther     = "other"
+)
+
+// Equipment kinds and statuses.
+const (
+	KindONT      = "ont"
+	KindRouter   = "router"
+	KindOLT      = "olt"
+	KindSplitter = "splitter"
+	KindSwitch   = "switch"
+	KindOther    = "other"
+
+	EqInStock   = "in_stock"
+	EqInstalled = "installed"
+	EqFaulty    = "faulty"
+	EqReturned  = "returned"
+	EqRetired   = "retired"
+)
+
+// Equipment is one physical item (ONT, router, OLT, splitter...). An item
+// that is installed at a customer has an AccountID; one that belongs to a
+// building (its router, its OLT) has a SiteID and no account.
+type Equipment struct {
+	ID          string    `json:"id"`
+	Kind        string    `json:"kind"`
+	Serial      string    `json:"serial,omitempty"`
+	MAC         string    `json:"mac,omitempty"`
+	Model       string    `json:"model,omitempty"`
+	Firmware    string    `json:"firmware,omitempty"`
+	Status      string    `json:"status"`
+	SiteID      string    `json:"site_id,omitempty"`
+	AccountID   string    `json:"account_id,omitempty"`
+	Notes       string    `json:"notes,omitempty"`
+	InstalledAt time.Time `json:"installed_at,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at,omitempty"`
+}
+
+// Equipment event kinds.
+const (
+	EqEvReceived   = "received"
+	EqEvAssigned   = "assigned"
+	EqEvUnassigned = "unassigned"
+	EqEvReturned   = "returned"
+	EqEvFaulty     = "faulty"
+	EqEvRepaired   = "repaired"
+	EqEvMoved      = "moved"
+	EqEvEdited     = "edited"
+	EqEvNote       = "note"
+)
+
+// EquipmentEvent is one line of an item's history.
+type EquipmentEvent struct {
+	ID          string    `json:"id"`
+	EquipmentID string    `json:"equipment_id"`
+	Kind        string    `json:"kind"`
+	FromStatus  string    `json:"from_status,omitempty"`
+	ToStatus    string    `json:"to_status,omitempty"`
+	SiteID      string    `json:"site_id,omitempty"`
+	AccountID   string    `json:"account_id,omitempty"`
+	CustomerID  string    `json:"customer_id,omitempty"`
+	Note        string    `json:"note,omitempty"`
+	Time        time.Time `json:"time"`
+}
+
+// Note is a free-text entry on a customer, account, building or item.
+type Note struct {
+	ID          string    `json:"id"`
+	CustomerID  string    `json:"customer_id,omitempty"`
+	AccountID   string    `json:"account_id,omitempty"`
+	SiteID      string    `json:"site_id,omitempty"`
+	EquipmentID string    `json:"equipment_id,omitempty"`
+	Text        string    `json:"text"`
+	Time        time.Time `json:"time"`
+}
+
+// maxEvents is how many events stay in memory (a database keeps them all).
 const maxEvents = 300
 
 // Data is the whole database.
@@ -255,6 +406,18 @@ type Data struct {
 	Devices  map[string]Device  `json:"devices"`  // siteID|MAC -> device
 	Tasks    map[string]Task    `json:"tasks"`
 	Events   []Event            `json:"events"`
+
+	// Format 4.
+	// ClosedAccounts holds deleted flats (same table, ClosedAt set). A key is
+	// in Accounts or in ClosedAccounts, never both.
+	ClosedAccounts  map[string]Account        `json:"closed_accounts"`
+	Customers       map[string]Customer       `json:"customers"`
+	Tenancies       map[string]Tenancy        `json:"tenancies"`
+	Contacts        map[string]Contact        `json:"contacts"`
+	Equipment       map[string]Equipment      `json:"equipment"`
+	EquipmentEvents map[string]EquipmentEvent `json:"equipment_events"`
+	Notes           map[string]Note           `json:"notes"`
+	EventSeq        int64                     `json:"event_seq"` // last Event.Seq handed out
 }
 
 func (d *Data) init() {
@@ -283,10 +446,34 @@ func (d *Data) init() {
 	if d.Tasks == nil {
 		d.Tasks = map[string]Task{}
 	}
+	if d.ClosedAccounts == nil {
+		d.ClosedAccounts = map[string]Account{}
+	}
+	if d.Customers == nil {
+		d.Customers = map[string]Customer{}
+	}
+	if d.Tenancies == nil {
+		d.Tenancies = map[string]Tenancy{}
+	}
+	if d.Contacts == nil {
+		d.Contacts = map[string]Contact{}
+	}
+	if d.Equipment == nil {
+		d.Equipment = map[string]Equipment{}
+	}
+	if d.EquipmentEvents == nil {
+		d.EquipmentEvents = map[string]EquipmentEvent{}
+	}
+	if d.Notes == nil {
+		d.Notes = map[string]Note{}
+	}
 }
 
-// AddEvent appends a lifecycle event, keeping only the newest maxEvents.
+// AddEvent appends a lifecycle event, assigning its sequence number and
+// keeping only the newest maxEvents in memory.
 func (d *Data) AddEvent(e Event) {
+	d.EventSeq++
+	e.Seq = d.EventSeq
 	d.Events = append(d.Events, e)
 	if n := len(d.Events); n > maxEvents {
 		d.Events = append([]Event(nil), d.Events[n-maxEvents:]...)
@@ -455,119 +642,6 @@ func (d *Data) TaskList() []Task {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out
-}
-
-// Store guards Data with a mutex and persists it to a JSON file.
-type Store struct {
-	mu   sync.RWMutex
-	path string
-	data Data
-}
-
-// Open loads (or creates) the database file at dir/ispbill.json. It refuses
-// to start on a file written by an older, incompatible version instead of
-// silently reading it wrongly.
-func Open(dir string) (*Store, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
-	}
-	s := &Store{path: filepath.Join(dir, "ispbill.json")}
-	b, err := os.ReadFile(s.path)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-	case err != nil:
-		return nil, err
-	default:
-		var probe struct {
-			Format int `json:"format"`
-		}
-		if err := json.Unmarshal(b, &probe); err != nil {
-			return nil, fmt.Errorf("corrupt %s: %w", s.path, err)
-		}
-		switch probe.Format {
-		case FormatVersion:
-			if err := json.Unmarshal(b, &s.data); err != nil {
-				return nil, fmt.Errorf("corrupt %s: %w", s.path, err)
-			}
-		case 2:
-			if err := migrateV2(s.path, b, &s.data); err != nil {
-				return nil, err
-			}
-		default:
-			return nil, fmt.Errorf("%w: %s has format %d, this version needs %d (old PIN/subscriber model). "+
-				"Move or delete the file to start fresh; ispbill will not touch it", ErrOldFormat, s.path, probe.Format, FormatVersion)
-		}
-	}
-	s.data.init()
-	return s, nil
-}
-
-// View runs fn under a read lock. fn must not retain or modify d's maps.
-func (s *Store) View(fn func(d *Data)) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	fn(&s.data)
-}
-
-// Update runs fn under the write lock and then saves atomically. fn should
-// validate before it mutates: if it returns an error nothing is written
-// (but earlier in-memory edits would remain). Return ErrNoChange to skip the save.
-func (s *Store) Update(fn func(d *Data) error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := fn(&s.data); err != nil {
-		if errors.Is(err, ErrNoChange) {
-			return nil
-		}
-		return err
-	}
-	return s.saveLocked()
-}
-
-// saveLocked persists the whole database atomically.
-func (s *Store) saveLocked() error {
-	b, err := json.MarshalIndent(&s.data, "", " ")
-	if err != nil {
-		return err
-	}
-	return WriteFileAtomic(s.path, b)
-}
-
-// WriteFileAtomic writes to a temp file in the same directory, fsyncs, renames
-// over path, then fsyncs the directory so the rename survives power loss.
-func WriteFileAtomic(path string, b []byte) error {
-	dir := filepath.Dir(path)
-	f, err := os.CreateTemp(dir, ".ispbill-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	cleanup := func() { f.Close(); os.Remove(tmp) }
-	if _, err := f.Write(b); err != nil {
-		cleanup()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		cleanup()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	if d, err := os.Open(dir); err == nil {
-		d.Sync()
-		d.Close()
-	}
-	return nil
 }
 
 // ---- sites ----------------------------------------------------------------

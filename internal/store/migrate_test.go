@@ -34,7 +34,7 @@ func TestMigrateV2ToV3(t *testing.T) {
 	}
 	var siteID string
 	s.View(func(d *Data) {
-		if d.Format != 3 || len(d.Sites) != 1 {
+		if d.Format != 4 || len(d.Sites) != 1 {
 			t.Fatalf("format %d sites %d", d.Format, len(d.Sites))
 		}
 		for id, st := range d.Sites {
@@ -73,11 +73,11 @@ func TestMigrateV2ToV3(t *testing.T) {
 	if fi, _ := os.Stat(bak); fi.Mode().Perm() != 0o600 {
 		t.Fatalf("backup mode %v", fi.Mode())
 	}
-	// The saved file is format 3 and loads as is (no second migration, same site).
+	// The saved file is format 4 and loads as is (no second migration, same site).
 	var probe struct{ Format int }
 	raw, _ := os.ReadFile(p)
 	json.Unmarshal(raw, &probe)
-	if probe.Format != 3 {
+	if probe.Format != 4 {
 		t.Fatalf("saved format %d", probe.Format)
 	}
 	s2, err := Open(dir)
@@ -99,7 +99,7 @@ func TestMigrateV2EmptyCreatesNoSite(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.View(func(d *Data) {
-		if d.Format != 3 || len(d.Sites) != 0 {
+		if d.Format != 4 || len(d.Sites) != 0 {
 			t.Fatalf("%d %d", d.Format, len(d.Sites))
 		}
 	})
@@ -133,12 +133,12 @@ func TestV3RoundTrip(t *testing.T) {
 		}
 	})
 	if _, err := os.Stat(filepath.Join(dir, "ispbill.json.v2.bak")); err == nil {
-		t.Fatal("a v3 file must not be backed up as v2")
+		t.Fatal("a v4 file must not be backed up as v2")
 	}
 }
 
 func TestUnknownFormatRefused(t *testing.T) {
-	for _, f := range []string{"1", "4", "0"} {
+	for _, f := range []string{"1", "5", "0"} {
 		dir := t.TempDir()
 		p := filepath.Join(dir, "ispbill.json")
 		raw := []byte(`{"format":` + f + `}`)
