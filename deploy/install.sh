@@ -185,7 +185,7 @@ packages() {
   step "system packages (apt)"
   apt_get update -qq
   apt_install curl ca-certificates gnupg git tar xz-utils unzip jq ufw qrencode wireguard-tools \
-    debian-keyring debian-archive-keyring apt-transport-https unattended-upgrades cron
+    debian-keyring debian-archive-keyring apt-transport-https unattended-upgrades cron iputils-ping traceroute
 }
 
 # ---------------------------------------------------------------------------
@@ -382,7 +382,7 @@ users_and_tools() {
   install -d -o root -g $APP -m 750 "$ETC"
   install -d -o root -g root -m 700 "$BACKUPS"
   local t
-  for t in wg-sync backup admin-peer doctor; do install -m 0755 "$ASSETS/$APP-$t" "$SBIN/$APP-$t"; done
+  for t in wg-sync backup admin-peer admin-reset doctor; do install -m 0755 "$ASSETS/$APP-$t" "$SBIN/$APP-$t"; done
   printf '%s\n' "$PROG_VERSION" >"$ETC/VERSION"; chmod 644 "$ETC/VERSION"
 }
 
@@ -512,7 +512,7 @@ WGEOF
 settings() {
   step "settings ($ENVF)"
   if [ "$DRY" = 1 ] && [ ! -f "$ENVF" ]; then
-    printf '    [dry-run] create %s (random ADMIN_PASS, MPESA_CALLBACK_TOKEN; WG_PUBLIC_KEY)\n' "$ENVF"
+    printf '    [dry-run] create %s (random ADMIN_PASS, DATA_KEY; WG_PUBLIC_KEY)\n' "$ENVF"
     return 0
   fi
   if [ ! -f "$ENVF" ]; then
@@ -544,13 +544,19 @@ WG_SUBNET=$WG_SUBNET
 # Metrics: routers send NetFlow to the tunnel address only
 NETFLOW_ADDR=$WG_SERVER_IP:2055
 
-# M-Pesa (Daraja) - fill in when the Paybill is ready; callbacks need DOMAIN (HTTPS)
-MPESA_ENV=sandbox
-MPESA_CONSUMER_KEY=
-MPESA_CONSUMER_SECRET=
-MPESA_SHORTCODE=
-MPESA_PASSKEY=
-MPESA_CALLBACK_TOKEN=$(rand 24)
+# M-Pesa, WhatsApp and email are set in the admin: Settings > M-Pesa, WhatsApp, Email.
+# What you save there wins over the lines below. The lines are a fallback only
+# (leave them commented, or fill them in once and manage the rest in the admin).
+# Daraja callbacks need DOMAIN (HTTPS).
+#MPESA_ENV=sandbox
+#MPESA_CONSUMER_KEY=
+#MPESA_CONSUMER_SECRET=
+#MPESA_SHORTCODE=
+#MPESA_PASSKEY=
+#MPESA_CALLBACK_TOKEN=
+#WA_TOKEN=
+#WA_PHONE_NUMBER_ID=
+#SMTP_HOST=
 EOF
     )
   else
@@ -558,12 +564,11 @@ EOF
     setkv PUBLIC_IP "$PUBIP"
     [ -z "${DOMAIN:-}" ] || setkv PUBLIC_BASE_URL "$BASE"
     [ -z "${ROUTER_PASS:-}" ] || setkv ROUTER_PASS "$ROUTER_PASS"
-    # The app refuses to start with M-Pesa configured and no callback token, so
-    # an older env file without one gets one now (blank, or missing entirely).
-    # Re-register the three Daraja callback URLs with ?t=<token> afterwards.
-    if [ -z "$(envget MPESA_CALLBACK_TOKEN)" ]; then
+    # The app refuses to start with M-Pesa set in this file but no callback
+    # token. (Settings > M-Pesa makes its own token when you save there.)
+    if [ -n "$(envget MPESA_CONSUMER_KEY)" ] && [ -z "$(envget MPESA_CALLBACK_TOKEN)" ]; then
       setkv MPESA_CALLBACK_TOKEN "$(rand 24)"
-      warn "MPESA_CALLBACK_TOKEN was empty and has been generated; if M-Pesa is in use, re-register the callback URLs with ?t=<token> (Admin > Settings shows them)"
+      warn "MPESA_CALLBACK_TOKEN was empty and has been generated; register the C2B URLs again in Admin > Settings > M-Pesa (Register the C2B URLs)"
     fi
     # Added once and then left alone (the key never changes; the rest is yours to edit).
     addkv WG_PUBLIC_KEY "$WG_PUB"
@@ -572,6 +577,10 @@ EOF
     [ -z "${ADMIN_PASS:-}" ] || setkv ADMIN_PASS "$ADMIN_PASS"
     BASE=$(envget PUBLIC_BASE_URL)
   fi
+  # DATA_KEY encrypts the secrets saved in Settings and national IDs. Every
+  # install gets one. Losing it makes both unreadable: it is in the Drive
+  # backup, and must be restored together with the database.
+  addkv DATA_KEY "$(head -c 32 /dev/urandom | base64 -w0)"
   if [ "$DRY" != 1 ]; then chown root:$APP "$ENVF"; chmod 640 "$ENVF"; fi
 }
 
@@ -700,8 +709,6 @@ SQL
       setkv DATABASE_URL "$(printf '%s' "$dburl" | sed -E 's/([?&])pool_max_conns=[0-9]+&?/\1/; s/[?&]$//')" ;;
     esac
   fi
-  # DATA_KEY encrypts national IDs. Losing it makes stored IDs unreadable: it is in the Drive backup.
-  addkv DATA_KEY "$(head -c 32 /dev/urandom | base64 -w0)"
   if [ "$DRY" != 1 ]; then
     dburl=$(envget DATABASE_URL)
     runuser -u $APP -- psql "$dburl" -Atc 'select 1' >/dev/null || die "the app role cannot connect to PostgreSQL (check pg_hba.conf and $ENVF)"
@@ -896,9 +903,11 @@ doctor_and_banner() {
  Fast Tech Net billing is running ($PROG_VERSION)
 
  Portal (public):   $BASE/portal
- Admin login:       admin / $apass
+ Admin login:       admin / $apass   (until you set a password in Admin > Settings)
  Storage:           $backend
- Settings:          $ENVF   (then: systemctl restart $APP)
+ Settings:          Admin > Settings (M-Pesa, WhatsApp, Email; no restart needed)
+                    $ENVF   (restart-only values, then: systemctl restart $APP)
+ Locked out?        sudo $APP-admin-reset
  Logs:              journalctl -u $APP -f
  Health:            ${HEALTH:-}
  WireGuard:         $WG_IF (routers) udp/$WG_PORT, server key $WG_PUB

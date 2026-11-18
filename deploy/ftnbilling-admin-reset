@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Reset the admin password of the Fast Tech Net billing server.
+# Installed as /usr/local/sbin/ftnbilling-admin-reset by deploy/install.sh.
+#
+#   sudo ftnbilling-admin-reset              remove the password saved in Settings,
+#                                            so ADMIN_PASS from the settings file
+#                                            works again
+#   sudo ftnbilling-admin-reset --generate   set a new random password and print
+#                                            it once
+#
+# It loads the settings file, runs the program as the service user, then
+# restarts the service so the change is picked up. With the PostgreSQL database
+# it works while the service runs. With the JSON file database it refuses until
+# the service is stopped (the file is not shared): systemctl stop ftnbilling.
+#
+# Test/override variables (all optional): FTN_ENV_FILE, FTN_BIN, FTN_USER,
+# FTN_NO_RESTART=1 (do not restart the service), FTN_ADMIN_RESET_NOROOT=1.
+set -euo pipefail
+
+APP=ftnbilling
+ENVF=${FTN_ENV_FILE:-/etc/$APP/$APP.env}
+BIN=${FTN_BIN:-/usr/local/bin/$APP}
+RUNAS=${FTN_USER:-$APP}
+
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; }
+
+case "${1:-}" in
+  "") args=() ;;
+  --generate|-g) args=(-generate) ;;
+  -h|--help) usage; exit 0 ;;
+  *) usage >&2; exit 2 ;;
+esac
+[ "$#" -le 1 ] || { usage >&2; exit 2; }
+[ "${FTN_ADMIN_RESET_NOROOT:-0}" = 1 ] || [ "$(id -u)" = 0 ] || die "run as root (sudo $APP-admin-reset)"
+[ -r "$ENVF" ] || die "$ENVF not found or unreadable"
+[ -x "$BIN" ] || die "$BIN not found"
+
+# Export every KEY=VALUE of the settings file (not sourced: values may hold spaces).
+while IFS= read -r line || [ -n "$line" ]; do
+  line=${line%$'\r'}
+  case "$line" in ''|'#'*) continue ;; esac
+  key=${line%%=*}
+  case "$key" in *[!A-Za-z0-9_]*|'') continue ;; esac
+  val=${line#*=}
+  case "$val" in \"*\") val=${val#\"}; val=${val%\"} ;; \'*\') val=${val#\'}; val=${val%\'} ;; esac
+  export "$key=$val"
+done <"$ENVF"
+
+if [ "$(id -un)" = "$RUNAS" ]; then
+  "$BIN" admin-reset-password "${args[@]}"
+else
+  runuser -u "$RUNAS" -- "$BIN" admin-reset-password "${args[@]}"
+fi
+
+if [ "${FTN_NO_RESTART:-0}" != 1 ] && command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "$APP" 2>/dev/null; then
+  systemctl restart "$APP" && echo "the service was restarted"
+fi

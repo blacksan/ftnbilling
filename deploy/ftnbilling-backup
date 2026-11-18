@@ -147,18 +147,6 @@ write_state() { # status snapshot bytes sha256 error
   mv -f "$STATE.tmp" "$STATE"
 }
 
-notify_failure() {
-  local tok chat msg
-  tok=$(envval TELEGRAM_BOT_TOKEN); chat=$(envval TELEGRAM_CHAT_ID)
-  [ -n "$tok" ] && [ -n "$chat" ] || return 0
-  command -v curl >/dev/null || return 0
-  msg="Backup FAILED on $HOST: $1"
-  # The token goes in through stdin so it never shows up in the process list.
-  printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$tok" |
-    curl -fsS -m 20 -K - --data-urlencode "chat_id=$chat" --data-urlencode "text=$msg" \
-      >/dev/null 2>&1 || warn "could not send the Telegram message"
-}
-
 rclone_ver_ok() { # rclone present and >= 1.60
   command -v rclone >/dev/null || return 1
   local v
@@ -313,10 +301,9 @@ job_exit() {
   if [ "$rc" -ne 0 ] && [ -n "$JOB" ]; then
     ERRMSG=${ERRMSG:-"exit status $rc"}
     case "$JOB" in
-      run) write_state failed "${SNAP:-}" 0 "" "$ERRMSG" || true; notify_failure "$ERRMSG";;
-      dump) status_set "error=$ERRMSG" || true; notify_failure "database dump: $ERRMSG";;
-      drill) status_set "drill_at=$(date -u +%FT%TZ)" drill_ok=false "drill_msg=$ERRMSG" || true
-             notify_failure "restore drill: $ERRMSG";;
+      run) write_state failed "${SNAP:-}" 0 "" "$ERRMSG" || true;;
+      dump) status_set "error=$ERRMSG" || true;;
+      drill) status_set "drill_at=$(date -u +%FT%TZ)" drill_ok=false "drill_msg=$ERRMSG" || true;;
     esac
   fi
 }

@@ -73,8 +73,8 @@ Options (environment variables): `DOMAIN`, `GH_TOKEN`, `VERSION` (a release tag;
 
 | Part | Detail |
 |---|---|
-| Packages (apt) | `curl ca-certificates gnupg git tar xz-utils unzip jq ufw qrencode wireguard-tools unattended-upgrades cron`, plus `chrony` if no time sync is running |
-| PostgreSQL | The distro's `postgresql` and `postgresql-client`. No TCP listener (`listen_addresses=''`), tuned for 1 vCPU / 2 GB in `conf.d/90-ftnbilling.conf`, `scram-sha-256` for role `ftnbilling` over the socket, database `ftnbilling`, `REVOKE CONNECT ... FROM PUBLIC`, `OOMScoreAdjust=-500` so Postgres outlives the app under memory pressure. The password and `DATA_KEY` (encrypts national IDs) are generated once into the settings file. `NO_POSTGRES=1` skips all of it |
+| Packages (apt) | `curl ca-certificates gnupg git tar xz-utils unzip jq ufw qrencode wireguard-tools unattended-upgrades cron iputils-ping traceroute`, plus `chrony` if no time sync is running |
+| PostgreSQL | The distro's `postgresql` and `postgresql-client`. No TCP listener (`listen_addresses=''`), tuned for 1 vCPU / 2 GB in `conf.d/90-ftnbilling.conf`, `scram-sha-256` for role `ftnbilling` over the socket, database `ftnbilling`, `REVOKE CONNECT ... FROM PUBLIC`, `OOMScoreAdjust=-500` so Postgres outlives the app under memory pressure. The database password is generated once into the settings file. `NO_POSTGRES=1` skips all of it |
 | Caddy | From the official Caddy apt repository; automatic HTTPS for `DOMAIN` |
 | rclone | For the Google Drive backup (distro package if 1.60 or newer, otherwise the official installer) |
 | The app | `/usr/local/bin/ftnbilling`, systemd service `ftnbilling` (`GOMEMLIMIT=600MiB GOGC=50`, `MemoryMax=900M`, runs after PostgreSQL and both WireGuard interfaces), data in `/var/lib/ftnbilling`, settings in `/etc/ftnbilling/ftnbilling.env` |
@@ -84,7 +84,9 @@ Options (environment variables): `DOMAIN`, `GH_TOKEN`, `VERSION` (a release tag;
 | Swap and logs | A 1 GB `/swapfile` (`vm.swappiness=10`) when RAM is 2 GB or less and there is no swap; journald `SystemMaxUse=500M` |
 | Updates | `unattended-upgrades`, security updates only, never reboots by itself |
 | Backups | `ftnbilling-dump.timer` every 6 hours (database dump, daily file tar), `ftnbilling-drill.timer` monthly restore drill, `ftnbilling-backup.timer` weekly Google Drive upload once you run `sudo ftnbilling-backup setup`. See [BACKUP.md](BACKUP.md). The old daily cron job is removed |
-| Tools | `/usr/local/sbin/`: `ftnbilling-admin-peer`, `ftnbilling-doctor`, `ftnbilling-backup`, `ftnbilling-wg-sync` |
+| Tools | `/usr/local/sbin/`: `ftnbilling-admin-peer`, `ftnbilling-admin-reset`, `ftnbilling-doctor`, `ftnbilling-backup`, `ftnbilling-wg-sync` |
+
+`DATA_KEY` (encrypts national IDs and the secrets saved in Settings) is generated once into the settings file on every install, with or without PostgreSQL. The `MPESA_*`, `WA_*` and `SMTP_*` lines are written commented out: set these up in Admin > Settings instead.
 
 On a first install the installer also creates the first admin device, `owner`.
 
@@ -121,7 +123,7 @@ It checks every program the installer put in, every service, timer and port, Pos
 
 1. Run the installer on the new VPS (section above).
 2. Connect Drive with your **saved** passphrases and download the newest snapshot: `sudo ftnbilling-backup setup`, then `sudo ftnbilling-backup restore latest` (details in [BACKUP.md](BACKUP.md)).
-3. Follow the numbered steps it prints: stop the app, copy the data and settings back (`DATA_KEY` is in the settings), restore both WireGuard files so routers and your admin devices keep working, restore the database with `pg_restore --clean --if-exists --no-owner`, start the app.
+3. Follow the numbered steps it prints: stop the app, copy the data and settings back (`DATA_KEY` is in the settings and must come back with the database: it decrypts the national IDs and the secrets saved in Settings), restore both WireGuard files so routers and your admin devices keep working, restore the database with `pg_restore --clean --if-exists --no-owner`, start the app.
 4. Point the domain at the new server and run `sudo ftnbilling-doctor`.
 
 To restore from a local dump on the same server instead: `sudo systemctl stop ftnbilling`, then `sudo cat /var/backups/ftnbilling/db/<file>.dump | sudo -u postgres pg_restore --clean --if-exists --no-owner --role=ftnbilling -d ftnbilling`, then `sudo systemctl start ftnbilling`.
@@ -158,27 +160,17 @@ A building that is "paused" in the admin gets no collection and no router change
 | Portal says "open this page from the WiFi login" | The router's host table must list the phone: `/ip/hotspot/host/print`. |
 | No traffic charts | Check `/ip/traffic-flow/target/print` (should be `10.99.0.1:2055`). The admin Settings page counts NetFlow packets from unknown sources. |
 
-## 4. Alerts, Telegram, email and WhatsApp
+## 4. Alerts, email and WhatsApp
 
-The server monitors every building from the moment it starts (Admin, Fleet overview). To be told when something breaks, add the settings of the channels you want to the environment file the installer wrote (`/etc/ftnbilling/ftnbilling.env`) and restart: `systemctl restart ftnbilling`. Each channel is optional.
+The server monitors every building from the moment it starts (Admin, Fleet overview). To be told when something breaks, set up the channels you want in the admin: **Settings > Email** and **Settings > WhatsApp**. Each channel is optional, and what you save applies at once (no restart). The environment file (`/etc/ftnbilling/ftnbilling.env`) can still hold `SMTP_*`, `ALERT_EMAIL_TO`, `WA_TOKEN`, `WA_PHONE_NUMBER_ID`, `WA_ADMIN_NUMBERS` and the `MPESA_*` values as a fallback; a value saved in the admin wins over it.
 
-```
-SMTP_HOST=smtp.example.com
-SMTP_PORT=587
-SMTP_USER=alerts@example.com
-SMTP_PASS=...
-SMTP_FROM=Fast Tech Net <alerts@example.com>
-ALERT_EMAIL_TO=you@example.com
-TELEGRAM_BOT_TOKEN=123456:ABC...
-TELEGRAM_CHAT_ID=-1001234567890
-WA_TOKEN=...
-WA_PHONE_NUMBER_ID=...
-WA_ADMIN_NUMBERS=254712345678
-```
+Secrets saved in the admin are encrypted with `DATA_KEY` from the environment file. The installer generates it on every install. Restore it together with the database, or the saved secrets cannot be read.
 
-Then open Admin, Alerts, and press **Send test** next to each channel. The thresholds, hold times, cooldown, repeat and mute are edited on that page (defaults and meaning: see "Monitoring, alerts and WhatsApp" in the main README). `/var/lib/ftnbilling` keeps the state in `fleet.json`, `alerts.json` and `outbox.json`; the daily backup includes them.
+Then press **Send test** on each settings page, and on the Alerts page. The thresholds, hold times, cooldown, repeat and mute are edited on the Alerts page (defaults and meaning: see "Monitoring, alerts and WhatsApp" in the main README). `/var/lib/ftnbilling` keeps the state in `fleet.json`, `alerts.json` and `outbox.json`; the daily backup includes them. A failed or stale backup also raises a "Backup problem" alert.
 
-If a provider rejects the credentials (an expired WhatsApp token, a changed SMTP password) the channel pauses, messages stay queued, and the Messages page shows a banner. Fix the setting, restart, and press the resume button.
+If a provider rejects the credentials (an expired WhatsApp token, a changed SMTP password) the channel pauses, messages stay queued, and the Messages page shows a banner. Fix the setting and press the resume button.
+
+Locked out of the admin: `sudo ftnbilling-admin-reset` (or `--generate`). `sudo ftnbilling-doctor` reports whether the password is in the database or the environment file, and which settings sections are saved in the admin.
 
 ### WhatsApp: Meta Business Manager checklist
 
@@ -186,12 +178,12 @@ If a provider rejects the credentials (an expired WhatsApp token, a changed SMTP
 
 1. A Meta Business portfolio and a WhatsApp Business Account (WABA).
 2. A dedicated phone number registered to the Cloud API. It cannot also be in use in the WhatsApp app or WhatsApp Business app.
-3. A System User with a permanent token that has the `whatsapp_business_messaging` and `whatsapp_business_management` permissions. Put the token in `WA_TOKEN`, and the phone number's ID (not the number) in `WA_PHONE_NUMBER_ID`.
+3. A System User with a permanent token that has the `whatsapp_business_messaging` and `whatsapp_business_management` permissions. Put the token in Settings > WhatsApp, and the phone number's ID (not the number) in the phone number ID field.
 4. A payment method on the WABA.
 5. The tenants' consent to receive messages. Collect it when you take the flat's details, and keep a record.
 6. Create the six templates below, category **Utility**, language **English (`en`)**, and wait for approval. The wording and the number of parameters must match exactly, or Meta refuses the message (error 132000 or 132001, shown on the Messages page as failed).
 7. The five tenant templates carry the footer **Reply STOP to opt out**.
-8. Put your own number(s) in `WA_ADMIN_NUMBERS` and press **Send test** next to WhatsApp on the Alerts page: it sends `ftn_admin_alert`.
+8. Put your own number(s) in the admin numbers field of Settings > WhatsApp, save, and press **Send test** there.
 
 Templates to create (`{{1}}` and so on are the parameters; the wording and the number of parameters must match exactly):
 

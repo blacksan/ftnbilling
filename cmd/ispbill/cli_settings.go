@@ -1,26 +1,27 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
-	"strings"
+	"net"
+	"net/http"
+	"time"
 
 	"ispbill/internal/config"
 	"ispbill/internal/settings"
+	"ispbill/internal/store"
 )
 
-// runSettingsCommand runs admin-reset-password and settings-check. Both open
-// the database directly, so the service must be stopped first (Postgres
-// allows one writer; the JSON file has no lock at all).
-func runSettingsCommand(cmd string, args []string, getenv func(string) string, stdin io.Reader, out io.Writer) error {
+// runSettingsCommand runs admin-reset-password and settings-check. With
+// Postgres they work while the service runs (they touch settings rows only).
+// The JSON file has no lock, so there they refuse while the service answers.
+func runSettingsCommand(cmd string, args []string, getenv func(string) string, out io.Writer) error {
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fromStdin := fs.Bool("password-stdin", false, "read the new password from standard input (admin-reset-password)")
+	generate := fs.Bool("generate", false, "set a random password and print it once (admin-reset-password)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("%s: %w\n\n%s", cmd, err, usage)
 	}
@@ -30,9 +31,17 @@ func runSettingsCommand(cmd string, args []string, getenv func(string) string, s
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	st, err := openStore(ctx, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	var st *store.Store
+	if cfg.DatabaseURL != "" {
+		st, err = openPostgresShared(ctx, cfg)
+	} else {
+		if serviceAnswers(cfg.ListenAddr) {
+			return errors.New("the service is running and the JSON database is not shared: stop it first (systemctl stop ftnbilling), then run this again")
+		}
+		st, err = store.Open(cfg.DataDir)
+	}
 	if err != nil {
-		return fmt.Errorf("%w (is the service still running? stop it first: systemctl stop ftnbilling)", err)
+		return err
 	}
 	defer st.Close()
 	m, err := settings.New(st, cfg.DataKey, cfg, getenv)
@@ -42,27 +51,21 @@ func runSettingsCommand(cmd string, args []string, getenv func(string) string, s
 
 	switch cmd {
 	case "admin-reset-password":
-		pw := ""
-		if *fromStdin {
-			line, err := bufio.NewReader(stdin).ReadString('\n')
-			if err != nil && line == "" {
-				return errors.New("no password on standard input")
-			}
-			pw = strings.TrimRight(line, "\r\n")
-			if err := settings.CheckNewPassword(pw, cfg.AdminUser); err != nil {
+		if !*generate {
+			if err := m.ClearAdminPassword("cli"); err != nil {
 				return err
 			}
-		} else if pw, err = settings.RandomPassword(); err != nil {
+			fmt.Fprintln(out, "the stored admin password was removed: ADMIN_PASS from the environment file works again")
+			return nil
+		}
+		pw, err := settings.RandomPassword()
+		if err != nil {
 			return err
 		}
 		if err := m.SetAdminPassword(pw, "cli"); err != nil {
 			return err
 		}
-		if *fromStdin {
-			fmt.Fprintln(out, "the admin password was changed; start the service again")
-		} else {
-			fmt.Fprintf(out, "the admin password was reset. Log in as %q with:\n\n  %s\n\nChange it in Settings after logging in, then start the service again.\n", cfg.AdminUser, pw)
-		}
+		fmt.Fprintf(out, "the admin password was reset. Log in as %q with:\n\n  %s\n\nChange it in Settings after logging in.\n", cfg.AdminUser, pw)
 		return nil
 
 	case "settings-check":
@@ -88,6 +91,24 @@ func runSettingsCommand(cmd string, args []string, getenv func(string) string, s
 		return nil
 	}
 	return fmt.Errorf("unknown command %q", cmd)
+}
+
+// serviceAnswers reports whether something answers /healthz on the listen address.
+func serviceAnswers(listen string) bool {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return false
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	c := http.Client{Timeout: 2 * time.Second}
+	resp, err := c.Get("http://" + net.JoinHostPort(host, port) + "/healthz")
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return true
 }
 
 func yesNo(b bool, yes, no string) string {

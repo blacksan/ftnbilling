@@ -149,18 +149,20 @@ All of these are edited on the Alerts page. Defaults:
 
 An alert is *pending* until its condition has held for the whole time, then *firing* (you get the message), then *resolved*. The recovery message is sent only if the problem message was. The same alert is announced at most once per **cooldown** (60 minutes), and optionally repeated every 6 hours while it stays firing. While a building is offline its other alerts are paused. If more than half of the buildings (and at least 3) go offline within 2 minutes you get one message listing them, and one when they are all back. **Mute** silences a building for planned work. Messages go to every channel that is switched on and set up.
 
-The secrets and addresses are environment settings, not part of the admin page:
+The server also raises one server-wide alert, **Backup problem**, when `backup-status.json` shows a dump older than 36 hours, a backup error, a failed restore drill or a failed Drive upload (see [deploy/BACKUP.md](deploy/BACKUP.md)). It is not an editable rule.
+
+The email and WhatsApp settings are edited in the admin under **Settings** (see "Settings pages" below). The environment variables are a fallback that applies until you save a value there:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | port `587` | email: STARTTLS on 587, TLS from the first byte on 465. The password is only sent over TLS (or to localhost) |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `SMTP_IMPLICIT` | port `587` | email: STARTTLS on 587, TLS from the first byte on 465 (or when `SMTP_IMPLICIT` is true). The password is only sent over TLS (or to localhost) |
 | `ALERT_EMAIL_TO` | | comma separated recipients |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | | create a bot with @BotFather, add it to the chat |
 | `WA_TOKEN`, `WA_PHONE_NUMBER_ID` | | WhatsApp Cloud API |
 | `WA_ADMIN_NUMBERS` | | numbers that get admin alerts, like `254712345678`, comma separated |
 | `WA_API_VERSION`, `WA_LANG` | `v23.0`, `en` | Graph API version; template language |
 | `WA_DAILY_LIMIT` | `240` | tenant WhatsApp messages per day (admin alerts are exempt) |
 | `WA_MIN_CONFIRM_KES` | `250` | smallest payment that gets a confirmation |
+| `WA_QUIET_FROM`, `WA_QUIET_TO` | `21`, `7` | hours (EAT) between which tenant reminders wait |
 | `WA_APP_SECRET`, `WA_VERIFY_TOKEN` | | switch the inbound webhook on (see below) |
 
 ### Messages to tenants (WhatsApp)
@@ -179,12 +181,12 @@ Each message is created once per event (an expiry, a payment, an outage), howeve
 
 1. A Meta Business portfolio and a WhatsApp Business Account (WABA).
 2. A dedicated phone number registered to the Cloud API. It cannot also be in use in the WhatsApp app or WhatsApp Business app.
-3. A System User with a permanent token that has the `whatsapp_business_messaging` and `whatsapp_business_management` permissions. Put the token in `WA_TOKEN`, and the phone number's ID (not the number) in `WA_PHONE_NUMBER_ID`.
+3. A System User with a permanent token that has the `whatsapp_business_messaging` and `whatsapp_business_management` permissions. Put the token in Settings > WhatsApp (access token), and the phone number's ID (not the number) in the phone number ID field.
 4. A payment method on the WABA.
 5. The tenants' consent to receive messages. Collect it when you take the flat's details, and keep a record.
 6. Create the six templates below, category **Utility**, language **English (`en`)**, and wait for approval. The wording and the number of parameters must match exactly, or Meta refuses the message (error 132000 or 132001, shown on the Messages page as failed).
 7. The five tenant templates carry the footer **Reply STOP to opt out**.
-8. Put your own number(s) in `WA_ADMIN_NUMBERS` and press **Send test** next to WhatsApp on the Alerts page: it sends `ftn_admin_alert`.
+8. Put your own number(s) in the admin numbers field of Settings > WhatsApp, save, and press **Send test** there (it sends one of the `ftn_` templates with sample values to one of your numbers). The Alerts page has its own Send test button too.
 
 Message templates (create these exactly; `{{1}}` and so on are the parameters):
 
@@ -201,7 +203,53 @@ A tenant only gets messages if the account has a WhatsApp number (Accounts, the 
 
 ### Inbound WhatsApp replies (optional)
 
-If `WA_APP_SECRET` (the app secret of your Meta app) and `WA_VERIFY_TOKEN` (any string you choose) are both set, the server answers `GET/POST /wa/webhook`. In the Meta app's WhatsApp configuration set the callback URL to `PUBLIC_BASE_URL/wa/webhook`, the verify token to the same string, and subscribe to the `messages` field. Every POST must carry a valid `X-Hub-Signature-256`; others are refused. Delivery statuses (sent, delivered, read, failed) are shown on the Messages page. A tenant whose number is on an account can send `BALANCE` or `STATUS` (plan, expiry, account code and how to pay), `STOP` (opt out) or `START` (opt back in); anything else gets a short help text. A number that is on no account gets only the support phone. At most 5 replies per sender per minute.
+When the app secret (of your Meta app) and the verify token (any string you choose) are both saved in Settings > WhatsApp, the server answers `GET/POST /wa/webhook`. It starts and stops with those two values, no restart. Until both are set the address answers 404.
+
+1. In the Meta app, open WhatsApp > Configuration > Webhook.
+2. Callback URL: the one shown on Settings > WhatsApp (`PUBLIC_BASE_URL/wa/webhook`). Verify token: the same string you saved. Press Verify and save; the settings page then shows when Meta verified it.
+3. Subscribe to the `messages` field.
+4. The page shows "last signed event" once Meta has sent something.
+
+Every POST must carry a valid `X-Hub-Signature-256`; others are refused. Delivery statuses (sent, delivered, read, failed) are shown on the Messages page. A tenant whose number is on an account can send `BALANCE` or `STATUS` (plan, expiry, account code and how to pay), `STOP` (opt out) or `START` (opt back in); anything else gets a short help text. A number that is on no account gets only the support phone. At most 5 replies per sender per minute.
+
+## Settings pages
+
+Admin, System, **Settings** has these pages. Everything saved there applies at once; no restart.
+
+| Page | What it holds |
+|---|---|
+| General and password | read-only facts (policy, database, backups, listen address), the admin password, and where each setting comes from |
+| WhatsApp | access token, phone number ID, admin numbers, template language, daily limit, webhook secrets, outage notice mode, a test button |
+| M-Pesa | environment, consumer key and secret, shortcode, passkey, public URL, callback token, what to do with an unknown account number, test buttons |
+| Email | SMTP server, user, password, From, recipients, a test button |
+| Equipment tools | ONT list import and a MAC address finder (asks every connected building's router) |
+| Router tools | ping, traceroute and a restricted console, per building |
+
+**Precedence.** A value saved in the admin wins over the environment file, which wins over the built-in default. Each field shows where its value comes from, and "go back to the environment file value" removes the saved one. Saving a form stores only the values you changed, so a value from the environment file stays there until you really change it. Restart-only values (listen address, WireGuard, `DATABASE_URL`, `DATA_KEY`) stay in `/etc/ftnbilling/ftnbilling.env`.
+
+**Secrets.** Tokens, keys and passwords are encrypted in the database with a key derived from `DATA_KEY`, are never shown again (only the last four characters), and are never written to the audit log (which lists key names only). Setting, replacing or reverting a secret, rotating the callback token and showing the callback URLs need the current admin password. Without `DATA_KEY` the plain settings still save and secret fields are refused. **`DATA_KEY` must be restored together with the database**: a database restored without it keeps its saved secrets, but they cannot be read, and the pages show a banner until you enter them again. The installer generates `DATA_KEY` on every install and the Drive backup keeps it.
+
+**Admin password.** Until you set one in Settings, `ADMIN_PASS` from the environment file is the password. Once one is saved (12 or more characters, hashed with pbkdf2-sha256), the environment value stops working. Logging in is rate limited: 5 failures per 15 minutes per address and 30 overall, then HTTP 429 with `Retry-After`. If you are locked out or forgot it:
+
+```
+sudo ftnbilling-admin-reset              # removes the saved password: ADMIN_PASS works again
+sudo ftnbilling-admin-reset --generate   # sets a random password and prints it once
+```
+
+With PostgreSQL this works while the service runs (it then restarts the service). With the JSON file database, stop the service first.
+
+**Router console.** One RouterOS command through `/rest/execute`, 500 characters at most, one line. Read-only commands (`print`, `get`, `find`, `export`, `monitor`, `ping`, `traceroute`) run at once; commands that change something (`add`, `set`, `remove`, `enable`, `disable`, `reboot` and so on) need the building's exact name and the current admin password. These are never run: `/user`, `/password`, `/system script`, `/system scheduler`, `/system backup`, `/system package`, `/system reset-configuration`, `/ip service`, `/certificate`, `/tool fetch`, `/import`, file removal or editing, `show-sensitive`, and `:execute`. Abbreviated words are understood, so `/us pr` is refused too. Private keys, passwords and secrets in the output are replaced by `[hidden]`. Every attempt is written to the audit log with secrets masked. At most 20 runs a minute and 2 at once, and a run is cut off after 25 seconds.
+
+**Daraja go-live checklist.**
+
+1. Sandbox first: Settings > M-Pesa, environment `sandbox`, the sandbox key and secret, shortcode `174379`, the passkey from the Daraja simulator, and the public https address. Press **Test key and secret**.
+2. Press **Register the C2B URLs** and **Send KES 1 prompt** (enter your own number). The prompt uses the reserved account reference `FTNTEST`; the confirmation is recorded in Unmatched with the note "settings test" and never credits a flat. The sandbox C2B shortcode differs from 174379: put it in the C2B shortcode field.
+3. For production: switch the environment to `production` and enter the live key, secret, Paybill, passkey. **The KES 1 test is real money in production.**
+4. Register the C2B URLs. Daraja refuses a second registration ("URLs are already registered") until the old ones are deleted in the Daraja portal or by Safaricom support. So **do not replace the callback token on a live Paybill without that**; after replacing it, register again.
+5. Callback URLs must be https and must not contain "mpesa", "safaricom", "exe", "exec", "cmd", "sql" or "query" (the token is random hex, so this holds). The app registers the form `PUBLIC_BASE_URL/pay/cb/t/<token>/c2b/confirm` (and `validate`); the STK result URL travels with each push. The older `?t=<token>` form also works.
+6. External validation is off by default on a Paybill: Safaricom enables it on request. Without it, an account number that matches no flat cannot be bounced at validation; it lands in Unmatched. With it, "Payment with an unknown account number" decides: `reject` (default) or `accept`.
+7. The payer's phone number may arrive hashed in a C2B confirmation; the pages show whatever arrives.
+8. Customers type the account number by hand: spaces, dashes and lower case are ignored (`abc-234` finds ABC234).
 
 ## Configuration (environment variables)
 
@@ -215,18 +263,19 @@ If `WA_APP_SECRET` (the app secret of your Meta app) and `WA_VERIFY_TOKEN` (any 
 | `ROUTER_USER` / `ROUTER_PASS` | `ispbill` / | legacy single-router mode only (the "Main building"); not needed on a server that only uses join commands |
 | `ROUTER_MOCK` | `false` | fake router |
 | `HOTSPOT_SERVER` | `hotspot1` | |
-| `ADMIN_USER` / `ADMIN_PASS` | `admin` / required | app refuses to start if PASS is empty or `admin` |
+| `ADMIN_USER` / `ADMIN_PASS` | `admin` / required until a password is saved in Settings | app refuses to start if there is no saved password and PASS is empty or `admin` |
 | `SUPPORT_PHONE` | | shown on the portal, including on the "not registered" page |
 | `PUBLIC_BASE_URL` | | needed for M-Pesa callbacks |
-| `MPESA_ENV` | `sandbox` | or `production` |
+| `MPESA_ENV` | `sandbox` | or `production`. The M-Pesa, WhatsApp and email variables are a fallback: Settings wins once you save there |
 | `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORTCODE`, `MPESA_PASSKEY` | | all four (with `PUBLIC_BASE_URL`) switch M-Pesa on |
-| `MPESA_CALLBACK_TOKEN` | | required once the M-Pesa key, secret and shortcode are set (the app refuses to start without it): callbacks must carry `?t=<token>`. The installer generates one |
+| `MPESA_CALLBACK_TOKEN` | | required once the M-Pesa key, secret and shortcode are set (the app refuses to start without it): callbacks must carry the token (`?t=<token>` or `/pay/cb/t/<token>/...`). Settings > M-Pesa makes one when you save there |
 | `REMINDER_DAYS` | `3` | days before expiry for the reminder event (0 = off) |
 | `REMINDER_ON_EXPIRY` | `true` | log an event when an account expires |
 | `WAN_INTERFACE` / `OLT_INTERFACE` | `ether1` / `sfp-sfpplus1` | for the ports charts; these layout settings (with the two capacity values, `FUP_TB`, `CUSTOMER_SUBNET`) apply to the legacy building only. Join-command buildings have them on their own page |
 | `WAN_CAPACITY_MBPS` / `OLT_CAPACITY_MBPS` | `500` / `10000` | |
 | `FUP_TB` | `15` | monthly fair-use figure used for the projection |
-| `SMTP_*`, `ALERT_EMAIL_TO`, `TELEGRAM_*`, `WA_*` | | alerts and tenant messages, see "Monitoring, alerts and WhatsApp" above |
+| `SMTP_*`, `ALERT_EMAIL_TO`, `WA_*` | | alerts and tenant messages, see "Monitoring, alerts and WhatsApp" above |
+| `DATA_KEY` | | base64 of 32 random bytes (`openssl rand -base64 32`). Encrypts national IDs and the secrets saved in Settings. The installer makes one; back it up with the database |
 | `NETFLOW_ADDR` | `:2055` | UDP listen address for NetFlow v5; one socket for all buildings, told apart by tunnel source address |
 | `CUSTOMER_SUBNET` | `10.5.50.0/24` | flows from here are attributed to flats |
 | `QOE_PING_TARGETS` | `8.8.8.8,1.1.1.1` | comma separated |
@@ -282,14 +331,14 @@ Admin -> Vouchers -> pick package and count (up to 500) -> "Generate and print".
 
 1. Get a Paybill/Till, then create a Daraja app at developer.safaricom.co.ke. Use the **sandbox** first (`MPESA_ENV=sandbox`, test shortcode 174379 and the passkey shown in the Daraja simulator).
 2. Make the container reachable from the internet over **HTTPS** at `PUBLIC_BASE_URL` (a public IP plus a TLS reverse proxy, or a tunnel such as Cloudflare Tunnel). The app itself speaks plain HTTP. Expose only `/pay/cb/*`, not `/admin`.
-3. Add to the env list: `MPESA_ENV`, `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORTCODE`, `MPESA_PASSKEY`, `PUBLIC_BASE_URL` and `MPESA_CALLBACK_TOKEN` (required). Restart the container. `/healthz` then shows `mpesa_enabled:true` and the portal shows "Pay with M-Pesa". Set `TEST_MODE=false`.
+3. Open Settings > M-Pesa and save the environment, consumer key and secret, shortcode, passkey and public URL (or put them in the environment file, `MPESA_*`, as a fallback). `/healthz` then shows `mpesa_enabled:true` and the portal shows "Pay with M-Pesa". Set `TEST_MODE=false`.
 4. Callback paths. Daraja rejects URLs containing "mpesa" or "safaricom", so the app uses:
    - STK Push result: `PUBLIC_BASE_URL/pay/cb/stk` (sent automatically with each push)
    - C2B validation: `PUBLIC_BASE_URL/pay/cb/c2b/validate`
    - C2B confirmation: `PUBLIC_BASE_URL/pay/cb/c2b/confirm`
 
-   Append `?t=<token>` (your `MPESA_CALLBACK_TOKEN`) to all three.
-5. Register the C2B URLs once (Daraja "C2B Register URL" API, `ResponseType` Completed or Cancelled as you prefer) pointing at the two C2B paths above.
+   Each carries the callback token, in the path (`/pay/cb/t/<token>/...`) or as `?t=<token>`. Settings > M-Pesa shows the URLs and reveals the real token after you give the admin password.
+5. Press **Register the C2B URLs** on Settings > M-Pesa (it calls Daraja's C2B Register URL with `ResponseType` Completed). See the go-live checklist under "Settings pages" for what Daraja refuses.
 6. Customers can then also pay the Paybill directly with the flat's account code as the account number. The app extends that account by the package whose price equals the amount. Anything it cannot match lands in Admin -> Unmatched. Keep prices unique.
 
 STK Push uses the account code as AccountReference; Daraja usually also sends a C2B confirmation for it, and the app de-duplicates by receipt number. Until the credentials are set the Daraja code stays disabled; use Admin -> Record M-Pesa for payments you see on the statement.

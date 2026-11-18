@@ -69,6 +69,9 @@ section "Programs"
 for c in curl tar ufw wg wg-quick qrencode caddy psql pg_dump pg_restore rclone; do
   if have "$c"; then pass "program: $c" "$(command -v "$c")"; else fail "program: $c" "not installed (re-run the installer)"; fi
 done
+for c in ping traceroute; do
+  if have "$c"; then pass "program: $c" "$(command -v "$c")"; else warn "program: $c" "not installed: the Tools page cannot ping or trace (apt install iputils-ping traceroute)"; fi
+done
 if have rclone; then
   rv=$(rclone version 2>/dev/null | awk 'NR==1{sub(/^rclone v/,""); print $1}')
   if [ -n "$rv" ] && [ "$(printf '%s\n1.60\n' "$rv" | sort -V | head -1)" = "1.60" ]; then
@@ -78,7 +81,7 @@ if have rclone; then
   fi
 fi
 if [ -x "$BIN" ]; then pass "app binary" "$BIN"; else fail "app binary" "$BIN missing or not executable"; fi
-for s in ftnbilling-wg-sync ftnbilling-backup ftnbilling-admin-peer ftnbilling-doctor; do
+for s in ftnbilling-wg-sync ftnbilling-backup ftnbilling-admin-peer ftnbilling-admin-reset ftnbilling-doctor; do
   if [ -x "/usr/local/sbin/$s" ]; then pass "tool: $s" ""; else fail "tool: $s" "/usr/local/sbin/$s missing"; fi
 done
 [ -r "$(dirname "$ENVF")/VERSION" ] && pass "installed version" "$(head -1 "$(dirname "$ENVF")/VERSION")"
@@ -162,9 +165,42 @@ if [ -n "$DBURL" ]; then
   else
     warn "postgres OOM protection" "OOMScoreAdjust drop-in missing (re-run the installer)"
   fi
-  [ -n "$(envval DATA_KEY)" ] && pass "DATA_KEY set" "" || warn "DATA_KEY set" "empty: the national-ID feature is off"
+  [ -n "$(envval DATA_KEY)" ] && pass "DATA_KEY set" "keep it with the database backup" || warn "DATA_KEY set" "empty: secrets cannot be saved in Settings and the national-ID feature is off (re-run the installer)"
 else
   warn "database" "no DATABASE_URL, skipped"
+fi
+
+# ------------------------------------------------------------------ settings
+section "Settings saved in the admin"
+if [ -n "$DBURL" ] && [ -x "$BIN" ] && [ -r "$ENVF" ]; then
+  # Run the app's own check with the settings file's values, as the service user.
+  sc=$(
+    while IFS= read -r line || [ -n "$line" ]; do
+      line=${line%$'\r'}
+      case "$line" in ''|'#'*) continue ;; esac
+      k=${line%%=*}; case "$k" in *[!A-Za-z0-9_]*|'') continue ;; esac
+      v=${line#*=}; case "$v" in \"*\") v=${v#\"}; v=${v%\"};; \'*\') v=${v#\'}; v=${v%\'};; esac
+      export "$k=$v"
+    done <"$ENVF"
+    if [ "$(id -u)" = 0 ] && id -u $APP >/dev/null 2>&1 && have runuser; then runuser -u $APP -- "$BIN" settings-check 2>&1; else "$BIN" settings-check 2>&1; fi
+  ); rc=$?
+  if printf '%s' "$sc" | grep -q '^admin password:'; then
+    pass "admin password" "$(printf '%s\n' "$sc" | sed -n 's/^admin password: //p' | head -1)"
+    for sec in whatsapp mpesa email; do
+      nd=$(printf '%s\n' "$sc" | awk -v s="[$sec]" '$0==s{f=1;next} /^\[/{f=0} f && $2=="database"' | wc -l)
+      ne=$(printf '%s\n' "$sc" | awk -v s="[$sec]" '$0==s{f=1;next} /^\[/{f=0} f && $2=="env"' | wc -l)
+      pass "settings: $sec" "$nd saved in the admin, $ne from the settings file"
+    done
+    if [ "$rc" != 0 ]; then fail "saved settings readable" "$(printf '%s\n' "$sc" | sed -n '/ignored/,$p' | tail -n +2 | head -3 | tr -s ' \n' ' ')"; fi
+    if [ -z "$(envval DATA_KEY)" ] && printf '%s\n' "$sc" | grep -q 'database (secret, set)'; then
+      warn "DATA_KEY missing" "saved secrets exist but DATA_KEY is empty: they cannot be read"
+    fi
+  else
+    warn "settings check" "$(printf '%s' "$sc" | head -1)"
+  fi
+  [ "$QUIET" = 1 ] || echo "      Locked out of the admin?  sudo $APP-admin-reset   (or --generate for a new random password)"
+else
+  warn "settings check" "needs the PostgreSQL database and the app binary; skipped"
 fi
 
 # ------------------------------------------------------------------ app

@@ -16,11 +16,11 @@ func cliEnv(dir string) func(string) string {
 	return func(k string) string { return m[k] }
 }
 
-func TestAdminResetPassword(t *testing.T) {
+func TestAdminResetGenerate(t *testing.T) {
 	dir := t.TempDir()
 	env := cliEnv(dir)
 	var out bytes.Buffer
-	handled, err := runCLI([]string{"admin-reset-password"}, env, &out)
+	handled, err := runCLI([]string{"admin-reset-password", "-generate"}, env, &out)
 	if !handled || err != nil {
 		t.Fatalf("handled=%v err=%v out=%s", handled, err, out.String())
 	}
@@ -55,11 +55,11 @@ func TestAdminResetPassword(t *testing.T) {
 	}
 }
 
-func TestSettingsCheckAndStdinReset(t *testing.T) {
+func TestSettingsCheckAndDefaultReset(t *testing.T) {
 	dir := t.TempDir()
 	env := cliEnv(dir)
 	var out bytes.Buffer
-	if err := runSettingsCommand("settings-check", nil, env, strings.NewReader(""), &out); err != nil {
+	if err := runSettingsCommand("settings-check", nil, env, &out); err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 	for _, want := range []string{"DATA_KEY: set", "from ADMIN_PASS", "[mpesa]", "[whatsapp]", "[email]", "wa.token"} {
@@ -70,15 +70,21 @@ func TestSettingsCheckAndStdinReset(t *testing.T) {
 	if strings.Contains(out.String(), "from-the-env-file-123") {
 		t.Fatal("a secret was printed")
 	}
+	// -generate stores a hash; the default reset removes it again.
 	out.Reset()
-	if err := runSettingsCommand("admin-reset-password", []string{"-password-stdin"}, env, strings.NewReader("short\n"), &out); err == nil {
-		t.Fatal("a short password was accepted")
-	}
-	if err := runSettingsCommand("admin-reset-password", []string{"-password-stdin"}, env, strings.NewReader("a-good-long-password-9\n"), &out); err != nil {
+	if err := runSettingsCommand("admin-reset-password", []string{"-generate"}, env, &out); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if err := runSettingsCommand("settings-check", nil, env, strings.NewReader(""), &out); err != nil || !strings.Contains(out.String(), "stored in the database") {
+	if err := runSettingsCommand("settings-check", nil, env, &out); err != nil || !strings.Contains(out.String(), "stored in the database") {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	out.Reset()
+	if err := runSettingsCommand("admin-reset-password", nil, env, &out); err != nil || !strings.Contains(out.String(), "works again") {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	out.Reset()
+	if err := runSettingsCommand("settings-check", nil, env, &out); err != nil || !strings.Contains(out.String(), "from ADMIN_PASS") {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 }
