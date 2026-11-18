@@ -11,10 +11,10 @@
 </div>
 <form method="get" class="row"><label>Status<select name="status">{{range .Data.Statuses}}<option value="{{.}}"{{if eq . $.Data.Status}} selected{{end}}>{{if .}}{{.}}{{else}}any{{end}}</option>{{end}}</select></label>
 <label>Channel<select name="channel">{{range .Data.Channels}}<option value="{{.}}"{{if eq . $.Data.Channel}} selected{{end}}>{{if .}}{{.}}{{else}}any{{end}}</option>{{end}}</select></label><button>Filter</button></form>
-<div class="tw" style="margin-top:12px"><table><tr><th>Created (EAT)</th><th>What</th>{{if .Data.ShowSite}}<th>Building</th>{{end}}<th>To</th><th>Status</th><th>Note</th><th></th></tr>
-{{range .Data.Rows}}<tr><td>{{.Created}}</td><td>{{.M.Kind}}<br><span class="muted">{{.M.Channel}}{{if .M.Template}} <code>{{.M.Template}}</code>{{end}}</span></td>{{if $.Data.ShowSite}}<td>{{.Building}}</td>{{end}}<td>{{.Who}}</td>
+<div class="tw msgs" style="margin-top:12px"><table><tr><th>Created (EAT)</th><th>What</th>{{if .Data.ShowSite}}<th>Building</th>{{end}}<th>To</th><th>Status</th><th>Note</th><th></th></tr>
+{{range .Data.Rows}}<tr><td>{{.Created}}</td><td>{{.M.Kind}}<br><span class="muted">{{.M.Channel}}{{if .M.Template}} <code>{{.M.Template}}</code>{{end}}</span></td>{{if $.Data.ShowSite}}<td class="bld">{{.Building}}</td>{{end}}<td>{{.Who}}</td>
 <td><span class="pill {{.M.Status}}">{{.M.Status}}</span>{{if and (eq .M.Status "sent") .M.Delivery (ne .M.Delivery "sent")}} <span class="pill {{.M.Delivery}}">{{.M.Delivery}}</span>{{end}}</td><td class="nw muted">{{if gt .M.Attempts 1}}{{.M.Attempts}} tries. {{end}}{{.Info}}</td>
-<td>{{if eq .M.Status "queued"}}<form method="post" action="/admin/messages/cancel" class="i"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.M.ID}}"><button>Cancel</button></form>
+<td class="act">{{if eq .M.Status "queued"}}<form method="post" action="/admin/messages/cancel" class="i"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.M.ID}}"><button>Cancel</button></form>
 {{else if or (eq .M.Status "failed") (eq .M.Status "skipped") (eq .M.Status "cancelled")}}<form method="post" action="/admin/messages/retry" class="i"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.M.ID}}"><button>Retry</button></form>{{end}}</td></tr>
 {{else}}<tr><td colspan="8">No messages{{if or .Data.Status .Data.Channel}} match this filter{{else}} yet{{end}}.</td></tr>{{end}}</table></div>
 <p class="muted">Showing the newest 400. Each message is sent once: a repeated event does not create a second one. Failed messages are retried up to 8 times with growing waits before they show here as failed.</p>
