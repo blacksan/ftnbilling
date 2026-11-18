@@ -305,6 +305,89 @@ func TestToolsConsolePolicy(t *testing.T) {
 	}
 }
 
+// Nothing a user types reaches the router as a script: ping goes through the
+// JSON ping call, and every console bypass is refused before Execute.
+func TestToolsNeverBuildScriptsFromInput(t *testing.T) {
+	r := newSetRig(t)
+	n := len(r.rt.Executed)
+	for _, target := range []string{"fe80::1%x;/user/add name=x", "fe80::1%eth0", "8.8.8.8 count=1; /system reboot", "-c", "$(id)", "a b"} {
+		for _, tool := range []string{"ping", "traceroute"} {
+			resp := r.do("POST", "/admin/tools/"+tool, url.Values{"site": {r.site.ID}, "target": {target}}, pw)
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if !strings.Contains(string(b), "enter an IP address or a host name") {
+				t.Errorf("%s %q accepted", tool, target)
+			}
+		}
+	}
+	resp := r.do("POST", "/admin/tools/ping", url.Values{"site": {r.site.ID}, "target": {"8.8.8.8"}}, pw)
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(b), "received=") {
+		t.Fatalf("ping result missing: %s", b)
+	}
+	if len(r.rt.Executed) != n {
+		t.Fatalf("ping ran a script on the router: %v", r.rt.Executed[n:])
+	}
+	for _, cmd := range []string{`:put "$[/system reset-configuration]"`, `:put [/interface wireguard get wg0 private-key]`, `:global f [:parse ":put 1"]; $f`,
+		"$f", "/system reset-configuration", "/ping 8.8.8.8 count=1; /user add name=x", "/interface wireguard get wg0 private-key", "/ip hotspot user print where password=x"} {
+		resp := r.do("POST", "/admin/tools/console", url.Values{"site": {r.site.ID}, "cmd": {cmd}, "confirm_site": {r.site.Name}, "current_password": {pw}}, pw)
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if !strings.Contains(string(b), "not allowed") {
+			t.Errorf("%q was not refused", cmd)
+		}
+	}
+	if len(r.rt.Executed) != n {
+		t.Fatalf("a refused command reached the router: %v", r.rt.Executed[n:])
+	}
+	// A console ping and print take the safe paths; print is forced to terse.
+	resp = r.do("POST", "/admin/tools/console", url.Values{"site": {r.site.ID}, "cmd": {"/ping 8.8.8.8 count=2"}}, pw)
+	b, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(b), "received=") || len(r.rt.Executed) != n {
+		t.Fatalf("console ping: %s %v", b, r.rt.Executed)
+	}
+	resp = r.do("POST", "/admin/tools/console", url.Values{"site": {r.site.ID}, "cmd": {"/ip address print"}}, pw)
+	resp.Body.Close()
+	if len(r.rt.Executed) != n+1 || r.rt.Executed[n] != "/ip address print terse without-paging" {
+		t.Fatalf("executed %v", r.rt.Executed[n:])
+	}
+	// Every submission is audited: building, outcome and byte count, no output.
+	var msgs []string
+	r.st.View(func(d *store.Data) {
+		for _, e := range d.Events {
+			if strings.HasPrefix(e.Msg, "console on ") {
+				msgs = append(msgs, e.Msg)
+			}
+		}
+	})
+	if len(msgs) < 10 {
+		t.Fatalf("audited %d: %v", len(msgs), msgs)
+	}
+	for _, m := range msgs {
+		if !strings.Contains(m, r.site.Name) || !strings.Contains(m, "bytes") {
+			t.Errorf("audit line lacks building or size: %s", m)
+		}
+		if strings.Contains(m, "bridge-hotspot") {
+			t.Errorf("audit line holds output: %s", m)
+		}
+	}
+}
+
+func TestConsoleOutputRedacted(t *testing.T) {
+	r := newSetRig(t)
+	r.rt.ExecOut = func(string) (string, error) {
+		return "0 name=wg0 private-key=\"SECRETKEY\" listen-port=13231\n1 name=u password=hunter2 profile=default", nil
+	}
+	resp := r.do("POST", "/admin/tools/console", url.Values{"site": {r.site.ID}, "cmd": {"/interface wireguard print"}}, pw)
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if strings.Contains(string(b), "SECRETKEY") || strings.Contains(string(b), "hunter2") || !strings.Contains(string(b), "listen-port=13231") {
+		t.Fatalf("output not redacted: %s", b)
+	}
+}
+
 func TestEquipmentFinder(t *testing.T) {
 	r := newSetRig(t)
 	r.rt.AddLease(routeros.Lease{MAC: "AA:BB:CC:DD:EE:01", Address: "10.5.50.77", HostName: "phone", Status: "bound"})

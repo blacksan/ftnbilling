@@ -88,6 +88,9 @@ func parseExecuteResult(raw json.RawMessage) string {
 // path "/ip/address". Only a bare print qualifies (no arguments).
 func printPath(cmd string) (string, bool) {
 	f := strings.Fields(strings.ReplaceAll(strings.TrimSpace(cmd), "/", " "))
+	for len(f) > 0 && (f[len(f)-1] == "terse" || f[len(f)-1] == "without-paging") {
+		f = f[:len(f)-1] // the flags the console forces
+	}
 	if len(f) < 2 || f[len(f)-1] != "print" {
 		return "", false
 	}

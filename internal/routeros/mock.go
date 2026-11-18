@@ -182,6 +182,8 @@ func (m *Mock) Execute(_ context.Context, cmd string) (string, error) {
 		return m.ExecOut(cmd)
 	}
 	c := strings.ToLower(strings.Join(strings.Fields(strings.ReplaceAll(cmd, "/", " ")), " "))
+	// The console forces these flags onto print; the samples ignore them.
+	c = strings.TrimSuffix(strings.TrimSuffix(c, " without-paging"), " terse")
 	switch {
 	case strings.HasPrefix(c, ":put "):
 		return strings.Trim(strings.TrimSpace(cmd[strings.Index(cmd, " ")+1:]), `"`), nil

@@ -2,9 +2,9 @@ package web
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
-	"net/netip"
-	"regexp"
 	"strings"
 	"time"
 
@@ -24,8 +24,6 @@ type toolResult struct {
 	Hops                            []routeros.Hop
 	Ran                             time.Time
 }
-
-var hostRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
 
 func (s *Server) toolSites(r *http.Request) []store.Site {
 	var list []store.Site
@@ -90,15 +88,30 @@ func (s *Server) toolStart(w http.ResponseWriter, r *http.Request) (st store.Sit
 	return st, e, func() { <-s.toolSem }, true
 }
 
-func validTarget(t string) bool {
-	if _, err := netip.ParseAddr(t); err == nil {
-		return true
+// validTarget accepts a plain IP address (no zone, so no %) or a strict host
+// name, and nothing else. Router tools pass the target as a JSON field, never
+// inside a script, but it is checked all the same.
+func validTarget(t string) bool { return routeros.ValidTarget(t) }
+
+// pinger is what the router client offers for ping (REST and Mock do).
+type pinger interface {
+	PingHost(ctx context.Context, target string, count int) (routeros.PingResult, error)
+}
+
+func formatPing(r routeros.PingResult) string {
+	return fmt.Sprintf("sent=%d received=%d packet-loss=%.0f%% avg-rtt=%s", r.Sent, r.Received, r.LossPct, r.AvgRTT.Round(time.Microsecond))
+}
+
+func formatHops(h []routeros.Hop) string {
+	var b strings.Builder
+	for _, x := range h {
+		fmt.Fprintf(&b, "%2d  %-40s loss=%s sent=%s last=%s avg=%s best=%s worst=%s %s\n", x.N, x.Address, x.Loss, x.Sent, x.Last, x.Avg, x.Best, x.Worst, x.Status)
 	}
-	return hostRe.MatchString(t)
+	return b.String()
 }
 
 func (s *Server) toolsPing(w http.ResponseWriter, r *http.Request) {
-	st, ex, release, ok := s.toolStart(w, r)
+	st, _, release, ok := s.toolStart(w, r)
 	if !ok {
 		return
 	}
@@ -108,12 +121,20 @@ func (s *Server) toolsPing(w http.ResponseWriter, r *http.Request) {
 		s.toolsRender(w, r, nil, st.ID, "", "Error: enter an IP address or a host name")
 		return
 	}
+	pg, isP := s.mgr.Router(st.ID).(pinger)
+	if !isP {
+		s.toolsRender(w, r, nil, st.ID, "", "Error: this building's router connection cannot ping")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), actionTimeout)
 	defer cancel()
-	out, err := ex.Execute(ctx, "/ping "+target+" count=4")
-	res := &toolResult{Tool: "Ping", Site: st.Name, Target: target, Output: routeros.RedactOutput(out), Ran: s.svc.Now()}
+	// The router's own ping endpoint: the target travels as a JSON field.
+	pr, err := pg.PingHost(ctx, target, 4)
+	res := &toolResult{Tool: "Ping", Site: st.Name, Target: target, Ran: s.svc.Now()}
 	if err != nil {
-		res.Err = err.Error()
+		res.Err = routeros.RedactOutput(err.Error())
+	} else {
+		res.Output = formatPing(pr)
 	}
 	s.toolsRender(w, r, res, st.ID, "", "")
 }
@@ -134,15 +155,17 @@ func (s *Server) toolsTraceroute(w http.ResponseWriter, r *http.Request) {
 	hops, err := ex.Traceroute(ctx, target, 15)
 	res := &toolResult{Tool: "Traceroute", Site: st.Name, Target: target, Hops: hops, Ran: s.svc.Now()}
 	if err != nil {
-		res.Err = err.Error()
+		res.Err = routeros.RedactOutput(err.Error())
 	}
 	s.toolsRender(w, r, res, st.ID, "", "")
 }
 
-// toolsConsole runs one console command. Read-only commands run at once;
-// commands that change the router need the building's name and the current
-// admin password; denied commands never run. Every attempt is audited with
-// secret values masked.
+// toolsConsole runs one console command. The policy accepts only a single
+// plain command (see routeros.Classify); read-only ones run at once, ones that
+// change the router need the building's name and the current admin password,
+// and everything else is refused. Every submission is audited with the
+// building, the redacted command, the outcome and the output size, never the
+// output itself.
 func (s *Server) toolsConsole(w http.ResponseWriter, r *http.Request) {
 	st, ex, release, ok := s.toolStart(w, r)
 	if !ok {
@@ -152,25 +175,50 @@ func (s *Server) toolsConsole(w http.ResponseWriter, r *http.Request) {
 	cmd := strings.TrimSpace(r.PostFormValue("cmd"))
 	dec := routeros.Classify(cmd)
 	res := &toolResult{Tool: "Console", Site: st.Name, Target: dec.Redacted, Ran: s.svc.Now()}
+	audit := func(outcome string, n int) {
+		s.audit(r, fmt.Sprintf("console on %s: %s, %s, %d bytes: %s", st.Name, dec.Verdict, outcome, n, dec.Redacted))
+	}
 	switch dec.Verdict {
 	case routeros.Deny:
-		s.audit(r, "console DENIED on "+st.Name+": "+dec.Redacted)
+		audit("denied", 0)
 		s.toolsRender(w, r, nil, st.ID, cmd, "Error: not allowed: "+dec.Reason)
 		return
 	case routeros.Confirm:
 		if strings.TrimSpace(r.PostFormValue("confirm_site")) != st.Name || !s.checkPassword(r, r.PostFormValue("current_password")) {
-			s.audit(r, "console confirmation failed on "+st.Name+": "+dec.Redacted)
+			audit("confirmation failed", 0)
 			s.toolsRender(w, r, nil, st.ID, cmd, "Error: "+dec.Reason+". To run it, type the building name exactly and your current password.")
 			return
 		}
 	}
-	s.audit(r, "console ("+dec.Verdict.String()+") on "+st.Name+": "+dec.Redacted)
 	ctx, cancel := context.WithTimeout(r.Context(), actionTimeout)
 	defer cancel()
-	out, err := ex.Execute(ctx, cmd)
+	var out string
+	var err error
+	switch dec.Kind {
+	case routeros.KindPing:
+		pg, isP := s.mgr.Router(st.ID).(pinger)
+		if !isP {
+			err = errors.New("this building's router connection cannot ping")
+			break
+		}
+		var pr routeros.PingResult
+		if pr, err = pg.PingHost(ctx, dec.Target, dec.Count); err == nil {
+			out = formatPing(pr)
+		}
+	case routeros.KindTraceroute:
+		var hops []routeros.Hop
+		if hops, err = ex.Traceroute(ctx, dec.Target, 15); err == nil {
+			out = formatHops(hops)
+		}
+	default:
+		out, err = ex.Execute(ctx, dec.Exec)
+	}
 	res.Output = routeros.RedactOutput(out)
 	if err != nil {
 		res.Err = routeros.RedactOutput(err.Error())
+		audit("error", len(res.Output))
+	} else {
+		audit("ok", len(res.Output))
 	}
 	s.toolsRender(w, r, res, st.ID, "", "")
 }

@@ -75,7 +75,7 @@ type onlineEntry struct {
 
 func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map[string]payments.Provider, mpesa *payments.Mpesa, mgr *sites.Manager, log *slog.Logger) *Server {
 	s := &Server{cfg: cfg, st: st, svc: svc, providers: providers, mpesa: mpesa, mgr: mgr, log: log,
-		rl: newLimiter(15, time.Minute), joinRL: newLimiter(10, time.Minute), testRL: newLimiter(10, time.Minute), stkRL: newLimiter(3, 10*time.Minute), toolRL: newLimiter(20, time.Minute), toolSem: make(chan struct{}, 2), online: map[string]onlineEntry{}}
+		rl: newLimiter(15, time.Minute), joinRL: newLimiter(10, time.Minute), testRL: newLimiter(10, time.Minute), stkRL: newLimiter(3, 10*time.Minute), toolRL: newLimiter(30, time.Minute), toolSem: make(chan struct{}, 2), online: map[string]onlineEntry{}}
 	s.auth = newAdminAuth(s)
 	if p, err := netip.ParsePrefix(cfg.WGSubnet); err == nil {
 		s.wgNet = p.Masked()
