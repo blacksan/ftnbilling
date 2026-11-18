@@ -73,7 +73,7 @@ func TestAdminRouterPaths(t *testing.T) {
 	// POST works on both.
 	for _, base := range []string{"/admin/sites", "/admin/routers"} {
 		loc := m.adminPost(t, base+"/create", url.Values{"name": {"Via " + base}})
-		if !strings.Contains(loc, "/admin/sites/view?id=") {
+		if !strings.Contains(loc, "/admin/routers/view?id=") {
 			t.Errorf("create via %s: %s", base, loc)
 		}
 	}

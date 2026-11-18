@@ -53,7 +53,7 @@ func TestDevicesPageOnlineFirstAttachCreateDismiss(t *testing.T) {
 	lease(rt, "00:15:EB:11:22:33", "10.5.50.20", "ont-new")
 	lease(rt, "AA:BB:CC:DD:EE:01", "10.5.50.60", "") // registered: never listed
 	page := m.adminGet(t, "/admin/devices")
-	for _, want := range []string{"00:15:EB:11:22:33", "ont-new", "10.5.50.20", "online", "/admin/devices/attach", "/admin/devices/create", "Flat 3B", "Flat 4A"} {
+	for _, want := range []string{"00:15:EB:11:22:33", "ont-new", "10.5.50.20", "online", "/admin/devices/attach", `data-open="addcustomer"`, "Flat 3B", "Flat 4A"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("devices page lacks %q", want)
 		}
@@ -62,7 +62,7 @@ func TestDevicesPageOnlineFirstAttachCreateDismiss(t *testing.T) {
 		t.Error("a registered MAC is listed")
 	}
 	// The nav badge and the dashboard count the online unregistered device.
-	if dash := m.adminGet(t, "/admin"); !strings.Contains(dash, `<span class="badge">1</span>`) {
+	if dash := m.adminGet(t, "/admin"); !strings.Contains(dash, `<span class="cnt" aria-label="1 online">1</span>`) {
 		t.Error("badge")
 	}
 	// Attach by typing the flat name; the device becomes the flat's MAC and the account page opens.
@@ -110,8 +110,8 @@ func TestSiteViewIPoEActions(t *testing.T) {
 	if _, err := m.svc.CreateAccount(billing.AccountInput{SiteID: s.ID, Flat: "Flat 3B", MAC: "AA:BB:CC:DD:EE:01"}); err != nil {
 		t.Fatal(err)
 	}
-	page := m.adminGet(t, "/admin/routers/view?id="+s.ID)
-	for _, want := range []string{"Access mode", "/admin/sites/adopt", "Cut over command", "Join only command", "Cleanup command", "in sync"} {
+	page := m.adminGet(t, "/admin/routers/view?id="+s.ID+"&tab=setup")
+	for _, want := range []string{"Access mode", "/admin/routers/adopt", "Cut over command", "Join only command", "Cleanup command", "in sync"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("site page lacks %q", want)
 		}
@@ -177,7 +177,7 @@ func TestSiteViewIPoEActions(t *testing.T) {
 	}
 	// Confirm cutover is refused until the router runs ftn-dhcp, and removes the timer when it does.
 	rt.SeedRow("/system/scheduler", routeros.Row{"name": sites.RollbackSchedule})
-	page = m.adminGet(t, "/admin/routers/view?id="+s.ID)
+	page = m.adminGet(t, "/admin/routers/view?id="+s.ID+"&tab=setup")
 	if !strings.Contains(page, "Cutover not confirmed") {
 		t.Fatal("pending cutover is not shown")
 	}

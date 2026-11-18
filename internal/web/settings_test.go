@@ -259,7 +259,7 @@ func TestToolsConsolePolicy(t *testing.T) {
 	}
 	n := len(r.rt.Executed)
 	change := url.Values{"cmd": {"/ip/address/add address=10.9.9.9/32 interface=ether1"}}
-	if out := run(change); !strings.Contains(out, "type the building name") {
+	if out := run(change); !strings.Contains(out, "type the router name") {
 		t.Fatalf("change ran without confirmation: %s", out)
 	}
 	bad := url.Values{"cmd": change["cmd"], "confirm_site": {r.site.Name}, "current_password": {"wrong"}}
