@@ -61,6 +61,18 @@ func SchemaVersion() int {
 	return ms[len(ms)-1].version
 }
 
+// AppliedVersion is the newest migration recorded in the database (0 when
+// none, or when the migrations table does not exist yet). It changes nothing.
+func (b *Backend) AppliedVersion(ctx context.Context) (int, error) {
+	var ok bool
+	if err := b.pool.QueryRow(ctx, "SELECT to_regclass('schema_migrations') IS NOT NULL").Scan(&ok); err != nil || !ok {
+		return 0, err
+	}
+	var v int
+	err := b.pool.QueryRow(ctx, "SELECT coalesce(max(version), 0) FROM schema_migrations").Scan(&v)
+	return v, err
+}
+
 const lockSQL = "SELECT pg_advisory_xact_lock(hashtext('ispbill-migrate:'||current_schema()))"
 
 // Migrate applies every pending migration, each in its own transaction under

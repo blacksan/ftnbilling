@@ -9,7 +9,7 @@ import (
 const usage = `ispbill: internet billing server
 
   ispbill                 run the server
-  ispbill migrate         apply pending database migrations
+  ispbill migrate [-check] apply pending database migrations (-check: only report the version)
   ispbill import-json     [-file PATH] [-force]  load a JSON database into Postgres
   ispbill export-json     -out PATH              write the Postgres data as a JSON file
   ispbill admin-reset-password [-generate]  remove the stored admin password (ADMIN_PASS works again), or set a random one
