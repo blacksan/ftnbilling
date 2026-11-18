@@ -290,11 +290,19 @@ func (m *Mock) AddRow(_ context.Context, path string, body map[string]string) (s
 	if m.tables == nil {
 		m.tables = map[string][]Row{}
 	}
+	p := cleanPath(path)
+	if p == "/ip/firewall/address-list" {
+		// RouterOS refuses a second row with the same list and address.
+		for _, e := range m.tables[p] {
+			if e["list"] == body["list"] && e["address"] == body["address"] {
+				return "", &APIError{Status: 400, Message: "Bad Request", Detail: "failure: already have such entry"}
+			}
+		}
+	}
 	m.nextID++
 	m.writes++
 	r := copyRow(body)
 	r[RowID] = fmt.Sprintf("*%X", m.nextID)
-	p := cleanPath(path)
 	m.tables[p] = append(m.tables[p], r)
 	return r[RowID], nil
 }

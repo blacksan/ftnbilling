@@ -13,7 +13,8 @@ import (
 // apart from the hotspot server's name (checked by ValidIface) in the
 // rollback script's first lines.
 //
-// Marker protocol (all rows use address 127.0.0.1; only list and comment matter):
+// Marker protocol (every row needs its own address: ftn-cmd 127.0.0.3, ftn-armed 127.0.0.2, ftn-undo
+// KitUndoAddress(n); only list and comment matter):
 //
 //	list=ftn-cmd   comment=backup   save ftn-pre-ipoe.backup and .rsc (each only if absent), then the row is removed
 //	list=ftn-armed comment=<n>      countdown: <n> is the tick count (empty or 0 to start); the tick adds 1;
@@ -31,22 +32,39 @@ import (
 // After a rollback the ftn-armed and ftn-undo rows are removed. "Confirm" is
 // the server removing those same rows itself.
 const (
-	KitVersion     = "v1"
-	KitComment     = "ftn: kit " + KitVersion
-	KitTickScript  = "ftn-kit-tick"
-	KitRollback    = "ftn-kit-rollback"
-	KitTimer       = "ftn-kit-timer"
-	KitInterval    = "30s"
-	KitArmTicks    = 30 // 30 ticks of 30 s: 15 minutes
-	KitListCmd     = "ftn-cmd"
-	KitListArmed   = "ftn-armed"
-	KitListUndo    = "ftn-undo"
-	KitCmdBackup   = "backup"
-	KitArmedNow    = "now"
-	KitBackupFile  = "ftn-pre-ipoe" // .backup and .rsc
-	kitScriptPolic = "read,write,policy,test"
-	kitTickPolicy  = "ftp,read,write,policy,test,sensitive" // BENCH-CHECK: backup save and export may need ftp/sensitive
+	KitVersion    = "v1"
+	KitComment    = "ftn: kit " + KitVersion
+	KitTickScript = "ftn-kit-tick"
+	KitRollback   = "ftn-kit-rollback"
+	KitTimer      = "ftn-kit-timer"
+	KitInterval   = "30s"
+	KitArmTicks   = 30 // 30 ticks of 30 s: 15 minutes
+	KitListCmd    = "ftn-cmd"
+	KitListArmed  = "ftn-armed"
+	KitListUndo   = "ftn-undo"
+	KitCmdBackup  = "backup"
+	KitArmedNow   = "now"
+	KitBackupFile = "ftn-pre-ipoe" // .backup and .rsc
+
+	// RouterOS refuses two rows with the same list and address, so every marker row has its own address
+	// (the kit ignores the address; only list and comment matter).
+	KitCmdAddress   = "127.0.0.3"
+	KitArmedAddress = "127.0.0.2"
+	kitScriptPolic  = "read,write,policy,test"
+	kitTickPolicy   = "ftp,read,write,policy,test,sensitive" // BENCH-CHECK: backup save and export may need ftp/sensitive
 )
+
+// KitUndoAddress is the address of the n-th (1-based) ftn-undo row: 127.0.1.1, 127.0.1.2, ... 127.0.1.254,
+// then 127.0.2.1 and on.
+func KitUndoAddress(n int) string {
+	if n < 1 {
+		n = 1
+	}
+	return fmt.Sprintf("127.0.%d.%d", 1+(n-1)/254, 1+(n-1)%254)
+}
+
+// The backup file ftn-pre-ipoe.backup is NOT encrypted (no password is given to /system backup save).
+// TODO: encrypt it with a per-site password kept on the server once the 7.25 syntax is bench-checked.
 
 // KitUndoHotspot, KitUndoDHCP and KitUndoARP are the comments of ftn-undo rows.
 func KitUndoHotspot(name string) string { return "hotspot|" + name }
@@ -113,7 +131,7 @@ func kitRollbackSource(hotspot string) string {
       :local p3 [:find $w "|"]
       :local ifn [:pick $w 0 $p3]
       :local mode [:pick $w ($p3 + 1) [:len $w]]
-      :if ($mode ~ "^(disabled|enabled|proxy-arp|local-proxy-arp|reply-only)$") do={
+      :if ($mode ~ "^(disabled|enabled|proxy-arp|local-proxy-arp|reply-only)\$") do={
         :if ($kind = "bridge") do={ :do { /interface bridge set [find where name=$ifn] arp=$mode } on-error={} }
         :if ($kind = "vlan") do={ :do { /interface vlan set [find where name=$ifn] arp=$mode } on-error={} }
         :if ($kind = "ethernet") do={ :do { /interface ethernet set [find where name=$ifn] arp=$mode } on-error={} }

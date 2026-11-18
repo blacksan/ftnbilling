@@ -1,4 +1,4 @@
-{{define "kit"}}:if ([:tostr [/system/device-mode/get scheduler]] ~ "^(true|yes)$") do={
+{{define "kit"}}:if ([:tostr [/system/device-mode/get scheduler]] ~ "^(true|yes)\$") do={
 {{secOpen .KitN "cutover kit" false}}
   /system/scheduler remove [find where name="{{.KitTimerName}}"]
   /system/script remove [find where name="{{.KitTickName}}"]

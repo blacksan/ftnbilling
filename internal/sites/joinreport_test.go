@@ -54,7 +54,7 @@ func TestReportSizeCapAndBadToken(t *testing.T) {
 }
 
 func TestSanitizeReport(t *testing.T) {
-	got := sanitizeReport([]byte("a\tb\r\nc\x00d\xffe password=hunter2 f\n"))
+	got := sanitizeReport([]byte("a\tb\r\nc\x00d\xffe password=hunter2 f\n"), "")
 	if got != "a?b\nc?d?e password=[hidden] f\n" {
 		t.Fatalf("%q", got)
 	}
@@ -63,7 +63,7 @@ func TestSanitizeReport(t *testing.T) {
 func TestROSVersionFromUA(t *testing.T) {
 	for ua, want := range map[string]string{
 		"RouterOS 7.25.1": "7.25.1", "RouterOS 7.13": "7.13", "RouterOS 7.20.1 (stable)": "7.20.1",
-		"Mikrotik/6.49 Fetch": "", "curl/8": "", "": "", "routeros 7.9": "7.9",
+		"Mikrotik/6.49 Fetch": "6.49", "Mikrotik/7.14": "7.14", "curl/8": "", "": "", "routeros 7.9": "7.9",
 	} {
 		if got := ROSVersionFromUA(ua); got != want {
 			t.Errorf("%q: %q want %q", ua, got, want)
@@ -188,5 +188,44 @@ func TestStoredReportFormat(t *testing.T) {
 	want := "at=" + f.now.UTC().Format(time.RFC3339) + " ok=false ros=7.25.1\n4 cutover kit: not allowed by device-mode\n"
 	if raw != want {
 		t.Fatalf("%q want %q", raw, want)
+	}
+}
+
+func TestSanitizeReportBackstops(t *testing.T) {
+	key := strings.Repeat("A", 43) + "="
+	got := sanitizeReport([]byte("x "+key+" y ZzPass12345678 z\n"), "ZzPass12345678")
+	if strings.Contains(got, key) || strings.Contains(got, "ZzPass") || strings.Count(got, "[hidden]") != 2 {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestSecondReportIsIgnored(t *testing.T) {
+	f := newFixture(t, nil)
+	s := f.create("Block A")
+	tok, _, _ := f.m.MintJoin(s.ID)
+	f.m.ConsumeJoinStage(tok, mt, "1.2.3.4", false, StageJoin)
+	f.advance(time.Minute)
+	if err := f.m.SubmitJoinReport(tok, []byte("result ok\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.SubmitJoinReport(tok, []byte("result fail\n1 x: y\n")); err != ErrReportDuplicate {
+		t.Fatalf("%v", err)
+	}
+	if r, _ := f.m.JoinReport(s.ID); !r.OK {
+		t.Fatal("the second report replaced the first")
+	}
+}
+
+func TestKitUndoAddresses(t *testing.T) {
+	seen := map[string]bool{KitCmdAddress: true, KitArmedAddress: true}
+	for n := 1; n <= 600; n++ {
+		a := KitUndoAddress(n)
+		if seen[a] {
+			t.Fatalf("duplicate address %s at %d", a, n)
+		}
+		seen[a] = true
+	}
+	if KitUndoAddress(1) != "127.0.1.1" || KitUndoAddress(254) != "127.0.1.254" || KitUndoAddress(255) != "127.0.2.1" {
+		t.Fatal(KitUndoAddress(1), KitUndoAddress(254), KitUndoAddress(255))
 	}
 }

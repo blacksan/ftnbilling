@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,9 @@ const (
 )
 
 // ErrReportTooLarge is returned for a report body over MaxReportBytes.
+// ErrReportDuplicate: the token's report was already stored.
+var ErrReportDuplicate = errors.New("join report already received")
+
 var ErrReportTooLarge = errors.New("join report is too large")
 
 // JoinReport is what the join script said about itself: whether every section
@@ -37,7 +41,7 @@ func JoinReportKey(siteID string) string { return "site." + siteID + ".join_repo
 
 // sanitizeReport keeps printable ASCII and newlines (anything else becomes
 // "?") and masks secrets the way router output is masked.
-func sanitizeReport(b []byte) string {
+func sanitizeReport(b []byte, restPass string) string {
 	out := make([]byte, 0, len(b))
 	for _, c := range b {
 		switch {
@@ -48,8 +52,17 @@ func sanitizeReport(b []byte) string {
 			out = append(out, '?')
 		}
 	}
-	return routeros.RedactOutput(string(out))
+	t := routeros.RedactOutput(string(out))
+	// Backstops for a secret that appears without a key name: anything shaped like a WireGuard key, and the
+	// building's own REST password.
+	t = wgKeyShape.ReplaceAllString(t, "[hidden]")
+	if len(restPass) >= 8 {
+		t = strings.ReplaceAll(t, restPass, "[hidden]")
+	}
+	return t
 }
+
+var wgKeyShape = regexp.MustCompile(`[A-Za-z0-9+/]{43}=`)
 
 // parseReport reads "result ok|fail ros <version>" on the first line and one
 // problem per following line.
@@ -100,7 +113,12 @@ func (m *Manager) SubmitJoinReport(token string, body []byte) error {
 		if len(body) > MaxReportBytes {
 			return ErrReportTooLarge
 		}
-		rep := parseReport(sanitizeReport(body), now)
+		// One report per use of the token: a second one (a replay, or the error path after the success path)
+		// is ignored.
+		if prev, ok := d.Settings[JoinReportKey(site.ID)]; ok && !prev.UpdatedAt.Before(site.Join.UsedAt) {
+			return ErrReportDuplicate
+		}
+		rep := parseReport(sanitizeReport(body, site.RESTPass), now)
 		v := formatStoredReport(rep)
 		k := JoinReportKey(site.ID)
 		if d.Settings == nil {
