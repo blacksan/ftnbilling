@@ -361,6 +361,22 @@ func (m *Mpesa) StartTest(ctx context.Context, phone string) (TestState, error) 
 	return out, nil
 }
 
+// testWindow is how long a Settings test payment stays pending.
+const testWindow = 10 * time.Minute
+
+// testPending reports whether a test payment is waiting for its result.
+func (m *Mpesa) testPending() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := m.now()
+	for _, t := range m.tests {
+		if t.Status == "pending" && now.Sub(t.Started) < testWindow {
+			return true
+		}
+	}
+	return false
+}
+
 // TestStatus returns the state of a test payment (false = unknown id).
 func (m *Mpesa) TestStatus(id string) (TestState, bool) {
 	m.mu.Lock()
@@ -702,9 +718,17 @@ func NormalizeRef(s string) string {
 // refKind tells what a BillRefNumber refers to: an account code (what
 // customers type as the Paybill account number), an order id, or the reserved
 // settings test reference.
-func (m *Mpesa) refKind(ref string) (kind string, order store.Order, acct store.Account) {
+//
+// The test reference counts only while a Settings test payment is pending in
+// memory (started less than testWindow ago) and the amount is the KES 1 the
+// test sends: anyone can type FTNTEST as an account number, and without a
+// test under way it is just an unknown reference.
+func (m *Mpesa) refKind(ref string, amount float64) (kind string, order store.Order, acct store.Account) {
 	if ref == FTNTestRef {
-		return "test", order, acct
+		if amount == 1 && m.testPending() {
+			return "test", order, acct
+		}
+		return "", order, acct
 	}
 	lower := strings.ToLower(ref)
 	m.st.View(func(d *store.Data) {
@@ -719,11 +743,11 @@ func (m *Mpesa) refKind(ref string) (kind string, order store.Order, acct store.
 
 // HandleC2BValidation accepts a payment only if its account number is known.
 func (m *Mpesa) HandleC2BValidation(body []byte) C2BResponse {
-	p, _, err := parseC2B(body)
+	p, amt, err := parseC2B(body)
 	if err != nil {
 		return C2BReject
 	}
-	if kind, _, _ := m.refKind(p.BillRefNumber); kind == "" && m.conf().UnknownRef != "accept" {
+	if kind, _, _ := m.refKind(p.BillRefNumber, amt); kind == "" && m.conf().UnknownRef != "accept" {
 		return C2BReject
 	}
 	return C2BAccept
@@ -757,7 +781,7 @@ func (m *Mpesa) c2b(ctx context.Context, body []byte) (C2BResponse, error) {
 		}
 		return nil
 	}
-	kind, order, acct := m.refKind(p.BillRefNumber)
+	kind, order, acct := m.refKind(p.BillRefNumber, amt)
 	switch kind {
 	case "order": // an STK push also triggers C2B; the reference may be the order id
 		if order.Status == store.OrderPaid {

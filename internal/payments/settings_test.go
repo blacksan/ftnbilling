@@ -137,16 +137,48 @@ func TestSettingsTestPayment(t *testing.T) {
 	}
 }
 
+func (r *rig) unmatchedNote(key string) (note string, found bool) {
+	r.st.View(func(d *store.Data) {
+		for _, p := range d.Payments {
+			if p.Status == store.PayUnmatched && strings.Contains(p.Key, key) {
+				note, found = p.Note, true
+			}
+		}
+	})
+	return
+}
+
 func TestFTNTESTNeverMatchesAndUnknownRefPolicy(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
-	// The reserved reference is always accepted at validation and lands in Unmatched.
+	// Anyone can type FTNTEST as an account number. With no test payment under
+	// way it is an unknown reference: bounced at validation, and a confirmation
+	// is filed as such.
+	if res := r.mp.HandleC2BValidation(c2b("T1", "FTNTEST", "1.00")); res.ResultCode != "C2B00012" {
+		t.Fatalf("FTNTEST without a test under way: %+v", res)
+	}
+	r.mp.HandleC2BConfirmation(ctx, c2b("TRNSTRANGER", "FTNTEST", "1.00"))
+	if note, ok := r.unmatchedNote("TRNSTRANGER"); !ok || note != "unknown account number" {
+		t.Fatalf("stranger FTNTEST: %q %v", note, ok)
+	}
+	// While a test is pending (and only for its KES 1) it is the test.
+	if _, err := r.mp.StartTest(ctx, "0712345678"); err != nil {
+		t.Fatal(err)
+	}
 	if res := r.mp.HandleC2BValidation(c2b("T1", "FTNTEST", "1.00")); res.ResultCode != "0" {
-		t.Fatalf("FTNTEST validation: %+v", res)
+		t.Fatalf("FTNTEST validation during a test: %+v", res)
+	}
+	if res := r.mp.HandleC2BValidation(c2b("T1", "FTNTEST", "500.00")); res.ResultCode != "C2B00012" {
+		t.Fatalf("FTNTEST with another amount: %+v", res)
 	}
 	r.mp.HandleC2BConfirmation(ctx, c2b("TRNTEST001", "ftn test", "1.00"))
-	if n := r.countStatus(store.PayUnmatched); n != 1 {
-		t.Fatalf("unmatched = %d", n)
+	if note, ok := r.unmatchedNote("TRNTEST001"); !ok || note != "settings test" {
+		t.Fatalf("test payment: %q %v", note, ok)
+	}
+	// Ten minutes later the test is stale and the reference is unknown again.
+	r.now = r.now.Add(11 * time.Minute)
+	if res := r.mp.HandleC2BValidation(c2b("T1", "FTNTEST", "1.00")); res.ResultCode != "C2B00012" {
+		t.Fatalf("stale test still accepted: %+v", res)
 	}
 	// Unknown reference: reject by default, accept when asked.
 	if res := r.mp.HandleC2BValidation(c2b("T2", "NOSUCH", "50.00")); res.ResultCode != "C2B00012" {
