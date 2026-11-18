@@ -1,0 +1,11 @@
+[Unit]
+Description=Fast Tech Net weekly encrypted backup to Google Drive
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ftnbilling-backup run
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=4h
