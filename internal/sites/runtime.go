@@ -87,10 +87,10 @@ func (m *Manager) autoFixAfterJoin(ctx context.Context, siteID string) {
 		out, err := m.ApplyAutoFixes(c, siteID)
 		if err != nil {
 			m.log.Warn("post-join setup fixes skipped", "site", siteID, "err", err)
-			return
 		}
 		for _, o := range out {
 			m.log.Info("post-join setup fix", "site", siteID, "check", o.ID, "applied", o.Applied, "err", o.Err)
 		}
+		m.afterJoin(siteID)
 	}()
 }

@@ -98,7 +98,7 @@ func (m *Mock) One(_ context.Context, path string) (Row, error) {
 func (m *Mock) Call(_ context.Context, path string, body map[string]string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if err := m.pathErrLocked(path); err != nil {
+	if err := m.writeErrLocked(path); err != nil {
 		return err
 	}
 	p := cleanPath(path)
@@ -143,6 +143,28 @@ func (m *Mock) SetPathFail(path string, err error) {
 		m.failPaths = map[string]error{}
 	}
 	m.failPaths[cleanPath(path)] = err
+}
+
+// SetWriteFail makes only the writes (add, set, remove, call) on path fail with
+// err, reads keep working. nil removes it.
+func (m *Mock) SetWriteFail(path string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err == nil {
+		delete(m.failWrites, cleanPath(path))
+		return
+	}
+	if m.failWrites == nil {
+		m.failWrites = map[string]error{}
+	}
+	m.failWrites[cleanPath(path)] = err
+}
+
+func (m *Mock) writeErrLocked(path string) error {
+	if err := m.pathErrLocked(path); err != nil {
+		return err
+	}
+	return m.failWrites[cleanPath(path)]
 }
 
 // pathErrLocked is the error to return for a call on path, if any.

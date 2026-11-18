@@ -498,16 +498,43 @@ type DeviceAccountInput struct {
 // given, is set as the flat's plan (no time is granted: it is paid for as
 // usual); the router gets the lease and queue at once.
 func (s *Service) CreateFromDevice(ctx context.Context, in DeviceAccountInput) (store.Account, error) {
+	a, _, err := s.CreateCustomer(ctx, AddCustomerInput{SiteID: in.SiteID, MAC: in.MAC, Flat: in.Flat, Tenant: in.Tenant, Phone: in.Phone, PackageID: in.PackageID})
+	return a, err
+}
+
+// AddCustomerInput is the one "add customer" form: the flat, the tenant, the
+// device's MAC, a package and whether to grant its time now.
+type AddCustomerInput struct {
+	SiteID, Flat, Tenant, Phone, MAC, PackageID string
+	// Activate grants the package's time at once (an admin grant, like
+	// ExtendAccount). Without it the package is only set as the flat's plan
+	// and the tenant pays on the payment page: the flat gets its lease and
+	// queue and is walled until then.
+	Activate bool
+	Note     string
+}
+
+// CreateCustomer makes the account, sets its package, optionally grants the
+// package's time, and makes one synchronous attempt to put it on the router
+// (8 s). It returns the account and what the router side looks like after
+// that attempt: a router that is offline leaves a queued task
+// (PendingTask), applied by the retry loop when it is back. Errors are the
+// ones of CreateAccount (DuplicateMACError for a MAC that is in use) and
+// "choose a package from the list".
+func (s *Service) CreateCustomer(ctx context.Context, in AddCustomerInput) (store.Account, AccountRouterState, error) {
+	if in.Activate && in.PackageID == "" {
+		return store.Account{}, AccountRouterState{}, fmt.Errorf("choose a package from the list")
+	}
 	if in.PackageID != "" { // checked first: a bad package must not leave a half-made flat behind
 		ok := false
-		s.st.View(func(d *store.Data) { p, found := d.Packages[in.PackageID]; ok = found && !p.Deleted })
+		s.st.View(func(d *store.Data) { p, found := d.EffectivePackage(in.SiteID, in.PackageID); ok = found && !p.Deleted })
 		if !ok {
-			return store.Account{}, fmt.Errorf("choose a package from the list")
+			return store.Account{}, AccountRouterState{}, fmt.Errorf("choose a package from the list")
 		}
 	}
-	a, err := s.CreateAccount(AccountInput{SiteID: in.SiteID, Flat: in.Flat, MAC: in.MAC, Tenant: in.Tenant, Phone: in.Phone})
+	a, err := s.CreateAccount(AccountInput{SiteID: in.SiteID, Flat: in.Flat, MAC: in.MAC, Tenant: in.Tenant, Phone: in.Phone, Notes: in.Note})
 	if err != nil {
-		return store.Account{}, err
+		return store.Account{}, AccountRouterState{}, err
 	}
 	if in.PackageID != "" {
 		err = s.st.Update(func(d *store.Data) error {
@@ -522,10 +549,18 @@ func (s *Service) CreateFromDevice(ctx context.Context, in DeviceAccountInput) (
 			return nil
 		})
 		if err != nil {
-			return a, err
+			return a, AccountRouterState{}, err
 		}
 	}
-	s.runAccountSite(ctx, a.ID)
+	if in.Activate {
+		if err := s.ExtendAccount(ctx, a.ID, in.PackageID, strings.TrimSpace(in.Note), false); err != nil {
+			a, _ = s.GetAccount(a.ID)
+			return a, s.AccountRouterState(a.ID), err
+		}
+	}
+	rc, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	s.runAccountSite(rc, a.ID)
 	a, _ = s.GetAccount(a.ID)
-	return a, nil
+	return a, s.AccountRouterState(a.ID), nil
 }

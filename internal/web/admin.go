@@ -34,6 +34,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	get("/admin/site/select", s.adminSiteSelect)
 	post("/admin/accounts/move", s.adminAccountMove)
 	s.siteRoutes(get, post)
+	s.setupAdminRoutes(get, post)
 	get("/admin/accounts", s.adminAccounts)
 	get("/admin/accounts/view", s.adminAccount)
 	post("/admin/accounts/create", s.adminAccountCreate)
