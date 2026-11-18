@@ -37,6 +37,18 @@ class MemoryTokenStore(var session: Session? = null) : TokenStore {
     }
 }
 
+class MemoryKnownTokenStore(var token: String? = null) : KnownTokenStore {
+    override fun get() = token
+
+    override fun set(token: String) {
+        this.token = token
+    }
+
+    override fun clear() {
+        token = null
+    }
+}
+
 class ApiClientTest {
     private lateinit var server: MockWebServer
     private lateinit var store: MemoryTokenStore
@@ -276,5 +288,77 @@ class ApiClientTest {
         val e = runCatching { DashboardRepository(api).dashboard() }.exceptionOrNull() as ApiError
         assertEquals(502, e.status)
         assertEquals(ErrorCode.UNKNOWN, e.code)
+    }
+
+    // ---- known_token (API v3, addendum K) ----
+
+    @Test fun loginSendsStoredKnownTokenAndStoresTheNewOne() = runBlocking {
+        val known = MemoryKnownTokenStore("kt-old")
+        server.enqueue(json(200, tokens("a", "r").dropLast(1) + ""","known_token":"kt-new"}"""))
+        AuthRepository(api, sessions, { device }, known).login("brian", "pw", SecondFactor(totp = "123456"))
+        val body = ApiJson.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertEquals("kt-old", body["known_token"]!!.jsonPrimitive.content)
+        assertEquals("kt-new", known.token)
+    }
+
+    @Test fun firstLoginOmitsKnownTokenField() = runBlocking {
+        val known = MemoryKnownTokenStore()
+        server.enqueue(json(200, tokens("a", "r")))
+        AuthRepository(api, sessions, { device }, known).login("brian", "pw", SecondFactor(totp = "123456"))
+        assertNull(ApiJson.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject["known_token"])
+        assertNull("nothing returned, nothing stored", known.token)
+    }
+
+    @Test fun knownTokenSurvivesSignOutAndIsNotInTheSession() = runBlocking {
+        val known = MemoryKnownTokenStore()
+        server.enqueue(json(200, tokens("a", "r").dropLast(1) + ""","known_token":"kt-1"}"""))
+        server.enqueue(MockResponse().setResponseCode(204))
+        val repo = AuthRepository(api, sessions, { device }, known)
+        repo.login("brian", "pw", SecondFactor(totp = "123456"))
+        assertFalse("known token must not be inside the session blob", store.session.toString().contains("kt-1"))
+        repo.logout()
+        assertTrue(sessions.state.value is AuthState.SignedOut)
+        assertNull(store.session)
+        assertEquals("kt-1", known.token)
+    }
+
+    @Test fun failedLoginKeepsTheKnownToken() = runBlocking {
+        val known = MemoryKnownTokenStore("kt-1")
+        server.enqueue(error(401, "invalid_credentials"))
+        runCatching { AuthRepository(api, sessions, { device }, known).login("b", "bad", SecondFactor(totp = "123456")) }
+        assertEquals("kt-1", known.token)
+    }
+
+    // ---- recovery_code_required ----
+
+    @Test fun recoveryCodeRequiredIsExposed() = runBlocking {
+        server.enqueue(error(401, "totp_invalid", "Use a recovery code.", """{"recovery_code_required":true}"""))
+        val e = runCatching { AuthRepository(api, sessions, { device }).login("b", "p", SecondFactor(totp = "123456")) }
+            .exceptionOrNull() as ApiError
+        assertTrue(e.recoveryCodeRequired)
+        assertEquals(ErrorCode.TOTP_INVALID, e.code)
+    }
+
+    @Test fun plainTotpInvalidDoesNotRequireRecovery() = runBlocking {
+        server.enqueue(error(401, "totp_invalid"))
+        val e = runCatching { AuthRepository(api, sessions, { device }).login("b", "p", SecondFactor(totp = "123456")) }
+            .exceptionOrNull() as ApiError
+        assertFalse(e.recoveryCodeRequired)
+    }
+
+    // ---- idempotency on retry ----
+
+    @Test fun refreshRetryOfAWriteGetsAFreshIdempotencyKey() = runBlocking {
+        signedIn()
+        server.enqueue(error(401, "token_expired"))
+        server.enqueue(json(200, tokens("acc-2", "ref-2")))
+        server.enqueue(json(200, """{"id":"a1"}"""))
+        AccountsRepository(api).suspendAccount("a1")
+        val first = server.takeRequest()
+        server.takeRequest()
+        val retry = server.takeRequest()
+        assertNotNull(first.getHeader("Idempotency-Key"))
+        assertNotNull(retry.getHeader("Idempotency-Key"))
+        assertTrue(first.getHeader("Idempotency-Key") != retry.getHeader("Idempotency-Key"))
     }
 }

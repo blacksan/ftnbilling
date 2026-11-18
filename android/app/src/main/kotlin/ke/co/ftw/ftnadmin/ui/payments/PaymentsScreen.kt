@@ -130,8 +130,13 @@ private fun PaymentRow(p: Payment, canAssign: Boolean, onAssign: () -> Unit) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(formatKes(p.amountKes), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                 StatusChip(
-                    if (p.isUnmatched) "Unmatched" else p.status.replaceFirstChar { it.uppercase() }.ifBlank { "Paid" },
-                    if (p.isUnmatched) Tone.Warn else if (p.status == "refunded") Tone.Bad else Tone.Good,
+                    p.status.replaceFirstChar { it.uppercase() }.ifBlank { "Unknown" },
+                    when (p.status) {
+                        "matched" -> Tone.Good
+                        "unmatched" -> Tone.Warn
+                        "refunded" -> Tone.Bad
+                        else -> Tone.Neutral
+                    },
                 )
             }
             Text(

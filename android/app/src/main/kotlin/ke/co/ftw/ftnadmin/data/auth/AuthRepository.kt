@@ -3,7 +3,8 @@ package ke.co.ftw.ftnadmin.data.auth
 import ke.co.ftw.ftnadmin.core.network.ApiClient
 import ke.co.ftw.ftnadmin.core.network.ApiError
 import ke.co.ftw.ftnadmin.core.network.AuthState
-import ke.co.ftw.ftnadmin.core.network.Session
+import ke.co.ftw.ftnadmin.core.network.KnownTokenStore
+import ke.co.ftw.ftnadmin.core.network.LoginResponse
 import ke.co.ftw.ftnadmin.core.network.SessionManager
 import ke.co.ftw.ftnadmin.data.putIfNotBlank
 import ke.co.ftw.ftnadmin.domain.DeviceSession
@@ -27,6 +28,7 @@ class AuthRepository(
     private val api: ApiClient,
     private val sessions: SessionManager,
     private val device: () -> DeviceInfo,
+    private val knownToken: KnownTokenStore = NoKnownToken,
 ) {
     val state: StateFlow<AuthState> = sessions.state
 
@@ -41,6 +43,7 @@ class AuthRepository(
                 putIfNotBlank("recovery_code", factor.recoveryCode.trim())
             }
             putIfNotBlank("setup_code", factor.setupCode.trim())
+            putIfNotBlank("known_token", runCatching { knownToken.get() }.getOrNull())
             put(
                 "device",
                 buildJsonObject {
@@ -52,8 +55,10 @@ class AuthRepository(
                 },
             )
         }
-        val session = api.post<Session>("auth", "login", body = body)
-        sessions.signIn(session)
+        val r = api.post<LoginResponse>("auth", "login", body = body)
+        // Keep the known token across sign-outs; only "wipe app data" removes it.
+        r.knownToken?.takeIf { it.isNotBlank() }?.let { runCatching { knownToken.set(it) } }
+        sessions.signIn(r.toSession())
     }
 
     /** Revokes this device on the server, then forgets the tokens even when the server is unreachable. */
@@ -70,4 +75,12 @@ class AuthRepository(
     suspend fun devices(): List<DeviceSession> = api.get<ItemList<DeviceSession>>("auth", "devices").items
 
     suspend fun revokeDevice(id: String) = api.send("DELETE", "auth", "devices", id)
+}
+
+private object NoKnownToken : KnownTokenStore {
+    override fun get(): String? = null
+
+    override fun set(token: String) = Unit
+
+    override fun clear() = Unit
 }

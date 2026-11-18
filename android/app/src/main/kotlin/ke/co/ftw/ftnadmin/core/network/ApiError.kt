@@ -3,6 +3,7 @@ package ke.co.ftw.ftnadmin.core.network
 import java.io.IOException
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 
@@ -60,6 +61,10 @@ class ApiError(
             ?.mapNotNull { (k, v) -> (v as? JsonPrimitive)?.contentOrNull?.let { k to it } }
             ?.toMap()
             .orEmpty()
+
+    /** Login: after 10 wrong authenticator codes only a recovery code is accepted (`details.recovery_code_required`). */
+    val recoveryCodeRequired: Boolean
+        get() = (details?.get("recovery_code_required") as? JsonPrimitive)?.booleanOrNull == true
 
     /** For `mac_in_use`: who owns the MAC. Null when the details are missing or malformed. */
     val macOwner: MacOwner?

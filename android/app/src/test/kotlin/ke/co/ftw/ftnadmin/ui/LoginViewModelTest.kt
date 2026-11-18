@@ -55,7 +55,8 @@ class LoginViewModelTest {
         vm.onTotp(totp)
     }
 
-    private fun err(code: Int, c: String) = MockResponse().setResponseCode(code).setBody("""{"error":{"code":"$c","message":"m"}}""")
+    private fun err(code: Int, c: String, details: String = "{}") =
+        MockResponse().setResponseCode(code).setBody("""{"error":{"code":"$c","message":"m","details":$details}}""")
 
     @Test fun submitNeedsAllFields() {
         assertFalse(vm.state.value.canSubmit)
@@ -111,5 +112,37 @@ class LoginViewModelTest {
         settle()
         assertTrue(vm.state.value.enrolRequired)
         assertTrue(vm.state.value.showSetupCode)
+    }
+
+    @Test fun recoveryCodeRequiredSwitchesFormToRecoveryEntry() = runTest(main.dispatcher) {
+        server.enqueue(err(401, "totp_invalid", """{"recovery_code_required":true}"""))
+        fill()
+        vm.submit()
+        settle()
+        val s = vm.state.value
+        assertEquals(FactorMode.Recovery, s.mode)
+        assertEquals("", s.totp)
+        assertTrue(s.error!!.contains("recovery code"))
+        assertEquals("username and password are kept", "brian", s.username)
+        assertFalse(s.busy)
+    }
+
+    @Test fun recoveryCodeRequiredOn429AlsoSwitches() = runTest(main.dispatcher) {
+        server.enqueue(err(429, "rate_limited", """{"retry_after_s":30,"recovery_code_required":true}""").setHeader("Retry-After", "30"))
+        fill()
+        vm.submit()
+        settle()
+        assertEquals(FactorMode.Recovery, vm.state.value.mode)
+    }
+
+    @Test fun totpBackoffShowsWaitTimeAndKeepsTotpMode() = runTest(main.dispatcher) {
+        server.enqueue(err(429, "rate_limited", """{"retry_after_s":45}""").setHeader("Retry-After", "45"))
+        fill()
+        vm.submit()
+        settle()
+        val s = vm.state.value
+        assertEquals(FactorMode.Totp, s.mode)
+        assertTrue(s.error!!, s.error!!.contains("45 seconds"))
+        assertTrue(s.error!!.contains("recovery code"))
     }
 }

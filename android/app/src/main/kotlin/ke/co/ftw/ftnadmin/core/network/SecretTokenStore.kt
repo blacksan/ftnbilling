@@ -24,3 +24,16 @@ class SecretTokenStore(private val secrets: SecretStore) : TokenStore {
         const val NAME = "api_session"
     }
 }
+
+/** [KnownTokenStore] in [SecretStore] (Keystore AES-GCM), like the session. */
+class SecretKnownTokenStore(private val secrets: SecretStore) : KnownTokenStore {
+    override fun get(): String? = secrets.get(NAME)?.decodeToString()?.ifBlank { null }
+
+    override fun set(token: String) = secrets.put(NAME, token.encodeToByteArray())
+
+    override fun clear() = secrets.delete(NAME)
+
+    private companion object {
+        const val NAME = "known_token"
+    }
+}

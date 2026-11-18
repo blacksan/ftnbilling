@@ -83,7 +83,23 @@ class LoginViewModel(private val auth: AuthRepository, initialNotice: String? = 
     }
 
     private fun failed(cur: LoginUiState, e: Throwable): LoginUiState {
-        val code = (e as? ApiError)?.code
+        val api = e as? ApiError
+        val code = api?.code
+        // Too many wrong authenticator codes: only a recovery code works now.
+        if (api != null && api.recoveryCodeRequired) {
+            return cur.copy(
+                busy = false,
+                mode = FactorMode.Recovery,
+                totp = "",
+                error = "Too many wrong authenticator codes. Authenticator codes are blocked for this account; " +
+                    "enter one of your saved recovery codes instead.",
+            )
+        }
+        // TOTP back-off: wait, or switch to a recovery code.
+        if (api != null && code == ErrorCode.RATE_LIMITED && cur.mode == FactorMode.Totp && cur.totp.length == LoginUiState.TOTP_DIGITS) {
+            val wait = api.retryAfterS?.let { "Wait $it seconds" } ?: "Wait a little"
+            return cur.copy(busy = false, totp = "", error = "Too many attempts. $wait before trying another code, or use a recovery code.")
+        }
         return when (code) {
             ErrorCode.INVALID_CREDENTIALS ->
                 cur.copy(busy = false, totp = "", error = "Wrong username or password.")

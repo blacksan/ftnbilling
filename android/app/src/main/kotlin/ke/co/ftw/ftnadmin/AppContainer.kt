@@ -7,6 +7,7 @@ import ke.co.ftw.ftnadmin.auth.AppLock
 import ke.co.ftw.ftnadmin.core.crypto.KeystoreAead
 import ke.co.ftw.ftnadmin.core.crypto.SecretStore
 import ke.co.ftw.ftnadmin.core.network.ApiClient
+import ke.co.ftw.ftnadmin.core.network.SecretKnownTokenStore
 import ke.co.ftw.ftnadmin.core.network.SecretTokenStore
 import ke.co.ftw.ftnadmin.core.network.SessionManager
 import ke.co.ftw.ftnadmin.core.prefs.Settings
@@ -42,7 +43,8 @@ class AppContainer(app: Application) {
     val sessions = SessionManager(SecretTokenStore(secrets))
     val api: ApiClient = ApiClient.create(BuildConfig.API_BASE, sessions)
 
-    val auth = AuthRepository(api, sessions, ::deviceInfo)
+    private val knownToken = SecretKnownTokenStore(secrets)
+    val auth = AuthRepository(api, sessions, ::deviceInfo, knownToken)
     val dashboard = DashboardRepository(api)
     val accounts = AccountsRepository(api)
     val payments = PaymentsRepository(api)
@@ -67,6 +69,7 @@ class AppContainer(app: Application) {
     suspend fun wipe() {
         withContext(Dispatchers.IO) {
             sessions.signOut()
+            knownToken.clear()
             secrets.wipeAll()
             settings.reset()
         }

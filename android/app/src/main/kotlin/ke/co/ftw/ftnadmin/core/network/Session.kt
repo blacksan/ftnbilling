@@ -28,6 +28,32 @@ data class Session(
     val user: UserInfo = UserInfo(),
 )
 
+/** `/auth/login` answer: the tokens plus the long-lived `known_token` that exempts this phone from lockouts. */
+@Serializable
+data class LoginResponse(
+    @SerialName("access_token") val accessToken: String,
+    @SerialName("access_expires_at") val accessExpiresAt: String = "",
+    @SerialName("refresh_token") val refreshToken: String,
+    @SerialName("refresh_expires_at") val refreshExpiresAt: String = "",
+    @SerialName("device_id") val deviceId: String = "",
+    val user: UserInfo = UserInfo(),
+    @SerialName("known_token") val knownToken: String? = null,
+) {
+    fun toSession() = Session(accessToken, accessExpiresAt, refreshToken, refreshExpiresAt, deviceId, user)
+}
+
+/**
+ * Holds the server's `known_token`. It deliberately survives sign-out (that is what keeps this phone
+ * from being locked out by strangers' failed guesses) and is removed only by "wipe app data".
+ */
+interface KnownTokenStore {
+    fun get(): String?
+
+    fun set(token: String)
+
+    fun clear()
+}
+
 /** `/auth/refresh` answers the same fields without `user` when the user did not change. */
 @Serializable
 data class RefreshResponse(

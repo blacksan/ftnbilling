@@ -97,8 +97,14 @@ class TokenAuthenticator(
         null
     }
 
+    /**
+     * A 401 means the call did not run, so the retry gets a fresh idempotency key: the server must not
+     * replay the stored 401 for it.
+     */
     private fun retry(request: Request, token: String): Request =
-        request.newBuilder().header("Authorization", "Bearer $token").build()
+        request.newBuilder().header("Authorization", "Bearer $token").apply {
+            if (request.header("Idempotency-Key") != null) header("Idempotency-Key", java.util.UUID.randomUUID().toString())
+        }.build()
 
     private fun priorCount(response: Response): Int {
         var n = 1

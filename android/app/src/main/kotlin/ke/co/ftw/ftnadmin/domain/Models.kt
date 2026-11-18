@@ -109,7 +109,8 @@ data class Payment(
     @SerialName("paid_at") val paidAt: String? = null,
     @SerialName("created_at") val createdAt: String = "",
 ) {
-    val isUnmatched: Boolean get() = accountId.isBlank() && status != "refunded" && status != "ignored"
+    /** Server statuses: matched, unmatched, refunded, ignored. */
+    val isUnmatched: Boolean get() = status == "unmatched"
 }
 
 @Serializable
