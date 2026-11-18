@@ -145,7 +145,7 @@ func (s *Server) adminSiteCreate(w http.ResponseWriter, r *http.Request) {
 		s.back(w, r, "/admin/sites/new", "Error: "+err.Error())
 		return
 	}
-	s.back(w, r, "/admin/sites/view?id="+st.ID, "Building added. Now connect its router with the join command below.")
+	s.back(w, r, "/admin/sites/view?id="+st.ID, "Router added. Now connect it with the join command below.")
 }
 
 func (s *Server) siteID(r *http.Request) (store.Site, bool) {
@@ -288,7 +288,7 @@ func (s *Server) adminSitePackages(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 	err := s.svc.SaveSiteOverrides(st.ID, ov)
-	s.back(w, r, "/admin/sites/view?id="+st.ID, msgOr(err, "Packages saved for this building"))
+	s.back(w, r, "/admin/sites/view?id="+st.ID, msgOr(err, "Packages saved for this router"))
 }
 
 func (s *Server) adminSiteSync(w http.ResponseWriter, r *http.Request) {
@@ -332,7 +332,7 @@ func (s *Server) adminSiteRemove(w http.ResponseWriter, r *http.Request) {
 		s.back(w, r, "/admin/sites/view?id="+st.ID, "Error: "+err.Error())
 		return
 	}
-	s.back(w, r, "/admin/sites", "Building removed: "+st.Name)
+	s.back(w, r, "/admin/sites", "Router removed: "+st.Name)
 }
 
 // adminSiteScript mints a one-time command for one stage of the IPoE move:

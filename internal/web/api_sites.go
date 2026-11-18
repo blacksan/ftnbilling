@@ -156,7 +156,7 @@ func (s *Server) apiSites(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 func (s *Server) site404(w http.ResponseWriter, id string) (store.Site, bool) {
 	l := s.liveSites(id)
 	if id == "" || len(l) != 1 {
-		apiErr(w, http.StatusNotFound, codeNotFound, "No such building.", nil)
+		apiErr(w, http.StatusNotFound, codeNotFound, "No such router.", nil)
 		return store.Site{}, false
 	}
 	return l[0], true
@@ -219,7 +219,7 @@ func (s *Server) apiQoE(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 		writeJSON(w, http.StatusOK, map[string]any{"latency_ms": nil, "loss_pct": nil,
 			"wan":    map[string]any{"down_bps": nil, "up_bps": nil, "cap_mbps": nil, "peak_util_pct": nil},
 			"series": map[string]any{"t": []string{}, "down_bps": []any{}, "up_bps": []any{}, "rtt_ms": []any{}},
-			"flags":  []map[string]string{{"kind": "nodata", "text": "This building is not collecting data yet: it is paused or not joined."}}})
+			"flags":  []map[string]string{{"kind": "nodata", "text": "This router is not collecting data yet: it is paused or not joined."}}})
 		return
 	}
 	rep := col.BuildReport(p, s.svc.Now())
@@ -302,7 +302,7 @@ func (s *Server) apiONTs(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 func (s *Server) apiDashboard(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 	site := r.URL.Query().Get("site")
 	if site != "" && !s.siteExists(site) {
-		apiErr(w, http.StatusNotFound, codeNotFound, "No such building.", nil)
+		apiErr(w, http.StatusNotFound, codeNotFound, "No such router.", nil)
 		return
 	}
 	has := func(id string) bool { return site == "" || id == site }
@@ -415,7 +415,7 @@ func (s *Server) apiAlertMute(w http.ResponseWriter, r *http.Request, c *apiCtx)
 		return
 	}
 	if !s.siteExists(req.SiteID) {
-		validationErr(w, map[string]string{"site_id": "no such building"})
+		validationErr(w, map[string]string{"site_id": "no such router"})
 		return
 	}
 	if req.Minutes < 0 || req.Minutes > 7*24*60 {

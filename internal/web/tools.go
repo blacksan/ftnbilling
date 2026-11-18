@@ -74,7 +74,7 @@ func (s *Server) toolStart(w http.ResponseWriter, r *http.Request) (st store.Sit
 	}
 	cmd := r.PostFormValue("cmd")
 	if !found {
-		s.toolsRender(w, r, nil, "", cmd, "Error: choose a building")
+		s.toolsRender(w, r, nil, "", cmd, "Error: choose a router")
 		return
 	}
 	if !s.toolRL.allow(realIP(r)) {
@@ -83,7 +83,7 @@ func (s *Server) toolStart(w http.ResponseWriter, r *http.Request) (st store.Sit
 	}
 	e, isEx := s.mgr.Router(siteID).(routeros.Executor)
 	if !isEx {
-		s.toolsRender(w, r, nil, siteID, cmd, "Error: this building's router connection cannot run tools")
+		s.toolsRender(w, r, nil, siteID, cmd, "Error: this router's connection cannot run tools")
 		return
 	}
 	select {
@@ -134,7 +134,7 @@ func (s *Server) toolsPing(w http.ResponseWriter, r *http.Request) {
 	}
 	pg, isP := s.mgr.Router(st.ID).(pinger)
 	if !isP {
-		s.toolsRender(w, r, nil, st.ID, "", "Error: this building's router connection cannot ping")
+		s.toolsRender(w, r, nil, st.ID, "", "Error: this router's connection cannot ping")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), actionTimeout)
@@ -307,7 +307,7 @@ func (s *Server) toolsConsole(w http.ResponseWriter, r *http.Request) {
 	case routeros.Confirm:
 		if strings.TrimSpace(r.PostFormValue("confirm_site")) != st.Name || !s.checkPassword(r, r.PostFormValue("current_password")) {
 			audit("confirmation failed", 0)
-			s.toolsRender(w, r, nil, st.ID, cmd, "Error: "+dec.Reason+". To run it, type the building name exactly and your current password.")
+			s.toolsRender(w, r, nil, st.ID, cmd, "Error: "+dec.Reason+". To run it, type the router name exactly and your current password.")
 			return
 		}
 	}
@@ -319,7 +319,7 @@ func (s *Server) toolsConsole(w http.ResponseWriter, r *http.Request) {
 	case routeros.KindPing:
 		pg, isP := s.mgr.Router(st.ID).(pinger)
 		if !isP {
-			err = errors.New("this building's router connection cannot ping")
+			err = errors.New("this router's connection cannot ping")
 			break
 		}
 		var pr routeros.PingResult

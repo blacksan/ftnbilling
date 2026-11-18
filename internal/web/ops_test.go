@@ -189,7 +189,7 @@ func TestAlertsSettingsTestAndMute(t *testing.T) {
 	r := newOpsRig(t)
 	a := r.joined(t, "Alpha Court", "10.99.0.2", true)
 	page := r.adminGet(t, "/admin/alerts")
-	for _, want := range []string{"Open alerts", "Building offline", "WAN saturated", "Packet loss", "High latency", "OLT port down", "Send test", "Mute a building"} {
+	for _, want := range []string{"Open alerts", "Router offline", "WAN saturated", "Packet loss", "High latency", "OLT port down", "Send test", "Mute a building"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("alerts page lacks %q", want)
 		}

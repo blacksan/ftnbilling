@@ -136,7 +136,8 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 			}
 			return m
 		},
-		"lines": func(v string) string { return strings.ReplaceAll(v, ",", "\n") },
+		"lines":  func(v string) string { return strings.ReplaceAll(v, ",", "\n") },
+		"static": staticURL,
 	}
 	s.tpl = template.Must(template.New("").Funcs(funcs).ParseFS(tplFS, "templates/*.html"))
 	return s
@@ -173,6 +174,7 @@ func (s *Server) Handler() http.Handler {
 	s.loginRoutes(mux)
 	s.adminRoutes(mux)
 	s.apiRoutes(mux)
+	s.staticRoutes(mux)
 	return s.middleware(mux)
 }
 

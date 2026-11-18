@@ -468,7 +468,7 @@ func (s *Server) adminSiteProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.svc.SaveSiteProfile(billing.SiteProfileInput{SiteID: id, Address: r.PostFormValue("address"), Lat: lat, Lng: lng, GoLive: gl})
-	s.back(w, r, to, msgOr(err, "Building profile saved"))
+	s.back(w, r, to, msgOr(err, "Router profile saved"))
 }
 
 func parseCoord(v string) (float64, error) {

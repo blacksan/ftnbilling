@@ -221,7 +221,7 @@ func (m *Manager) startLocked(s store.Site) {
 	m.mu.Unlock()
 	m.wg.Add(1)
 	go func() { defer m.wg.Done(); m.run(ctx, rt) }()
-	m.log.Info("building started", "site", id, "name", s.Name, "mode", s.Mode)
+	m.log.Info("router started", "site", id, "name", s.Name, "mode", s.Mode)
 }
 
 // stopLocked cancels a runtime and waits until it has saved its metrics.
@@ -389,7 +389,7 @@ func (m *Manager) CreateSite(in SiteInput) (store.Site, error) {
 			return err
 		}
 		if nameTaken(d, s.Name, "") {
-			return fmt.Errorf("there is already a building called %q", s.Name)
+			return fmt.Errorf("there is already a router called %q", s.Name)
 		}
 		s.ID, s.CreatedAt = store.NewSiteID(), m.now()
 		for {
@@ -426,7 +426,7 @@ func (m *Manager) UpdateSite(id string, in SiteInput) error {
 			return err
 		}
 		if nameTaken(d, s.Name, id) {
-			return fmt.Errorf("there is already a building called %q", s.Name)
+			return fmt.Errorf("there is already a router called %q", s.Name)
 		}
 		d.Sites[id] = s
 		return nil
@@ -458,7 +458,7 @@ func (m *Manager) SetDisabled(id string, disabled bool) error {
 }
 
 // ErrSiteHasAccounts is returned when removing a building that still has flats.
-var ErrSiteHasAccounts = errors.New("this building still has accounts. Move or delete them first")
+var ErrSiteHasAccounts = errors.New("this router still has accounts. Move or delete them first")
 
 // RemoveSite removes a building. confirm must equal its name, and it is
 // refused while accounts exist. The peer is dropped, the runtime stopped, the
@@ -471,7 +471,7 @@ func (m *Manager) RemoveSite(id, confirm string) error {
 			return billing.ErrNoSite
 		}
 		if strings.TrimSpace(confirm) != s.Name {
-			return fmt.Errorf("type the building name %q to confirm", s.Name)
+			return fmt.Errorf("type the router name %q to confirm", s.Name)
 		}
 		for _, a := range d.Accounts {
 			if a.SiteID == id {
@@ -491,7 +491,7 @@ func (m *Manager) RemoveSite(id, confirm string) error {
 				delete(d.Devices, k)
 			}
 		}
-		d.AddEvent(store.Event{Time: m.now(), SiteID: id, Kind: "info", Msg: "building removed: " + s.Name})
+		d.AddEvent(store.Event{Time: m.now(), SiteID: id, Kind: "info", Msg: "router removed: " + s.Name})
 		return nil
 	})
 	if err != nil {

@@ -383,7 +383,7 @@ func TestStormGuard(t *testing.T) {
 			t.Fatalf("%s: a storm is one message, got %v", ch, r.out.texts(ch))
 		}
 	}
-	if txt := r.out.texts(notify.ChanEmail)[0]; !strings.Contains(txt, "4 of 5 buildings") || !strings.Contains(txt, "Site 0") || !strings.Contains(txt, "Site 3") {
+	if txt := r.out.texts(notify.ChanEmail)[0]; !strings.Contains(txt, "4 of 5 routers") || !strings.Contains(txt, "Site 0") || !strings.Contains(txt, "Site 3") {
 		t.Fatal(txt)
 	}
 	if r.e.OpenCount("") != 4 {

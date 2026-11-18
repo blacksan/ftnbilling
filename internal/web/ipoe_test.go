@@ -110,7 +110,7 @@ func TestSiteViewIPoEActions(t *testing.T) {
 	if _, err := m.svc.CreateAccount(billing.AccountInput{SiteID: s.ID, Flat: "Flat 3B", MAC: "AA:BB:CC:DD:EE:01"}); err != nil {
 		t.Fatal(err)
 	}
-	page := m.adminGet(t, "/admin/sites/view?id="+s.ID)
+	page := m.adminGet(t, "/admin/routers/view?id="+s.ID)
 	for _, want := range []string{"Access mode", "/admin/sites/adopt", "Cut over command", "Join only command", "Cleanup command", "in sync"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("site page lacks %q", want)
@@ -177,7 +177,7 @@ func TestSiteViewIPoEActions(t *testing.T) {
 	}
 	// Confirm cutover is refused until the router runs ftn-dhcp, and removes the timer when it does.
 	rt.SeedRow("/system/scheduler", routeros.Row{"name": sites.RollbackSchedule})
-	page = m.adminGet(t, "/admin/sites/view?id="+s.ID)
+	page = m.adminGet(t, "/admin/routers/view?id="+s.ID)
 	if !strings.Contains(page, "Cutover not confirmed") {
 		t.Fatal("pending cutover is not shown")
 	}
