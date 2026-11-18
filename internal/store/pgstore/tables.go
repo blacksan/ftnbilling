@@ -377,6 +377,13 @@ var notesC = (&codec[store.Note]{
 	},
 }).build()
 
+var settingsC = (&codec[store.Setting]{
+	name: "settings", pk: []string{"key"}, key: func(v store.Setting) string { return v.Key },
+	cols: []string{"key", "value", "enc", "updated_at"},
+	args: func(v store.Setting) []any { return []any{v.Key, v.Value, v.Enc, tm(v.UpdatedAt)} },
+	dst:  func(v *store.Setting) []any { return []any{&v.Key, &v.Value, &v.Enc, t_(&v.UpdatedAt)} },
+}).build()
+
 var eventsC = (&codec[store.Event]{
 	name: "events", pk: []string{"seq"}, key: func(v store.Event) string { return fmt.Sprint(v.Seq) },
 	cols: []string{"seq", "time", "site_id", "kind", "account_id", "customer_id", "equipment_id", "msg"},

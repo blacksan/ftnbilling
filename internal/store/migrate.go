@@ -69,7 +69,7 @@ func (d *Data) migrateV3toV4(now time.Time) {
 		}
 	}
 	d.deriveCRM(now)
-	d.Format = FormatVersion
+	d.Format = 4
 }
 
 // detID makes a stable 12-hex id so that deriving twice gives the same rows.

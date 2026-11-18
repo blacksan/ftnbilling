@@ -34,7 +34,7 @@ func TestMigrateV2ToV3(t *testing.T) {
 	}
 	var siteID string
 	s.View(func(d *Data) {
-		if d.Format != 4 || len(d.Sites) != 1 {
+		if d.Format != FormatVersion || len(d.Sites) != 1 {
 			t.Fatalf("format %d sites %d", d.Format, len(d.Sites))
 		}
 		for id, st := range d.Sites {
@@ -77,7 +77,7 @@ func TestMigrateV2ToV3(t *testing.T) {
 	var probe struct{ Format int }
 	raw, _ := os.ReadFile(p)
 	json.Unmarshal(raw, &probe)
-	if probe.Format != 4 {
+	if probe.Format != FormatVersion {
 		t.Fatalf("saved format %d", probe.Format)
 	}
 	s2, err := Open(dir)
@@ -99,7 +99,7 @@ func TestMigrateV2EmptyCreatesNoSite(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.View(func(d *Data) {
-		if d.Format != 4 || len(d.Sites) != 0 {
+		if d.Format != FormatVersion || len(d.Sites) != 0 {
 			t.Fatalf("%d %d", d.Format, len(d.Sites))
 		}
 	})
@@ -138,7 +138,7 @@ func TestV3RoundTrip(t *testing.T) {
 }
 
 func TestUnknownFormatRefused(t *testing.T) {
-	for _, f := range []string{"1", "5", "0"} {
+	for _, f := range []string{"1", "6", "0"} {
 		dir := t.TempDir()
 		p := filepath.Join(dir, "ispbill.json")
 		raw := []byte(`{"format":` + f + `}`)
@@ -239,5 +239,46 @@ func TestMigrateV2OrphanDevicesDropped(t *testing.T) {
 	}
 	if problems := Validate(d); len(problems) != 0 {
 		t.Fatalf("Validate: %v", problems)
+	}
+}
+
+// A format 4 file (from before settings existed) loads, is backed up as
+// .v4.bak, is rewritten as format 5 and keeps every row.
+func TestMigrateV4ToV5(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "ispbill.json")
+	v4 := `{"format":4,"sites":{"s1":{"id":"s1","name":"A","mode":"env"}},"packages":{},"accounts":{},"orders":{},"vouchers":{},"payments":{},"devices":{},"tasks":{},"events":[],"event_seq":0}`
+	os.WriteFile(p, []byte(v4), 0o600)
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.View(func(d *Data) {
+		if d.Format != 5 || len(d.Sites) != 1 || d.Settings == nil || len(d.Settings) != 0 {
+			t.Fatalf("format %d sites %d settings %v", d.Format, len(d.Sites), d.Settings)
+		}
+	})
+	if b, err := os.ReadFile(p + ".v4.bak"); err != nil || string(b) != v4 {
+		t.Fatalf("v4 backup: %v", err)
+	}
+	if err := s.Update(func(d *Data) error {
+		d.Settings["admin.pass_hash"] = Setting{Key: "admin.pass_hash", Value: "h"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s2, _ := Open(dir)
+	s2.View(func(d *Data) {
+		if d.Settings["admin.pass_hash"].Value != "h" {
+			t.Fatal("setting lost over a reopen")
+		}
+	})
+	// An older binary (format 4 only) must refuse, not drop the hash: the
+	// file now says 5, and decodeJSON of an older build rejects unknown formats.
+	var probe struct{ Format int }
+	raw, _ := os.ReadFile(p)
+	json.Unmarshal(raw, &probe)
+	if probe.Format != 5 {
+		t.Fatalf("saved format %d", probe.Format)
 	}
 }

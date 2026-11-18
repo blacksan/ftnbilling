@@ -16,7 +16,7 @@ import (
 
 // Tables lists every data table in report order.
 var Tables = []string{"sites", "packages", "customers", "equipment", "accounts", "tenancies", "site_contacts", "orders", "vouchers",
-	"payments", "devices", "tasks", "equipment_events", "notes", "events"}
+	"payments", "devices", "tasks", "equipment_events", "notes", "settings", "events"}
 
 // Counts are row counts per table plus the sum of applied payments.
 type Counts struct {
@@ -32,7 +32,7 @@ func CountsOf(d *store.Data) Counts {
 		"sites": len(d.Sites), "packages": len(d.Packages), "customers": len(d.Customers), "equipment": len(d.Equipment),
 		"accounts": len(d.Accounts) + len(d.ClosedAccounts), "tenancies": len(d.Tenancies), "site_contacts": len(d.Contacts),
 		"orders": len(d.Orders), "vouchers": len(d.Vouchers), "payments": len(d.Payments), "devices": len(d.Devices), "tasks": len(d.Tasks),
-		"equipment_events": len(d.EquipmentEvents), "notes": len(d.Notes), "events": len(d.Events),
+		"equipment_events": len(d.EquipmentEvents), "notes": len(d.Notes), "settings": len(d.Settings), "events": len(d.Events),
 	}, Closed: len(d.ClosedAccounts)}
 	for _, p := range d.Payments {
 		if p.Status == store.PayApplied {
@@ -191,6 +191,9 @@ func (b *Backend) Import(ctx context.Context, d *store.Data, opt ImportOptions) 
 		return want, err
 	}
 	if err := copyRows(ctx, tx, notesC, mapVals(d.Notes)); err != nil {
+		return want, err
+	}
+	if err := copyRows(ctx, tx, settingsC, mapVals(d.Settings)); err != nil {
 		return want, err
 	}
 	if err := copyRows(ctx, tx, eventsC, d.Events); err != nil {

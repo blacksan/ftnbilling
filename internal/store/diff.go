@@ -50,8 +50,9 @@ func (x EquipmentEvent) norm() EquipmentEvent {
 	x.Time = nt(x.Time)
 	return x
 }
-func (x Note) norm() Note   { x.Time = nt(x.Time); return x }
-func (x Event) norm() Event { x.Time = nt(x.Time); return x }
+func (x Note) norm() Note       { x.Time = nt(x.Time); return x }
+func (x Setting) norm() Setting { x.UpdatedAt = nt(x.UpdatedAt); return x }
+func (x Event) norm() Event     { x.Time = nt(x.Time); return x }
 
 // Norm returns the row as it will be stored: times in UTC at microsecond
 // precision. Backends apply it on load; the Store applies it on write.
@@ -69,6 +70,7 @@ func (x Task) Norm() Task                     { return x.norm() }
 func (x EquipmentEvent) Norm() EquipmentEvent { return x.norm() }
 func (x Note) Norm() Note                     { return x.norm() }
 func (x Event) Norm() Event                   { return x.norm() }
+func (x Setting) Norm() Setting               { return x.norm() }
 
 func eqc[V comparable](a, b V) bool { return a == b }
 func eqDeep[V any](a, b V) bool     { return reflect.DeepEqual(a, b) }
@@ -207,6 +209,8 @@ var tables = []table{
 		eqc[EquipmentEvent], EquipmentEvent.norm, func(v EquipmentEvent) string { return v.ID }, nil},
 	tbl[Note]{func(d *Data) *map[string]Note { return &d.Notes }, func(c *ChangeSet) *Delta[Note] { return &c.Notes },
 		eqc[Note], Note.norm, func(v Note) string { return v.ID }, nil},
+	tbl[Setting]{func(d *Data) *map[string]Setting { return &d.Settings }, func(c *ChangeSet) *Delta[Setting] { return &c.Settings },
+		eqc[Setting], Setting.norm, func(v Setting) string { return v.Key }, nil},
 }
 
 // ---- accounts: open and closed share one key space ------------------------
@@ -387,7 +391,7 @@ func cloneData(d *Data) Data {
 		ClosedAccounts: cloneMap(d.ClosedAccounts, nil), Orders: cloneMap(d.Orders, nil), Vouchers: cloneMap(d.Vouchers, nil),
 		Payments: cloneMap(d.Payments, nil), Devices: cloneMap(d.Devices, nil), Tasks: cloneMap(d.Tasks, nil),
 		Customers: cloneMap(d.Customers, nil), Tenancies: cloneMap(d.Tenancies, nil), Contacts: cloneMap(d.Contacts, nil),
-		Equipment: cloneMap(d.Equipment, nil), EquipmentEvents: cloneMap(d.EquipmentEvents, nil), Notes: cloneMap(d.Notes, nil),
+		Equipment: cloneMap(d.Equipment, nil), EquipmentEvents: cloneMap(d.EquipmentEvents, nil), Notes: cloneMap(d.Notes, nil), Settings: cloneMap(d.Settings, nil),
 		Events: append([]Event(nil), d.Events...),
 	}
 }

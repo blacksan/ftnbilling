@@ -33,7 +33,7 @@ func TestMigrateV3ToV4DerivesCRM(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.View(func(d *Data) {
-		if d.Format != 4 {
+		if d.Format != FormatVersion {
 			t.Fatalf("format %d", d.Format)
 		}
 		// a1 and a2 share a phone (07.. and 2547.. forms): one customer, two tenancies.

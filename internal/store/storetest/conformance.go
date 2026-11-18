@@ -58,6 +58,8 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 		d.EquipmentEvents["ee1"] = store.EquipmentEvent{ID: "ee1", EquipmentID: "e1", Kind: store.EqEvAssigned, FromStatus: "in_stock", ToStatus: "installed",
 			SiteID: "s111111", AccountID: "a1", CustomerID: "c1", Note: "n", Time: at}
 		d.Notes["n1"] = store.Note{ID: "n1", CustomerID: "c1", AccountID: "a1", SiteID: "s111111", EquipmentID: "e1", Text: "hello", Time: at}
+		d.Settings["wa.token"] = store.Setting{Key: "wa.token", Value: "c2VhbGVk", Enc: true, UpdatedAt: at}
+		d.Settings["wa.lang"] = store.Setting{Key: "wa.lang", Value: "sw", UpdatedAt: at}
 		d.AddEvent(store.Event{Time: at, SiteID: "s111111", Kind: "info", AccountID: "a1", CustomerID: "c1", EquipmentID: "e1", Msg: "m"})
 		return nil
 	})
@@ -224,6 +226,51 @@ func Run(t *testing.T) {
 		s.Update(func(d *store.Data) error { d.AddEvent(store.Event{Kind: "info", Msg: "next"}); return nil })
 		if got := h.Reopen().Snapshot().EventSeq; got != 351 {
 			t.Fatalf("seq after restart: %d", got)
+		}
+	})
+
+	t.Run("SettingsDiffAndRollback", func(t *testing.T) {
+		h := New(t)
+		at := time.Date(2026, 6, 7, 8, 9, 10, 987654321, time.UTC)
+		if err := h.Store.Update(func(d *store.Data) error {
+			d.Settings["a.one"] = store.Setting{Key: "a.one", Value: "1", UpdatedAt: at}
+			d.Settings["a.two"] = store.Setting{Key: "a.two", Value: "sealed", Enc: true, UpdatedAt: at}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		got := h.Reopen().Snapshot().Settings
+		if len(got) != 2 || got["a.one"].Value != "1" || got["a.one"].Enc || !got["a.two"].Enc ||
+			!got["a.one"].UpdatedAt.Equal(at.Truncate(time.Microsecond)) {
+			t.Fatalf("settings not stored: %+v", got)
+		}
+		want := h.Store.Snapshot()
+		boom := errors.New("boom")
+		err := h.Store.Update(func(d *store.Data) error {
+			d.Settings["a.one"] = store.Setting{Key: "a.one", Value: "changed", UpdatedAt: at}
+			delete(d.Settings, "a.two")
+			d.Settings["a.three"] = store.Setting{Key: "a.three", Value: "x", UpdatedAt: at}
+			return boom
+		})
+		if !errors.Is(err, boom) || !reflect.DeepEqual(h.Store.Snapshot(), want) {
+			t.Fatalf("rollback after error failed: %v", err)
+		}
+		h.Fault.FailNextCommit(ErrInjected)
+		err = h.Store.Update(func(d *store.Data) error { delete(d.Settings, "a.one"); return nil })
+		if !errors.Is(err, store.ErrPersist) || !reflect.DeepEqual(h.Store.Snapshot(), want) {
+			t.Fatalf("rollback after commit failure failed: %v", err)
+		}
+		// Update one row and delete another in one commit.
+		if err := h.Store.Update(func(d *store.Data) error {
+			d.Settings["a.one"] = store.Setting{Key: "a.one", Value: "2", UpdatedAt: at}
+			delete(d.Settings, "a.two")
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		got = h.Reopen().Snapshot().Settings
+		if len(got) != 1 || got["a.one"].Value != "2" {
+			t.Fatalf("update+delete not stored: %+v", got)
 		}
 	})
 

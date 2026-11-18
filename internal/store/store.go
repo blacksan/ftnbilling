@@ -25,8 +25,8 @@ var ErrOldFormat = errors.New("ispbill.json is in an old or unknown data format"
 // FormatVersion is the data format. 2 = flat accounts locked to an ONT MAC
 // (single building); 3 = adds Sites and a SiteID on every row; 4 = adds
 // customers, tenancies, equipment, contacts, notes, closed accounts and event
-// sequence numbers.
-const FormatVersion = 4
+// sequence numbers; 5 = adds admin settings (and the admin password hash).
+const FormatVersion = 5
 
 const (
 	OrderPending = "pending"
@@ -391,6 +391,15 @@ type Note struct {
 	Time        time.Time `json:"time"`
 }
 
+// Setting is one admin-edited setting. Enc means Value is sealed with the
+// settings secretbox (see internal/secretbox); otherwise it is plain text.
+type Setting struct {
+	Key       string    `json:"key"`
+	Value     string    `json:"value"`
+	Enc       bool      `json:"enc,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // maxEvents is how many events stay in memory (a database keeps them all).
 const maxEvents = 300
 
@@ -418,6 +427,9 @@ type Data struct {
 	EquipmentEvents map[string]EquipmentEvent `json:"equipment_events"`
 	Notes           map[string]Note           `json:"notes"`
 	EventSeq        int64                     `json:"event_seq"` // last Event.Seq handed out
+
+	// Format 5: admin settings (key -> row), including the admin password hash.
+	Settings map[string]Setting `json:"settings"`
 }
 
 func (d *Data) init() {
@@ -466,6 +478,9 @@ func (d *Data) init() {
 	}
 	if d.Notes == nil {
 		d.Notes = map[string]Note{}
+	}
+	if d.Settings == nil {
+		d.Settings = map[string]Setting{}
 	}
 }
 

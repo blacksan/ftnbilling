@@ -100,6 +100,7 @@ func TestCodecsCoverEveryField(t *testing.T) {
 	guardCodec(t, tasksC)
 	guardCodec(t, eqEventsC)
 	guardCodec(t, notesC)
+	guardCodec(t, settingsC)
 	guardCodec(t, eventsC)
 }
 
@@ -115,7 +116,7 @@ func TestCodecColumnsExist(t *testing.T) {
 	}
 	for name, cols := range map[string][]string{"sites": sitesC.cols, "packages": packagesC.cols, "customers": customersC.cols, "equipment": equipmentC.cols,
 		"accounts": accountsC.cols, "tenancies": tenanciesC.cols, "site_contacts": contactsC.cols, "orders": ordersC.cols, "vouchers": vouchersC.cols,
-		"payments": paymentsC.cols, "devices": devicesC.cols, "tasks": tasksC.cols, "equipment_events": eqEventsC.cols, "notes": notesC.cols, "events": eventsC.cols} {
+		"payments": paymentsC.cols, "devices": devicesC.cols, "tasks": tasksC.cols, "equipment_events": eqEventsC.cols, "notes": notesC.cols, "settings": settingsC.cols, "events": eventsC.cols} {
 		i := strings.Index(all.String(), "CREATE TABLE "+name+" (")
 		if i < 0 {
 			t.Fatalf("table %s not in migrations", name)
@@ -209,5 +210,6 @@ func TestCodecRoundTripEveryField(t *testing.T) {
 	roundTrip(t, ctx, tx, tasksC, nil, store.Task.Norm)
 	roundTrip(t, ctx, tx, eqEventsC, func(v *store.EquipmentEvent) { v.Kind = "assigned" }, store.EquipmentEvent.Norm)
 	roundTrip(t, ctx, tx, notesC, nil, store.Note.Norm)
+	roundTrip(t, ctx, tx, settingsC, nil, store.Setting.Norm)
 	roundTrip(t, ctx, tx, eventsC, nil, store.Event.Norm)
 }

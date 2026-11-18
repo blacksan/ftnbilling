@@ -237,6 +237,8 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	do(err)
 	nts, err := queryAll(ctx, tx, notesC, "")
 	do(err)
+	sets, err := queryAll(ctx, tx, settingsC, "")
+	do(err)
 	limit := 300
 	if all {
 		limit = 1 << 30
@@ -253,6 +255,7 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	d.Accounts, d.ClosedAccounts, d.Tenancies, d.Contacts = map[string]store.Account{}, map[string]store.Account{}, map[string]store.Tenancy{}, map[string]store.Contact{}
 	d.Orders, d.Vouchers, d.Payments, d.Devices = map[string]store.Order{}, map[string]store.Voucher{}, map[string]store.Payment{}, map[string]store.Device{}
 	d.Tasks, d.EquipmentEvents, d.Notes = map[string]store.Task{}, map[string]store.EquipmentEvent{}, map[string]store.Note{}
+	d.Settings = map[string]store.Setting{}
 	fill(d.Sites, sites, sitesC)
 	fill(d.Packages, pk, packagesC)
 	fill(d.Customers, cust, customersC)
@@ -273,6 +276,7 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	fill(d.Tasks, tsk, tasksC)
 	fill(d.EquipmentEvents, eqe, eqEventsC)
 	fill(d.Notes, nts, notesC)
+	fill(d.Settings, sets, settingsC)
 	for i := len(evs) - 1; i >= 0; i-- { // oldest first in memory
 		d.Events = append(d.Events, evs[i])
 	}
@@ -306,6 +310,7 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	tasksC.queueDeletes(batch, cs.Tasks.Delete)
 	eqEventsC.queueDeletes(batch, cs.EquipmentEvents.Delete)
 	notesC.queueDeletes(batch, cs.Notes.Delete)
+	settingsC.queueDeletes(batch, cs.Settings.Delete)
 	mark("delete")
 	sitesC.queueUpserts(batch, cs.Sites)
 	mark("sites")
@@ -337,6 +342,8 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	mark("equipment_events")
 	notesC.queueUpserts(batch, cs.Notes)
 	mark("notes")
+	settingsC.queueUpserts(batch, cs.Settings)
+	mark("settings")
 	eventsC.queueUpserts(batch, store.Delta[store.Event]{Upsert: cs.NewEvents})
 	mark("events")
 	if batch.Len() == 0 {
