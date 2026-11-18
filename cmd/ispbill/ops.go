@@ -59,6 +59,26 @@ func mpesaConf(c config.Config) payments.MpesaConfig {
 	}
 }
 
+// resumeOnNewWAToken returns a function to call with every applied WhatsApp
+// configuration. The outbox pauses the channel when Meta refuses the token; a
+// new token (or phone number ID) is the fix, so the pause ends when one is
+// saved. The first call only records the starting values: a pause kept from
+// before a restart must not end just because the service started again.
+func resumeOnNewWAToken(resume func(channel string)) func(config.Config) {
+	var mu sync.Mutex
+	var token, phoneID string
+	first := true
+	return func(c config.Config) {
+		mu.Lock()
+		changed := !first && c.WhatsAppConfigured() && (c.WAToken != token || c.WAPhoneNumberID != phoneID)
+		first, token, phoneID = false, c.WAToken, c.WAPhoneNumberID
+		mu.Unlock()
+		if changed {
+			resume(notify.ChanWhatsApp)
+		}
+	}
+}
+
 func payHintOf(c config.Config) string {
 	if c.MpesaShortcode != "" {
 		return "M-Pesa Paybill " + c.MpesaShortcode
@@ -120,8 +140,10 @@ func startOps(ctx context.Context, wg *sync.WaitGroup, setm *settings.Manager, m
 		tenant.SetPayHint(payHintOf(c))
 		inbound.SetReplyInfo(payHintOf(c), c.SupportPhone)
 	})
+	waResume := resumeOnNewWAToken(box.Resume)
 	setm.OnApply(settings.SecWhatsApp, func(c config.Config) {
 		live.Store(&c)
+		waResume(c)
 		if c.WhatsAppConfigured() {
 			box.SetSender(notify.ChanWhatsApp, &notify.WhatsApp{Token: c.WAToken, PhoneNumberID: c.WAPhoneNumberID, APIVersion: c.WAAPIVersion, Lang: c.WALang})
 		} else {
