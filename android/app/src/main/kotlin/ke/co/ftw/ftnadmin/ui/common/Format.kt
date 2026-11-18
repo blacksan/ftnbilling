@@ -1,5 +1,9 @@
 package ke.co.ftw.ftnadmin.ui.common
 
+import java.time.Duration
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 fun formatBytes(bytes: Long): String {
@@ -14,15 +18,62 @@ fun formatBytes(bytes: Long): String {
     return String.format(Locale.US, "%.1f %s", value, units[i])
 }
 
-/** "12 s ago", "3 min ago", or "never" when [epochMs] is 0. */
-fun formatAge(epochMs: Long, nowMs: Long): String {
-    if (epochMs <= 0) return "never"
-    val s = ((nowMs - epochMs) / 1000).coerceAtLeast(0)
-    return when {
-        s < 60 -> "$s s ago"
-        s < 3600 -> "${s / 60} min ago"
-        else -> "${s / 3600} h ago"
+fun formatBps(bps: Long): String {
+    if (bps < 1000) return "$bps bps"
+    val units = arrayOf("kbps", "Mbps", "Gbps")
+    var v = bps / 1000.0
+    var i = 0
+    while (v >= 1000 && i < units.lastIndex) {
+        v /= 1000
+        i++
     }
+    return String.format(Locale.US, "%.1f %s", v, units[i])
 }
 
 fun formatKes(amount: Long): String = String.format(Locale.US, "KES %,d", amount)
+
+fun parseInstant(s: String?): Instant? = if (s.isNullOrBlank()) null else try {
+    Instant.parse(s)
+} catch (_: Exception) {
+    try {
+        java.time.OffsetDateTime.parse(s).toInstant()
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private val DATE_TIME = DateTimeFormatter.ofPattern("d MMM yyyy HH:mm", Locale.ENGLISH).withZone(ZoneId.of("Africa/Nairobi"))
+private val DATE = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH).withZone(ZoneId.of("Africa/Nairobi"))
+
+/** Nairobi local time, or "-" when absent. */
+fun formatDateTime(s: String?): String = parseInstant(s)?.let(DATE_TIME::format) ?: "-"
+
+fun formatDate(s: String?): String = parseInstant(s)?.let(DATE::format) ?: "-"
+
+/** "12 s ago", "3 min ago", "2 h ago", "4 d ago", or "never". */
+fun formatAge(s: String?, now: Instant = Instant.now()): String {
+    val t = parseInstant(s) ?: return "never"
+    val secs = Duration.between(t, now).seconds.coerceAtLeast(0)
+    return when {
+        secs < 60 -> "$secs s ago"
+        secs < 3600 -> "${secs / 60} min ago"
+        secs < 86_400 -> "${secs / 3600} h ago"
+        else -> "${secs / 86_400} d ago"
+    }
+}
+
+/** "in 3 d", "expired 2 h ago" style text for an expiry. */
+fun formatExpiry(s: String?, now: Instant = Instant.now()): String {
+    val t = parseInstant(s) ?: return "No expiry"
+    return if (t.isAfter(now)) {
+        val secs = Duration.between(now, t).seconds
+        val rel = when {
+            secs < 3600 -> "${secs / 60} min"
+            secs < 86_400 -> "${secs / 3600} h"
+            else -> "${secs / 86_400} d"
+        }
+        "${formatDateTime(s)} (in $rel)"
+    } else {
+        "${formatDateTime(s)} (${formatAge(s, now)})"
+    }
+}

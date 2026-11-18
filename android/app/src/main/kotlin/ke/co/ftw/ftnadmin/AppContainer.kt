@@ -1,114 +1,93 @@
 package ke.co.ftw.ftnadmin
 
 import android.app.Application
+import android.os.Build
 import android.os.SystemClock
-import android.webkit.CookieManager
-import com.wireguard.android.backend.Backend
-import com.wireguard.android.backend.GoBackend
 import ke.co.ftw.ftnadmin.auth.AppLock
-import ke.co.ftw.ftnadmin.auth.CredentialStore
-import ke.co.ftw.ftnadmin.auth.LockState
 import ke.co.ftw.ftnadmin.core.crypto.KeystoreAead
 import ke.co.ftw.ftnadmin.core.crypto.SecretStore
+import ke.co.ftw.ftnadmin.core.network.ApiClient
+import ke.co.ftw.ftnadmin.core.network.SecretTokenStore
+import ke.co.ftw.ftnadmin.core.network.SessionManager
 import ke.co.ftw.ftnadmin.core.prefs.Settings
-import ke.co.ftw.ftnadmin.net.AdminApi
-import ke.co.ftw.ftnadmin.net.AdminHttp
-import ke.co.ftw.ftnadmin.net.PublicHealth
-import ke.co.ftw.ftnadmin.tunnel.TunnelManager
-import ke.co.ftw.ftnadmin.tunnel.TunnelRepository
-import ke.co.ftw.ftnadmin.tunnel.TunnelState
-import ke.co.ftw.ftnadmin.web.AdminWebController
+import ke.co.ftw.ftnadmin.data.accounts.AccountsRepository
+import ke.co.ftw.ftnadmin.data.alerts.AlertsRepository
+import ke.co.ftw.ftnadmin.data.auth.AuthRepository
+import ke.co.ftw.ftnadmin.data.auth.DeviceInfo
+import ke.co.ftw.ftnadmin.data.dashboard.DashboardRepository
+import ke.co.ftw.ftnadmin.data.payments.PaymentsRepository
+import ke.co.ftw.ftnadmin.data.sites.NewDevicesRepository
+import ke.co.ftw.ftnadmin.data.sites.SitesRepository
+import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Hand-written dependency graph; one instance for the process, owned by [FtnApp]. */
-class AppContainer(private val app: Application) {
+/** Hand-written dependency graph (single module, no Hilt); one instance for the process, owned by [FtnApp]. */
+class AppContainer(app: Application) {
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    private val backend: Backend = GoBackend(app)
     private val secrets = SecretStore(app, KeystoreAead())
 
     val settings = Settings(app, appScope)
-    val tunnelRepository = TunnelRepository(secrets)
-    val credentials = CredentialStore(secrets)
-    val tunnel = TunnelManager(app, backend, tunnelRepository, settings, AdminHttp.healthProbe, appScope)
     val appLock = AppLock(settings, appScope)
-    val adminApi = AdminApi(tunnel, credentials)
-    val publicHealth = PublicHealth(settings)
     val windowSecurity = WindowSecurity()
 
-    /** True after a wipe until the onboarding screen has shown the reminder to revoke the device. */
-    private val _wiped = MutableStateFlow(false)
-    val wiped: StateFlow<Boolean> = _wiped.asStateFlow()
+    val sessions = SessionManager(SecretTokenStore(secrets))
+    val api: ApiClient = ApiClient.create(BuildConfig.API_BASE, sessions)
 
-    private val foreground = MutableStateFlow(false)
+    val auth = AuthRepository(api, sessions, ::deviceInfo)
+    val dashboard = DashboardRepository(api)
+    val accounts = AccountsRepository(api)
+    val payments = PaymentsRepository(api)
+    val sites = SitesRepository(api)
+    val newDevices = NewDevicesRepository(api)
+    val alerts = AlertsRepository(api)
 
     init {
-        appScope.launch(Dispatchers.IO) {
-            tunnelRepository.load()
-            credentials.preload()
-        }
-        appScope.launch {
-            // A login that was not saved only lives as long as the tunnel session.
-            tunnel.state.collect { if (it !is TunnelState.Up) credentials.clearSession() }
-        }
-        appScope.launch {
-            // Auto-connect when the app comes to the foreground unlocked; not after a manual disconnect.
-            combine(foreground, appLock.state) { fg, lock -> fg && lock == LockState.Unlocked }
-                .distinctUntilChanged()
-                .collect { ready ->
-                    val s = settings.state.value
-                    if (ready && s != null && s.autoConnect && s.onboardingDone && tunnel.state.value is TunnelState.Down) {
-                        tunnel.connect()
-                    }
-                }
-        }
+        appScope.launch(Dispatchers.IO) { sessions.restore() }
     }
 
-    fun onForeground() {
-        foreground.value = true
-        tunnel.onAppForeground()
-        appLock.onForeground(SystemClock.elapsedRealtime())
-    }
+    fun onForeground() = appLock.onForeground(SystemClock.elapsedRealtime())
 
-    fun onBackground() {
-        foreground.value = false
-        appLock.onBackground(SystemClock.elapsedRealtime())
-        tunnel.onAppBackground()
-    }
+    fun onBackground() = appLock.onBackground(SystemClock.elapsedRealtime())
 
-    /** The server's logout always answers 401, so logging out natively means: forget the session, drop the tunnel, lock. */
+    /** Revokes this device on the server and forgets the tokens. */
     fun logout() {
-        CookieManager.getInstance().removeAllCookies(null)
-        appLock.lock()
-        appScope.launch { tunnel.disconnect() }
+        appScope.launch { auth.logout() }
     }
 
-    /** Removes every trace of the tunnel, login and settings from this device. */
+    /** Removes the session and every setting from this device. */
     suspend fun wipe() {
-        tunnel.disconnect()
         withContext(Dispatchers.IO) {
-            tunnelRepository.clear()
-            credentials.forget()
+            sessions.signOut()
             secrets.wipeAll()
             settings.reset()
         }
-        AdminWebController.clearAllWebData(app)
         appLock.reset()
-        _wiped.value = true
     }
 
-    fun acknowledgeWipe() {
-        _wiped.value = false
+    private fun deviceInfo(): DeviceInfo {
+        val id = secrets.get(INSTALL_ID)?.decodeToString() ?: UUID.randomUUID().toString().also {
+            secrets.put(INSTALL_ID, it.encodeToByteArray())
+        }
+        val model = Build.MODEL.orEmpty()
+        return DeviceInfo(
+            installId = id,
+            name = "${Build.MANUFACTURER.orEmpty().replaceFirstChar { it.uppercase() }} $model".trim(),
+            model = model,
+            appVersion = BuildConfig.VERSION_NAME,
+        )
+    }
+
+    private companion object {
+        const val INSTALL_ID = "install_id"
     }
 }
 

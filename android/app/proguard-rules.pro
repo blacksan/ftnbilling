@@ -1,4 +1,5 @@
-# wireguard-android reaches the Go backend through JNI and reflection-like lookups.
--keep class com.wireguard.android.backend.** { *; }
--keep class com.wireguard.crypto.** { *; }
+# kotlinx.serialization keeps its own rules via the plugin; OkHttp ships consumer rules.
 -dontwarn javax.annotation.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.conscrypt.**
+-dontwarn org.openjsse.**

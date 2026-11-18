@@ -3,6 +3,7 @@ import org.gradle.api.JavaVersion
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 // Release signing comes from the environment (CI). Without it the release build stays unsigned.
@@ -19,10 +20,7 @@ android {
         versionCode = providers.gradleProperty("versionCode").map(String::toInt).getOrElse(1)
         versionName = providers.gradleProperty("versionName").getOrElse("0.1.0-dev")
 
-        buildConfigField("String", "ADMIN_ORIGIN", "\"http://10.98.0.1:8080\"")
-        buildConfigField("String", "ADMIN_HOST", "\"10.98.0.1\"")
-        buildConfigField("int", "ADMIN_PORT", "8080")
-        buildConfigField("String", "TUNNEL_LIB_VERSION", "\"${libs.versions.tunnel.get()}\"")
+        buildConfigField("String", "API_BASE", "\"https://isp.ftw.co.ke\"")
     }
 
     signingConfigs {
@@ -40,6 +38,10 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            // Debug builds may point at a staging server: -PapiBase=https://staging.example (https only).
+            val debugBase = providers.gradleProperty("apiBase").getOrElse("https://isp.ftw.co.ke")
+            require(debugBase.startsWith("https://")) { "apiBase must be https" }
+            buildConfigField("String", "API_BASE", "\"$debugBase\"")
         }
         release {
             isMinifyEnabled = true
@@ -57,6 +59,10 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
     }
 
     packaging {
@@ -84,10 +90,10 @@ dependencies {
     implementation(libs.androidx.biometric)
     implementation(libs.kotlinx.coroutines.android)
 
-    implementation(libs.wireguard.tunnel)
-    implementation(libs.zxing.embedded)
+    implementation(libs.okhttp)
+    implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.junit)
-    testImplementation(libs.org.json)
+    testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.kotlinx.coroutines.test)
 }

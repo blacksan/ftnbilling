@@ -89,8 +89,8 @@ fun LockScreen() {
             title = { Text("Wipe app data?") },
             text = {
                 Text(
-                    "This removes the VPN tunnel, saved password and settings from this device. " +
-                        "Afterwards run ftnbilling-admin-peer remove <name> on the server to revoke this device.",
+                    "This signs you out and removes the saved session and settings from this device. " +
+                        "Revoke this device in Settings on another phone, or ask the owner to, so its tokens stop working.",
                 )
             },
             confirmButton = {
