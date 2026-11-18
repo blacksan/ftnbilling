@@ -54,6 +54,7 @@ type Server struct {
 	rl        *limiter
 	joinRL    *limiter // /j/ by client address
 	wgNet     netip.Prefix
+	adminNet  netip.Prefix
 	ops       Ops
 
 	onlineMu sync.Mutex
@@ -70,6 +71,9 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 		rl: newLimiter(15, time.Minute), joinRL: newLimiter(10, time.Minute), online: map[string]onlineEntry{}}
 	if p, err := netip.ParsePrefix(cfg.WGSubnet); err == nil {
 		s.wgNet = p.Masked()
+	}
+	if p, err := netip.ParsePrefix(cfg.AdminAllowCIDR); err == nil {
+		s.adminNet = p.Masked()
 	}
 	funcs := template.FuncMap{
 		"kes": func(n int) string { return "KES " + itoa(n) },
@@ -340,4 +344,23 @@ func (s *Server) fromTunnel(r *http.Request) bool {
 	}
 	a, err := netip.ParseAddr(realIP(r))
 	return err == nil && s.wgNet.Contains(a.Unmap())
+}
+
+// adminAllowed says whether the admin may be served to this request: only
+// from the machine itself (SSH tunnel) and the admin WireGuard network.
+// Router tunnels (WG_SUBNET) and every other address are refused, even
+// though the reverse proxy already blocks /admin from the internet.
+func (s *Server) adminAllowed(r *http.Request) bool {
+	if s.fromTunnel(r) {
+		return false
+	}
+	a, err := netip.ParseAddr(realIP(r))
+	if err != nil {
+		return false
+	}
+	a = a.Unmap()
+	if a.IsLoopback() {
+		return true
+	}
+	return s.adminNet.IsValid() && s.adminNet.Contains(a)
 }

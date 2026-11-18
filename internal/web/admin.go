@@ -71,8 +71,9 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 // admin enforces basic auth and, for POST, the CSRF double-submit check.
 func (s *Server) admin(h http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.fromTunnel(r) {
-			// The admin is never served to the router tunnels.
+		if !s.adminAllowed(r) {
+			// The admin is served only to loopback and the admin tunnel,
+			// never to the router tunnels or the internet.
 			http.NotFound(w, r)
 			return
 		}

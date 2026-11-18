@@ -66,7 +66,7 @@ func newMultiOps(t *testing.T, mut func(*config.Config), mkOps func(cfg config.C
 	_, pub, _ := wg.GenerateKeypair()
 	cfg := config.Config{BrandName: "Building WiFi", TestMode: true, AdminUser: "admin", AdminPass: pw,
 		SupportPhone: "0700 111 222", NetflowAddr: "off", PingTargets: []string{"8.8.8.8"},
-		WGPublicKey: pub, WGEndpoint: "203.0.113.10:51820", WGSubnet: "10.99.0.0/22", JoinTokenTTL: 30 * time.Minute,
+		WGPublicKey: pub, WGEndpoint: "203.0.113.10:51820", WGSubnet: "10.99.0.0/22", AdminAllowCIDR: "10.98.0.0/24", JoinTokenTTL: 30 * time.Minute,
 		JoinRequireMikrotikUA: true, PublicBaseURL: "https://billing.example.co.ke", DataDir: t.TempDir(),
 		FlowEvery: time.Hour, PortEvery: time.Hour, PingEvery: time.Hour, DNSEvery: time.Hour, SaveEvery: time.Hour}
 	if mut != nil {
@@ -203,21 +203,34 @@ func TestMoveAccountThroughTheAdmin(t *testing.T) {
 	}
 }
 
-func TestAdminRefusedFromTheTunnelSubnet(t *testing.T) {
+func TestAdminServedOnlyToLoopbackAndAdminNet(t *testing.T) {
 	m := newMulti(t)
+	for ip, want := range map[string]int{
+		"10.99.0.5":    404, // a router tunnel
+		"198.51.100.7": 404, // the internet
+		"10.98.0.5":    200, // an admin WireGuard peer
+		"10.98.1.5":    404, // outside the admin /24
+		"127.0.0.1":    200,
+	} {
+		req, _ := http.NewRequest("GET", m.ts.URL+"/admin", nil)
+		req.SetBasicAuth("admin", pw)
+		req.Header.Set("X-Forwarded-For", ip)
+		r, err := m.cl.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		if r.StatusCode != want {
+			t.Errorf("admin from %s: %d, want %d", ip, r.StatusCode, want)
+		}
+	}
+	// no forwarded header: the test client is on loopback
 	req, _ := http.NewRequest("GET", m.ts.URL+"/admin", nil)
 	req.SetBasicAuth("admin", pw)
-	req.Header.Set("X-Forwarded-For", "10.99.0.5")
 	r, _ := m.cl.Do(req)
 	r.Body.Close()
-	if r.StatusCode != 404 {
-		t.Fatalf("admin from a tunnel address: %d", r.StatusCode)
-	}
-	req.Header.Set("X-Forwarded-For", "198.51.100.7")
-	r, _ = m.cl.Do(req)
-	r.Body.Close()
 	if r.StatusCode != 200 {
-		t.Fatalf("admin from outside: %d", r.StatusCode)
+		t.Errorf("admin from loopback: %d", r.StatusCode)
 	}
 }
 
