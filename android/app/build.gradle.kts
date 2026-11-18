@@ -10,7 +10,7 @@ val signingPath: String? = providers.environmentVariable("ANDROID_KEYSTORE_PATH"
 
 android {
     namespace = "ke.co.ftw.ftnadmin"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "ke.co.ftw.ftnadmin"
