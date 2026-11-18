@@ -19,6 +19,7 @@ import (
 	"ispbill/internal/routeros"
 	"ispbill/internal/sites"
 	"ispbill/internal/store"
+	"ispbill/internal/store/storetest"
 	"ispbill/internal/web"
 	"ispbill/internal/wg"
 )
@@ -71,7 +72,7 @@ func newMultiOps(t *testing.T, mut func(*config.Config), mkOps func(cfg config.C
 	if mut != nil {
 		mut(&cfg)
 	}
-	st, _ := store.Open(cfg.DataDir)
+	st, _ := storetest.Open(t, cfg.DataDir)
 	logs := &syncBuf{}
 	log := slog.New(slog.NewTextHandler(logs, nil))
 	m := &multi{mocks: map[string]*routeros.Mock{}, logs: logs}

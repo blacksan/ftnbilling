@@ -50,6 +50,7 @@ type Service struct {
 	log     *slog.Logger
 	now     func() time.Time
 	policy  Policy
+	box     *Secretbox // national-ID encryption; nil = feature off
 
 	sites sync.Map // siteID -> *siteState
 	hook  func()   // called after a payment was applied (tenant messages)
@@ -122,10 +123,19 @@ func cleanText(s string, max int) string {
 func (s *Service) uniqueCode(d *store.Data) string {
 	for {
 		c := RandomCode(6)
-		if _, taken := d.AccountByCode(c); !taken {
+		if _, taken := d.AccountByCode(c); !taken && !closedCodeTaken(d, c) {
 			return c
 		}
 	}
+}
+
+func closedCodeTaken(d *store.Data, code string) bool {
+	for _, a := range d.ClosedAccounts {
+		if a.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 // flatTaken: flat labels only need to be unique inside one building.
@@ -170,11 +180,9 @@ func (s *Service) SetWhatsApp(id, raw string, samePhone, optOut bool) error {
 		if err != nil {
 			return err
 		}
-		if a.WhatsApp == wa && a.WAOptOut == optOut {
+		if !d.SetWhatsApp(id, wa, optOut) { // also updates the linked customer
 			return store.ErrNoChange
 		}
-		a.WhatsApp, a.WAOptOut = wa, optOut
-		d.Accounts[id] = a
 		return nil
 	})
 }

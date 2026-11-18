@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"ispbill/internal/store"
+	"ispbill/internal/store/storetest"
 )
 
 type inRig struct {
@@ -19,11 +20,11 @@ type inRig struct {
 
 func newInRig(t *testing.T) *inRig {
 	t.Helper()
-	st, _ := store.Open(t.TempDir())
+	st, _ := storetest.Open(t, t.TempDir())
 	c := &clock{t: noon()}
 	box := newBox(t, c, &fake{}, nil)
 	st.Update(func(d *store.Data) error {
-		d.Sites["s1"] = store.Site{ID: "s1", Name: "Kilimani"}
+		d.Sites["s1"] = store.Site{Mode: store.SiteModeEnv, ID: "s1", Name: "Kilimani"}
 		d.Packages["pm"] = store.Package{ID: "pm", Name: "Monthly 10 Mbps", Slug: "m", DurationMin: 43200, SpeedMbps: 10, PriceKES: 3000}
 		d.Accounts["a1"] = store.Account{ID: "a1", SiteID: "s1", Code: "ABC123", Flat: "Flat 3B", WhatsApp: "254712345678", PackageID: "pm", ExpiresAt: c.Now().Add(50 * time.Hour)}
 		d.Accounts["a2"] = store.Account{ID: "a2", SiteID: "s1", Code: "XYZ789", Flat: "Flat 4A", WhatsApp: "254799999999"}

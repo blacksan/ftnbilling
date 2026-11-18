@@ -80,7 +80,7 @@ func (s *Service) EndPlan(ctx context.Context, id string) error {
 	return err
 }
 
-// DeleteAccount removes a flat's account. Its router user and session are
+// DeleteAccount closes a flat's account (it moves to Data.ClosedAccounts). Its router user and session are
 // removed (retried in the background if the router is unreachable). Payment
 // history is kept in the ledger; the account code is never reused.
 // confirm must equal the account code, to avoid deleting the wrong flat.
@@ -96,7 +96,18 @@ func (s *Service) DeleteAccount(ctx context.Context, id, confirm string) error {
 		}
 		// Queue the router cleanup before the account disappears.
 		s.enqueueLocked(d, a, true, "account deleted")
+		// The flat is closed, not erased: it keeps its code, history and
+		// payments, and its ONT goes back to stock as "returned".
+		now := s.now()
 		delete(d.Accounts, id)
+		a.ClosedAt = now
+		d.ClosedAccounts[id] = a
+		closeTenancyLocked(d, id, now)
+		for k, e := range d.Equipment {
+			if e.AccountID == id {
+				returnLocked(d, k, e, store.EqReturned, "account closed", now)
+			}
+		}
 		for k, o := range d.Orders {
 			if o.AccountID == id && o.Status == store.OrderPending {
 				o.Status, o.Reason = store.OrderFailed, "account deleted"

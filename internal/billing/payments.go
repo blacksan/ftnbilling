@@ -108,7 +108,7 @@ func (s *Service) creditLocked(d *store.Data, in CreditInput) (p store.Payment, 
 	s.enqueueLocked(d, a, false, "payment "+key)
 	p = store.Payment{
 		Key: key, SiteID: a.SiteID, Method: in.Method, Status: store.PayApplied, AmountKES: in.AmountKES,
-		Phone: in.Phone, Name: in.Name, BillRef: in.BillRef, AccountID: a.ID, PackageID: pkg.ID,
+		Phone: in.Phone, Name: in.Name, BillRef: in.BillRef, AccountID: a.ID, CustomerID: a.CustomerID, PackageID: pkg.ID,
 		OrderID: in.OrderID, Note: in.Note, PaidAt: paid, CreatedAt: now,
 	}
 	d.Payments[key] = p
@@ -169,13 +169,13 @@ func (s *Service) RecordUnmatched(in UnmatchedInput) (bool, error) {
 		if paid.IsZero() {
 			paid = now
 		}
-		siteID := in.SiteID
+		siteID, customerID := in.SiteID, ""
 		if a, ok := d.Accounts[in.AccountID]; ok {
-			siteID = a.SiteID
+			siteID, customerID = a.SiteID, a.CustomerID
 		}
 		d.Payments[key] = store.Payment{
 			Key: key, SiteID: siteID, Method: in.Method, Status: store.PayUnmatched, AmountKES: in.AmountKES,
-			Phone: in.Phone, Name: in.Name, BillRef: in.BillRef, AccountID: in.AccountID,
+			Phone: in.Phone, Name: in.Name, BillRef: in.BillRef, AccountID: in.AccountID, CustomerID: customerID,
 			OrderID: in.Ord, Note: in.Note, PaidAt: paid, CreatedAt: now,
 		}
 		created = true
@@ -208,6 +208,7 @@ func (s *Service) AssignPayment(ctx context.Context, key, accountID, pkgID, note
 		d.Accounts[a.ID] = a
 		s.enqueueLocked(d, a, false, "assigned payment "+key)
 		p.Status, p.AccountID, p.PackageID, p.ResolvedAt = store.PayApplied, a.ID, pkg.ID, now
+		p.CustomerID = a.CustomerID
 		p.SiteID = a.SiteID
 		site = a.SiteID
 		p.Note = joinNote(p.Note, note)

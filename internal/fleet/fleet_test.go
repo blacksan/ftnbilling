@@ -14,6 +14,7 @@ import (
 	"ispbill/internal/metrics"
 	"ispbill/internal/routeros"
 	"ispbill/internal/store"
+	"ispbill/internal/store/storetest"
 	"ispbill/internal/wg"
 )
 
@@ -65,7 +66,7 @@ type rig struct {
 func newRig(t *testing.T) *rig {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(dir)
+	st, err := storetest.Open(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}

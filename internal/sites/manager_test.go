@@ -3,6 +3,7 @@ package sites
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -20,6 +21,7 @@ import (
 	"ispbill/internal/metrics"
 	"ispbill/internal/routeros"
 	"ispbill/internal/store"
+	"ispbill/internal/store/storetest"
 	"ispbill/internal/wg"
 )
 
@@ -48,7 +50,7 @@ func newFixture(t *testing.T, mut func(*config.Config)) *fixture {
 	if mut != nil {
 		mut(&cfg)
 	}
-	st, err := store.Open(cfg.DataDir)
+	st, err := storetest.Open(t, cfg.DataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,10 +105,17 @@ func TestJoinTokenFlow(t *testing.T) {
 		t.Fatalf("%q %v %v", tok, exp, err)
 	}
 	// Only the hash is stored: the plaintext token is nowhere in the data file.
-	raw, _ := os.ReadFile(filepath.Join(f.cfg.DataDir, "ispbill.json"))
-	if strings.Contains(string(raw), tok) || !strings.Contains(string(raw), HashToken(tok)) {
-		t.Fatal("the token must be stored as a hash only")
+	if !storetest.Postgres() {
+		raw, _ := os.ReadFile(filepath.Join(f.cfg.DataDir, "ispbill.json"))
+		if strings.Contains(string(raw), tok) || !strings.Contains(string(raw), HashToken(tok)) {
+			t.Fatal("the token must be stored as a hash only")
+		}
 	}
+	f.st.View(func(d *store.Data) {
+		if d.Sites[s.ID].Join.Hash != HashToken(tok) || strings.Contains(fmt.Sprintf("%+v", d.Sites[s.ID]), tok) {
+			t.Fatal("the token must be stored as a hash only")
+		}
+	})
 	// A link-preview bot (wrong User-Agent) does not consume it.
 	if _, _, err := f.m.ConsumeJoin(tok, "WhatsApp/2.23", "1.2.3.4"); err != ErrJoinInvalid {
 		t.Fatalf("bot: %v", err)
@@ -134,10 +143,11 @@ func TestJoinTokenFlow(t *testing.T) {
 	if pub, _ := wg.PublicKey(m[1]); pub != got.WGPublicKey {
 		t.Fatal("stored public key does not match the script's private key")
 	}
-	raw, _ = os.ReadFile(filepath.Join(f.cfg.DataDir, "ispbill.json"))
-	if strings.Contains(string(raw), m[1]) {
-		t.Fatal("the router's private key was stored")
-	}
+	f.st.View(func(d *store.Data) {
+		if strings.Contains(fmt.Sprintf("%+v", d.Sites[got.ID]), m[1]) {
+			t.Fatal("the router's private key was stored")
+		}
+	})
 	if !strings.Contains(string(script), `password="`+got.RESTPass+`"`) || !strings.Contains(string(script), "10.99.0.2") {
 		t.Fatal("script lacks the REST password or tunnel address")
 	}
@@ -565,7 +575,7 @@ func TestBootstrap(t *testing.T) {
 		if mut != nil {
 			mut(&cfg)
 		}
-		st, _ := store.Open(dir)
+		st, _ := storetest.Open(t, dir)
 		if pre != nil {
 			pre(dir, st)
 		}

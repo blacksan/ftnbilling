@@ -11,6 +11,7 @@ import (
 
 	"ispbill/internal/routeros"
 	"ispbill/internal/store"
+	"ispbill/internal/store/storetest"
 )
 
 const mac1 = "AA:BB:CC:DD:EE:01"
@@ -23,6 +24,7 @@ type env struct {
 	site    string // building A
 	now     time.Time
 	dir     string
+	h       *storetest.Handle
 }
 
 // addSite creates another building in the store and gives it its own mock router.
@@ -68,10 +70,12 @@ func newEnv(t *testing.T) *env {
 // open (re)opens the store and service on the same directory: a "restart".
 func (e *env) open(t *testing.T) {
 	t.Helper()
-	st, err := store.Open(e.dir)
-	if err != nil {
-		t.Fatal(err)
+	if e.h == nil {
+		e.h = storetest.NewIn(t, e.dir)
+	} else {
+		e.h.Reopen()
 	}
+	st := e.h.Store
 	e.st = st
 	e.svc = NewService(st, e.routers, quiet())
 	e.svc.SetClock(func() time.Time { return e.now })

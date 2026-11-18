@@ -17,6 +17,7 @@ import (
 	"ispbill/internal/payments"
 	"ispbill/internal/routeros"
 	"ispbill/internal/store"
+	"ispbill/internal/store/storetest"
 )
 
 type fakeDaraja struct {
@@ -71,7 +72,7 @@ func newRig(t *testing.T) *rig {
 	fd := &fakeDaraja{}
 	srv := httptest.NewServer(fd)
 	t.Cleanup(srv.Close)
-	st, _ := store.Open(t.TempDir())
+	st, _ := storetest.Open(t, t.TempDir())
 	rt := routeros.NewMock()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	site := store.NewSiteID()

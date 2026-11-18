@@ -9,6 +9,7 @@ import (
 
 	"ispbill/internal/billing"
 	"ispbill/internal/store"
+	"ispbill/internal/store/storetest"
 )
 
 type trig struct {
@@ -25,15 +26,15 @@ type trig struct {
 
 func newTrig(t *testing.T) *trig {
 	t.Helper()
-	st, err := store.Open(t.TempDir())
+	st, err := storetest.Open(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := &trig{t: t, st: st, c: &clock{t: noon()}, f: &fake{}, ends: map[string]time.Time{}, open: map[string]time.Time{}, mode: "manual"}
 	r.box = newBox(t, r.c, r.f, nil)
 	st.Update(func(d *store.Data) error {
-		d.Sites["s1"] = store.Site{ID: "s1", Name: "Kilimani"}
-		d.Sites["s2"] = store.Site{ID: "s2", Name: "Lavington"}
+		d.Sites["s1"] = store.Site{Mode: store.SiteModeEnv, ID: "s1", Name: "Kilimani"}
+		d.Sites["s2"] = store.Site{Mode: store.SiteModeEnv, ID: "s2", Name: "Lavington"}
 		d.Packages["pm"] = store.Package{ID: "pm", Name: "Monthly 10 Mbps", Slug: "m10", DurationMin: 43200, SpeedMbps: 10, PriceKES: 3000}
 		d.Packages["pd"] = store.Package{ID: "pd", Name: "Daily", Slug: "d", DurationMin: 1440, SpeedMbps: 5, PriceKES: 100}
 		return nil

@@ -173,6 +173,7 @@ func New(t testing.TB) *Handle {
 // NewIn is New with a given data directory (JSON backend).
 func NewIn(t testing.TB, dir string) *Handle {
 	t.Helper()
+	store.Strict = true // rigs catch an ErrNoChange that follows a change
 	h := &Handle{t: t, Dir: dir, Fault: &Fault{}, Kind: "json"}
 	if Postgres() {
 		h.Kind = "postgres"
@@ -222,3 +223,7 @@ func (h *Handle) Schema() string { return h.schema }
 
 // ErrInjected is a convenient error for FailNextCommit.
 var ErrInjected = errors.New("injected commit failure")
+
+// Open is NewIn in the shape of store.Open, for test rigs: the store on the
+// selected backend, closed when the test ends.
+func Open(t testing.TB, dir string) (*store.Store, error) { return NewIn(t, dir).Store, nil }

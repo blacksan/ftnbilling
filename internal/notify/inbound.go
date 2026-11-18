@@ -232,15 +232,7 @@ func (in *Inbound) command(id, from, text string) {
 
 func (in *Inbound) setOptOut(from string, out bool) {
 	_ = in.o.Store.Update(func(d *store.Data) error {
-		changed := false
-		for id, a := range d.Accounts {
-			if a.WhatsApp == from && a.WAOptOut != out {
-				a.WAOptOut = out
-				d.Accounts[id] = a
-				changed = true
-			}
-		}
-		if !changed {
+		if !d.SetWAOptOutByNumber(from, out) { // updates the linked customer too
 			return store.ErrNoChange
 		}
 		return nil

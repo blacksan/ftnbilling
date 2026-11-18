@@ -92,7 +92,7 @@ func newRig(t *testing.T, n int) *rig {
 		out: &sink{}, now: time.Date(2026, 11, 18, 12, 0, 0, 0, metrics.EAT)}
 	for i := 0; i < n; i++ {
 		id := fmt.Sprintf("s%d", i)
-		r.in.sites = append(r.in.sites, store.Site{ID: id, Name: fmt.Sprintf("Site %d", i)})
+		r.in.sites = append(r.in.sites, store.Site{Mode: store.SiteModeEnv, ID: id, Name: fmt.Sprintf("Site %d", i)})
 	}
 	r.e = r.engine(filepath.Join(t.TempDir(), "alerts.json"))
 	return r

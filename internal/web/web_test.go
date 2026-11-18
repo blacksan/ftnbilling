@@ -19,6 +19,7 @@ import (
 	"ispbill/internal/routeros"
 	"ispbill/internal/sites"
 	"ispbill/internal/store"
+	"ispbill/internal/store/storetest"
 	"ispbill/internal/web"
 )
 
@@ -52,7 +53,7 @@ func newAppCfg(t *testing.T, testMode bool, mut func(*config.Config)) *app {
 	dir := t.TempDir()
 	cfg.DataDir = dir
 	cfg.FlowEvery, cfg.PortEvery, cfg.PingEvery, cfg.DNSEvery, cfg.SaveEvery = time.Hour, time.Hour, time.Hour, time.Hour, time.Hour
-	st, _ := store.Open(dir)
+	st, _ := storetest.Open(t, dir)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	envID, err := sites.Bootstrap(cfg, st, log)
 	if err != nil {
