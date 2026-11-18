@@ -22,6 +22,7 @@ import (
 	"ispbill/internal/billing"
 	"ispbill/internal/config"
 	"ispbill/internal/payments"
+	"ispbill/internal/settings"
 	"ispbill/internal/sites"
 	"ispbill/internal/store"
 )
@@ -53,9 +54,15 @@ type Server struct {
 	tpl       *template.Template
 	rl        *limiter
 	joinRL    *limiter // /j/ by client address
+	testRL    *limiter // settings test buttons
+	stkRL     *limiter // KES 1 test payments
+	toolRL    *limiter // ping, traceroute, console
+	toolSem   chan struct{}
 	wgNet     netip.Prefix
 	adminNet  netip.Prefix
 	ops       Ops
+	setm      *settings.Manager // nil = environment configuration only
+	auth      *adminAuth
 
 	onlineMu sync.Mutex
 	online   map[string]onlineEntry
@@ -68,7 +75,8 @@ type onlineEntry struct {
 
 func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map[string]payments.Provider, mpesa *payments.Mpesa, mgr *sites.Manager, log *slog.Logger) *Server {
 	s := &Server{cfg: cfg, st: st, svc: svc, providers: providers, mpesa: mpesa, mgr: mgr, log: log,
-		rl: newLimiter(15, time.Minute), joinRL: newLimiter(10, time.Minute), online: map[string]onlineEntry{}}
+		rl: newLimiter(15, time.Minute), joinRL: newLimiter(10, time.Minute), testRL: newLimiter(10, time.Minute), stkRL: newLimiter(3, 10*time.Minute), toolRL: newLimiter(20, time.Minute), toolSem: make(chan struct{}, 2), online: map[string]onlineEntry{}}
+	s.auth = newAdminAuth(s)
 	if p, err := netip.ParsePrefix(cfg.WGSubnet); err == nil {
 		s.wgNet = p.Masked()
 	}
@@ -109,9 +117,32 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 		},
 		"hours": func(min float64) float64 { return min / 60 },
 		"seq":   func(p ...string) []string { return p },
+		"dict": func(kv ...any) map[string]any {
+			m := map[string]any{}
+			for i := 0; i+1 < len(kv); i += 2 {
+				m[fmt.Sprint(kv[i])] = kv[i+1]
+			}
+			return m
+		},
+		"lines": func(v string) string { return strings.ReplaceAll(v, ",", "\n") },
 	}
 	s.tpl = template.Must(template.New("").Funcs(funcs).ParseFS(tplFS, "templates/*.html"))
 	return s
+}
+
+// SetSettings installs the settings manager. Call it before Handler. Without
+// one the server uses its boot configuration only.
+func (s *Server) SetSettings(m *settings.Manager) { s.setm = m }
+
+// live is the configuration in force now: the boot configuration with the
+// admin-edited settings laid over it. Use it for everything Settings can
+// change (M-Pesa, WhatsApp, email, the admin user); s.cfg is for boot-only
+// values (listen address, WireGuard, data directory).
+func (s *Server) live() config.Config {
+	if s.setm != nil {
+		return s.setm.Effective()
+	}
+	return s.cfg
 }
 
 func itoa(n int) string { b, _ := json.Marshal(n); return string(b) }
@@ -180,7 +211,7 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"ok": true, "router_ok": online == len(runnable), "sites_total": len(all), "sites_online": online,
-		"test_mode": s.cfg.TestMode, "mpesa_enabled": s.cfg.MpesaEnabled(),
+		"test_mode": s.cfg.TestMode, "mpesa_enabled": s.live().MpesaEnabled(),
 		"db": s.st.Kind(), "db_ok": s.st.Healthy() == nil,
 	})
 }
@@ -190,6 +221,13 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 func redactPath(p string) string {
 	if strings.HasPrefix(p, "/j/") {
 		return "/j/[redacted]"
+	}
+	// /pay/cb/t/<token>/stk: the token is a credential.
+	if rest, ok := strings.CutPrefix(p, "/pay/cb/t/"); ok {
+		if i := strings.Index(rest, "/"); i >= 0 {
+			return "/pay/cb/t/[redacted]" + rest[i:]
+		}
+		return "/pay/cb/t/[redacted]"
 	}
 	return p
 }

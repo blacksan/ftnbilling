@@ -37,10 +37,15 @@ type Inbound struct {
 	o   InboundOptions
 	now func() time.Time
 
-	mu    sync.Mutex
-	seen  map[string]bool
-	order []string
-	sent  map[string][]time.Time // sender -> reply times
+	mu      sync.Mutex
+	secret  string // WA_APP_SECRET, replaceable at run time
+	verify  string // WA_VERIFY_TOKEN
+	payHint string
+	support string
+	lastEv  time.Time // last correctly signed POST
+	seen    map[string]bool
+	order   []string
+	sent    map[string][]time.Time // sender -> reply times
 }
 
 // NewInbound builds the handler.
@@ -51,13 +56,47 @@ func NewInbound(o InboundOptions) *Inbound {
 	if o.Log == nil {
 		o.Log = slog.Default()
 	}
-	return &Inbound{o: o, now: o.Now, seen: map[string]bool{}, sent: map[string][]time.Time{}}
+	return &Inbound{o: o, now: o.Now, secret: o.AppSecret, verify: o.VerifyToken, payHint: o.PayHint, support: o.SupportPhone,
+		seen: map[string]bool{}, sent: map[string][]time.Time{}}
+}
+
+// SetSecrets replaces the app secret and verify token (Settings > WhatsApp).
+// Empty values switch the webhook off: nothing verifies.
+func (in *Inbound) SetSecrets(appSecret, verifyToken string) {
+	in.mu.Lock()
+	in.secret, in.verify = appSecret, verifyToken
+	in.mu.Unlock()
+}
+
+// SetReplyInfo changes the payment hint and support phone used in replies.
+func (in *Inbound) SetReplyInfo(payHint, supportPhone string) {
+	in.mu.Lock()
+	in.payHint, in.support = payHint, supportPhone
+	in.mu.Unlock()
+}
+
+// Active reports whether both secrets are set, so the webhook can work.
+func (in *Inbound) Active() bool {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return in.secret != "" && in.verify != ""
+}
+
+// LastSignedEvent is when the last correctly signed POST arrived (zero = never
+// since the server started).
+func (in *Inbound) LastSignedEvent() time.Time {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return in.lastEv
 }
 
 // Verify answers the GET handshake: it returns the challenge to echo when the
 // mode and the verify token are right.
 func (in *Inbound) Verify(mode, token, challenge string) (string, bool) {
-	if mode != "subscribe" || in.o.VerifyToken == "" || !hmac.Equal([]byte(token), []byte(in.o.VerifyToken)) {
+	in.mu.Lock()
+	want := in.verify
+	in.mu.Unlock()
+	if mode != "subscribe" || want == "" || !hmac.Equal([]byte(token), []byte(want)) {
 		return "", false
 	}
 	return challenge, true
@@ -67,16 +106,25 @@ func (in *Inbound) Verify(mode, token, challenge string) (string, bool) {
 // body keyed with the app secret) in constant time.
 func (in *Inbound) ValidSignature(body []byte, header string) bool {
 	const pfx = "sha256="
-	if in.o.AppSecret == "" || !strings.HasPrefix(header, pfx) {
+	in.mu.Lock()
+	secret := in.secret
+	in.mu.Unlock()
+	if secret == "" || !strings.HasPrefix(header, pfx) {
 		return false
 	}
 	got, err := hex.DecodeString(strings.TrimPrefix(header, pfx))
 	if err != nil {
 		return false
 	}
-	m := hmac.New(sha256.New, []byte(in.o.AppSecret))
+	m := hmac.New(sha256.New, []byte(secret))
 	m.Write(body)
-	return hmac.Equal(got, m.Sum(nil))
+	if !hmac.Equal(got, m.Sum(nil)) {
+		return false
+	}
+	in.mu.Lock()
+	in.lastEv = in.now()
+	in.mu.Unlock()
+	return true
 }
 
 // Sign returns the header value for body (tests and tools).
@@ -207,10 +255,13 @@ func (in *Inbound) command(id, from, text string) {
 			}
 		}
 	})
+	in.mu.Lock()
+	payHint, support := in.payHint, in.support
+	in.mu.Unlock()
 	if len(accts) == 0 {
 		msg := "We could not find an account for this number."
-		if in.o.SupportPhone != "" {
-			msg += " Please call " + in.o.SupportPhone + "."
+		if support != "" {
+			msg += " Please call " + support + "."
 		}
 		in.reply(id, from, "", msg)
 		return
@@ -224,7 +275,7 @@ func (in *Inbound) command(id, from, text string) {
 		in.setOptOut(from, false)
 		in.reply(id, from, site, "Messages are on again. Reply BALANCE any time to see your plan.")
 	case "BALANCE", "STATUS":
-		in.reply(id, from, site, in.balanceText(accts, siteName))
+		in.reply(id, from, site, in.balanceText(accts, siteName, payHint, support))
 	default:
 		in.reply(id, from, site, helpText)
 	}
@@ -239,7 +290,7 @@ func (in *Inbound) setOptOut(from string, out bool) {
 	})
 }
 
-func (in *Inbound) balanceText(accts []store.Account, siteName map[string]string) string {
+func (in *Inbound) balanceText(accts []store.Account, siteName map[string]string, payHint, support string) string {
 	now := in.now()
 	var lines []string
 	for i, a := range accts {
@@ -253,11 +304,11 @@ func (in *Inbound) balanceText(accts []store.Account, siteName map[string]string
 		case billing.StateActive:
 			lines = append(lines, fmt.Sprintf("%s: %s plan active until %s (%s left). Account number %s.", where, pkg.Name, eatText(a.ExpiresAt), billing.Remaining(a.ExpiresAt, now), a.Code))
 		case billing.StateExpired:
-			lines = append(lines, fmt.Sprintf("%s: your plan ended on %s. Pay via %s, account number %s, to reconnect.", where, eatText(a.ExpiresAt), in.o.PayHint, a.Code))
+			lines = append(lines, fmt.Sprintf("%s: your plan ended on %s. Pay via %s, account number %s, to reconnect.", where, eatText(a.ExpiresAt), payHint, a.Code))
 		case billing.StateSuspended:
-			lines = append(lines, fmt.Sprintf("%s: this account is suspended.%s", where, supportSuffix(in.o.SupportPhone)))
+			lines = append(lines, fmt.Sprintf("%s: this account is suspended.%s", where, supportSuffix(support)))
 		default:
-			lines = append(lines, fmt.Sprintf("%s: no plan yet. Pay via %s, account number %s.", where, in.o.PayHint, a.Code))
+			lines = append(lines, fmt.Sprintf("%s: no plan yet. Pay via %s, account number %s.", where, payHint, a.Code))
 		}
 	}
 	return strings.Join(lines, "\n")

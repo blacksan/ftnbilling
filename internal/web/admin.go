@@ -62,7 +62,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	get("/admin/vouchers", s.adminVouchers)
 	post("/admin/vouchers/generate", s.adminGenVouchers)
 	get("/admin/vouchers/print", s.adminPrintVouchers)
-	get("/admin/settings", s.adminSettings)
+	s.settingsRoutes(get, post)
 	s.crmRoutes(get, post)
 	s.metricsRoutes(get, post)
 	s.opsRoutes(get, post)
@@ -77,12 +77,7 @@ func (s *Server) admin(h http.HandlerFunc) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		u, p, ok := r.BasicAuth()
-		userOK := safeEq(u, s.cfg.AdminUser)
-		passOK := safeEq(p, s.cfg.AdminPass)
-		if !ok || !userOK || !passOK {
-			w.Header().Set("WWW-Authenticate", `Basic realm="ispbill admin", charset="UTF-8"`)
-			http.Error(w, "authentication required", http.StatusUnauthorized)
+		if !s.authenticate(w, r) {
 			return
 		}
 		c, err := r.Cookie(csrfCookie)
@@ -269,7 +264,7 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
 	routerOK, routerMsg := s.routerSummary(ctx, sc)
 	p.Data = map[string]any{"Total": total, "Active": active, "Soon": soon, "Expired": expired, "New": newAcc, "Suspended": susp,
 		"Today": today, "Month": month, "Pending": pending, "Events": events, "Tasks": tasks,
-		"RouterOK": routerOK, "RouterErr": routerMsg, "TestMode": s.cfg.TestMode, "Mpesa": s.cfg.MpesaEnabled(),
+		"RouterOK": routerOK, "RouterErr": routerMsg, "TestMode": s.cfg.TestMode, "Mpesa": s.live().MpesaEnabled(),
 		"SiteNames": p.Data["SiteNames"], "ShowSite": p.Data["ShowSite"]}
 	s.render(w, "admin_dashboard", p)
 }
@@ -789,33 +784,6 @@ func (s *Server) adminPrintVouchers(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 	s.render(w, "admin_print", map[string]any{"Brand": s.cfg.BrandName, "Vouchers": list, "Pkgs": pkgs, "Batch": batch, "Support": s.cfg.SupportPhone})
-}
-
-// ---- settings / info ---------------------------------------------------------------
-
-func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
-	p := s.page(r, "settings")
-	pol := s.svc.Policy()
-	base := s.cfg.PublicBaseURL
-	if base == "" {
-		base = "https://YOUR-PUBLIC-URL"
-	}
-	tok := ""
-	if s.cfg.MpesaCallbackToken != "" {
-		tok = "?t=TOKEN"
-	}
-	p.Data = map[string]any{
-		"Policy": pol, "Cfg": s.cfg, "Mpesa": s.cfg.MpesaEnabled(),
-		"CBStk": base + "/pay/cb/stk" + tok, "CBVal": base + "/pay/cb/c2b/validate" + tok, "CBConf": base + "/pay/cb/c2b/confirm" + tok,
-		"Support":    s.cfg.SupportPhone,
-		"WGEndpoint": s.cfg.WGEndpoint, "WGSubnet": s.cfg.WGSubnet, "JoinTTL": s.cfg.JoinTokenTTL.String(),
-		"Stray": s.mgr.Stray(), "Backup": s.backupStatus(), "DBKind": s.st.Kind(), "DBErr": errString(s.st.Healthy()),
-		"AdminCIDR": s.cfg.AdminAllowCIDR,
-	}
-	if env, ok := s.envSite(); ok {
-		p.Data["Env"] = s.mgr.Effective(env)
-	}
-	s.render(w, "admin_settings", p)
 }
 
 func (s *Server) adminDeletePackage(w http.ResponseWriter, r *http.Request) {

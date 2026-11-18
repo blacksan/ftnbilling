@@ -26,6 +26,9 @@ type fakeDaraja struct {
 	stkBody  map[string]any
 	stkAuth  string
 	respCode string
+	regBody  map[string]string // last RegisterURL body
+	regCode  string            // ResponseCode to answer RegisterURL with
+	queryRes string            // ResultCode to answer STK queries with ("" = still processing)
 }
 
 func (f *fakeDaraja) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +52,22 @@ func (f *fakeDaraja) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			code = "0"
 		}
 		w.Write([]byte(`{"MerchantRequestID":"m1","CheckoutRequestID":"ws_CO_123","ResponseCode":"` + code + `","ResponseDescription":"ok"}`))
+	case "/mpesa/c2b/v2/registerurl":
+		b, _ := io.ReadAll(r.Body)
+		json.Unmarshal(b, &f.regBody)
+		if f.regCode != "" {
+			w.WriteHeader(400)
+			w.Write([]byte(`{"errorCode":"500.003.1001","errorMessage":"` + f.regCode + `"}`))
+			return
+		}
+		w.Write([]byte(`{"ResponseCode":"0","ResponseDescription":"Success"}`))
+	case "/mpesa/stkpushquery/v1/query":
+		if f.queryRes == "" {
+			w.WriteHeader(500)
+			w.Write([]byte(`{"errorCode":"500.001.1001","errorMessage":"The transaction is being processed"}`))
+			return
+		}
+		w.Write([]byte(`{"ResponseCode":"0","ResponseDescription":"ok","ResultCode":"` + f.queryRes + `","ResultDesc":"done"}`))
 	default:
 		http.NotFound(w, r)
 	}

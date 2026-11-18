@@ -7,29 +7,41 @@ import (
 )
 
 // Daraja rejects callback URLs containing "mpesa"/"safaricom", so the routes
-// live under the neutral prefix /pay/cb/.
+// live under the neutral prefix /pay/cb/. They are always registered and
+// answer 404 until M-Pesa is enabled and the request carries the callback
+// token, either as ?t=<token> or in the path as /pay/cb/t/<token>/... (the
+// form registered for C2B, in case RegisterURL refuses a query string). A
+// Settings save therefore takes effect without a restart.
 func (s *Server) callbackRoutes(mux *http.ServeMux) {
-	if s.mpesa == nil || !s.mpesa.Enabled() {
-		return
-	}
-	mux.HandleFunc("POST /pay/cb/stk", s.cb(func(w http.ResponseWriter, b []byte, r *http.Request) {
+	stk := s.cb(func(w http.ResponseWriter, b []byte, r *http.Request) {
 		if err := s.mpesa.HandleSTKCallback(r.Context(), b); err != nil {
 			s.log.Warn("stk callback", "err", err)
 		}
 		writeJSON(w, map[string]any{"ResultCode": 0, "ResultDesc": "Accepted"})
-	}))
-	mux.HandleFunc("POST /pay/cb/c2b/validate", s.cb(func(w http.ResponseWriter, b []byte, r *http.Request) {
+	})
+	validate := s.cb(func(w http.ResponseWriter, b []byte, r *http.Request) {
 		writeJSON(w, s.mpesa.HandleC2BValidation(b))
-	}))
-	mux.HandleFunc("POST /pay/cb/c2b/confirm", s.cb(func(w http.ResponseWriter, b []byte, r *http.Request) {
+	})
+	confirm := s.cb(func(w http.ResponseWriter, b []byte, r *http.Request) {
 		writeJSON(w, s.mpesa.HandleC2BConfirmation(r.Context(), b))
-	}))
+	})
+	mux.HandleFunc("POST /pay/cb/stk", stk)
+	mux.HandleFunc("POST /pay/cb/c2b/validate", validate)
+	mux.HandleFunc("POST /pay/cb/c2b/confirm", confirm)
+	mux.HandleFunc("POST /pay/cb/t/{token}/stk", stk)
+	mux.HandleFunc("POST /pay/cb/t/{token}/c2b/validate", validate)
+	mux.HandleFunc("POST /pay/cb/t/{token}/c2b/confirm", confirm)
 }
 
-// cb wraps a callback handler: optional shared-secret check, bounded body read.
+// cb wraps a callback handler: live enabled check, shared-secret check, bounded
+// body read. Every refusal is the same 404.
 func (s *Server) cb(h func(http.ResponseWriter, []byte, *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if tok := s.cfg.MpesaCallbackToken; tok != "" && !safeEq(r.URL.Query().Get("t"), tok) {
+		tok := r.PathValue("token")
+		if tok == "" {
+			tok = r.URL.Query().Get("t")
+		}
+		if s.mpesa == nil || !s.mpesa.CheckCallbackToken(tok) {
 			http.NotFound(w, r)
 			return
 		}

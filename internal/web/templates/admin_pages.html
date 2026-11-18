@@ -157,8 +157,16 @@
 {{$d := .}}{{range .Data.Vouchers}}<tr><td><b>{{.Code}}</b></td><td>{{if .SiteID}}{{index $d.Data.SiteNames .SiteID}}{{else}}any{{end}}</td><td>{{(pkgOf $d.Data.PkgMap .PackageID).Name}}</td><td><a href="/admin/vouchers/print?batch={{.Batch}}">{{.Batch}}</a></td><td>{{if .Used}}used {{eat .UsedAt}}{{else}}unused{{end}}</td></tr>
 {{else}}<tr><td colspan="5">No vouchers yet.</td></tr>{{end}}</table></div>{{template "afoot"}}{{end}}
 
-{{define "admin_settings"}}{{template "ahead" .}}
-<p class="muted">Read-only. These values come from the container's environment variables (see README). Change them in the router's env list and restart the container.</p>
+{{define "admin_settings"}}{{template "ahead" .}}{{template "set_tabs" .}}
+<div class="card"><b>Admin password</b>
+{{if .Data.HasHash}}<p class="muted">The password is stored here (hashed). The ADMIN_PASS value in the environment file is ignored.</p>
+{{else}}<p class="muted">Right now the password comes from ADMIN_PASS in the environment file{{if not .Data.EnvPassOK}} (<span class="bad">it is empty or a placeholder, so nobody can log in</span>){{end}}. Set one here and the environment value stops working.</p>{{end}}
+{{if .Data.HasKey}}<form method="post" action="/admin/settings/password" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<label>Current password<input type="password" name="current_password" autocomplete="current-password"></label>
+<label>New password (12 or more characters)<input type="password" name="new_password" autocomplete="new-password"></label>
+<label>New password again<input type="password" name="confirm_password" autocomplete="new-password"></label><button>Change password</button></form>
+{{else}}<p class="bad">Saving settings and passwords here needs DATA_KEY in the environment file. Add it and restart once.</p>{{end}}
+<p class="muted">Locked out? On the server run <code>ispbill admin-reset-password</code>.</p></div>
 <div class="grid2">
 <div class="card"><b>Lifecycle rules</b><table>
 <tr><td>Reminder before expiry</td><td>{{if .Data.Policy.ReminderDays}}{{.Data.Policy.ReminderDays}} days before (plans longer than that){{else}}off{{end}} <code>REMINDER_DAYS</code></td></tr>
@@ -169,12 +177,10 @@
 <tr><td>Upgrades</td><td>take effect immediately; the new package's time is added from the current expiry</td></tr>
 <tr><td>Suspension</td><td>manual, from the account page</td></tr></table></div>
 <div class="card"><b>Payments</b><table>
-<tr><td>M-Pesa Daraja</td><td>{{if .Data.Mpesa}}enabled{{else}}disabled (credentials not set){{end}}</td></tr>
+<tr><td>M-Pesa Daraja</td><td>{{if .Data.Mpesa}}enabled{{else}}disabled (credentials not set){{end}} <a href="/admin/settings/mpesa">M-Pesa settings</a></td></tr><tr><td>WhatsApp</td><td>{{if .Data.WAOn}}set up{{else}}not set up{{end}} <a href="/admin/settings/whatsapp">WhatsApp settings</a></td></tr><tr><td>Email</td><td>{{if .Data.EmailOn}}set up{{else}}not set up{{end}} <a href="/admin/settings/email">Email settings</a></td></tr>
 <tr><td>Test payments</td><td>{{if .Data.Cfg.TestMode}}<span class="bad">ON (free access!)</span>{{else}}off{{end}}</td></tr>
 <tr><td>Paybill account number</td><td>the flat's account code</td></tr>
-<tr><td>STK result URL</td><td><code>{{.Data.CBStk}}</code></td></tr>
-<tr><td>C2B validation URL</td><td><code>{{.Data.CBVal}}</code></td></tr>
-<tr><td>C2B confirmation URL</td><td><code>{{.Data.CBConf}}</code></td></tr>
+<tr><td>Callback URLs</td><td>see <a href="/admin/settings/mpesa">M-Pesa settings</a></td></tr>
 <tr><td>Support phone shown</td><td>{{if .Data.Support}}{{.Data.Support}}{{else}}not set (SUPPORT_PHONE){{end}}</td></tr></table></div>
 <div class="card"><b>Database and backups</b><table>
 <tr><td>Customer database</td><td>{{if eq .Data.DBKind "postgres"}}PostgreSQL{{else}}JSON file (set <code>DATABASE_URL</code> to use PostgreSQL){{end}}{{if .Data.DBErr}} <span class="bad">not healthy: {{.Data.DBErr}}</span>{{else}} <span class="ok">healthy</span>{{end}}</td></tr>

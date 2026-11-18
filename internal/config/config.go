@@ -41,7 +41,13 @@ type Config struct {
 	MpesaKey       string
 	MpesaSecret    string
 	MpesaShortcode string
-	MpesaPasskey   string
+	// MpesaC2BShortcode is the shortcode C2B URLs are registered for when it
+	// differs from MpesaShortcode (the Daraja sandbox needs this). "" = same.
+	MpesaC2BShortcode string
+	// MpesaUnknownRef: "reject" (default) bounces a Paybill payment whose
+	// account number matches no flat; "accept" takes it into Unmatched.
+	MpesaUnknownRef string
+	MpesaPasskey    string
 	// MpesaCallbackToken is required once M-Pesa is configured (see Validate).
 	// Daraja callback URLs carry ?t=<token> and callbacks without it are
 	// refused (Daraja callbacks are unsigned, so this stops forged "payments").
@@ -95,6 +101,8 @@ type Config struct {
 	WAAppSecret, WAVerifyToken             string // optional inbound webhook
 	WADailyLimit                           int    // tenant messages per day (admin alerts are exempt)
 	WAMinConfirmKES                        int    // smallest payment that gets a confirmation
+	WAQuietFrom, WAQuietTo                 int    // tenant quiet hours, EAT: from 21 to 7 by default
+	SMTPImplicit                           bool   // TLS from the first byte (port 465 always is)
 }
 
 // EmailConfigured and WhatsAppConfigured tell which
@@ -132,6 +140,8 @@ func Load(getenv func(string) string) (Config, error) {
 		MpesaSecret:        get("MPESA_CONSUMER_SECRET", ""),
 		MpesaShortcode:     get("MPESA_SHORTCODE", ""),
 		MpesaPasskey:       get("MPESA_PASSKEY", ""),
+		MpesaC2BShortcode:  get("MPESA_C2B_SHORTCODE", ""),
+		MpesaUnknownRef:    strings.ToLower(get("MPESA_UNKNOWN_REF", "reject")),
 		MpesaCallbackToken: get("MPESA_CALLBACK_TOKEN", ""),
 	}
 	var errs []error
@@ -250,6 +260,18 @@ func Load(getenv func(string) string) (Config, error) {
 			*dst = n
 		}
 	}
+	c.WAQuietFrom, c.WAQuietTo = 21, 7
+	for k, dst := range map[string]*int{"WA_QUIET_FROM": &c.WAQuietFrom, "WA_QUIET_TO": &c.WAQuietTo} {
+		if v := get(k, ""); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 || n > 23 {
+				errs = append(errs, fmt.Errorf("%s must be an hour from 0 to 23", k))
+				continue
+			}
+			*dst = n
+		}
+	}
+	c.SMTPImplicit = parseBool(getenv("SMTP_IMPLICIT"))
 	c.FlowEvery = dur("METRICS_FLOW_EVERY", 60*time.Second)
 	c.PortEvery = dur("METRICS_PORT_EVERY", 30*time.Second)
 	c.PingEvery = dur("METRICS_PING_EVERY", 60*time.Second)
@@ -270,6 +292,9 @@ func (c Config) Validate() error {
 	// ROUTER_PASS is no longer required here: buildings joined over WireGuard
 	// carry their own credentials. main refuses to start only when a legacy
 	// env-mode building exists and ROUTER_PASS is empty.
+	if c.MpesaUnknownRef != "reject" && c.MpesaUnknownRef != "accept" {
+		errs = append(errs, fmt.Errorf("MPESA_UNKNOWN_REF must be reject or accept, got %q", c.MpesaUnknownRef))
+	}
 	if c.MpesaEnv != "sandbox" && c.MpesaEnv != "production" {
 		errs = append(errs, fmt.Errorf("MPESA_ENV must be sandbox or production, got %q", c.MpesaEnv))
 	}

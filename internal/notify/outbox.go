@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ispbill/internal/store"
@@ -20,15 +21,30 @@ import (
 var EAT = time.FixedZone("EAT", 3*3600)
 
 const (
-	maxAttempts   = 8
-	baseBackoff   = 30 * time.Second
-	maxBackoff    = time.Hour
-	dedupeKeep    = 90 * 24 * time.Hour
-	finishedKeep  = 60 * 24 * time.Hour
-	maxFinished   = 5000
-	quietFromHour = 21 // tenant reminders go out from 07:00 until 21:00 EAT
-	quietToHour   = 7
+	maxAttempts  = 8
+	baseBackoff  = 30 * time.Second
+	maxBackoff   = time.Hour
+	dedupeKeep   = 90 * 24 * time.Hour
+	finishedKeep = 60 * 24 * time.Hour
+	maxFinished  = 5000
 )
+
+// Quiet hours (EAT): tenant reminders go out from quietTo until quietFrom.
+// Defaults are 21:00 and 07:00; Settings > WhatsApp can change them live.
+var quietFromHour, quietToHour atomic.Int32
+
+func init() { quietFromHour.Store(21); quietToHour.Store(7) }
+
+// SetQuietHours sets the quiet window: it starts at fromHour (0-23) and ends
+// at toHour (0-23) EAT, wrapping past midnight when fromHour > toHour. Equal
+// hours switch quiet hours off.
+func SetQuietHours(fromHour, toHour int) {
+	quietFromHour.Store(int32(fromHour))
+	quietToHour.Store(int32(toHour))
+}
+
+// QuietHours returns the current quiet window.
+func QuietHours() (fromHour, toHour int) { return int(quietFromHour.Load()), int(quietToHour.Load()) }
 
 // Options configures an Outbox.
 type Options struct {
@@ -151,6 +167,20 @@ func (b *Outbox) SetSender(channel string, s Sender) {
 	b.mu.Unlock()
 }
 
+// RemoveSender stops a channel from sending (its queued messages stay queued).
+func (b *Outbox) RemoveSender(channel string) {
+	b.mu.Lock()
+	delete(b.o.Senders, channel)
+	b.mu.Unlock()
+}
+
+// SetWADailyLimit changes the tenant WhatsApp cap per EAT day (0 = no cap).
+func (b *Outbox) SetWADailyLimit(n int) {
+	b.mu.Lock()
+	b.o.WADailyLimit = n
+	b.mu.Unlock()
+}
+
 // HasSender reports whether a channel is configured.
 func (b *Outbox) HasSender(channel string) bool {
 	b.mu.Lock()
@@ -169,8 +199,15 @@ func newID() string {
 // QuietNow reports whether a time is in the tenant quiet hours (21:00 to
 // 07:00 EAT).
 func QuietNow(t time.Time) bool {
+	from, to := QuietHours()
 	h := t.In(EAT).Hour()
-	return h >= quietFromHour || h < quietToHour
+	switch {
+	case from == to:
+		return false
+	case from > to:
+		return h >= from || h < to
+	}
+	return h >= from && h < to
 }
 
 // NextOpen returns the next 07:00 EAT at or after t when t is in quiet hours,
@@ -180,7 +217,8 @@ func NextOpen(t time.Time) time.Time {
 		return t
 	}
 	e := t.In(EAT)
-	open := time.Date(e.Year(), e.Month(), e.Day(), quietToHour, 0, 0, 0, EAT)
+	_, to := QuietHours()
+	open := time.Date(e.Year(), e.Month(), e.Day(), to, 0, 0, 0, EAT)
 	if !open.After(e) {
 		open = open.AddDate(0, 0, 1)
 	}

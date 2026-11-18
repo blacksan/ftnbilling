@@ -19,6 +19,7 @@ import (
 	"ispbill/internal/config"
 	"ispbill/internal/metrics"
 	"ispbill/internal/payments"
+	"ispbill/internal/settings"
 	"ispbill/internal/sites"
 	"ispbill/internal/store"
 	"ispbill/internal/web"
@@ -99,11 +100,12 @@ func run(log *slog.Logger) error {
 		}()
 	}
 
-	mp := payments.NewMpesa(payments.MpesaConfig{
-		BaseURL: cfg.MpesaBaseURL(), Key: cfg.MpesaKey, Secret: cfg.MpesaSecret, Shortcode: cfg.MpesaShortcode,
-		Passkey: cfg.MpesaPasskey, PublicBaseURL: cfg.PublicBaseURL, CallbackToken: cfg.MpesaCallbackToken,
-		Enabled: cfg.MpesaEnabled(),
-	}, svc, st, log)
+	// Settings saved in the admin pages lie over the environment file.
+	setm, err := settings.New(st, cfg.DataKey, cfg, os.Getenv)
+	if err != nil {
+		return fmt.Errorf("settings: %w", err)
+	}
+	mp := payments.NewMpesa(mpesaConf(setm.Effective()), svc, st, log)
 	// Callbacks the database could not take are kept on disk and replayed.
 	mp.SetSpool(payments.NewSpool(filepath.Join(cfg.DataDir, "spool")))
 	wg.Add(1)
@@ -136,13 +138,13 @@ func run(log *slog.Logger) error {
 		log.Warn("TEST_MODE=true: the test payment button grants free access")
 	}
 	log.Info("starting", "listen", cfg.ListenAddr, "data", cfg.DataDir, "router_mock", cfg.RouterMock,
-		"test_mode", cfg.TestMode, "mpesa_enabled", cfg.MpesaEnabled(), "mpesa_env", cfg.MpesaEnv)
+		"test_mode", cfg.TestMode, "mpesa_enabled", setm.Effective().MpesaEnabled(), "mpesa_env", setm.Effective().MpesaEnv)
 
 	svc.ResyncAll()
 	wg.Add(1)
 	go func() { defer wg.Done(); svc.RunSweeper(ctx, 60*time.Second) }()
 
-	ops, err := startOps(ctx, &wg, cfg, st, svc, mgr, log)
+	ops, err := startOps(ctx, &wg, setm, mp, st, svc, mgr, log)
 	if err != nil {
 		stop()
 		wg.Wait()
@@ -151,6 +153,7 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	webSrv := web.New(cfg, st, svc, providers, mp, mgr, log)
+	webSrv.SetSettings(setm)
 	webSrv.SetOps(ops)
 
 	srv := &http.Server{

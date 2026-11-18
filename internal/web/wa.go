@@ -3,25 +3,38 @@ package web
 import (
 	"io"
 	"net/http"
+	"time"
+
+	"ispbill/internal/settings"
 )
 
-// waRoutes registers the WhatsApp webhook. It exists only when both
-// WA_APP_SECRET and WA_VERIFY_TOKEN are set and the inbound handler runs.
+// waRoutes registers the WhatsApp webhook. The routes always exist; they
+// answer 404 until both the app secret and the verify token are saved, so
+// Settings > WhatsApp takes effect without a restart.
 func (s *Server) waRoutes(mux *http.ServeMux) {
-	if s.ops.Inbound == nil || s.cfg.WAAppSecret == "" || s.cfg.WAVerifyToken == "" {
-		return
-	}
+	live := func() bool { return s.ops.Inbound != nil && s.ops.Inbound.Active() }
 	mux.HandleFunc("GET /wa/webhook", func(w http.ResponseWriter, r *http.Request) {
+		if !live() {
+			http.NotFound(w, r)
+			return
+		}
 		q := r.URL.Query()
 		ch, ok := s.ops.Inbound.Verify(q.Get("hub.mode"), q.Get("hub.verify_token"), q.Get("hub.challenge"))
 		if !ok {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
+		if s.setm != nil {
+			_ = s.setm.SetMarker(settings.KeyWebhookVerified, s.svc.Now().UTC().Format(time.RFC3339))
+		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		io.WriteString(w, ch)
 	})
 	mux.HandleFunc("POST /wa/webhook", func(w http.ResponseWriter, r *http.Request) {
+		if !live() {
+			http.NotFound(w, r)
+			return
+		}
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)

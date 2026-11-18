@@ -42,15 +42,8 @@ type chanInfo struct {
 	Paused          string
 }
 
-func maskTail(s string) string {
-	if len(s) <= 4 {
-		return s
-	}
-	return "..." + s[len(s)-4:]
-}
-
 func (s *Server) channels() []chanInfo {
-	cfg := s.cfg
+	cfg := s.live()
 	var pauses map[string]notify.Pause
 	if s.ops.Box != nil {
 		pauses = s.ops.Box.Paused()
@@ -61,11 +54,11 @@ func (s *Server) channels() []chanInfo {
 	}
 	mail := strings.Join(cfg.AlertEmailTo, ", ")
 	if mail == "" {
-		mail = "ALERT_EMAIL_TO is not set"
+		mail = "no address set (Settings > Email)"
 	}
 	wa := strings.Join(cfg.WAAdminNumbers, ", ")
 	if wa == "" {
-		wa = "WA_ADMIN_NUMBERS is not set"
+		wa = "no number set (Settings > WhatsApp)"
 	}
 	out := []chanInfo{
 		{Name: notify.ChanEmail, Label: "Email", To: mail, Configured: cfg.EmailConfigured() && len(cfg.AlertEmailTo) > 0, On: set.Email},
@@ -86,7 +79,7 @@ func (s *Server) adminAlerts(w http.ResponseWriter, r *http.Request) {
 	}
 	p := s.page(r, "alerts")
 	sc := s.scopeOf(r)
-	names := map[string]string{}
+	names := map[string]string{"": alerts.ServerName}
 	for _, st := range sc.Sites {
 		names[st.ID] = st.Name
 	}
@@ -159,7 +152,7 @@ func (s *Server) adminAlertTest(w http.ResponseWriter, r *http.Request) {
 	ch := r.PostFormValue("channel")
 	m, ok := s.ops.Alerts.TestMessage(ch)
 	if !ok {
-		s.back(w, r, "/admin/alerts", "Error: "+ch+" has no recipient set in the server settings")
+		s.back(w, r, "/admin/alerts", "Error: "+ch+" has no recipient: add one in Settings")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
@@ -204,8 +197,8 @@ func (s *Server) adminOutageNotice(w http.ResponseWriter, r *http.Request) {
 		s.back(w, r, back, "Error: tenant messages are not running")
 		return
 	}
-	if !s.cfg.WhatsAppConfigured() {
-		s.back(w, r, back, "Error: WhatsApp is not configured (WA_TOKEN and WA_PHONE_NUMBER_ID)")
+	if !s.live().WhatsAppConfigured() {
+		s.back(w, r, back, "Error: WhatsApp is not configured (Settings > WhatsApp)")
 		return
 	}
 	if s.ops.Alerts.Settings().OutageNotice == "off" {
