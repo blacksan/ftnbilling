@@ -1,0 +1,74 @@
+package ke.co.ftw.ftnadmin.ui.more
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import ke.co.ftw.ftnadmin.data.routers.RouterLiveRepository
+import ke.co.ftw.ftnadmin.data.sites.SitesRepository
+import ke.co.ftw.ftnadmin.ui.common.apiResult
+import ke.co.ftw.ftnadmin.ui.common.userMessage
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+data class EditRouterUiState(
+    /** Null until the router record has loaded. */
+    val form: RouterForm? = null,
+    val loadError: String? = null,
+    val fieldErrors: Map<String, String> = emptyMap(),
+    val busy: Boolean = false,
+    val error: String? = null,
+    val saved: Boolean = false,
+) {
+    val canSave: Boolean get() = !busy && !saved && form != null && form.name.isNotBlank()
+}
+
+/** Edit router (owner): loads `GET /routers/{id}`, saves with `PATCH /routers/{id}`. */
+class EditRouterViewModel(
+    private val routerId: String,
+    private val sites: SitesRepository,
+    private val repo: RouterLiveRepository,
+    private val onSaved: () -> Unit = {},
+) : ViewModel() {
+    private val _state = MutableStateFlow(EditRouterUiState())
+    val state: StateFlow<EditRouterUiState> = _state.asStateFlow()
+
+    init {
+        load()
+    }
+
+    fun load() {
+        _state.update { it.copy(loadError = null) }
+        viewModelScope.launch {
+            val r = apiResult { sites.site(routerId) }
+            r.fold(
+                { s -> _state.update { it.copy(form = RouterForm.from(s)) } },
+                { e -> _state.update { it.copy(loadError = e.userMessage()) } },
+            )
+        }
+    }
+
+    fun edit(field: String, change: (RouterForm) -> RouterForm) =
+        _state.update { cur -> cur.form?.let { cur.copy(form = change(it), fieldErrors = cur.fieldErrors - field, error = null) } ?: cur }
+
+    fun save() {
+        val s = _state.value
+        val form = s.form ?: return
+        if (!s.canSave) return
+        _state.update { it.copy(busy = true, error = null, fieldErrors = emptyMap()) }
+        viewModelScope.launch {
+            val r = apiResult { repo.updateRouter(routerId, form.toInput()) }
+            r.fold(
+                { _ ->
+                    _state.update { it.copy(busy = false, saved = true) }
+                    onSaved()
+                },
+                { e ->
+                    val f = e.toFormFailure()
+                    _state.update { it.copy(busy = false, error = f.message, fieldErrors = f.fields) }
+                },
+            )
+        }
+    }
+}
