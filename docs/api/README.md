@@ -8,6 +8,7 @@
 | `v4-w9.md` | live router data, interfaces, clients, overview, reboot |
 | `v4-w8.md` | Android client notes |
 | `v4-w7.md` | web JSON endpoints under `/admin` |
+| `v6-apartments.md` | apartments (buildings), units, caretaker and landlord, the MAC-in-another-apartment rule |
 
 What belongs in a notes file: the exact request and response shapes as built (field names, nullability, error codes and statuses), role needed, limits and caching, and anything that differs from addendum L of `api-v1.md`.
 

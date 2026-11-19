@@ -272,7 +272,7 @@ func (s *Server) minRole(method, path string) string {
 		return store.RoleOperator
 	case strings.HasPrefix(path, "/admin/settings"), strings.HasPrefix(path, "/admin/tools"):
 		return store.RoleOwner
-	case !read && (strings.HasPrefix(path, "/admin/sites/") && path != "/admin/sites/profile" && !strings.HasPrefix(path, "/admin/sites/contacts") &&
+	case !read && (strings.HasPrefix(path, "/admin/sites/") && path != "/admin/sites/profile" &&
 		path != "/admin/sites/outage-notice" && path != "/admin/sites/packages" && path != "/admin/sites/sync"):
 		return store.RoleOwner
 	case !read && (strings.HasPrefix(path, "/admin/customers/natid") || path == "/admin/customers/anonymize" || path == "/admin/accounts/delete" || path == "/admin/accounts/move"):

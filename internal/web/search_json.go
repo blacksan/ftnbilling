@@ -50,6 +50,11 @@ func (s *Server) adminSearchJSON(w http.ResponseWriter, r *http.Request) {
 			g.Items = append(g.Items, searchItem{Title: a.Flat, Sub: joinNonEmpty(" · ", a.Tenant, a.Code, names[a.SiteID]), Href: "/admin/accounts/view?code=" + url.QueryEscape(a.Code)})
 		}
 		out = append(out, g)
+		g = searchGroup{Name: "Apartments"}
+		for _, a := range res.Apartments[:cut(len(res.Apartments))] {
+			g.Items = append(g.Items, searchItem{Title: a.Name, Sub: joinNonEmpty(" · ", a.Address, a.Caretaker.Name, a.Landlord.Name), Href: aptURL(a.ID)})
+		}
+		out = append(out, g)
 		g = searchGroup{Name: "Contacts"}
 		for _, c := range res.Customers[:cut(len(res.Customers))] {
 			g.Items = append(g.Items, searchItem{Title: c.Name, Sub: c.Phone, Href: "/admin/customers/view?id=" + url.QueryEscape(c.ID)})

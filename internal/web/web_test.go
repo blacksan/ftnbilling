@@ -97,7 +97,63 @@ func seedSite(t *testing.T, st *store.Store, name string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	apartmentFor(t, st, id, name)
 	return id
+}
+
+// apartmentFor gives a router an apartment named after it and links the two,
+// the shape the migration leaves existing data in.
+func apartmentFor(t *testing.T, st *store.Store, siteID, name string) string {
+	t.Helper()
+	id := store.NewApartmentID()
+	err := st.Update(func(d *store.Data) error {
+		d.Apartments[id] = store.Apartment{ID: id, Name: name, CreatedAt: time.Now()}
+		d.ApartmentSites[store.ApartmentSiteKey(id, siteID)] = store.ApartmentSite{ApartmentID: id, SiteID: siteID, CreatedAt: time.Now()}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// aptOf is the apartment linked to a router (the one apartmentFor made).
+func aptOf(t *testing.T, st *store.Store, siteID string) string {
+	t.Helper()
+	var id string
+	st.View(func(d *store.Data) {
+		if ids := d.SiteApartmentIDs(siteID); len(ids) > 0 {
+			id = ids[0]
+		}
+	})
+	if id == "" {
+		t.Fatalf("router %s has no apartment", siteID)
+	}
+	return id
+}
+
+// fillApartment adds the apartment of the form's router (or of the only
+// apartment there is) to an add-customer post, as the form's select would.
+func fillApartment(st *store.Store, path string, f url.Values) {
+	if f == nil || (path != "/admin/accounts/create" && path != "/admin/devices/create") || f.Get("apartment_id") != "" {
+		return
+	}
+	if f.Get("flat") == "x" {
+		return
+	}
+	st.View(func(d *store.Data) {
+		if site := f.Get("site"); site != "" {
+			if ids := d.SiteApartmentIDs(site); len(ids) > 0 {
+				f.Set("apartment_id", ids[0])
+			}
+			return
+		}
+		if len(d.Apartments) == 1 {
+			for id := range d.Apartments {
+				f.Set("apartment_id", id)
+			}
+		}
+	})
 }
 
 func body(t *testing.T, r *http.Response) string {
@@ -115,6 +171,7 @@ func (a *app) admin(method, path string, form url.Values) *http.Response {
 			form = url.Values{}
 		}
 		form.Set("_csrf", a.br.CSRF)
+		fillApartment(a.st, path, form)
 		rd = strings.NewReader(form.Encode())
 	}
 	req, _ := http.NewRequest(method, a.ts.URL+path, rd)

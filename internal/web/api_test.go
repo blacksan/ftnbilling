@@ -460,7 +460,7 @@ func TestAPIRoleMatrix(t *testing.T) {
 
 func TestAPIAccountsCRUDAndShapes(t *testing.T) {
 	r := newAPIRig(t)
-	x := r.call(r.oper.Access, "POST", "/accounts", map[string]any{"site_id": r.A.ID, "flat": "A-101", "mac": "aa-bb-cc-00-20-01", "tenant": "Wanjiku", "phone": "0712345678"}, nil)
+	x := r.call(r.oper.Access, "POST", "/accounts", map[string]any{"apartment_id": aptOf(t, r.st, r.A.ID), "site_id": r.A.ID, "flat": "A-101", "mac": "aa-bb-cc-00-20-01", "tenant": "Wanjiku", "phone": "0712345678"}, nil)
 	if x.Status != 201 {
 		t.Fatalf("create: %d %s", x.Status, x.Raw)
 	}
@@ -474,12 +474,12 @@ func TestAPIAccountsCRUDAndShapes(t *testing.T) {
 	}
 	id := str(acct, "id")
 	// Validation.
-	if x := r.call(r.oper.Access, "POST", "/accounts", map[string]any{"site_id": r.A.ID, "flat": "A-102", "mac": "nonsense"}, nil); x.Status != 400 || x.errCode(t) != "validation_failed" {
+	if x := r.call(r.oper.Access, "POST", "/accounts", map[string]any{"apartment_id": aptOf(t, r.st, r.A.ID), "site_id": r.A.ID, "flat": "A-102", "mac": "nonsense"}, nil); x.Status != 400 || x.errCode(t) != "validation_failed" {
 		t.Errorf("bad mac: %d %s", x.Status, x.Raw)
 	} else if f := x.JSON(t)["error"].(map[string]any)["details"].(map[string]any)["fields"].(map[string]any); f["mac"] == nil {
 		t.Errorf("no fields.mac: %s", x.Raw)
 	}
-	if x := r.call(r.oper.Access, "POST", "/accounts", map[string]any{"site_id": r.A.ID, "flat": "A-101", "mac": "AA:BB:CC:00:20:02"}, nil); x.Status != 409 || x.errCode(t) != "flat_in_use" {
+	if x := r.call(r.oper.Access, "POST", "/accounts", map[string]any{"apartment_id": aptOf(t, r.st, r.A.ID), "site_id": r.A.ID, "flat": "A-101", "mac": "AA:BB:CC:00:20:02"}, nil); x.Status != 409 || x.errCode(t) != "unit_in_use" {
 		t.Errorf("duplicate flat: %d %s", x.Status, x.Raw)
 	}
 	if x := r.call(r.oper.Access, "POST", "/accounts", map[string]any{"site_id": "nope", "flat": "Z", "mac": "AA:BB:CC:00:20:03"}, nil); x.Status != 400 && x.Status != 404 {
@@ -555,19 +555,25 @@ func TestAPIMACInUseBody(t *testing.T) {
 	r := newAPIRig(t)
 	a := r.acct(t, r.A, "Flat 7", "AA:BB:CC:00:30:07")
 	b := r.acct(t, r.B, "B-2", "AA:BB:CC:00:30:08")
-	// Another building, same MAC: still refused, and the body names the owner.
+	// Another apartment, same MAC: refused as mac_other_building, and the body names the owner.
 	x := r.call(r.oper.Access, "PUT", "/accounts/"+b.ID+"/mac", map[string]any{"mac": "aa:bb:cc:00:30:07"}, nil)
-	if x.Status != 409 || x.errCode(t) != "mac_in_use" {
+	if x.Status != 409 || x.errCode(t) != "mac_other_building" {
 		t.Fatalf("put mac: %d %s", x.Status, x.Raw)
 	}
 	det := x.JSON(t)["error"].(map[string]any)["details"].(map[string]any)
-	acc := det["account"].(map[string]any)
-	if det["mac"] != "AA:BB:CC:00:30:07" || acc["id"] != a.ID || acc["code"] != a.Code || acc["flat"] != "Flat 7" || acc["site_id"] != r.A.ID || acc["site_name"] != "Alpha" {
+	acc := det["belongs_to"].(map[string]any)
+	if det["mac"] != "AA:BB:CC:00:30:07" || acc["account_id"] != a.ID || acc["code"] != a.Code || acc["unit"] != "Flat 7" || acc["site_id"] != r.A.ID || acc["site_name"] != "Alpha" ||
+		acc["apartment"].(map[string]any)["name"] != "Alpha" {
 		t.Fatalf("details: %v", det)
 	}
-	x = r.call(r.oper.Access, "POST", "/accounts", map[string]any{"site_id": r.B.ID, "flat": "B-9", "mac": "AA:BB:CC:00:30:07"}, nil)
-	if x.Status != 409 || x.errCode(t) != "mac_in_use" {
+	x = r.call(r.oper.Access, "POST", "/accounts", map[string]any{"apartment_id": aptOf(t, r.st, r.B.ID), "flat": "B-9", "mac": "AA:BB:CC:00:30:07"}, nil)
+	if x.Status != 409 || x.errCode(t) != "mac_other_building" {
 		t.Fatalf("create with a used mac: %d %s", x.Status, x.Raw)
+	}
+	// The same apartment keeps the older code and body.
+	x = r.call(r.oper.Access, "POST", "/accounts", map[string]any{"apartment_id": aptOf(t, r.st, r.A.ID), "flat": "A-9", "mac": "AA:BB:CC:00:30:07"}, nil)
+	if x.Status != 409 || x.errCode(t) != "mac_in_use" {
+		t.Fatalf("create with a mac used in the same apartment: %d %s", x.Status, x.Raw)
 	}
 }
 
@@ -631,7 +637,7 @@ func TestAPIAccountListFiltersAndPagination(t *testing.T) {
 
 func TestAPIIdempotencyReplay(t *testing.T) {
 	r := newAPIRig(t)
-	body := map[string]any{"site_id": r.A.ID, "flat": "Idem-1", "mac": "AA:BB:CC:00:50:01"}
+	body := map[string]any{"apartment_id": aptOf(t, r.st, r.A.ID), "site_id": r.A.ID, "flat": "Idem-1", "mac": "AA:BB:CC:00:50:01"}
 	h := map[string]string{"Idempotency-Key": "7d6f5f4e-0c63-4a3c-8f6b-0e2c7a1d9b11"}
 	first := r.call(r.oper.Access, "POST", "/accounts", body, h)
 	second := r.call(r.oper.Access, "POST", "/accounts", body, h)
@@ -663,7 +669,7 @@ func TestAPIIdempotencyReplay(t *testing.T) {
 	if x := r.call(r.oper.Access, "POST", "/accounts", map[string]any{"site_id": r.A.ID, "flat": "Idem-2", "mac": "AA:BB:CC:00:50:02"}, h); x.Status != 400 {
 		t.Errorf("key reuse for another body: %d %s", x.Status, x.Raw)
 	}
-	other := r.call(r.owner.Access, "POST", "/accounts", map[string]any{"site_id": r.A.ID, "flat": "Idem-3", "mac": "AA:BB:CC:00:50:03"}, h)
+	other := r.call(r.owner.Access, "POST", "/accounts", map[string]any{"apartment_id": aptOf(t, r.st, r.A.ID), "site_id": r.A.ID, "flat": "Idem-3", "mac": "AA:BB:CC:00:50:03"}, h)
 	if other.Status != 201 {
 		t.Errorf("another device with the same key: %d %s", other.Status, other.Raw)
 	}
@@ -671,7 +677,7 @@ func TestAPIIdempotencyReplay(t *testing.T) {
 	var wg sync.WaitGroup
 	hp := map[string]string{"Idempotency-Key": "parallel-1"}
 	res := make([]reply, 5)
-	pb := map[string]any{"site_id": r.A.ID, "flat": "Idem-P", "mac": "AA:BB:CC:00:50:09"}
+	pb := map[string]any{"apartment_id": aptOf(t, r.st, r.A.ID), "site_id": r.A.ID, "flat": "Idem-P", "mac": "AA:BB:CC:00:50:09"}
 	for i := range res {
 		wg.Add(1)
 		go func() { defer wg.Done(); res[i] = r.call(r.oper.Access, "POST", "/accounts", pb, hp) }()
@@ -993,17 +999,17 @@ func TestAPIUnregistered(t *testing.T) {
 		t.Errorf("attach bad mac: %d", x.Status)
 	}
 	// Create from a device.
-	x = r.call(r.oper.Access, "POST", "/unregistered/create", map[string]any{"site_id": r.B.ID, "mac": "AA:BB:CC:00:80:AC", "flat": "New-9", "tenant": "Otieno", "phone": "0711000111", "package_id": r.pkgID(t, "1 Hour")}, nil)
+	x = r.call(r.oper.Access, "POST", "/unregistered/create", map[string]any{"apartment_id": aptOf(t, r.st, r.B.ID), "site_id": r.B.ID, "mac": "AA:BB:CC:00:80:AC", "flat": "New-9", "tenant": "Otieno", "phone": "0711000111", "package_id": r.pkgID(t, "1 Hour")}, nil)
 	if x.Status != 201 || x.JSON(t)["flat"] != "New-9" || x.JSON(t)["mac"] != "AA:BB:CC:00:80:AC" || x.JSON(t)["package"] == nil {
 		t.Fatalf("create: %d %s", x.Status, x.Raw)
 	}
-	if x := r.call(r.oper.Access, "POST", "/unregistered/create", map[string]any{"site_id": r.B.ID, "mac": "AA:BB:CC:00:80:AC", "flat": "New-10"}, nil); x.Status != 409 || x.errCode(t) != "mac_in_use" {
+	if x := r.call(r.oper.Access, "POST", "/unregistered/create", map[string]any{"apartment_id": aptOf(t, r.st, r.B.ID), "site_id": r.B.ID, "mac": "AA:BB:CC:00:80:AC", "flat": "New-10"}, nil); x.Status != 409 || x.errCode(t) != "mac_in_use" {
 		t.Errorf("create with a used mac: %d %s", x.Status, x.Raw)
 	}
-	if x := r.call(r.oper.Access, "POST", "/unregistered/create", map[string]any{"site_id": r.B.ID, "mac": "AA:BB:CC:00:80:AD", "flat": "New-9"}, nil); x.Status != 409 || x.errCode(t) != "flat_in_use" {
+	if x := r.call(r.oper.Access, "POST", "/unregistered/create", map[string]any{"apartment_id": aptOf(t, r.st, r.B.ID), "site_id": r.B.ID, "mac": "AA:BB:CC:00:80:AD", "flat": "New-9"}, nil); x.Status != 409 || x.errCode(t) != "unit_in_use" {
 		t.Errorf("create with a used flat: %d %s", x.Status, x.Raw)
 	}
-	if x := r.call(r.oper.Access, "POST", "/unregistered/create", map[string]any{"site_id": r.B.ID, "mac": "AA:BB:CC:00:80:AD"}, nil); x.Status != 400 || x.errCode(t) != "validation_failed" {
+	if x := r.call(r.oper.Access, "POST", "/unregistered/create", map[string]any{"apartment_id": aptOf(t, r.st, r.B.ID), "site_id": r.B.ID, "mac": "AA:BB:CC:00:80:AD"}, nil); x.Status != 400 || x.errCode(t) != "validation_failed" {
 		t.Errorf("create without a flat: %d %s", x.Status, x.Raw)
 	}
 	// Dismiss.

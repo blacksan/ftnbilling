@@ -17,6 +17,7 @@ func (s *Server) deviceRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/devices/create", s.adminDeviceCreate)
 	post("/admin/devices/attach", s.adminDeviceAttach)
 	post("/admin/devices/dismiss", s.adminDeviceDismiss)
+	post("/admin/devices/move", s.adminDeviceMove)
 	get("/admin/sites/devices.json", s.adminRouterDevices)
 }
 
@@ -198,4 +199,21 @@ func (s *Server) adminDeviceAttach(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminDeviceDismiss(w http.ResponseWriter, r *http.Request) {
 	s.back(w, r, "/admin/devices", msgOr(s.svc.DismissDevice(s.siteFor(r), r.PostFormValue("mac")), "Dismissed (it comes back if it opens the portal again)"))
+}
+
+// adminDeviceMove is "Move customer here": the device belongs to a customer of
+// another building, and the operator moves that customer to this router's
+// building after a confirm. The old router's lease and queue go, the new one's
+// are written, and the account history says so.
+func (s *Server) adminDeviceMove(w http.ResponseWriter, r *http.Request) {
+	if r.PostFormValue("confirm") != "1" {
+		s.back(w, r, "/admin/devices", "Error: tick the box to confirm the move")
+		return
+	}
+	a, err := s.svc.MoveCustomerHere(r.Context(), s.siteFor(r), r.PostFormValue("mac"), r.PostFormValue("apartment_id"))
+	if err != nil {
+		s.back(w, r, "/admin/devices", "Error: "+err.Error())
+		return
+	}
+	s.back(w, r, s.accountURL(a.ID), "Moved "+a.Tenant+" to this apartment. The router is updating.")
 }

@@ -174,6 +174,12 @@ func (s *Server) apiUnregistered(w http.ResponseWriter, r *http.Request, c *apiC
 		if onlyOnline && !on {
 			continue
 		}
+		// A MAC of an account of this very router is no unknown device; one of
+		// an account served by another building is listed with belongs_to.
+		bt, own := s.svc.DeviceOwnership(dv.SiteID, dv.MAC)
+		if own {
+			continue
+		}
 		sg, ok := sugs[dv.SiteID]
 		if !ok {
 			a, b := s.suggestAccounts(dv.SiteID, now)
@@ -187,9 +193,20 @@ func (s *Server) apiUnregistered(w http.ResponseWriter, r *http.Request, c *apiC
 		case sg.stale != nil:
 			suggested = sg.stale
 		}
+		var belongs any // null unless the MAC belongs to a customer of another building
+		if bt != nil {
+			suggested = nil
+			choices := []map[string]string{}
+			for _, ap := range bt.ApartmentChoices {
+				choices = append(choices, map[string]string{"id": ap.ID, "name": ap.Name})
+			}
+			belongs = map[string]any{"account_id": bt.AccountID, "code": bt.Code, "customer": bt.Customer,
+				"apartment": map[string]any{"id": bt.ApartmentID, "name": bt.Apartment}, "unit": bt.Unit,
+				"site_id": bt.SiteID, "site_name": bt.SiteName, "same_apartment": bt.SameApartment, "move_to_choices": choices}
+		}
 		items = append(items, map[string]any{"site_id": dv.SiteID, "site_name": names[dv.SiteID], "mac": dv.MAC, "vendor": dv.Vendor,
 			"host_name": dv.HostName, "ip": dv.IP, "source": dv.Source, "online": on, "first_seen": tp(dv.FirstSeen), "last_seen": tp(dv.LastSeen),
-			"hits": dv.Hits, "suggested_account": suggested})
+			"hits": dv.Hits, "suggested_account": suggested, "belongs_to": belongs})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
@@ -249,12 +266,14 @@ func (s *Server) apiUnregAttach(w http.ResponseWriter, r *http.Request, c *apiCt
 
 func (s *Server) apiUnregCreate(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 	var req struct {
-		SiteID    string `json:"site_id"`
-		MAC       string `json:"mac"`
-		Flat      string `json:"flat"`
-		Tenant    string `json:"tenant"`
-		Phone     string `json:"phone"`
-		PackageID string `json:"package_id"`
+		SiteID      string `json:"site_id"`
+		MAC         string `json:"mac"`
+		Flat        string `json:"flat"` // older name of unit
+		Unit        string `json:"unit"`
+		ApartmentID string `json:"apartment_id"`
+		Tenant      string `json:"tenant"`
+		Phone       string `json:"phone"`
+		PackageID   string `json:"package_id"`
 	}
 	if !decode(w, r, &req, false) {
 		return
@@ -263,8 +282,16 @@ func (s *Server) apiUnregCreate(w http.ResponseWriter, r *http.Request, c *apiCt
 	if !s.siteExists(req.SiteID) {
 		fields["site_id"] = "no such router"
 	}
-	if strings.TrimSpace(req.Flat) == "" {
-		fields["flat"] = "a flat label is required"
+	if strings.TrimSpace(req.Unit) == "" {
+		req.Unit = req.Flat
+	}
+	if strings.TrimSpace(req.Unit) == "" {
+		fields["unit"] = "a unit (flat) label is required"
+	}
+	if strings.TrimSpace(req.ApartmentID) == "" {
+		fields["apartment_id"] = "an apartment is required"
+	} else if !s.apartmentExists(req.ApartmentID) {
+		fields["apartment_id"] = "no such apartment"
 	}
 	mac, merr := billing.NormalizeMAC(req.MAC)
 	if merr != nil {
@@ -281,7 +308,7 @@ func (s *Server) apiUnregCreate(w http.ResponseWriter, r *http.Request, c *apiCt
 		validationErr(w, fields)
 		return
 	}
-	a, err := s.svc.CreateAccount(billing.AccountInput{SiteID: req.SiteID, Flat: req.Flat, MAC: mac, Tenant: req.Tenant, Phone: req.Phone})
+	a, err := s.svc.CreateAccount(billing.AccountInput{ApartmentID: req.ApartmentID, SiteID: req.SiteID, Unit: req.Unit, Flat: req.Unit, MAC: mac, Tenant: req.Tenant, Phone: req.Phone})
 	if err != nil {
 		s.billingErr(w, err, mac)
 		return

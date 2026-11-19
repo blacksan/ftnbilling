@@ -166,6 +166,7 @@ func TestSearchLiveAndDevicesJSON(t *testing.T) {
 func (m *multi) postJSON(t *testing.T, path string, f url.Values) (int, map[string]any) {
 	t.Helper()
 	f.Set("_csrf", m.br.CSRF)
+	fillApartment(m.st, path, f)
 	req, _ := newJSONReq(m.ts.URL+path, f)
 	req.AddCookie(m.br.Cookie)
 	if m.cookie != nil {

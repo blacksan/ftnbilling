@@ -18,6 +18,7 @@ import (
 // Allowed literals are exact strings and need a reason.
 var buildingAllowed = map[string]string{
 	"building":                        "CSV column name and the ?kind= key of the search redirect: wire names, not prose",
+	"mac_other_building":              "the API error code is fixed by the apartments spec (wire name, not prose)",
 	"already exists in this building": "matches the text of an error raised by internal/billing (billing is not renamed in P0)",
 }
 

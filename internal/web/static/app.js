@@ -97,7 +97,8 @@
         var f = $("form", dlg);
         $("input[name=mac]", f).value = pre;
         var rsel = $("[data-router-select]", f); if (rsel && o.getAttribute("data-site")) rsel.value = o.getAttribute("data-site");
-        var fl = o.getAttribute("data-flat"); if (fl) $("input[name=flat]", f).value = fl;
+        aptsFor(f, o.getAttribute("data-site"));
+        var fl = o.getAttribute("data-flat"); if (fl) { var ui = $("input[name=unit]", f); if (ui) ui.value = fl; }
         step(f, "form"); devsFor(f);
       }
       openDlg(dlg); return;
@@ -256,6 +257,31 @@
     });
   }
   $$("[data-router-select]").forEach(function (s) { s.addEventListener("change", function () { devsFor(s.form); }); });
+  /* Add customer: the apartment decides the router. One router: chosen and hidden. Several: only those are offered. */
+  function aptRouters(form) {
+    var a = $("[data-apt-select]", form), sel = $("[data-router-select]", form), fld = $("[data-router-field]", form);
+    if (!a || !sel || !fld) return;
+    var o = a.options[a.selectedIndex], ids = o && o.getAttribute("data-routers") ? o.getAttribute("data-routers").split(",") : [];
+    Array.prototype.forEach.call(sel.options, function (op) { op.hidden = !!op.value && ids.length > 0 && ids.indexOf(op.value) < 0; op.disabled = op.hidden; });
+    if (ids.length === 1) { sel.value = ids[0]; fld.hidden = true; }
+    else { fld.hidden = ids.length === 0; if (ids.indexOf(sel.value) < 0) sel.value = ""; sel.required = ids.length > 1; }
+    sel.dispatchEvent(new Event("change"));
+  }
+  /* A device row knows its router: offer the apartments that router serves, and take the only one. */
+  function aptsFor(form, siteId) {
+    var a = $("[data-apt-select]", form); if (!a || !siteId) return;
+    var only = [];
+    Array.prototype.forEach.call(a.options, function (op) {
+      if (!op.value) return;
+      var ids = (op.getAttribute("data-routers") || "").split(",");
+      op.hidden = op.disabled = ids.indexOf(siteId) < 0;
+      if (!op.hidden) only.push(op.value);
+    });
+    if (only.length === 1) { a.value = only[0]; }
+    aptRouters(form);
+    var sel = $("[data-router-select]", form); if (sel && sel.value !== siteId && Array.prototype.some.call(sel.options, function (op) { return op.value === siteId; })) sel.value = siteId;
+  }
+  $$("[data-apt-select]").forEach(function (a) { a.addEventListener("change", function () { aptRouters(a.form); }); });
   var ac = $("#addcustomer");
   if (ac) ac.addEventListener("ftn:open", function () { var f = $("form", ac); if (f && !f._devs) devsFor(f); });
 
