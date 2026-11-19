@@ -384,9 +384,3 @@ func TestHealthzCountsBuildings(t *testing.T) {
 		t.Fatalf("healthz %d %s", r.StatusCode, b)
 	}
 }
-
-func (m *multi) gotAlerts() []string {
-	m.alertMu.Lock()
-	defer m.alertMu.Unlock()
-	return append([]string(nil), m.alerts...)
-}

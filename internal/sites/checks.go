@@ -357,14 +357,6 @@ func yes(v string) bool {
 	return false
 }
 
-func no(v string) bool {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "false", "no", "off":
-		return true
-	}
-	return false
-}
-
 func rowDisabled(r routeros.Row) bool { return yes(r["disabled"]) }
 
 func splitList(s string) []string {
@@ -414,8 +406,6 @@ func parseVersion(v string) (major, minor int, ok bool) {
 	minor, _ = strconv.Atoi(m[2])
 	return major, minor, true
 }
-
-func printCmd(path string) string { return path + "/print" }
 
 // ---- evaluation ----------------------------------------------------------------
 
@@ -1243,10 +1233,6 @@ type portAssess struct {
 	vlans    []string       // VLAN interfaces on it
 	strands  []string       // VLAN interfaces that are no bridge port (moving would cut them off)
 	conflict bool
-}
-
-func (a portAssess) autoSafe() bool {
-	return len(a.hard) == 0 && len(a.unknown) == 0 && len(a.learned) == 0
 }
 
 // wanIfaces is every interface name the router treats as the WAN.

@@ -136,13 +136,7 @@ type Service struct {
 }
 
 func NewService(st *store.Store, rs RouterSource, log *slog.Logger) *Service {
-	svc := &Service{st: st, routers: rs, log: log, now: time.Now, policy: DefaultPolicy()}
-	if h, ok := rs.(interface {
-		SetForeignIPs(func(siteID string) map[string]bool)
-	}); ok {
-		h.SetForeignIPs(svc.foreignIPs) // address allocation avoids the router's own static leases
-	}
-	return svc
+	return &Service{st: st, routers: rs, log: log, now: time.Now, policy: DefaultPolicy()}
 }
 
 // SetSweepHook registers work the sweeper does for every runnable building

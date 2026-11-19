@@ -14,7 +14,7 @@ const listUnreg = "ftn-unreg"
 
 // ipoeRule is one firewall or NAT rule of the walled garden as data: it is
 // rendered to a pasteable script line (ipoeRules, the frozen paste scripts) and
-// to a REST body (Body, the server-run provisioning job).
+// to a REST body (Body, used by the checks' fixes).
 type ipoeRule struct {
 	Table   string // "filter" or "nat"
 	Props   [][2]string
@@ -41,14 +41,6 @@ func (r ipoeRule) Args() string {
 		b.WriteString(p[0] + "=" + p[1])
 	}
 	return b.String()
-}
-
-// Path is the REST path of the rule's table.
-func (r ipoeRule) Path() string {
-	if r.Table == "nat" {
-		return "/ip/firewall/nat"
-	}
-	return "/ip/firewall/filter"
 }
 
 // Body is the REST body of the rule for the customer interface iface ($ifc is replaced).

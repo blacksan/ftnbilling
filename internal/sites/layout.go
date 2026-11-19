@@ -161,12 +161,6 @@ func addInt(b [4]byte, n int) netip.Addr {
 	return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
 }
 
-// Validate checks the editable layout fields of a site. They end up inside the
-// bootstrap script, so interface names, addresses and the subnets are held to a
-// strict shape. wgNet (may be the zero Prefix) is the WireGuard tunnel subnet
-// the LAN and customer subnets must not overlap.
-func Validate(s store.Site) error { return ValidateNet(s, netip.Prefix{}) }
-
 // DefaultTunnelRange is the tunnel subnet assumed when the caller has none.
 var DefaultTunnelRange = netip.MustParsePrefix("10.99.0.0/22")
 

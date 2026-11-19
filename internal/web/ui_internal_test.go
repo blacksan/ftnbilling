@@ -22,7 +22,7 @@ func adminTemplateNames(t *testing.T) []string {
 	for _, e := range ents {
 		n := e.Name()
 		switch n {
-		case "portal.html", "wait.html", "pay.html", "success.html", "layout.html", "brand.html":
+		case "portal.html", "wait.html", "pay.html", "success.html", "layout.html":
 			continue // the tenant side is not part of the admin redesign
 		}
 		out = append(out, n)

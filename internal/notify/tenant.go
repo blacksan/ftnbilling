@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -317,6 +316,3 @@ func (t *Tenant) Validate(m Message) (bool, string) {
 	}
 	return true, ""
 }
-
-// ReplyText builds a free-form session reply (inbound webhook).
-func ReplyText(parts ...string) string { return strings.Join(parts, "\n") }

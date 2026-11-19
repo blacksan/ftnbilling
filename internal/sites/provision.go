@@ -23,10 +23,9 @@ type Provisioner interface {
 
 // provMgr holds the hooks set after construction and the reboot slot.
 type provMgr struct {
-	mu       sync.Mutex
-	runs     map[string]struct{} // routers with a disruptive action in flight (a reboot)
-	p        Provisioner
-	announce func(siteID, text, dedupe string)
+	mu   sync.Mutex
+	runs map[string]struct{} // routers with a disruptive action in flight (a reboot)
+	p    Provisioner
 }
 
 // SetProvisioner connects the billing service.
@@ -36,27 +35,10 @@ func (m *Manager) SetProvisioner(p Provisioner) {
 	m.prov.mu.Unlock()
 }
 
-// SetAnnouncer sets the function that tells the operators about an outcome
-// (alerts.Engine.Announce: WhatsApp and email).
-func (m *Manager) SetAnnouncer(f func(siteID, text, dedupe string)) {
-	m.prov.mu.Lock()
-	m.prov.announce = f
-	m.prov.mu.Unlock()
-}
-
 func (m *Manager) provisioner() Provisioner {
 	m.prov.mu.Lock()
 	defer m.prov.mu.Unlock()
 	return m.prov.p
-}
-
-func (m *Manager) announce(siteID, text, dedupe string) {
-	m.prov.mu.Lock()
-	f := m.prov.announce
-	m.prov.mu.Unlock()
-	if f != nil {
-		f(siteID, text, dedupe)
-	}
 }
 
 // ErrBusy: a reboot is already in flight for this router.

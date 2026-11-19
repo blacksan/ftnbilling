@@ -19,7 +19,3 @@ func ipoeApp(t *testing.T, mut func(*config.Config)) (*multi, store.Site, *route
 	m.selectSite(t, s.ID)
 	return m, s, rt
 }
-
-func lease(rt *routeros.Mock, mac, ip, host string) {
-	rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": mac, "address": ip, "active-address": ip, "host-name": host, "status": "bound", "dynamic": "true", "server": "ftn-dhcp"})
-}

@@ -13,13 +13,6 @@ type RouterSource interface {
 	Router(siteID string) routeros.Client
 }
 
-type single struct{ rt routeros.Client }
-
-func (s single) Router(string) routeros.Client { return s.rt }
-
-// SingleRouter serves one client for every site (tests, single router setups).
-func SingleRouter(rt routeros.Client) RouterSource { return single{rt} }
-
 // MockRouters is a test RouterSource: one fake router per site ID.
 type MockRouters map[string]*routeros.Mock
 

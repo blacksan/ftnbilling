@@ -356,14 +356,6 @@ func load(path string) (Data, error) {
 	return d, nil
 }
 
-func save(path string, d *Data) error {
-	b, err := json.Marshal(d)
-	if err != nil {
-		return err
-	}
-	return store.WriteFileAtomic(path, b)
-}
-
 func marshal(d *Data) ([]byte, error) { return json.Marshal(d) }
 
 func writeBytes(path string, b []byte) error { return store.WriteFileAtomic(path, b) }
