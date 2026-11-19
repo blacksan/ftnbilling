@@ -107,12 +107,13 @@ func TestInstallDryRunHasNoAdminVPN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry run failed: %v\n%s", err, out)
 	}
-	for _, bad := range []string{"wg-admin", "51821", "10.98.", "admin-peer", "ADM_"} {
+	// (udp/51821 and 10.98.0.0/24 are wg-mgmt's defaults now: remote WinBox, not the retired admin VPN.)
+	for _, bad := range []string{"wg-admin", "admin-peer", "ADM_"} {
 		if strings.Contains(string(out), bad) {
 			t.Errorf("dry-run output mentions %q:\n%s", bad, out)
 		}
 	}
-	for _, want := range []string{"[14/14]", "migrate", "--setup-code", "write /etc/caddy/Caddyfile"} {
+	for _, want := range []string{"[15/15]", "migrate", "--setup-code", "write /etc/caddy/Caddyfile", "wg-mgmt"} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("dry-run output lacks %q", want)
 		}
@@ -177,6 +178,19 @@ func TestInstallLegacyFirewallRuleNumbers(t *testing.T) {
 	}
 	if got := strings.Fields(string(out)); strings.Join(got, ",") != "10,6,4,3" {
 		t.Errorf("rule numbers %v, want 10,6,4,3 (highest first, wg0 and others untouched)", got)
+	}
+	// With remote WinBox on its default port, udp/51821 is wg-mgmt's own rule: only wg-admin rules go,
+	// and nothing "on wg-mgmt" is ever touched.
+	status2 := status + "[12] 10.98.0.1 udp                 ALLOW IN    Anywhere on wg-mgmt\n[13] Anywhere                   DENY IN     Anywhere on wg-mgmt\n"
+	cmd = exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(), "MGMT_PORT=51821")
+	cmd.Stdin = strings.NewReader(status2)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if got := strings.Fields(string(out)); strings.Join(got, ",") != "10,4" {
+		t.Errorf("with MGMT_PORT=51821 rule numbers %v, want 10,4 (only wg-admin rules)", got)
 	}
 }
 

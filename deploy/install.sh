@@ -15,7 +15,9 @@
 #
 # What it sets up: PostgreSQL (local socket only), Caddy (HTTPS; /admin and /api
 # are public, protected by the app's own login with a second factor), WireGuard
-# wg0 for the routers, ufw, rclone (Google Drive backup), unattended security
+# wg0 for the routers, WireGuard wg-mgmt for remote WinBox (your laptop or phone
+# reaches the routers' WinBox through this server; devices are added with
+# ftnbilling-mgmt), ufw, rclone (Google Drive backup), unattended security
 # upgrades, a swap file on small servers, 6-hourly database dumps and a monthly
 # restore drill. See deploy/README.md.
 #
@@ -49,6 +51,10 @@
 #                 Unset = no IP filter (the callback token still protects them).
 #   SUPPORT_PHONE, BRAND_NAME, PUBLIC_IP (skip auto-detection of this VPS's IPv4).
 #   WG_PORT (51820), WG_SUBNET (10.99.0.0/22),
+#   MGMT_PORT (51821, udp: the remote-WinBox WireGuard interface wg-mgmt),
+#   MGMT_SUBNET (10.98.0.0/24: a private IPv4 prefix, /16 to /29, apart from
+#                WG_SUBNET; the server is .1, each device gets the next free address.
+#                Routers built after this setting is made accept WinBox from it).
 #   REPO (blacksan/ftnbilling), BRANCH (main), SWAP_MB (1024).
 set -Eeuo pipefail
 
@@ -74,8 +80,11 @@ WG_SUBNET="${WG_SUBNET:-10.99.0.0/22}"
 WG_NET=${WG_SUBNET%/*}
 WG_SERVER_IP=${WG_NET%.*}.1
 WG_CONF=/etc/wireguard/$WG_IF.conf
+MGMT_IF=wg-mgmt
+MGMT_CONF=/etc/wireguard/$MGMT_IF.conf
+MGMT_MARK=ftnbilling-mgmt   # BEGIN/END marker of the block in /etc/ufw/before.rules
 SWAP_MB="${SWAP_MB:-1024}"
-TOTAL=14
+TOTAL=15
 STEPN=0
 STEPNAME=starting
 WROTE=0
@@ -153,12 +162,53 @@ fillkv() {
 PGSU() { run runuser -u postgres -- "$@"; }
 
 # ---------------------------------------------------------------------------
+ip2int() { local a b c d; IFS=. read -r a b c d <<<"$1"; echo $(((a << 24) | (b << 16) | (c << 8) | d)); }
+# in_private_v4 ADDR: RFC 1918 (10/8, 172.16/12, 192.168/16).
+in_private_v4() {
+  local n; n=$(ip2int "$1")
+  [ $((n >> 24)) -eq 10 ] || [ $((n >> 20)) -eq $(((172 << 4) | 1)) ] || [ $((n >> 16)) -eq $(((192 << 8) | 168)) ]
+}
+# prefixes_overlap A/N B/M: success when the two IPv4 prefixes share addresses.
+prefixes_overlap() {
+  local a=${1%/*} an=${1#*/} b=${2%/*} bn=${2#*/} n mask
+  n=$an; [ "$bn" -ge "$n" ] || n=$bn
+  mask=$(((0xFFFFFFFF << (32 - n)) & 0xFFFFFFFF))
+  [ $(($(ip2int "$a") & mask)) -eq $(($(ip2int "$b") & mask)) ]
+}
+# mgmt_settings: MGMT_SUBNET / MGMT_PORT from the environment, else from the
+# settings file of an earlier install, else the defaults; then validated.
+mgmt_settings() {
+  MGMT_PORT="${MGMT_PORT:-$(envget MGMT_PORT)}"; MGMT_PORT="${MGMT_PORT:-51821}"
+  MGMT_SUBNET="${MGMT_SUBNET:-$(envget MGMT_SUBNET)}"; MGMT_SUBNET="${MGMT_SUBNET:-10.98.0.0/24}"
+  case $MGMT_PORT in ""|*[!0-9]*) die "MGMT_PORT must be a UDP port number, got: $MGMT_PORT" ;; esac
+  { [ "$MGMT_PORT" -ge 1 ] && [ "$MGMT_PORT" -le 65535 ]; } || die "MGMT_PORT must be 1 to 65535, got: $MGMT_PORT"
+  [ "$MGMT_PORT" != "$WG_PORT" ] || die "MGMT_PORT must differ from WG_PORT ($WG_PORT)"
+  [[ $MGMT_SUBNET =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]] || die "MGMT_SUBNET must be an IPv4 prefix like 10.98.0.0/24, got: $MGMT_SUBNET"
+  local o; for o in $(printf '%s' "${MGMT_SUBNET%/*}" | tr . ' '); do [ "$o" -le 255 ] || die "MGMT_SUBNET has a bad address: $MGMT_SUBNET"; done
+  { [ "${MGMT_SUBNET#*/}" -ge 16 ] && [ "${MGMT_SUBNET#*/}" -le 29 ]; } || die "MGMT_SUBNET must be a /16 to /29 prefix, got: $MGMT_SUBNET"
+  in_private_v4 "${MGMT_SUBNET%/*}" || die "MGMT_SUBNET must be a private IPv4 prefix (10/8, 172.16/12 or 192.168/16), got: $MGMT_SUBNET"
+  if prefixes_overlap "$MGMT_SUBNET" "$WG_SUBNET"; then die "MGMT_SUBNET ($MGMT_SUBNET) must not overlap WG_SUBNET ($WG_SUBNET)"; fi
+  MGMT_NET=$(int2ip_masked "${MGMT_SUBNET%/*}" "${MGMT_SUBNET#*/}")
+  MGMT_SUBNET=$MGMT_NET/${MGMT_SUBNET#*/}
+  MGMT_SERVER_IP=$(int2ip_masked "$MGMT_NET" 32 1)
+}
+# int2ip_masked ADDR BITS [N]: the network address of ADDR/BITS, plus N.
+int2ip_masked() {
+  local n mask
+  mask=$(((0xFFFFFFFF << (32 - $2)) & 0xFFFFFFFF))
+  n=$(($(ip2int "$1") & mask))
+  n=$((n + ${3:-0}))
+  echo "$(((n >> 24) & 255)).$(((n >> 16) & 255)).$(((n >> 8) & 255)).$((n & 255))"
+}
+
+# ---------------------------------------------------------------------------
 preflight() {
   step "checking this server"
   if [ "$DRY" = 1 ]; then note "DRY_RUN=1: nothing below is executed, only printed"; fi
   if [ "$DRY" != 1 ] && [ "$(id -u)" != 0 ]; then die "run as root (pipe into: sudo ... bash)"; fi
   # An existing settings file means this run upgrades a server that is already installed.
   if [ -f "$ENVF" ]; then UPGRADE=1; note "existing install found: this run is an in-place upgrade"; fi
+  mgmt_settings
   local ID ID_LIKE VERSION_ID PRETTY_NAME
   eval "$( (. /etc/os-release 2>/dev/null; printf 'ID=%q ID_LIKE=%q VERSION_ID=%q PRETTY_NAME=%q' "${ID:-}" "${ID_LIKE:-}" "${VERSION_ID:-}" "${PRETTY_NAME:-}") || true)"
   case "${ID:-}${ID_LIKE:-}" in
@@ -371,7 +421,7 @@ acquire_program() {
   fi
   ASSETS=$BUNDLE/deploy
   local f
-  for f in $APP-wg-sync $APP-backup $APP-admin-reset $APP-wipe $APP-doctor $APP-backup.service $APP-backup.timer $APP-dump.service $APP-dump.timer $APP-drill.service $APP-drill.timer; do
+  for f in $APP-wg-sync $APP-backup $APP-admin-reset $APP-wipe $APP-doctor $APP-mgmt $APP-backup.service $APP-backup.timer $APP-dump.service $APP-dump.timer $APP-drill.service $APP-drill.timer; do
     [ -f "$ASSETS/$f" ] || die "$ASSETS/$f is missing: incomplete bundle or source tree"
   done
   [ -f "$BIN_SRC" ] || die "program binary not found at $BIN_SRC"
@@ -395,7 +445,7 @@ users_and_tools() {
   install -d -o root -g $APP -m 750 "$ETC"
   install -d -o root -g root -m 700 "$BACKUPS"
   local t
-  for t in wg-sync backup admin-reset wipe doctor; do install -m 0755 "$ASSETS/$APP-$t" "$SBIN/$APP-$t"; done
+  for t in wg-sync backup admin-reset wipe doctor mgmt; do install -m 0755 "$ASSETS/$APP-$t" "$SBIN/$APP-$t"; done
   printf '%s\n' "$PROG_VERSION" >"$ETC/VERSION"; chmod 644 "$ETC/VERSION"
 }
 
@@ -488,9 +538,92 @@ WGEOF
   else
     systemctl is-active --quiet wg-quick@$WG_IF || systemctl start wg-quick@$WG_IF || die "could not start $WG_IF (see: journalctl -u wg-quick@$WG_IF)"
     systemctl enable --now $APP-wg-sync.path $APP-wg-status.timer >/dev/null
-    if [ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo 0)" = 1 ]; then
-      warn "net.ipv4.ip_forward is 1 on this server. The firewall blocks routing from the tunnels, but leave forwarding off unless you need it."
+    if [ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo 0)" = 1 ] && [ "${NO_FIREWALL:-0}" = 1 ]; then
+      warn "net.ipv4.ip_forward is 1 on this server and NO_FIREWALL=1 leaves the forwarding rules unmanaged: this server may route packets between networks."
     fi
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# The forwarding rules of the remote-WinBox interface, as lines of
+# /etc/ufw/before.rules (the ufw-before-forward chain runs before ufw's own
+# defaults, and ufw's route rules cannot say "ICMP echo only"). They sit first
+# in the chain, so nothing ufw adds later can let a device further than this:
+#   wg-mgmt -> wg0:    tcp/8291 (WinBox) and ping, to the routers' tunnel range only
+#   wg0 -> wg-mgmt:    replies only (established/related); a router cannot open a connection to a device
+#   wg-mgmt -> anywhere else, and wg-mgmt -> this server: dropped (no internet, no server services)
+# No NAT: routers see the device's own address.
+mgmt_rules() {
+  cat <<EOF
+# BEGIN $MGMT_MARK (written by deploy/install.sh; a re-run replaces this block)
+# Remote WinBox: devices on $MGMT_IF reach tcp/8291 (WinBox) and ping on the routers' tunnel range $WG_SUBNET, nothing else.
+-A ufw-before-input -i $MGMT_IF -j DROP
+-A ufw-before-forward -i $MGMT_IF -m conntrack --ctstate INVALID -j DROP
+-A ufw-before-forward -i $MGMT_IF -o $WG_IF -s $MGMT_SUBNET -d $WG_SUBNET -p tcp --dport 8291 -j ACCEPT
+-A ufw-before-forward -i $MGMT_IF -o $WG_IF -s $MGMT_SUBNET -d $WG_SUBNET -p icmp --icmp-type echo-request -j ACCEPT
+-A ufw-before-forward -i $MGMT_IF -j DROP
+-A ufw-before-forward -i $WG_IF -o $MGMT_IF -s $WG_SUBNET -d $MGMT_SUBNET -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A ufw-before-forward -o $MGMT_IF -j DROP
+# END $MGMT_MARK
+EOF
+}
+
+# mgmt_before_rules < before.rules: the same file with the block above (replaced
+# if already there) right after "# End required lines".
+mgmt_before_rules() {
+  BLK=$(mgmt_rules) MARK=$MGMT_MARK awk '
+    BEGIN { blk = ENVIRON["BLK"]; mark = ENVIRON["MARK"] }
+    index($0, "# BEGIN " mark) == 1 { skip = 1 }
+    skip { if ($0 == "# END " mark) skip = 0; next }
+    { print }
+    !done && $0 == "# End required lines" { print blk; done = 1 }
+  '
+}
+
+# ---------------------------------------------------------------------------
+wireguard_mgmt() {
+  step "remote WinBox: WireGuard $MGMT_IF ($MGMT_SUBNET, udp/$MGMT_PORT)"
+  if [ "${NO_FIREWALL:-0}" = 1 ]; then
+    note "NO_FIREWALL=1: skipped. Remote WinBox needs this server to forward packets, and its rules live in ufw"
+    MGMT_ON=0; return 0
+  fi
+  MGMT_ON=1
+  local host=${BASE#*://} cur
+  host=${host%%[:/]*}
+  if [ "$DRY" = 1 ] && [ -z "$host" ]; then host="<domain>"; fi
+  # Only wg-mgmt's own settings are touched here: wg0 and its peers are not.
+  if [ ! -f "$MGMT_CONF" ]; then
+    if [ "$DRY" = 1 ]; then printf '    [dry-run] generate the %s server key, write %s\n' "$MGMT_IF" "$MGMT_CONF"
+    else
+      ( umask 077
+        cat >"$MGMT_CONF" <<WGEOF
+[Interface]
+Address = $MGMT_SERVER_IP/${MGMT_SUBNET#*/}
+ListenPort = $MGMT_PORT
+MTU = 1380
+PrivateKey = $(wg genkey)
+WGEOF
+      )
+    fi
+  elif [ "$DRY" != 1 ]; then
+    # An existing install keeps its key and its devices. The address is the one thing a re-run cannot change.
+    cur=$(awk '/^\[Peer\]/{exit} /^Address *=/{print $3; exit}' "$MGMT_CONF")
+    [ "$cur" = "$MGMT_SERVER_IP/${MGMT_SUBNET#*/}" ] || die "$MGMT_CONF has Address $cur but MGMT_SUBNET is $MGMT_SUBNET. Changing the subnet means new profiles for every device and rebuilt routers: remove the devices (ftnbilling-mgmt remove), delete $MGMT_CONF and run again, or set MGMT_SUBNET back."
+    cur=$(awk '/^\[Peer\]/{exit} /^ListenPort *=/{print $3; exit}' "$MGMT_CONF")
+    if [ "$cur" != "$MGMT_PORT" ]; then
+      note "changing the $MGMT_IF port from ${cur:-?} to $MGMT_PORT"
+      awk -v p="$MGMT_PORT" '/^\[Peer\]/{peers=1} !peers && /^ListenPort *=/{print "ListenPort = " p; next} {print}' "$MGMT_CONF" >"$MGMT_CONF.new"
+      chmod 600 "$MGMT_CONF.new"; mv -f "$MGMT_CONF.new" "$MGMT_CONF"
+      try wg set "$MGMT_IF" listen-port "$MGMT_PORT"
+    fi
+  fi
+  run chmod 600 "$MGMT_CONF"
+  # What the operator tool reads (no secrets: the key stays in $MGMT_CONF).
+  printf 'MGMT_IF=%s\nMGMT_SUBNET=%s\nMGMT_PORT=%s\nMGMT_ENDPOINT_HOST=%s\nWG_SUBNET=%s\n' "$MGMT_IF" "$MGMT_SUBNET" "$MGMT_PORT" "$host" "$WG_SUBNET" | writef 644 root:root $ETC/mgmt.env
+  try systemctl enable wg-quick@$MGMT_IF
+  if [ "$DRY" = 1 ]; then printf '    [dry-run] systemctl start wg-quick@%s\n' "$MGMT_IF"
+  else
+    systemctl is-active --quiet wg-quick@$MGMT_IF || systemctl start wg-quick@$MGMT_IF || die "could not start $MGMT_IF (see: journalctl -u wg-quick@$MGMT_IF)"
   fi
 }
 
@@ -573,6 +706,12 @@ WG_SUBNET=$WG_SUBNET
 # Metrics: routers send NetFlow to the tunnel address only
 NETFLOW_ADDR=$WG_SERVER_IP:2055
 
+# Remote WinBox: devices (sudo ftnbilling-mgmt add <name>) join this separate WireGuard
+# interface and reach the routers' WinBox through this server. Routers built from the
+# billing admin accept WinBox from MGMT_SUBNET. Changing it needs the routers rebuilt.
+MGMT_PORT=$MGMT_PORT
+MGMT_SUBNET=$MGMT_SUBNET
+
 # M-Pesa, WhatsApp and email are set in the admin: Settings > M-Pesa, WhatsApp, Email.
 # What you save there wins over the lines below. The lines are a fallback only
 # (leave them commented, or fill them in once and manage the rest in the admin).
@@ -604,6 +743,8 @@ EOF
     addkv WG_PUBLIC_KEY "$WG_PUB"
     addkv WG_ENDPOINT "$PUBIP:$WG_PORT"
     addkv WG_SUBNET "$WG_SUBNET"
+    addkv MGMT_PORT "$MGMT_PORT"
+    addkv MGMT_SUBNET "$MGMT_SUBNET"
     [ -z "${ADMIN_PASS:-}" ] || setkv ADMIN_PASS "$ADMIN_PASS"
     BASE=$(envget PUBLIC_BASE_URL)
   fi
@@ -835,8 +976,13 @@ EOF
 
 # Reads "ufw status numbered" on stdin; prints the numbers of the rules that
 # belong to the retired admin VPN (udp/51821, anything on wg-admin), highest first.
+# The remote-WinBox interface now uses udp/51821 by default: with MGMT_PORT set to
+# that port its rule is not an old one, and nothing "on wg-mgmt" ever is.
 legacy_rule_numbers() {
-  awk '/wg-admin|51821/ && match($0, /^\[ *[0-9]+\]/) {n=substr($0, 2, RLENGTH-2); gsub(/ /, "", n); print n}' | sort -rn
+  awk -v keep="${MGMT_PORT:-}" '
+    /wg-mgmt/ { next }
+    (/wg-admin/ || (/51821/ && keep != "51821")) && match($0, /^\[ *[0-9]+\]/) { n = substr($0, 2, RLENGTH-2); gsub(/ /, "", n); print n }
+  ' | sort -rn
 }
 
 # ---------------------------------------------------------------------------
@@ -849,6 +995,7 @@ firewall() {
   runq ufw allow 80/tcp
   runq ufw allow 443/tcp
   runq ufw allow "$WG_PORT"/udp          # routers (wg0)
+  if [ "${MGMT_ON:-0}" = 1 ]; then runq ufw allow "$MGMT_PORT"/udp; fi   # remote WinBox devices (wg-mgmt)
   # NetFlow arrives only through the tunnel. A legacy install that still has a
   # router on ROUTER_URL sends it over the internet, so keep that rule there.
   if ! grep -qs '^ROUTER_URL=' "$ENVF"; then
@@ -875,8 +1022,42 @@ firewall() {
     ufw delete allow in on tailscale0 >/dev/null 2>&1 || true
     ufw delete allow 41641/udp >/dev/null 2>&1 || true
   fi
+  mgmt_firewall
   runq ufw default deny incoming
   runq ufw --force enable
+  mgmt_forwarding
+}
+
+# Forwarding between the two WireGuard interfaces, kept across reboots. It is
+# switched on only here, after the ufw block above is in place and ufw is enabled,
+# so there is no moment when this server routes without the rules.
+mgmt_forwarding() {
+  [ "${MGMT_ON:-0}" = 1 ] || return 0
+  printf '# Fast Tech Net remote WinBox: devices on %s are routed to the routers on %s. Allowed only by the ftnbilling-mgmt block of /etc/ufw/before.rules.\nnet.ipv4.ip_forward=1\n' "$MGMT_IF" "$WG_IF" | writef 644 root:root /etc/sysctl.d/91-ftnbilling-mgmt.conf
+  run sysctl -q -p /etc/sysctl.d/91-ftnbilling-mgmt.conf
+  if [ -r /etc/ufw/sysctl.conf ] && grep -Eq '^net/ipv4/ip_forward *= *0' /etc/ufw/sysctl.conf; then
+    warn "/etc/ufw/sysctl.conf sets net/ipv4/ip_forward=0, which ufw applies when it starts and which switches forwarding off again: change it to 1 for remote WinBox"
+  fi
+}
+
+# The wg-mgmt forwarding rules in /etc/ufw/before.rules (see mgmt_rules). Written
+# only when they differ, so a re-run changes nothing; loaded by ufw's reload/enable.
+mgmt_firewall() {
+  [ "${MGMT_ON:-0}" = 1 ] || return 0
+  local f=/etc/ufw/before.rules tmp
+  if [ "$DRY" = 1 ]; then printf '    [dry-run] ufw before.rules: %s forwarding block (wg-mgmt -> wg0 tcp/8291 + ping only; everything else from wg-mgmt dropped)\n' "$MGMT_IF"; return 0; fi
+  [ -f "$f" ] || die "$f not found: ufw is not set up as expected"
+  tmp=$(mktemp "$f.XXXXXX")
+  mgmt_before_rules <"$f" >"$tmp"
+  grep -q "^# BEGIN $MGMT_MARK" "$tmp" || { rm -f "$tmp"; die "could not add the remote WinBox rules: no '# End required lines' in $f"; }
+  chmod --reference="$f" "$tmp"; chown --reference="$f" "$tmp"
+  if cmp -s "$tmp" "$f"; then rm -f "$tmp"
+  else
+    cp -p "$f" "$f.pre-$MGMT_MARK"
+    mv -f "$tmp" "$f"
+    try ufw reload
+    note "remote WinBox forwarding rules written to $f"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -1009,6 +1190,7 @@ doctor_and_banner() {
  Health:            ${HEALTH:-}
  WireGuard:         $WG_IF (routers) udp/$WG_PORT, server key $WG_PUB
 EOF
+  if [ "$MGMT_ON" = 1 ]; then echo " Remote WinBox: sudo $APP-mgmt add <your-device>"; fi
   if [ -n "$MAC_REPORT" ]; then
     printf '\n ATTENTION, flats that share a MAC address (not provisioned until fixed in Admin):\n%s\n' "$(printf '%s\n' "$MAC_REPORT" | sed 's/^/   /')"
   elif printf '%s' "${DB_COUNTS:-}" | grep -q 'applied payments'; then
@@ -1050,7 +1232,7 @@ main() {
   # Everything below was already read; never let a command swallow the rest of a piped script.
   exec </dev/null
   PROG_VERSION=""; BUNDLE=""; BIN_SRC=""; ASSETS=""; BK_MSG=""; HEALTH=""; DB_COUNTS=""; DOC_RC=0
-  MAC_REPORT=""; SETUP_OUT=""; REMOVED_NOTE=""; UPGRADE=0
+  MAC_REPORT=""; SETUP_OUT=""; REMOVED_NOTE=""; UPGRADE=0; MGMT_ON=0
   WG_PUB=""; PUBIP=""; BASE=""; MEM_MB=0; GOARCH=amd64
   preflight
   packages
@@ -1061,6 +1243,7 @@ main() {
   wireguard_routers
   remove_legacy_admin_vpn
   settings
+  wireguard_mgmt
   postgres_setup
   app_and_caddy
   firewall

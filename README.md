@@ -113,7 +113,9 @@ Per-router REST traffic is budgeted: at most two reads and one write in flight
 per router, 10 s per call (`ROUTER_READ_TIMEOUT` sets the read limit).
 
 The settings for the tunnel are `WG_PUBLIC_KEY`, `WG_ENDPOINT` (default
-`PUBLIC_IP:51820`), `WG_SUBNET` (`10.99.0.0/22`), `WG_DUMP_PATH`,
+`PUBLIC_IP:51820`), `WG_SUBNET` (`10.99.0.0/22`), `MGMT_SUBNET` (`10.98.0.0/24`,
+the remote-WinBox devices' network; the installer also takes `MGMT_PORT`, UDP
+`51821`; see `deploy/README.md`, Remote WinBox), `WG_DUMP_PATH`,
 `JOIN_TOKEN_TTL` (`30m`), `ALLOW_INSECURE_JOIN` (bench tests only) and
 `JOIN_REQUIRE_MIKROTIK_UA` (`true`).
 

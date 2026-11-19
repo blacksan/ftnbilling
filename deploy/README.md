@@ -49,7 +49,7 @@ To preview without changing anything: `DRY_RUN=1` (works without root and prints
 curl -fsSL -H "Authorization: Bearer $GH" https://raw.githubusercontent.com/blacksan/ftnbilling/main/deploy/install.sh | DRY_RUN=1 bash
 ```
 
-Options (environment variables): `DOMAIN`, `GH_TOKEN`, `VERSION` (a release tag; default is the latest release), `FROM_SOURCE=1` (build on the server instead of using a release), `NO_POSTGRES=1`, `NO_FIREWALL=1`, `DRY_RUN=1`, `PUBLIC_IP`, `ADMIN_PASS`, `BRAND_NAME`, `SUPPORT_PHONE`, `WG_PORT`, `WG_SUBNET`, `SWAP_MB`. The header of `install.sh` lists them.
+Options (environment variables): `DOMAIN`, `GH_TOKEN`, `VERSION` (a release tag; default is the latest release), `FROM_SOURCE=1` (build on the server instead of using a release), `NO_POSTGRES=1`, `NO_FIREWALL=1`, `DRY_RUN=1`, `PUBLIC_IP`, `ADMIN_PASS`, `BRAND_NAME`, `SUPPORT_PHONE`, `WG_PORT`, `WG_SUBNET`, `MGMT_PORT` (UDP, default 51821) and `MGMT_SUBNET` (default `10.98.0.0/24`) for remote WinBox, `SWAP_MB`. The header of `install.sh` lists them.
 
 ### Where the program comes from
 
@@ -75,11 +75,12 @@ Options (environment variables): `DOMAIN`, `GH_TOKEN`, `VERSION` (a release tag;
 | rclone | For the Google Drive backup (distro package if 1.60 or newer, otherwise the official installer) |
 | The app | `/usr/local/bin/ftnbilling`, systemd service `ftnbilling` (`GOMEMLIMIT=600MiB GOGC=50`, `MemoryMax=900M`, runs after PostgreSQL and `wg0`), data in `/var/lib/ftnbilling`, settings in `/etc/ftnbilling/ftnbilling.env` |
 | `wg0` | Routers' tunnel: `10.99.0.1/22`, UDP 51820, MTU 1380. The private key is generated once in `/etc/wireguard/wg0.conf` and never regenerated. `ftnbilling-wg-sync` (root, via a systemd path unit) applies the peer list the app writes after validating it (only `[Peer]`, a 44-character `PublicKey`, one `/32` inside the subnet; no symlinks, no file over 256 KB) and `ftnbilling-wg-status.timer` writes handshake times for the admin page |
-| Firewall (ufw) | Deny incoming by default. Open: SSH, 80, 443, UDP 51820. On `wg0` only UDP 2055 to `10.99.0.1`. All other input and all routing from the tunnel is denied. The public UDP 2055 rule is removed (kept on an old install that still has `ROUTER_URL`). Warns if `net.ipv4.ip_forward` is 1 |
+| `wg-mgmt` | Remote WinBox: a second, separate WireGuard interface for your own laptop and phone: `10.98.0.1/24` (`MGMT_SUBNET`), UDP 51821 (`MGMT_PORT`), MTU 1380, key and devices in `/etc/wireguard/wg-mgmt.conf`, settings for the tool in `/etc/ftnbilling/mgmt.env`. Devices are added with `ftnbilling-mgmt`. See "Remote WinBox" below |
+| Firewall (ufw) | Deny incoming by default. Open: SSH, 80, 443, UDP 51820, UDP 51821. On `wg0` only UDP 2055 to `10.99.0.1`. All other input and all routing from the router tunnel is denied. The public UDP 2055 rule is removed (kept on an old install that still has `ROUTER_URL`). `net.ipv4.ip_forward` is 1 (`/etc/sysctl.d/91-ftnbilling-mgmt.conf`) only for remote WinBox, and a block of rules in `/etc/ufw/before.rules` (between `# BEGIN ftnbilling-mgmt` and `# END ftnbilling-mgmt`, replaced on every run) limits it, see below |
 | Swap and logs | A 1 GB `/swapfile` (`vm.swappiness=10`) when RAM is 2 GB or less and there is no swap; journald `SystemMaxUse=500M` |
 | Updates | `unattended-upgrades`, security updates only, never reboots by itself |
 | Backups | `ftnbilling-dump.timer` every 6 hours (database dump, daily file tar), `ftnbilling-drill.timer` monthly restore drill, `ftnbilling-backup.timer` weekly Google Drive upload once you run `sudo ftnbilling-backup setup`. See [BACKUP.md](BACKUP.md). The old daily cron job is removed |
-| Tools | `/usr/local/sbin/`: `ftnbilling-admin-reset`, `ftnbilling-wipe`, `ftnbilling-doctor`, `ftnbilling-backup`, `ftnbilling-wg-sync` |
+| Tools | `/usr/local/sbin/`: `ftnbilling-admin-reset`, `ftnbilling-wipe`, `ftnbilling-doctor`, `ftnbilling-backup`, `ftnbilling-wg-sync`, `ftnbilling-mgmt` |
 
 `DATA_KEY` (encrypts national IDs and the secrets saved in Settings) is generated once into the settings file on every install, with or without PostgreSQL. The `MPESA_*`, `WA_*` and `SMTP_*` lines are written commented out: set these up in Admin > Settings instead.
 
@@ -124,7 +125,7 @@ sudo ftnbilling-doctor        # PASS / WARN / FAIL for everything; exit status 1
 sudo ftnbilling-doctor -q     # only warnings and failures
 ```
 
-It checks every program the installer put in, every service, timer and port, PostgreSQL (reachable, the app role connects, migrations current or `db-check`), `wg0` up, the public `/admin/login` page (200 over https), nothing on UDP 51821, the app bound to loopback, flats that share a MAC address, the schema version, Caddy, the app's `/healthz` (including `db_ok`), the dump, restore-drill and Drive backup timers and their last results, whether Google Drive is set up, the ufw rules, disk, RAM, swap and clock sync. The installer runs it at the end. A fresh install normally shows one warning: Drive backup is not set up yet.
+It checks every program the installer put in, every service, timer and port, PostgreSQL (reachable, the app role connects, migrations current or `db-check`), `wg0` and `wg-mgmt` up (a warning, not a failure, on an install from before remote WinBox), `ip_forward` and the remote-WinBox forwarding rules, the public `/admin/login` page (200 over https), no retired admin VPN on UDP 51821, the app bound to loopback, flats that share a MAC address, the schema version, Caddy, the app's `/healthz` (including `db_ok`), the dump, restore-drill and Drive backup timers and their last results, whether Google Drive is set up, the ufw rules, disk, RAM, swap and clock sync. The installer runs it at the end. A fresh install normally shows one warning: Drive backup is not set up yet.
 
 ### Restore on a new server (manual steps)
 
@@ -147,6 +148,19 @@ If the line fails with a certificate error, correct the router's clock; the page
 To rebuild a router, press **Reset router** and paste the new line (the line erases the router first; running the set-up script a second time on a built router is refused). The router is never open while it builds: before any WAN connection exists the script puts a firewall hold at the top of the filter that drops new and invalid traffic from the WAN, the WAN connection is created switched off and is switched on only after the full rule set is in, and the hold is removed last. If the script stops on an error the hold stays and the WAN is switched on behind it so the failure report can reach the server. **Reset router** on the Setup tab (owner only, the router name typed to confirm) makes the server forget the router's keys and join state, so a new line can be made. It does not touch the router.
 
 A router that is "paused" in the admin gets no collection and no router changes, and tenants cannot buy there.
+
+## Remote WinBox
+
+Open WinBox on a router from your laptop or phone, from anywhere, through this server:
+
+1. On the server: `sudo ftnbilling-mgmt add <your-device>` (a-z, 0-9 and dash). It prints the device's WireGuard profile once, with a QR code. The server does not keep the device's private key.
+2. On the device, import the profile in the WireGuard app (phone: scan the QR code; laptop: save the text as a `.conf` and import it) and connect.
+3. In WinBox, connect to the router's **tunnel address** (shown on the router page in the admin, and as `tunnel_address` in the API, for example `10.99.0.2`) and sign in with the router's own user and password.
+4. `sudo ftnbilling-mgmt list` shows every device and its last handshake. When a laptop or phone is lost: `sudo ftnbilling-mgmt remove <your-device>`.
+
+How it is kept narrow: the profile routes only the routers' tunnel range (`WG_SUBNET`, never the whole internet) through the VPN. The server lets a device through to the routers on WinBox (TCP 8291) and ping only; the device cannot reach this server's own services, other networks or the internet, and a router cannot open a connection back to a device. There is no NAT: the router sees the device's own `10.98.0.x` address. A router built by the script accepts WinBox from `MGMT_SUBNET` through its tunnel (MAC-WinBox stays on the LAN).
+
+**Routers built before this feature** have no such rule, and the server never changes a router's services or firewall after the bootstrap. Reset each one (Setup, **Reset router**) and paste the new line once; the rebuilt router has it. Until then WinBox works as before on its LAN. Changing `MGMT_SUBNET` later likewise needs every device re-added and every router rebuilt.
 
 ## 3. Check
 

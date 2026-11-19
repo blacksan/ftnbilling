@@ -9,7 +9,8 @@
 # It only reads; it changes nothing.
 #
 # Test/override variables (all optional): FTN_ENV_FILE, FTN_DATA, FTN_BIN,
-# FTN_BACKUP_DIR, FTN_HEALTH_URL, FTN_ADMIN_URL (default <PUBLIC_BASE_URL>/admin/login).
+# FTN_BACKUP_DIR, FTN_HEALTH_URL, FTN_ADMIN_URL (default <PUBLIC_BASE_URL>/admin/login),
+# FTN_MGMT_ENV (remote WinBox settings, default /etc/ftnbilling/mgmt.env), FTN_MGMT_CONF.
 set -u -o pipefail
 
 APP=ftnbilling
@@ -22,6 +23,13 @@ STATUS_JSON=$DATA/backup-status.json
 DRIVE_STATE=/var/lib/$APP-backup/last.json
 QUIET=0
 [ "${1:-}" = "-q" ] && QUIET=1
+# Remote WinBox (wg-mgmt): the installer writes these; an older install has no file.
+MGMT_ENVF=${FTN_MGMT_ENV:-/etc/$APP/mgmt.env}
+MGMT_IF=wg-mgmt
+MGMT_PORT=51821
+# shellcheck disable=SC1090
+[ ! -r "$MGMT_ENVF" ] || . "$MGMT_ENVF"
+MGMT_CONF=${FTN_MGMT_CONF:-/etc/wireguard/$MGMT_IF.conf}
 
 if [ -t 1 ]; then G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; Z=$'\033[0m'; else G=""; Y=""; R=""; Z=""; fi
 NP=0; NW=0; NF=0
@@ -84,6 +92,7 @@ if [ -x "$BIN" ]; then pass "app binary" "$BIN"; else fail "app binary" "$BIN mi
 for s in ftnbilling-wg-sync ftnbilling-backup ftnbilling-admin-reset ftnbilling-doctor; do
   if [ -x "/usr/local/sbin/$s" ]; then pass "tool: $s" ""; else fail "tool: $s" "/usr/local/sbin/$s missing"; fi
 done
+if [ -x /usr/local/sbin/ftnbilling-mgmt ]; then pass "tool: ftnbilling-mgmt" ""; else warn "tool: ftnbilling-mgmt" "missing: this install predates remote WinBox (re-run the installer)"; fi
 [ -r "$(dirname "$ENVF")/VERSION" ] && pass "installed version" "$(head -1 "$(dirname "$ENVF")/VERSION")"
 
 # ------------------------------------------------------------------ services
@@ -129,7 +138,13 @@ if have ss; then
     if listening tcp "$p"; then pass "port tcp/$p" "caddy listening"; else fail "port tcp/$p" "nothing listening"; fi
   done
   if listening udp 51820; then pass "port udp/51820" "wg0 (routers)"; else fail "port udp/51820" "wg0 not listening"; fi
-  if listening udp 51821; then fail "port udp/51821" "something listens here: the old admin VPN should be gone (sudo systemctl disable --now wg-quick@wg-admin)"; else pass "port udp/51821" "nothing listening (the old admin VPN is gone)"; fi
+  # udp/51821 was the old admin VPN's port and is wg-mgmt's by default now: it is only wrong when the old interface is what listens.
+  if have wg && wg show wg-admin >/dev/null 2>&1; then fail "port udp/51821" "the old admin VPN (wg-admin) is still up (sudo systemctl disable --now wg-quick@wg-admin)"
+  elif [ "$MGMT_PORT" != 51821 ] && listening udp 51821; then fail "port udp/51821" "something listens here: the old admin VPN should be gone (sudo systemctl disable --now wg-quick@wg-admin)"
+  elif [ "$MGMT_PORT" != 51821 ]; then pass "port udp/51821" "nothing listening (the old admin VPN is gone)"; fi
+  if [ -f "$MGMT_CONF" ]; then
+    if listening udp "$MGMT_PORT"; then pass "port udp/$MGMT_PORT" "$MGMT_IF (remote WinBox)"; else fail "port udp/$MGMT_PORT" "$MGMT_IF is not listening (systemctl status wg-quick@$MGMT_IF)"; fi
+  fi
   if listening udp 2055; then pass "port udp/2055" "NetFlow"; else warn "port udp/2055" "NetFlow not listening"; fi
   if listening tcp 5432; then fail "port tcp/5432" "Postgres is listening on TCP; it must only use its local socket"; else pass "port tcp/5432" "no Postgres TCP listener"; fi
 else
@@ -276,8 +291,23 @@ if have wg; then
 else
   fail "WireGuard" "wg is not installed, so tunnels cannot be checked"
 fi
+# Remote WinBox: wg-mgmt up and forwarding on. An install from before this feature has neither: a warning, not a failure.
 fw=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo 0)
-if [ "$fw" = 1 ]; then warn "ip_forward" "1: this server routes packets; leave it 0 unless you need it"; else pass "ip_forward" "0"; fi
+if have wg && wg show "$MGMT_IF" >/dev/null 2>&1; then
+  n=$(wg show "$MGMT_IF" peers 2>/dev/null | grep -c . || true)
+  pass "interface $MGMT_IF" "up (remote WinBox devices: ${n:-0})"
+  if [ "$fw" = 1 ]; then pass "ip_forward" "1 (needed for remote WinBox)"; else fail "ip_forward" "0: remote WinBox cannot reach the routers (sysctl -w net.ipv4.ip_forward=1; re-run the installer so it stays on)"; fi
+  if have iptables; then
+    if iptables -S ufw-before-forward 2>/dev/null | grep -q -- "-A ufw-before-forward -i $MGMT_IF -j DROP"; then pass "remote WinBox forwarding rules" "$MGMT_IF limited to WinBox and ping on the routers' tunnel range"
+    else fail "remote WinBox forwarding rules" "the ufw rules that limit $MGMT_IF are not loaded (re-run the installer, then: sudo ufw reload)"; fi
+  else warn "remote WinBox forwarding rules" "iptables not found; not checked"; fi
+elif [ -f "$MGMT_CONF" ]; then
+  fail "interface $MGMT_IF" "configured but down (systemctl status wg-quick@$MGMT_IF)"
+  if [ "$fw" = 1 ]; then pass "ip_forward" "1"; else warn "ip_forward" "0 (remote WinBox is down)"; fi
+else
+  warn "interface $MGMT_IF" "not set up: this install predates remote WinBox (re-run the installer; see deploy/README.md, Remote WinBox)"
+  if [ "$fw" = 1 ]; then warn "ip_forward" "1 but remote WinBox is not set up: this server routes packets with no forwarding rules of ours"; else pass "ip_forward" "0 (remote WinBox not set up)"; fi
+fi
 
 # ------------------------------------------------------------------ firewall
 section "Firewall"
@@ -290,7 +320,11 @@ if have ufw; then
       printf '%s' "$st" | grep -Eq "^$r +ALLOW" && pass "ufw allow $r" "" || fail "ufw allow $r" "rule missing"
     done
     if printf '%s' "$st" | grep -Eq '^8080(/tcp)? +ALLOW +Anywhere'; then fail "ufw :8080 public" "port 8080 is open to everyone"; else pass "ufw :8080 public" "not open to the internet"; fi
-    if printf '%s' "$st" | grep -Eq 'wg-admin|51821'; then warn "ufw old admin VPN rules" "rules for udp/51821 or wg-admin remain (re-run the installer to remove them)"; else pass "ufw old admin VPN rules" "none"; fi
+    if [ -f "$MGMT_CONF" ]; then
+      printf '%s' "$st" | grep -Eq "^$MGMT_PORT/udp +ALLOW" && pass "ufw allow $MGMT_PORT/udp" "remote WinBox" || fail "ufw allow $MGMT_PORT/udp" "rule missing: devices cannot connect (re-run the installer)"
+    fi
+    old='wg-admin|51821'; [ "$MGMT_PORT" != 51821 ] || { [ ! -f "$MGMT_CONF" ] || old='wg-admin'; }
+    if printf '%s' "$st" | grep -Eq "$old"; then warn "ufw old admin VPN rules" "rules for udp/51821 or wg-admin remain (re-run the installer to remove them)"; else pass "ufw old admin VPN rules" "none"; fi
   else
     fail "ufw" "not active (the server is unprotected; re-run the installer)"
   fi
