@@ -121,3 +121,25 @@ func (d *Data) OpenAccountsOfApartment(apartmentID string) []Account {
 
 // UnitKey is how units are compared: ignoring case and extra spaces.
 func UnitKey(s string) string { return apartmentNameKey(s) }
+
+// NormalizeUnit trims a unit and writes every run of white space (a
+// non-breaking space too) as one ASCII space. Units are stored this way, so the
+// Go comparison (UnitKey) and the Postgres unique index (which only has to
+// know ASCII spaces) agree.
+func NormalizeUnit(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// normalizeUnits rewrites the units of open accounts into their stored form.
+// Flat mirrors Unit, so it follows when it was the same text.
+func normalizeUnits(d *Data) {
+	for id, a := range d.Accounts {
+		u := NormalizeUnit(a.Unit)
+		if u == a.Unit {
+			continue
+		}
+		if a.Flat == a.Unit {
+			a.Flat = u
+		}
+		a.Unit = u
+		d.Accounts[id] = a
+	}
+}

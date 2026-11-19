@@ -132,33 +132,52 @@ func (s *Server) adminDevices(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "admin_devices", p)
 }
 
-// resolveFlat turns what the admin typed in the picker (an account code or a
-// flat label, any case) into an account of the building.
-func (s *Server) resolveFlat(siteID, text string) (store.Account, bool) {
+// resolveFlat turns what was typed (an account code, or a unit label in any
+// case) into an open account of the router. A code is exact. A label that more
+// than one open account of the router carries (the same unit in two apartments)
+// is never guessed: the accounts come back in ambiguous and ok is false, unless
+// apartmentID narrows it to one.
+func (s *Server) resolveFlat(siteID, text, apartmentID string) (acct store.Account, ok bool, ambiguous []store.Account) {
 	text = strings.TrimSpace(text)
 	// The datalist shows "Flat 3B (K7Q2MX)"; accept that form too.
 	if i := strings.LastIndex(text, "("); i >= 0 && strings.HasSuffix(text, ")") {
 		text = strings.TrimSpace(text[i+1 : len(text)-1])
 	}
 	if text == "" {
-		return store.Account{}, false
+		return store.Account{}, false, nil
 	}
-	var out store.Account
-	found := false
+	var hits []store.Account
 	s.st.View(func(d *store.Data) {
+		key := store.UnitKey(text)
 		for _, a := range d.AccountList() {
 			if a.SiteID != siteID {
 				continue
 			}
-			if strings.EqualFold(a.Code, text) || strings.EqualFold(a.Flat, text) {
-				out, found = a, true
-				if strings.EqualFold(a.Code, text) {
-					return
-				}
+			if strings.EqualFold(a.Code, text) {
+				hits = []store.Account{a}
+				return
+			}
+			if apartmentID != "" && a.ApartmentID != apartmentID {
+				continue
+			}
+			if store.UnitKey(a.Unit) == key || store.UnitKey(a.Flat) == key {
+				hits = append(hits, a)
 			}
 		}
 	})
-	return out, found
+	switch len(hits) {
+	case 0:
+		return store.Account{}, false, nil
+	case 1:
+		return hits[0], true, nil
+	}
+	return store.Account{}, false, hits
+}
+
+// apartmentName is an apartment's name for a page ("" when it is gone).
+func (s *Server) apartmentName(id string) (n string) {
+	s.st.View(func(d *store.Data) { n = d.Apartments[id].Name })
+	return n
 }
 
 func (s *Server) adminDeviceCreate(w http.ResponseWriter, r *http.Request) {
@@ -182,7 +201,11 @@ func (s *Server) adminDeviceCreate(w http.ResponseWriter, r *http.Request) {
 // another flat is refused, and the error names that flat and its building.
 func (s *Server) adminDeviceAttach(w http.ResponseWriter, r *http.Request) {
 	site := s.siteFor(r)
-	a, ok := s.resolveFlat(site, r.PostFormValue("acct"))
+	a, ok, amb := s.resolveFlat(site, r.PostFormValue("acct"), r.PostFormValue("apartment_id"))
+	if len(amb) > 0 {
+		s.back(w, r, "/admin/devices", "Error: more than one flat of this router has that number ("+s.ambiguousText(amb)+"). Type the account code instead")
+		return
+	}
 	if id := r.PostFormValue("account"); !ok && id != "" { // account id, as older forms sent it
 		a, ok = s.svc.GetAccount(id)
 	}
@@ -216,4 +239,13 @@ func (s *Server) adminDeviceMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.back(w, r, s.accountURL(a.ID), "Moved "+a.Tenant+" to this apartment. The router is updating.")
+}
+
+// ambiguousText lists "apartment, unit (code)" for the accounts a typed label matched.
+func (s *Server) ambiguousText(list []store.Account) string {
+	var parts []string
+	for _, a := range list {
+		parts = append(parts, s.apartmentName(a.ApartmentID)+", unit "+a.Unit+" ("+a.Code+")")
+	}
+	return strings.Join(parts, "; ")
 }

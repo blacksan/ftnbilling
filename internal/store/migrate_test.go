@@ -340,18 +340,21 @@ func TestMigrateV7ToV8MovesBenchPortIntoCustomerPorts(t *testing.T) {
 // into its notes).
 const v7Apartments = `{"format":7,
 "sites":{"s1":{"id":"s1","name":"Riverside","address":"Ngong Rd","mode":"wg","bench_port":"ether5","created_at":"2026-01-01T00:00:00Z"},
-         "s2":{"id":"s2","name":"Hilltop","mode":"wg","created_at":"2026-01-02T00:00:00Z"}},
+         "s2":{"id":"s2","name":"Hilltop","mode":"wg","created_at":"2026-01-02T00:00:00Z"},
+         "s3":{"id":"s3","name":"Old","mode":"wg","removed":true,"created_at":"2025-12-01T00:00:00Z"}},
 "accounts":{
  "a1":{"id":"a1","site_id":"s1","code":"AAA111","flat":"Flat 1","mac":"AA:BB:CC:DD:EE:01","created_at":"2026-01-03T00:00:00Z"},
  "a2":{"id":"a2","site_id":"s1","code":"BBB222","flat":"B4","mac":"AA:BB:CC:DD:EE:02","created_at":"2026-01-04T00:00:00Z"},
  "a3":{"id":"a3","site_id":"s2","code":"CCC333","flat":"B4","mac":"AA:BB:CC:DD:EE:03","created_at":"2026-01-04T00:00:00Z"},
- "a4":{"id":"a4","site_id":"s1","code":"DDD444","flat":"flat  1","mac":"AA:BB:CC:DD:EE:04","created_at":"2026-01-05T00:00:00Z"}},
-"closed_accounts":{"a5":{"id":"a5","site_id":"s1","code":"EEE555","flat":"Flat 1","mac":"AA:BB:CC:DD:EE:05","created_at":"2026-01-01T00:00:00Z","closed_at":"2026-02-01T00:00:00Z"}},
+ "a4":{"id":"a4","site_id":"s1","code":"DDD444","flat":"flat\u00a0 1","mac":"AA:BB:CC:DD:EE:04","created_at":"2026-01-05T00:00:00Z"}},
+"closed_accounts":{"a6":{"id":"a6","site_id":"s3","code":"FFF666","flat":"Z9","mac":"AA:BB:CC:DD:EE:06","created_at":"2025-12-02T00:00:00Z","closed_at":"2026-01-01T00:00:00Z"},
+ "a5":{"id":"a5","site_id":"s1","code":"EEE555","flat":"Flat 1","mac":"AA:BB:CC:DD:EE:05","created_at":"2026-01-01T00:00:00Z","closed_at":"2026-02-01T00:00:00Z"}},
 "contacts":{
  "c1":{"id":"c1","site_id":"s1","role":"caretaker","name":"Otieno","phone":"0722000111","email":"o@x.org","notes":"gate","created_at":"2026-01-01T00:00:00Z"},
  "c2":{"id":"c2","site_id":"s1","role":"landlord","name":"Kamau","phone":"0711222333","created_at":"2026-01-02T00:00:00Z"},
  "c3":{"id":"c3","site_id":"s1","role":"security","name":"Guard","phone":"0700000001","created_at":"2026-01-03T00:00:00Z"},
  "c4":{"id":"c4","site_id":"s1","role":"agent","name":"Wambui","phone":"0733444555","created_at":"2026-01-04T00:00:00Z"},
+ "c6":{"id":"c6","site_id":"s3","role":"caretaker","name":"Gone","phone":"0700000002","created_at":"2025-12-01T00:00:00Z"},
  "c5":{"id":"c5","site_id":"s2","role":"security","name":"Night guard","phone":"0700000009","notes":"after 8pm","created_at":"2026-01-01T00:00:00Z"}}}`
 
 // MigrationV7Expect is what both backends must give for the fixture above; the
@@ -367,7 +370,7 @@ func TestMigrateV7ToV9Apartments(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.View(func(d *Data) {
-		if d.Format != FormatVersion || len(d.Apartments) != 2 || len(d.ApartmentSites) != 2 || len(d.LegacyContacts) != 0 {
+		if d.Format != FormatVersion || len(d.Apartments) != 3 || len(d.ApartmentSites) != 2 || len(d.LegacyContacts) != 0 {
 			t.Fatalf("format %d, %d apartments, %d links, %d legacy contacts", d.Format, len(d.Apartments), len(d.ApartmentSites), len(d.LegacyContacts))
 		}
 		a1, a2 := d.Apartments[MigratedApartmentID("s1")], d.Apartments[MigratedApartmentID("s2")]
@@ -390,12 +393,24 @@ func TestMigrateV7ToV9Apartments(t *testing.T) {
 		if w := (ApartmentContact{Name: "Night guard", Phone: "+254700000009", Notes: "Role: security | after 8pm"}); a2.Caretaker != w || !a2.Landlord.Empty() {
 			t.Errorf("hilltop %+v / %+v", a2.Caretaker, a2.Landlord)
 		}
-		units := map[string]string{"a1": "Flat 1", "a2": "B4", "a3": "B4", "a4": "flat  1 (DDD444)"}
+		units := map[string]string{"a1": "Flat 1", "a2": "B4", "a3": "B4", "a4": "flat 1 (DDD444)"}
 		for id, u := range units {
 			a := d.Accounts[id]
 			apt := MigratedApartmentID(a.SiteID)
 			if a.ApartmentID != apt || a.Unit != u || a.Flat != u {
 				t.Errorf("%s: apartment %q unit %q flat %q", id, a.ApartmentID, a.Unit, a.Flat)
+			}
+		}
+		arch := d.Apartments[MigratedApartmentID(ArchivedApartmentKey)]
+		if c := d.ClosedAccounts["a6"]; arch.Name != "Archived" || c.ApartmentID != arch.ID || c.Unit != "Z9" || !arch.Caretaker.Empty() {
+			t.Errorf("the closed account of a removed router: %+v in %+v", c, arch)
+		}
+		if _, ok := d.Apartments[MigratedApartmentID("s3")]; ok {
+			t.Error("a removed router got its own apartment")
+		}
+		for k := range d.ApartmentSites {
+			if d.ApartmentSites[k].SiteID == "s3" || d.ApartmentSites[k].ApartmentID == arch.ID {
+				t.Errorf("the archive or a removed router is linked: %+v", d.ApartmentSites[k])
 			}
 		}
 		if c := d.ClosedAccounts["a5"]; c.ApartmentID != MigratedApartmentID("s1") || c.Unit != "Flat 1" {
@@ -424,7 +439,7 @@ func TestMigrateV7ToV9Apartments(t *testing.T) {
 		t.Fatal(err)
 	}
 	s2.View(func(d *Data) {
-		if len(d.Apartments) != 2 || d.Accounts["a4"].Unit != "flat  1 (DDD444)" {
+		if len(d.Apartments) != 3 || d.Accounts["a4"].Unit != "flat 1 (DDD444)" {
 			t.Errorf("second open changed the data")
 		}
 	})
@@ -459,6 +474,17 @@ func TestUnitAndApartmentNameInvariants(t *testing.T) {
 	if err := add("x2", "p1", " b4 "); !errors.Is(err, ErrDuplicateUnit) {
 		t.Fatalf("same unit in one apartment: %v", err)
 	}
+	if err := add("x2", "p1", "b4\u00a0"); !errors.Is(err, ErrDuplicateUnit) {
+		t.Fatalf("a non-breaking space is a space: %v", err)
+	}
+	if err := add("x4", "p1", "C\u00a0\u00a07"); err != nil {
+		t.Fatal(err)
+	}
+	s.View(func(d *Data) {
+		if d.Accounts["x4"].Unit != "C 7" || d.Accounts["x4"].Flat != "C 7" {
+			t.Errorf("unit is stored with ASCII spaces: %q / %q", d.Accounts["x4"].Unit, d.Accounts["x4"].Flat)
+		}
+	})
 	if err := add("x3", "p2", "B4"); err != nil {
 		t.Fatalf("the same unit in another apartment is fine: %v", err)
 	}

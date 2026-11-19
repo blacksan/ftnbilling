@@ -415,6 +415,10 @@ func IsObsoleteSiteSetting(key string) bool {
 	return false
 }
 
+// ArchivedApartmentKey feeds MigratedApartmentID for the one apartment that holds the
+// accounts of removed routers (migration 0008 uses the same key).
+const ArchivedApartmentKey = "archived"
+
 // MigratedApartmentID is the id of the apartment that migration 0008 (and
 // migrateV8toV9) creates for a router: "a" + the first 6 hex digits of
 // md5("apt|" + router id). Postgres computes the same value in SQL, so the two
@@ -446,7 +450,7 @@ func legacyPhone(raw string) string {
 
 var spaceRun = regexp.MustCompile(`\s+`)
 
-func tidy(s string) string { return strings.TrimSpace(spaceRun.ReplaceAllString(s, " ")) }
+func tidy(s string) string { return NormalizeUnit(s) }
 
 // migrateV8toV9 upgrades format 8 data in memory (migration 0008 in Postgres):
 //   - every router gets one apartment named after it (the router's name, with
@@ -476,6 +480,9 @@ func (d *Data) migrateV8toV9(now time.Time) {
 	seen := map[string]bool{}
 	aptOf := map[string]string{}
 	for _, s := range sites {
+		if s.Removed {
+			continue // a removed router gets no apartment of its own (see Archived below)
+		}
 		id := MigratedApartmentID(s.ID)
 		aptOf[s.ID] = id
 		if _, ok := d.Apartments[id]; ok {
@@ -492,6 +499,31 @@ func (d *Data) migrateV8toV9(now time.Time) {
 		seen[apartmentNameKey(name)] = true
 		d.Apartments[id] = Apartment{ID: id, Name: name, Address: s.Address, CreatedAt: s.CreatedAt}
 		d.ApartmentSites[ApartmentSiteKey(id, s.ID)] = ApartmentSite{ApartmentID: id, SiteID: s.ID, CreatedAt: s.CreatedAt}
+	}
+	// Accounts of removed routers (their closed accounts, mostly) share one "Archived"
+	// apartment that no router serves. Live routers keep the plain name.
+	archived := MigratedApartmentID(ArchivedApartmentKey)
+	needArchive := false
+	for _, a := range d.Accounts {
+		needArchive = needArchive || (a.ApartmentID == "" && d.Sites[a.SiteID].Removed)
+	}
+	for _, a := range d.ClosedAccounts {
+		needArchive = needArchive || (a.ApartmentID == "" && d.Sites[a.SiteID].Removed)
+	}
+	if needArchive {
+		if _, ok := d.Apartments[archived]; !ok {
+			name := "Archived"
+			if seen[apartmentNameKey(name)] {
+				name = "Archived (removed routers)"
+			}
+			seen[apartmentNameKey(name)] = true
+			d.Apartments[archived] = Apartment{ID: archived, Name: name, Notes: "Customers of routers that were removed. No router serves this apartment.", CreatedAt: now}
+		}
+		for _, s := range sites {
+			if s.Removed {
+				aptOf[s.ID] = archived
+			}
+		}
 	}
 	// accounts
 	var open []Account
@@ -512,6 +544,7 @@ func (d *Data) migrateV8toV9(now time.Time) {
 		if a.Unit == "" {
 			a.Unit = a.Flat
 		}
+		a.Unit = NormalizeUnit(a.Unit)
 		if a.ApartmentID != "" && a.Unit != "" {
 			k := a.ApartmentID + "|" + UnitKey(a.Unit)
 			if units[k] {
@@ -537,6 +570,7 @@ func (d *Data) migrateV8toV9(now time.Time) {
 		if a.Unit == "" {
 			a.Unit = a.Flat
 		}
+		a.Unit = NormalizeUnit(a.Unit)
 		d.ClosedAccounts[k] = a
 	}
 	// contacts
@@ -554,8 +588,8 @@ func (d *Data) migrateV8toV9(now time.Time) {
 	filled := map[slotKey]bool{}
 	for _, c := range cs {
 		apt, ok := d.Apartments[aptOf[c.SiteID]]
-		if !ok {
-			continue
+		if !ok || apt.ID == archived {
+			continue // contacts of a removed router are dropped with it
 		}
 		slot := "caretaker"
 		if c.Role == "landlord" || c.Role == "agent" {

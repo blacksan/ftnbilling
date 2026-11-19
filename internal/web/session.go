@@ -272,11 +272,15 @@ func (s *Server) minRole(method, path string) string {
 		return store.RoleOperator
 	case strings.HasPrefix(path, "/admin/settings"), strings.HasPrefix(path, "/admin/tools"):
 		return store.RoleOwner
+	case path == "/admin/apartments/delete":
+		return store.RoleOwner // like DELETE /api/v1/apartments/{id}
+	case strings.HasPrefix(path, "/admin/sites/contacts"):
+		return store.RoleViewer // gone (410) for every role: the old address answers the same to all
 	case !read && (strings.HasPrefix(path, "/admin/sites/") && path != "/admin/sites/profile" &&
 		path != "/admin/sites/outage-notice" && path != "/admin/sites/packages" && path != "/admin/sites/sync" &&
 		path != "/admin/sites/ports/update"): // operators change customer/unused ports; ChangePort keeps LAN and OLT for owners
 		return store.RoleOwner
-	case !read && (strings.HasPrefix(path, "/admin/customers/natid") || path == "/admin/customers/anonymize" || path == "/admin/accounts/delete" || path == "/admin/accounts/move"):
+	case !read && (strings.HasPrefix(path, "/admin/customers/natid") || path == "/admin/customers/anonymize" || path == "/admin/accounts/delete"):
 		return store.RoleOwner
 	case !read:
 		return store.RoleOperator

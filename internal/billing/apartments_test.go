@@ -387,3 +387,71 @@ func TestMoveRefusesATakenUnitAndNeedsARouter(t *testing.T) {
 		t.Fatalf("%+v %v", got, err)
 	}
 }
+
+// A blocked account does not keep the router state it had: its lease, queue and ARP row go,
+// and it stays flagged with the words for why.
+func TestBlockedAccountLosesItsRouterState(t *testing.T) {
+	e := newEnv(t)
+	a := e.flat(t, "Flat 1", macA)
+	e.payAt(t, a, "1 Day")
+	e.reconcile(t)
+	if len(e.rt.Table("/ip/dhcp-server/lease")) != 1 || len(e.rt.Table("/queue/simple")) != 1 {
+		t.Fatalf("setup: lease %v queue %v", e.rt.Table("/ip/dhcp-server/lease"), e.rt.Table("/queue/simple"))
+	}
+	arpBefore := len(e.rt.Table("/ip/arp"))
+	err := e.st.Update(func(d *store.Data) error {
+		delete(d.ApartmentSites, store.ApartmentSiteKey(store.MigratedApartmentID(e.site), e.site))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := e.svc.ReconcileSite(context.Background(), e.site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(e.rt.Table("/ip/dhcp-server/lease")); n != 0 {
+		t.Errorf("lease kept: %v", e.rt.Table("/ip/dhcp-server/lease"))
+	}
+	if n := len(e.rt.Table("/queue/simple")); n != 0 {
+		t.Errorf("queue kept: %v", e.rt.Table("/queue/simple"))
+	}
+	for _, r := range e.rt.Table("/ip/arp") {
+		if strings.HasPrefix(r["comment"], AcctPrefix+a.Code) {
+			t.Errorf("ARP row kept (%d rows before): %v", arpBefore, r)
+		}
+	}
+	if len(run.Conflicts) != 1 || !strings.Contains(run.Conflicts[0], "does not serve") {
+		t.Fatalf("still flagged in words: %v", run.Conflicts)
+	}
+	if why := e.svc.AccountProblem(a.ID); why == "" {
+		t.Fatal("no longer flagged")
+	}
+	// A second pass writes nothing more, and linking again brings the rows back.
+	e.rt.ResetWrites()
+	if _, err := e.svc.ReconcileSite(context.Background(), e.site); err != nil || e.rt.Writes() != 0 {
+		t.Fatalf("second pass: %v, %d writes", err, e.rt.Writes())
+	}
+	if err := e.svc.LinkRouter(store.MigratedApartmentID(e.site), e.site); err != nil {
+		t.Fatal(err)
+	}
+	e.reconcile(t)
+	if len(e.rt.Table("/ip/dhcp-server/lease")) != 1 || len(e.rt.Table("/queue/simple")) != 1 {
+		t.Fatalf("not written again: %v %v", e.rt.Table("/ip/dhcp-server/lease"), e.rt.Table("/queue/simple"))
+	}
+}
+
+// The move recheck: the device the operator looked at must still be the account's.
+func TestMoveRefusedWhenTheDeviceChangedMeanwhile(t *testing.T) {
+	e, f1, b, _ := otherBuilding(t)
+	_, err := e.svc.MoveToApartment(context.Background(), MoveInput{AccountID: f1.ID, ApartmentID: store.MigratedApartmentID(b), SiteID: b, ExpectMAC: "AA:BB:CC:00:00:99"})
+	if !errors.Is(err, ErrDeviceChanged) {
+		t.Fatalf("a changed MAC must refuse the move: %v", err)
+	}
+	if cur, _ := e.svc.GetAccount(f1.ID); cur.SiteID != e.site {
+		t.Fatalf("the account moved anyway: %+v", cur)
+	}
+	if _, err := e.svc.MoveToApartment(context.Background(), MoveInput{AccountID: f1.ID, ApartmentID: store.MigratedApartmentID(b), SiteID: b, ExpectMAC: strings.ToLower(macA)}); err != nil {
+		t.Fatalf("the same MAC (any case) moves: %v", err)
+	}
+}

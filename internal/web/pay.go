@@ -144,6 +144,36 @@ type payPage struct {
 	BlockedUntil                   string
 	Selected, Phone                string
 	Mpesa, Test                    bool
+	// Choices: set when a typed flat number is used in more than one apartment of the router.
+	// The visitor picks theirs (ApartmentID) and continues.
+	Choices []payChoice
+	Typed   string
+}
+
+type payChoice struct{ ID, Name string }
+
+// payWrongRouter says, in words, that the visitor's device is on another router than the account's.
+// "" = fine, or the visitor's router is not known. No payment is taken until the visitor is where the account is.
+func (s *Server) payWrongRouter(p payPage, a store.Account) string {
+	if !p.Detected || p.Site == "" || p.Site == a.SiteID {
+		return ""
+	}
+	var here, there string
+	s.st.View(func(d *store.Data) {
+		here = d.Sites[p.Site].Name
+		var names []string
+		for _, id := range d.SiteApartmentIDs(p.Site) {
+			names = append(names, d.Apartments[id].Name)
+		}
+		if len(names) > 0 {
+			here += " (" + strings.Join(names, ", ") + ")"
+		}
+		there = d.Apartments[a.ApartmentID].Name
+		if there == "" {
+			there = d.Sites[a.SiteID].Name
+		}
+	})
+	return "Your device is connected at " + here + ", not at " + there + ". Call " + p.Support + "."
 }
 
 // siteByAddr finds the building a visitor is in. A walled flat reaches us
@@ -206,19 +236,19 @@ func (s *Server) payHome(w http.ResponseWriter, r *http.Request) {
 
 // payAccount resolves what the visitor typed to an open account: its account
 // code anywhere, or, when the building was recognised, the flat label in it.
-func (s *Server) payAccount(site, text string) (a store.Account, byCode, ok bool) {
+func (s *Server) payAccount(site, text, apartmentID string) (a store.Account, byCode, ok bool, ambiguous []store.Account) {
 	text = strings.TrimSpace(text)
 	if text == "" || len(text) > 40 {
-		return store.Account{}, false, false
+		return store.Account{}, false, false, nil
 	}
 	if a, ok := s.svc.AccountByCode(strings.ToUpper(text)); ok {
-		return a, true, true
+		return a, true, true, nil
 	}
 	if site == "" {
-		return store.Account{}, false, false
+		return store.Account{}, false, false, nil
 	}
-	a, ok = s.resolveFlat(site, text)
-	return a, false, ok
+	a, ok, ambiguous = s.resolveFlat(site, text, apartmentID)
+	return a, false, ok, ambiguous
 }
 
 func (s *Server) payFail(w http.ResponseWriter, r *http.Request, code int, p payPage, msg string) {
@@ -240,7 +270,16 @@ func (s *Server) payFind(w http.ResponseWriter, r *http.Request) {
 		s.payFail(w, r, http.StatusTooManyRequests, p, "Too many attempts. Wait a minute and try again.")
 		return
 	}
-	a, byCode, ok := s.payAccount(p.Site, r.FormValue("code"))
+	a, byCode, ok, amb := s.payAccount(p.Site, r.FormValue("code"), r.FormValue("apartment_id"))
+	if len(amb) > 0 {
+		// The same label is used in more than one apartment of this router: ask which one, never guess.
+		p.Typed = strings.TrimSpace(r.FormValue("code"))
+		for _, x := range amb {
+			p.Choices = append(p.Choices, payChoice{ID: x.ApartmentID, Name: s.apartmentName(x.ApartmentID)})
+		}
+		s.payFail(w, r, http.StatusConflict, p, "More than one flat on this network has that number. Choose your apartment, or enter your account number.")
+		return
+	}
 	if !ok {
 		s.payFail(w, r, http.StatusNotFound, p, "We could not find that account. Check the account number, or call "+p.Support+".")
 		return
@@ -253,6 +292,13 @@ func (s *Server) payFind(w http.ResponseWriter, r *http.Request) {
 // label sees only the label, and the page carries a signed token instead of
 // the code, so a flat label cannot be turned into an account code.
 func (s *Server) payChoose(w http.ResponseWriter, r *http.Request, p payPage, a store.Account, byCode bool, status int, errMsg, selected string) {
+	if msg := s.payWrongRouter(p, a); msg != "" {
+		p.Error, p.Found = msg, false
+		p.CSRF = s.payCSRF(w, r)
+		w.WriteHeader(http.StatusConflict)
+		s.render(w, "pay", p)
+		return
+	}
 	p.Site, p.Found, p.Flat, p.Error, p.ByCode = a.SiteID, true, a.Flat, errMsg, byCode
 	p.Tok = payToken(a.ID, s.svc.Now())
 	p.CSRF = s.payCSRF(w, r)
@@ -336,6 +382,10 @@ func (s *Server) payStart(w http.ResponseWriter, r *http.Request) {
 		s.payFail(w, r, http.StatusNotFound, p, "We could not find that account. Please start again, or call "+p.Support+".")
 		return
 	}
+	if s.payWrongRouter(p, a) != "" { // before any order or prompt
+		s.payChoose(w, r, p, a, byCode, http.StatusConflict, "", "")
+		return
+	}
 	// The account exists now, so it is safe to start counting against it. The key
 	// includes the address: one tenant's retries do not lock the building out.
 	if !payAcctRL.allow(ip + "|" + a.ID) {
@@ -391,6 +441,10 @@ func (s *Server) payVoucher(w http.ResponseWriter, r *http.Request) {
 	a, byCode, ok := s.payFormAccount(r)
 	if !ok {
 		s.payFail(w, r, http.StatusNotFound, p, "We could not find that account. Please start again, or call "+p.Support+".")
+		return
+	}
+	if s.payWrongRouter(p, a) != "" { // before any order or prompt
+		s.payChoose(w, r, p, a, byCode, http.StatusConflict, "", "")
 		return
 	}
 	if !payAcctRL.allow("voucher|" + ip + "|" + a.ID) {

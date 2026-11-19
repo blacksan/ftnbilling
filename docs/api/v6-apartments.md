@@ -121,3 +121,10 @@ Every account (open and closed) takes the apartment of its router and keeps its 
 ## Error codes added
 
 `mac_other_building` (409), `unit_in_use` (409), `apartment_name_in_use` (409), `apartment_in_use` (409), `router_serves_accounts` (409). Validation of apartment fields uses `validation_failed`.
+
+## Review fixes
+
+- Roles: `DELETE /apartments/{id}` is owner only; `POST /accounts/{id}/move` and `POST /unregistered/move` are operator. The web pages follow the same split.
+- `POST /unregistered/move` rechecks the customer's MAC inside the update; if it changed meanwhile the answer is 409 `bad_state` ("this customer's device changed while you were moving them").
+- Units are stored with single ASCII spaces (a non-breaking space counts as a space), so "B4" and "b4" + NBSP are the same unit.
+- Migration: removed routers get no apartment; their accounts (mostly closed ones) share one "Archived" apartment that no router serves.

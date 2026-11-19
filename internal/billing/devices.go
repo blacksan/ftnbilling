@@ -327,7 +327,7 @@ func (s *Service) MoveCustomerHere(ctx context.Context, siteID, rawMAC, apartmen
 	default:
 		return store.Account{}, ErrNoApartment
 	}
-	return s.MoveToApartment(ctx, MoveInput{AccountID: owner.ID, ApartmentID: target, SiteID: siteID})
+	return s.MoveToApartment(ctx, MoveInput{AccountID: owner.ID, ApartmentID: target, SiteID: siteID, ExpectMAC: mac})
 }
 
 // UnregisteredOnline counts the online unregistered devices of a building

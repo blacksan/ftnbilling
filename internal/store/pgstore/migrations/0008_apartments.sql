@@ -32,13 +32,28 @@ SELECT s.id AS site_id, 'a' || substr(md5('apt|' || s.id), 1, 6) AS apartment_id
        s.address, s.created_at
 FROM sites s CROSS JOIN LATERAL (
   SELECT CASE WHEN btrim(regexp_replace(s.name, '\s+', ' ', 'g')) = '' THEN s.id
-              ELSE btrim(regexp_replace(s.name, '\s+', ' ', 'g')) END AS name) nm;
+              ELSE btrim(regexp_replace(s.name, '\s+', ' ', 'g')) END AS name) nm
+WHERE NOT s.removed; -- a removed router gets no apartment of its own
 INSERT INTO apartments (id, name, address, created_at) SELECT apartment_id, name, address, created_at FROM ftn_apt_map;
 INSERT INTO apartment_sites (apartment_id, site_id, created_at) SELECT apartment_id, site_id, created_at FROM ftn_apt_map;
 
+-- The accounts of removed routers (their closed accounts, mostly) share one "Archived" apartment that no
+-- router serves. Live routers keep the plain name. store.ArchivedApartmentKey gives the same id.
+INSERT INTO apartments (id, name, notes, created_at)
+SELECT 'a' || substr(md5('apt|archived'), 1, 6),
+       CASE WHEN EXISTS (SELECT 1 FROM apartments WHERE lower(name) = 'archived') THEN 'Archived (removed routers)' ELSE 'Archived' END,
+       'Customers of routers that were removed. No router serves this apartment.', now()
+WHERE EXISTS (SELECT 1 FROM accounts a JOIN sites s ON s.id = a.site_id WHERE s.removed);
+INSERT INTO ftn_apt_map (site_id, apartment_id, name, address, created_at)
+SELECT s.id, 'a' || substr(md5('apt|archived'), 1, 6), '', '', s.created_at FROM sites s
+WHERE s.removed AND EXISTS (SELECT 1 FROM apartments WHERE id = 'a' || substr(md5('apt|archived'), 1, 6));
+
 -- Every account, open and closed, takes the apartment of its router; its flat label becomes its unit.
 -- A second open account of an apartment with the same label gets " (<code>)" added, with an audit event.
-UPDATE accounts a SET apartment_id = m.apartment_id, unit = a.flat FROM ftn_apt_map m WHERE m.site_id = a.site_id;
+-- Units are stored with one ASCII space between words (store.NormalizeUnit does the same in Go).
+UPDATE accounts a SET apartment_id = m.apartment_id,
+  unit = btrim(regexp_replace(a.flat, '[\s\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+', ' ', 'g'))
+  FROM ftn_apt_map m WHERE m.site_id = a.site_id;
 CREATE TEMP TABLE ftn_unit_dupes ON COMMIT DROP AS
   SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY apartment_id, lower(regexp_replace(btrim(unit), '\s+', ' ', 'g'))
                                                 ORDER BY created_at, id) AS rn
@@ -61,7 +76,7 @@ SELECT c.*, m.apartment_id,
        row_number() OVER (PARTITION BY m.apartment_id, CASE WHEN c.role IN ('landlord','agent') THEN 'landlord' ELSE 'caretaker' END
                           ORDER BY c.created_at, c.id) AS rn,
        regexp_replace(c.phone, '[ ().-]', '', 'g') AS p0
-FROM site_contacts c JOIN ftn_apt_map m ON m.site_id = c.site_id;
+FROM site_contacts c JOIN ftn_apt_map m ON m.site_id = c.site_id AND m.name <> ''; -- contacts of a removed router go with it
 ALTER TABLE ftn_contacts ADD COLUMN phone_norm text;
 UPDATE ftn_contacts SET p0 = substr(p0, 2) WHERE p0 LIKE '+%';
 UPDATE ftn_contacts SET p0 = '254' || substr(p0, 2) WHERE p0 ~ '^0[0-9]{9}$';

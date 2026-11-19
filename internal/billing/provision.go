@@ -390,7 +390,7 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	if ftn != nil {
 		ifc = ftn["interface"]
 	}
-	pd := planOps(site, wants, flagged, leases, queues, suspended, snap, now, planExtra{unreg: unreg, arp: arp, ifc: ifc, flaggedEntitled: flaggedEntitled})
+	pd := planOps(site, wants, flagged, leases, queues, suspended, snap, now, planExtra{unreg: unreg, arp: arp, ifc: ifc, flaggedEntitled: flaggedEntitled, blocked: blockedSet(blocked)})
 	ps.mu.Lock()
 	ps.foreign = map[string]bool{}
 	for _, ip := range pd.foreignIPs {
@@ -493,6 +493,10 @@ type planExtra struct {
 	unreg, arp      []routeros.Row
 	ifc             string          // the customer interface (ftn-dhcp's)
 	flaggedEntitled map[string]bool // flagged flats that have paid time
+	// blocked: accounts that must not be provisioned on this router (provisionBlock). They stay
+	// flagged, and the lease, queue and ARP row we wrote for them earlier are removed, so a
+	// blocked account never keeps its last router state.
+	blocked map[string]bool
 }
 
 // opSet collects what a pass wants to do.
@@ -637,7 +641,7 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 	}
 	// leases of flats that no longer exist here
 	for code, rows := range ourLeases {
-		if byCode[code] != nil || flagged[code] {
+		if byCode[code] != nil || (flagged[code] && !x.blocked[code]) {
 			continue
 		}
 		for _, r := range rows {
@@ -683,7 +687,7 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 		snap[a.Code] = sn
 	}
 	for code, rows := range ourQueues {
-		if byCode[code] != nil || flagged[code] {
+		if byCode[code] != nil || (flagged[code] && !x.blocked[code]) {
 			continue
 		}
 		for _, r := range rows {
@@ -771,7 +775,7 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 			}
 		}
 		for code, rows := range ourARP {
-			if byCode[code] != nil || flagged[code] {
+			if byCode[code] != nil || (flagged[code] && !x.blocked[code]) {
 				continue
 			}
 			for _, r := range rows {
@@ -808,4 +812,12 @@ func sameProp(key, cur, want string) bool {
 // RouterRows reads rows of a building's router (read only; the setup tests and the bench helper use it).
 func (s *Service) RouterRows(ctx context.Context, siteID, path string, query map[string]string) ([]routeros.Row, error) {
 	return s.router(siteID).Rows(ctx, path, query)
+}
+
+func blockedSet(m map[string]string) map[string]bool {
+	out := make(map[string]bool, len(m))
+	for code := range m {
+		out[code] = true
+	}
+	return out
 }

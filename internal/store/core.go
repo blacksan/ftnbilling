@@ -122,6 +122,9 @@ func (s *Store) Update(fn func(d *Data) error) error {
 		}
 		return nil
 	}
+	if !panicked && ferr == nil {
+		normalizeUnits(&s.data)
+	}
 	cs := diffData(&s.data, &s.shadow, s.now())
 	if panicked {
 		rollbackData(&s.data, &s.shadow, cs)

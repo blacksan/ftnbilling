@@ -25,7 +25,10 @@
 <div class="card"><b>{{if .Detected}}Your internet is paused{{else}}Pay for your internet{{end}}</b>
 <p class="muted">Enter your account number{{if .Detected}} (or your flat, for example Flat 3B){{end}} to pay with M-Pesa. Your internet comes back within a minute of paying.</p></div>
 {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
-<form method="post" action="/pay/find"><input type="hidden" name="_pcsrf" value="{{.CSRF}}"><input type="text" name="code" placeholder="Account number" autocapitalize="characters" autocomplete="off" required maxlength="40">
+<form method="post" action="/pay/find"><input type="hidden" name="_pcsrf" value="{{.CSRF}}">
+{{if .Choices}}<input type="hidden" name="code" value="{{.Typed}}">
+<select name="apartment_id" required aria-label="Apartment">{{range .Choices}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select>
+{{else}}<input type="text" name="code" placeholder="Account number" autocapitalize="characters" autocomplete="off" required maxlength="40">{{end}}
 <button type="submit">Continue</button></form>
 {{end}}
 <p class="muted">Help: {{.Support}}</p>

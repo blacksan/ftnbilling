@@ -420,6 +420,8 @@ func (s *Server) billingErr(w http.ResponseWriter, err error, mac string) {
 		apiErr(w, http.StatusConflict, codeApartmentNameUsed, "An apartment with that name already exists.", nil)
 	case errors.As(err, &blocked):
 		apiErr(w, http.StatusConflict, codeRouterServes, err.Error(), map[string]any{"router": blocked.Router, "apartment": blocked.Apartment, "units": blocked.Units})
+	case errors.Is(err, billing.ErrDeviceChanged):
+		apiErr(w, http.StatusConflict, "bad_state", err.Error(), nil)
 	case errors.Is(err, billing.ErrNoApartment):
 		validationErr(w, map[string]string{"apartment_id": "choose an apartment"})
 	case errors.Is(err, billing.ErrChooseRouter):

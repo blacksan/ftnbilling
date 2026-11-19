@@ -21,7 +21,9 @@ var (
 	ErrApartmentName    = errors.New("the apartment needs a name")
 	ErrChooseRouter     = errors.New("choose a router: this apartment is served by more than one")
 	ErrApartmentNoRoute = errors.New("this apartment has no router yet: link a router to it first")
-	ErrRouterNotLinked  = errors.New("that router does not serve this apartment: link it to the apartment first")
+	// ErrDeviceChanged: the account's MAC is no longer the one the operator was looking at.
+	ErrDeviceChanged   = errors.New("this customer's device changed while you were moving them: check the device again")
+	ErrRouterNotLinked = errors.New("that router does not serve this apartment: link it to the apartment first")
 )
 
 // UnitTakenError says which open account of the apartment already has a unit.
@@ -526,6 +528,7 @@ type MoveInput struct {
 	ApartmentID string // "" = keep
 	SiteID      string // "" = the apartment's only router; error if several
 	Unit        string // "" = keep
+	ExpectMAC   string // when set, the account must still have this MAC inside the update, or ErrDeviceChanged
 }
 
 // MoveToApartment changes an account's apartment (and router, picked from the
@@ -541,6 +544,9 @@ func (s *Service) MoveToApartment(ctx context.Context, in MoveInput) (store.Acco
 		a, ok := d.Accounts[in.AccountID]
 		if !ok {
 			return ErrNotFound
+		}
+		if in.ExpectMAC != "" && !strings.EqualFold(a.MAC, in.ExpectMAC) {
+			return ErrDeviceChanged
 		}
 		aptID := in.ApartmentID
 		if aptID == "" {
