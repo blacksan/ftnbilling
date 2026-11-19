@@ -28,7 +28,7 @@
 <h3>Flats</h3>
 <div class="grid2"><div class="card"><b>Top 10 flats by download</b><div class="muted">Click a flat for its detail.</div>{{.Data.TopChart}}</div>
 <div class="card"><b>Services</b><div class="muted">Where the bytes go (download plus upload).{{if $R.NFOn}} {{if $R.NF.LastAt.IsZero}}No traffic-flow data received yet.{{else}}Last flow packet {{eat $R.NF.LastAt}}.{{end}}{{end}}</div>{{.Data.SvcChart}}</div></div>
-<div class="tw" style="margin-top:12px"><table><tr>
+<div class="tw mt-3"><table><tr>
 <th><a href="?period={{$P}}&sort=flat">Flat</a></th><th>Code</th><th>Package</th>
 <th class="n"><a href="?period={{$P}}&sort=down">Download GB</a></th><th class="n"><a href="?period={{$P}}&sort=up">Upload GB</a></th><th class="n"><a href="?period={{$P}}&sort=share">Share</a></th>
 <th class="n"><a href="?period={{$P}}&sort=peak">Peak Mbps</a></th><th class="n"><a href="?period={{$P}}&sort=cap">Time at cap</a></th><th class="n"><a href="?period={{$P}}&sort=current">Now Mbps</a></th><th>Top services</th></tr>
@@ -42,7 +42,7 @@
 <h3>Quality</h3>
 <div class="grid2"><div class="card"><b>Latency</b><div class="muted">Average ping round trip from the router.</div>{{.Data.LatChart}}</div>
 <div class="card"><b>Packet loss</b><div class="muted">Share of ping packets lost.</div>{{.Data.LossChart}}</div></div>
-<div class="card" style="margin-top:12px"><b>Busy hours</b><div class="muted">Average WAN use by hour of day over the last {{if $R.BusyDays}}{{$R.BusyDays}}{{else}}14{{end}} day(s) of data.</div>{{.Data.Busy}}</div>
+<div class="card mt-3"><b>Busy hours</b><div class="muted">Average WAN use by hour of day over the last {{if $R.BusyDays}}{{$R.BusyDays}}{{else}}14{{end}} day(s) of data.</div>{{.Data.Busy}}</div>
 
 <h3>Ports</h3>
 <div class="tw"><table><tr><th>Interface</th><th>Role</th><th>Link</th><th class="n">Now rx / tx Mbps</th><th class="n">Peak rx / tx Mbps</th><th class="n">Peak vs capacity</th></tr>

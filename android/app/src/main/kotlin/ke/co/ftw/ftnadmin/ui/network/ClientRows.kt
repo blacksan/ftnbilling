@@ -22,7 +22,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
+import ke.co.ftw.ftnadmin.ui.theme.MonoFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -37,7 +37,7 @@ import ke.co.ftw.ftnadmin.ui.common.formatAge
 import ke.co.ftw.ftnadmin.ui.common.formatBps
 import ke.co.ftw.ftnadmin.ui.common.formatBytes
 
-private val Mono = FontFamily.Monospace
+private val Mono = MonoFamily
 
 /** Collapsed: who, address, state. Expanded: lease, queue, usage, port, last seen and the actions. */
 @OptIn(ExperimentalLayoutApi::class)

@@ -31,24 +31,24 @@
 {{range $a.Routers}}<tr><td><a href="/admin/routers/view?id={{.ID}}">{{.Name}}</a></td><td class="muted">{{index $a.AccountRouters .ID}} flats</td>
 <td>{{if $d.CanWrite}}<form method="post" action="/admin/apartments/unlink" class="i" data-confirm="Stop {{.Name}} serving {{$a.Name}}?"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$a.ID}}"><input type="hidden" name="site" value="{{.ID}}"><button class="ghost sm">Unlink</button></form>{{end}}</td></tr>
 {{else}}<tr><td class="muted">No router serves this apartment, so none of its flats can be provisioned.</td></tr>{{end}}</table>
-{{if and $d.CanWrite $a.Unlinked}}<form method="post" action="/admin/apartments/link" class="row" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$a.ID}}">
+{{if and $d.CanWrite $a.Unlinked}}<form method="post" action="/admin/apartments/link" class="row mt-3"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$a.ID}}">
 <label class="field">Link a router<select name="site">{{range $a.Unlinked}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label><button>Link</button></form>{{end}}
-<p class="muted" style="margin-top:8px">A router can serve several apartments, and a large apartment can have several routers. A router cannot be unlinked while flats of this apartment are on it.</p></section>
+<p class="muted mt-2">A router can serve several apartments, and a large apartment can have several routers. A router cannot be unlinked while flats of this apartment are on it.</p></section>
 <section class="panel"><h2>People</h2>
 {{template "contactcard" (dict "Title" "Caretaker" "C" $a.Caretaker)}}
 {{template "contactcard" (dict "Title" "Landlord / agent" "C" $a.Landlord)}}
-{{if $a.Notes}}<p style="margin-top:10px">{{$a.Notes}}</p>{{end}}</section>
+{{if $a.Notes}}<p class="mt-3">{{$a.Notes}}</p>{{end}}</section>
 </div>
-<section class="panel" style="margin-top:16px"><h2>Flats</h2>
+<section class="panel mt-4"><h2>Flats</h2>
 {{if $a.Accounts}}<div class="tw"><table class="rs"><thead><tr><th>Unit</th><th>Customer</th><th>Router</th><th>State</th><th>Problem</th></tr></thead><tbody>
 {{range $a.Accounts}}<tr><td class="who"><b><a href="/admin/accounts/view?code={{.Code}}">{{.Unit}}</a></b><span>{{.Code}}</span></td><td data-label="Customer">{{.Tenant}}</td><td data-label="Router">{{index $a.RouterOf .ID}}</td>
 <td data-label="State"><span class="pill {{state .}}">{{state .}}</span></td><td data-label="Problem">{{with index $d.Data.Issue .ID}}<span class="bad">{{.}}</span>{{end}}</td></tr>{{end}}</tbody></table></div>
 {{else}}<p class="muted">No flats yet. Use Add customer and pick this apartment.</p>{{end}}</section>
-{{if $d.CanWrite}}<section class="panel danger" style="margin-top:16px"><h2 class="bad">Remove apartment</h2><p class="muted" style="margin:6px 0 10px">Only possible when no account, open or closed, belongs to it.</p>
+{{if $d.CanWrite}}<section class="panel danger mt-4"><h2 class="bad">Remove apartment</h2><p class="muted" style="margin:6px 0 10px">Only possible when no account, open or closed, belongs to it.</p>
 <form method="post" action="/admin/apartments/delete" data-confirm="Remove {{$a.Name}}?"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$a.ID}}"><button>Remove</button></form></section>{{end}}
 {{template "afoot" .}}{{end}}
 
-{{define "contactfields"}}<fieldset class="panel" style="margin-top:12px"><legend>{{.Title}} (optional)</legend>
+{{define "contactfields"}}<fieldset class="panel mt-3"><legend>{{.Title}} (optional)</legend>
 <div class="two"><label class="field">Name<input name="{{.P}}_name" value="{{.C.Name}}" maxlength="80" autocomplete="off"></label>
 <label class="field">Phone<input name="{{.P}}_phone" value="{{.C.Phone}}" inputmode="tel" placeholder="0712 345 678" autocomplete="off"></label></div>
 <div class="two"><label class="field">Alternative phone<input name="{{.P}}_phone2" value="{{.C.Phone2}}" inputmode="tel" autocomplete="off"></label>

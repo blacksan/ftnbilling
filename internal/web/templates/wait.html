@@ -1,4 +1,4 @@
-{{define "wait"}}{{template "top" .}}<meta http-equiv="refresh" content="5;url=/portal/wait?order={{.Order.ID}}"></head><body><main>
+{{define "wait"}}{{template "top" .}}<meta http-equiv="refresh" content="5;url=/portal/wait?order={{.Order.ID}}"></head><body class="portal"><main>
 {{template "brandbar" .Brand}}{{if .SiteName}}<p class="muted" style="margin:0 0 4px">{{.SiteName}}</p>{{end}}
 {{if eq .Order.Status "failed"}}
 <p class="err">Payment was not completed{{if .Order.Reason}}: {{.Order.Reason}}{{end}}.</p>

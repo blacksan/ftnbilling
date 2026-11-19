@@ -1,1 +1,2 @@
 {{define "brandword"}}{{$p := brandParts .}}<span class="bw">{{index $p 0}}{{if index $p 1}} <span class="bwa">{{index $p 1}}</span>{{end}}</span>{{end}}
+{{define "wordmark"}}<span class="wm"><svg class="wmk" viewBox="0 0 28 28" aria-hidden="true"><rect class="bg" width="28" height="28" rx="8"/><path class="fgs" d="M7.5 12.2a9.6 9.6 0 0 1 13 0M10.2 15.4a5.6 5.6 0 0 1 7.6 0"/><circle class="fgf" cx="14" cy="19" r="1.9"/></svg><span class="bw">{{.}}</span></span>{{end}}

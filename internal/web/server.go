@@ -37,12 +37,6 @@ var faviconSVG []byte
 //go:embed static/logo-*.svg
 var logoFS embed.FS
 
-// Comfortaa Bold (SIL Open Font License), used for the brand wordmark so it
-// looks the same on every phone without needing internet.
-//
-//go:embed static/comfortaa-700.woff2
-var brandFont []byte
-
 // Server wires HTTP handlers to the billing service.
 type Server struct {
 	cfg       config.Config

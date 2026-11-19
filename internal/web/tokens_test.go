@@ -109,10 +109,16 @@ func TestDesignTokensContrast(t *testing.T) {
 	}{{"light", light}, {"dark", dark}} {
 		tok := th.tok
 		for _, k := range []string{"bg", "surface", "surface-2", "surface-3", "ink", "ink-2", "muted", "brand", "on-brand", "brand-ink", "brand-soft",
-			"side", "on-side", "side-mut", "ok", "ok-soft", "warn", "warn-soft", "bad", "bad-soft", "info", "info-soft", "teal", "teal-soft",
-			"plum", "plum-soft", "field", "focus", "line", "line-strong", "feat-bg", "feat-ink", "feat-accent", "chart-1", "chart-2", "chart-3", "chart-4", "chart-grid"} {
+			"side", "on-side", "side-mut", "ok", "ok-soft", "warn", "warn-soft", "warn-fill", "bad", "bad-soft", "info", "info-soft",
+			"field", "focus", "line", "line-strong", "chart-1", "chart-2", "chart-3", "chart-4", "chart-grid",
+			"brand-50", "brand-100", "brand-200", "brand-300", "brand-400", "brand-500", "brand-600", "brand-700", "brand-800", "brand-900"} {
 			if tok[k] == "" {
 				t.Fatalf("%s: token --%s missing", th.name, k)
+			}
+		}
+		for _, gone := range []string{"teal", "plum", "feat-bg"} {
+			if tok[gone] != "" {
+				t.Errorf("%s: --%s was dropped from the design and must not come back", th.name, gone)
 			}
 		}
 		text := func(fg, bg string) {
@@ -138,28 +144,30 @@ func TestDesignTokensContrast(t *testing.T) {
 		text("ink", "brand-soft")
 		text("on-side", "side")
 		text("side-mut", "side")
-		text("on-brand", "brand") // active sidebar pill, highlighter, buttons
-		text("feat-ink", "feat-bg")
 		text("bg", "ink") // inverted: toasts, selected tab (light)
-		for _, tone := range []string{"ok", "warn", "bad", "info", "teal", "plum"} {
+		for _, tone := range []string{"ok", "warn", "bad", "info"} {
 			text(tone, tone+"-soft")
 			text(tone, "surface")
+			text(tone, "bg")
 			text("ink", tone+"-soft")
 			text("ink-2", tone+"-soft")
-			// the stat card chip: icon (soft) on the solid tone
-			ui(tone+"-soft", tone)
+		}
+		// warning is a yellow fill with dark text and an icon, never orange
+		if r := ratio(t, "#0F172A", tok["warn-fill"]); r < 4.5 {
+			t.Errorf("%s: dark text on --warn-fill is %.2f:1, need 4.5", th.name, r)
 		}
 		text("bg", "bad") // danger buttons
 		// interface parts: input borders, focus ring, chart marks, feature accents
 		for _, bg := range []string{"bg", "surface", "surface-2"} {
 			ui("field", bg)
+			ui("line-strong", bg) // interactive borders: buttons, inputs, tabs
 			ui("focus", bg)
+			ui("brand", bg)
 		}
 		// gridlines are decoration and exempt; marks are not
 		for _, c := range []string{"chart-1", "chart-2", "chart-3", "chart-4"} {
 			ui(c, "surface")
 		}
-		ui("feat-accent", "feat-bg")
 		ui("brand", "side")
 		ui("on-brand", "brand")
 	}
