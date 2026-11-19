@@ -41,8 +41,21 @@ var LiveReadPaths = []string{
 	"/queue/simple",
 }
 
-// liveTimeout cuts one read of a router (a variable so a test can shorten it).
-var liveTimeout = 3 * time.Second
+// liveTimeout cuts one read of a router when the configuration gives none (a
+// variable so a test can shorten it; production uses Config.RouterReadTimeout).
+var liveTimeout = 8 * time.Second
+
+func (m *Manager) liveReadTimeout() time.Duration {
+	if liveTimeout != defaultLiveTimeout {
+		return liveTimeout // a test shortened it
+	}
+	if m.cfg.RouterReadTimeout > 0 {
+		return m.cfg.RouterReadTimeout
+	}
+	return liveTimeout
+}
+
+const defaultLiveTimeout = 8 * time.Second
 
 const (
 	liveTTL = 5 * time.Second
@@ -325,8 +338,8 @@ func (m *Manager) liveGet(ctx context.Context, siteID, view string, fetch func(c
 		e.flight = f
 		m.live.mu.Unlock()
 
-		// The read outlives the caller that started it (others wait on it) but not 3 s.
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), liveTimeout)
+		// The read outlives the caller that started it (others wait on it) but not longer than the read timeout.
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.liveReadTimeout())
 		v, ferr := fetch(rctx)
 		cancel()
 

@@ -67,12 +67,47 @@ const (
 	kitRollbackName   = "ftn-kit-rollback"
 	netflowComment    = "ftn: netflow"
 	checksCacheFor    = 15 * time.Second
-	readTimeout       = 3 * time.Second
-	extraReadTimeout  = 8 * time.Second
+	extraReadTimeout  = 12 * time.Second
+	recheckMax        = 6                // ... this many times in a row
 	kitAdvanceAfter   = 45 * time.Second // the kit timer ticks every 30 s
 	requiredAPIPolicy = "read,write,test,sensitive,api,rest-api,reboot"
 	custDNSComment    = "ftn: customer dns"
 )
+
+// The read budget of one pass. The tunnel to a building can take a quarter of a
+// second per request, so the pass reads a few paths at a time (not thirty at
+// once, which makes every read slow), gives each read time, and tries a read
+// that timed out once more. Variables so a test can shorten them.
+var (
+	recheckAfter    = 20 * time.Second // a pass with timed-out reads is repeated by the server
+	readTimeout     = 10 * time.Second
+	readConcurrency = 4
+)
+
+// tableProps names the only fields the checks and the job read of a big table,
+// so the router sends less over a slow tunnel (a .proplist query).
+var tableProps = map[string]string{
+	"/interface/bridge/host": "mac-address,on-interface,local,bridge",
+}
+
+func tableQuery(path string) map[string]string {
+	if p, ok := tableProps[path]; ok {
+		return map[string]string{".proplist": p}
+	}
+	return nil
+}
+
+// isTimeout says whether err is a read that ran out of time (not a refusal).
+func isTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
 
 // CheckFix says how an item can be fixed.
 type CheckFix struct {
@@ -123,6 +158,8 @@ type Checks struct {
 	Summary     CheckSummary `json:"summary"`
 	JoinReport  *JoinReport  `json:"join_report"`
 	Items       []CheckItem  `json:"items"`
+	// Slow is true when some read of the router timed out: the server repeats the pass by itself.
+	Slow bool `json:"slow,omitempty"`
 }
 
 // Item returns the item with the id.
@@ -170,9 +207,10 @@ type cachedChecks struct {
 // checksState is the Manager's cache of the last pass of each building and
 // the last kit run-count seen (to tell a dead timer from a live one).
 type checksState struct {
-	mu    sync.Mutex
-	cache map[string]cachedChecks
-	kit   map[string]kitSample
+	mu      sync.Mutex
+	cache   map[string]cachedChecks
+	kit     map[string]kitSample
+	pending map[string]bool // automatic re-checks waiting
 }
 
 func (cs *checksState) get(siteID string, now time.Time) (Checks, bool) {
@@ -244,10 +282,11 @@ type snapshot struct {
 	one  map[string]routeros.Row
 	rows map[string][]routeros.Row
 	errs map[string]error
+	slow map[string]bool // paths whose read timed out (after the retry)
 }
 
 func newSnapshot() *snapshot {
-	return &snapshot{one: map[string]routeros.Row{}, rows: map[string][]routeros.Row{}, errs: map[string]error{}}
+	return &snapshot{one: map[string]routeros.Row{}, rows: map[string][]routeros.Row{}, errs: map[string]error{}, slow: map[string]bool{}}
 }
 
 func (sn *snapshot) tbl(p string) []routeros.Row { return sn.rows[p] }
@@ -275,18 +314,28 @@ func readSnapshot(ctx context.Context, rt rowReader, singles, tables []string) *
 	insp, _ := rt.(routeros.Inspector)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 6)
+	sem := make(chan struct{}, readConcurrency)
 	run := func(path string, fn func(context.Context) error) {
 		wg.Add(1)
 		sem <- struct{}{}
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			c, cancel := context.WithTimeout(ctx, readTimeout)
-			defer cancel()
-			if err := fn(c); err != nil {
+			var err error
+			for try := 0; try < 2; try++ {
+				c, cancel := context.WithTimeout(ctx, readTimeout)
+				err = fn(c)
+				cancel()
+				if err == nil || !isTimeout(err) || ctx.Err() != nil {
+					break
+				}
+			}
+			if err != nil {
 				mu.Lock()
 				sn.errs[path] = err
+				if isTimeout(err) {
+					sn.slow[path] = true
+				}
 				mu.Unlock()
 			}
 		}()
@@ -308,7 +357,7 @@ func readSnapshot(ctx context.Context, rt rowReader, singles, tables []string) *
 	}
 	for _, p := range tables {
 		run(p, func(c context.Context) error {
-			rows, err := rt.Rows(c, p, nil)
+			rows, err := rt.Rows(c, p, tableQuery(p))
 			if err != nil {
 				return err
 			}
@@ -430,6 +479,7 @@ type evalCtx struct {
 	sn      *snapshot
 	plan    netplan.Plan
 	planErr error
+	slow    bool // some read failed: the server will look again
 	cust    custInfo
 	ix      acctIndex
 	now     time.Time
@@ -544,9 +594,25 @@ func (e *evalCtx) unknown(it *CheckItem, id string) bool {
 		return false
 	}
 	it.Status = StatusUnknown
-	it.Detail = fmt.Sprintf("The server could not read %s from the router (%s), so this cannot be judged yet.", p, shortErr(err))
-	it.Fix = CheckFix{Kind: FixManual, Label: "Check the router answers", Command: printCmd(p)}
+	if isTimeout(err) {
+		// Nothing for the operator to run: the server asks again by itself.
+		it.Detail = unreadDetail("", err)
+		it.Fix = CheckFix{Kind: FixNone}
+		e.slow = true
+		return true
+	}
+	it.Detail = fmt.Sprintf("The server could not read %s from the router (%s), so this cannot be judged yet. The server keeps trying.", p, shortErr(err))
+	it.Fix = CheckFix{Kind: FixNone}
+	e.slow = true
 	return true
+}
+
+// unreadDetail is the text of an item the server could not judge for lack of an answer.
+func unreadDetail(what string, err error) string {
+	if isTimeout(err) {
+		return "The router was slow to answer; checking again automatically."
+	}
+	return "The server could not " + what + " (" + shortErr(err) + "). It keeps trying."
 }
 
 func shortErr(err error) string {
@@ -1851,8 +1917,9 @@ func evalUnmanaged(e *evalCtx, it *CheckItem) {
 		it.Detail = "This building already runs in IPoE mode."
 	case e.unmanagedErr != nil:
 		it.Status = StatusUnknown
-		it.Detail = "The server could not list the devices on the customer network (" + shortErr(e.unmanagedErr) + ")."
-		it.Fix = CheckFix{Kind: FixManual, Label: "Check the router answers", Command: "/ip/arp/print"}
+		it.Detail = unreadDetail("list the devices on the customer network", e.unmanagedErr)
+		it.Fix = CheckFix{Kind: FixNone}
+		e.slow = true
 	case len(e.unmanaged) == 0:
 		okItem(it, "No devices on the customer network that the server does not know.")
 	default:
@@ -1870,8 +1937,9 @@ func evalUnseen(e *evalCtx, it *CheckItem) {
 		it.Detail = "This building already runs in IPoE mode."
 	case e.unseenErr != nil:
 		it.Status = StatusUnknown
-		it.Detail = "The server could not compare the flats with the router's devices (" + shortErr(e.unseenErr) + ")."
-		it.Fix = CheckFix{Kind: FixManual, Label: "Check the router answers", Command: "/ip/dhcp-server/lease/print"}
+		it.Detail = unreadDetail("compare the flats with the router's devices", e.unseenErr)
+		it.Fix = CheckFix{Kind: FixNone}
+		e.slow = true
 	case len(e.unseen) == 0:
 		okItem(it, "Every flat with paid time was seen on the router.")
 	default:
@@ -1930,7 +1998,59 @@ func (m *Manager) Checks(ctx context.Context, siteID string, fresh bool) (Checks
 	if c.Router.Reachable {
 		m.chk.put(siteID, now, c) // an unreachable router is never cached: the next look must try again
 	}
+	if c.Slow {
+		m.scheduleRecheck(siteID, 1)
+	} else {
+		m.chk.rechecks(siteID, false)
+	}
 	return c, nil
+}
+
+// rechecks marks (set) or clears a pending automatic re-check of a building
+// and says whether one was already pending.
+func (cs *checksState) rechecks(siteID string, set bool) (was bool) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.pending == nil {
+		cs.pending = map[string]bool{}
+	}
+	was = cs.pending[siteID]
+	if set {
+		cs.pending[siteID] = true
+	} else {
+		delete(cs.pending, siteID)
+	}
+	return was
+}
+
+// scheduleRecheck repeats a pass that had reads which timed out, without
+// anybody pressing a button: the Setup page shows "checking again" meanwhile.
+func (m *Manager) scheduleRecheck(siteID string, attempt int) {
+	if attempt > recheckMax || m.chk.rechecks(siteID, true) {
+		return
+	}
+	time.AfterFunc(recheckAfter, func() {
+		m.chk.rechecks(siteID, false)
+		m.mu.RLock()
+		ctx := m.ctx
+		m.mu.RUnlock()
+		if ctx == nil || ctx.Err() != nil {
+			return
+		}
+		var site store.Site
+		var ok bool
+		m.st.View(func(d *store.Data) { site, ok = d.Sites[siteID] })
+		if !ok || site.Removed {
+			return
+		}
+		c := m.runChecks(ctx, site)
+		if c.Router.Reachable {
+			m.chk.put(siteID, m.now(), c)
+		}
+		if c.Slow {
+			m.scheduleRecheck(siteID, attempt+1)
+		}
+	})
 }
 
 func (m *Manager) runChecks(ctx context.Context, site store.Site) Checks {
@@ -1968,6 +2088,7 @@ func (m *Manager) runChecks(ctx context.Context, site store.Site) Checks {
 	res := e.sn.single("/system/resource")
 	out := Checks{SiteID: site.ID, GeneratedAt: now, Items: items, JoinReport: m.loadJoinReport(site.ID),
 		Router: RouterInfo{Reachable: e.sn.errs["/system/resource"] == nil, Version: res["version"], Board: res["board-name"]}}
+	out.Slow = e.slow
 	out.Summary = summarize(items)
 	out.Summary.CutoverReady = out.Router.Reachable && len(out.Blockers(false, false)) == 0
 	return out
