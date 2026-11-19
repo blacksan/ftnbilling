@@ -68,7 +68,7 @@ func FreeIPLocked(d *store.Data, siteID string, pl netplan.Plan, avoid ...map[st
 //
 // An address outside the static range (the unregistered pool .10 to .59, or
 // anything else) does not count as an address: such a flat would be walled
-// the moment the cutover enables the unregistered list, so it gets a fresh one.
+// the moment the router walls the unregistered pool, so it gets a fresh one.
 func EnsureIPsLocked(d *store.Data, siteID string, pl netplan.Plan, avoid ...map[string]bool) (int, error) {
 	n := 0
 	for _, a := range d.AccountList() {
@@ -118,8 +118,7 @@ type AdoptResult struct {
 	Skipped   []string // plain-words reasons
 }
 
-// AdoptLeases imports the router's current DHCP leases into the accounts
-// before the cutover: for each flat whose MAC holds a lease inside the
+// AdoptLeases imports the router's current DHCP leases into the accounts: for each flat whose MAC holds a lease inside the
 // building's customer subnet, the flat's IP becomes the leased address, so the
 // ONT keeps its address when the static lease replaces the dynamic one. A flat
 // whose address would clash with another flat, or that has no lease, keeps
@@ -176,7 +175,7 @@ func (s *Service) AdoptLeases(ctx context.Context, siteID string) (AdoptResult, 
 				continue
 			}
 			if !pl.InStatic(ip) {
-				// The unregistered pool (.10 to .59) is walled at the cutover:
+				// The unregistered pool (.10 to .59) is walled:
 				// a flat must not keep an address from it. It gets a static one.
 				if a.IP == "" || !pl.InStatic(a.IP) {
 					fresh, ferr := FreeIPLocked(d, siteID, pl, s.foreignIPs(siteID))

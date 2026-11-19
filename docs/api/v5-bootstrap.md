@@ -42,9 +42,9 @@ checks; the router is only read by the cache refresh (never more often than ever
 
 ```
 { router_id,
-  state: not_started | waiting_router | online | ready,
+  state: not_started | waiting_router | stalled | online | ready,
   join:  { state: none|waiting|used|expired, expires_at, report: {at, ok, ros, lines[]} | null },
-  next_action: { kind: paste_line | press_button | fix | wait | none, text, check_id },
+  next_action: { kind: paste_line | fix | wait | none, text, check_id },
   steps: [ {n, key, title, status: pending|running|ok|failed, detail, at} ],
   checks: {ok, warn, fail, unknown}, blockers: [check ids], last_error }
 ```
@@ -52,6 +52,7 @@ checks; the router is only read by the cache refresh (never more often than ever
 `state`:
 - `not_started`: no line has been fetched by a router yet (join token pending, expired or never minted).
 - `waiting_router`: the setup script was fetched (`steps[0]` ok) but the tunnel is not up yet.
+- `stalled`: the script was fetched more than 10 minutes ago, no report arrived and the tunnel is not up: the router never came back (the fetch can rotate its keys before the reset, so it may have stopped halfway). `next_action` is `paste_line`: reset the router with the Reset button and paste a new line.
 - `online`: the tunnel is up (WireGuard handshake younger than 3 minutes) but the checks are not all green yet.
 - `ready`: tunnel up, server login works, no failing check.
 
@@ -66,9 +67,7 @@ checks; the router is only read by the cache refresh (never more often than ever
 
 `status` is `running` for the first step that is not ok when the previous one is; `failed` only for step 4 with failing checks
 (and for step 1 if the join report says the script failed). `join.report` is the router's own report of the script run
-(`lines` are sanitised; secrets never appear). `next_action.kind`: `paste_line` (not started or expired), `press_button`
-(device-mode fetch needs the physical button: the report says so), `fix` (a check fails; `check_id` is the first),
-`wait`, `none`.
+(`lines` are sanitised; secrets never appear). `next_action.kind`: `paste_line` (not started, expired, `stalled`, or the router has no v5 layout: "Rebuild required: reset the router and paste a new line"), `fix` (a check fails; `check_id` is the first), `wait`, `none`. There is no `press_button`: the server cannot tell that the device-mode button is needed (the paste line prints it on the router).
 
 Clients poll every 5 s while the state is not `ready`, then every 30 s.
 
@@ -92,11 +91,15 @@ Public endpoints (no session; the token is the credential):
 - `GET /j/<token>/reset`: the fixed reset stub. Accepted for 5 minutes after the setup fetch, any number of times. 404 otherwise.
 - `POST /j/<token>/report` (and the existing report path): the script's run report. Unchanged.
 
-`GET /routers/{id}/script` (owner, `Content-Disposition: attachment; filename=ftn-setup.rsc`, `no-store`, 409 when the
-router is not set up on the server side): Line B. Mints a token and consumes it server-side and returns the same script.
-The owner drags it into WinBox Files and runs `/import ftn-setup.rsc`. On a router that is not blank the script's first
-section aborts when it finds an address, bridge, DHCP server or firewall rule without an `ftn:` comment. Every
-download makes new keys; the previous script stops working.
+`POST /routers/{id}/script` (owner, API only: the web admin has no button for it), body `{"confirm_name": "<router name>", "force": false}`.
+`Content-Disposition: attachment; filename=ftn-setup.rsc`, `no-store`, never replayed from the Idempotency-Key cache. Line B, for a router that cannot take
+the paste line: mints a token, consumes it server-side and returns the same script. The owner drags it into WinBox Files
+and runs `/import ftn-setup.rsc` on a blank router. 400 `bad_request` without a body, 422 `validation_failed` (field `confirm_name`) on a wrong
+name, 409 `bad_state` when the router is not set up on the server side, **and 409 when the router is joined and its tunnel is
+fresh** (a new script makes new keys and would cut a live router off) unless `force` is `true`. Every download makes new
+keys; the previous script stops working. The script runs only on a blank router: its first section refuses (and changes nothing) when it
+finds any object with an `ftn:` comment (an earlier run) or any address, bridge, DHCP server or firewall rule that is not ours. A
+rebuild always goes through the paste line (which resets the router first).
 
 ## Actions
 
@@ -113,9 +116,9 @@ router (Line A erases it when the new line is pasted).
 `GET /routers/{id}/checks[?fresh=1]`, `POST /routers/{id}/checks/{check_id}/fix`: unchanged shape. Cached 60 s; `fresh=1`
 re-reads. Checks kept: `router.version`, `api_user.policy`, `device_mode.fetch`, `dns.remote_requests`,
 `customer.dns_input`, `customer.interface`, `olt.bridge_conflict`, `bench.port`, `traffic_flow`, `service.www`, `ipv6`,
-`server.public_ip`, `router.script_hooks`. New: `walled.rules` (fix rewrites the walled-garden rules), `dhcp.ftn` (fix
+`server.public_ip`, `router.script_hooks`. New: `router.layout` (the router has the v5 layout: the `br-customers` bridge with the comment `ftn: customer bridge` that only the script makes; on a router without it every fix is off, nothing is written, and the item says "Rebuild required: reset the router and paste a new line"), `walled.rules` (fix rewrites the walled-garden rules), `dhcp.ftn` (fix
 enables `ftn-dhcp`), `wan.internet` (the router can reach the internet; no fix), `bootstrap.file` (a leftover
-`ftn-setup.rsc`/`ftn-reset.rsc`; the fix removes exactly those files). Checks never carry a command to copy: each either has an auto fix (the server issues it) or explains in words (most say to paste a new line, which rebuilds the item). The fix object has no `command` field. Removed: `device_mode.scheduler`, `device_mode.hotspot`,
+`ftn-setup.rsc`/`ftn-reset.rsc`; the fix removes exactly those files). Checks never carry a command to copy: each either has an auto fix (the server issues it) or explains in words (most say to paste a new line, which rebuilds the item). The fix object has no `command` field. The checks JSON has `layout` (`v5`, `old` or `unknown`) and no cutover fields (`blocks_cutover`, `cutover_ready` and `override` are gone). Removed: `device_mode.scheduler`, `device_mode.hotspot`,
 `kit.installed`, `hotspot.orphan_users`, `containers`, `unmanaged.devices`, `flats.unseen`.
 
 ## Bench

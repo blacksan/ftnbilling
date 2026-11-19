@@ -15,6 +15,7 @@ func ipoeApp(t *testing.T, mut func(*config.Config)) (*multi, store.Site, *route
 	s := m.addSite(t, "Riverside")
 	rt := m.mock(s.ID)
 	rt.SeedRow("/ip/dhcp-server", routeros.Row{"name": "ftn-dhcp", "disabled": "false"})
+	rt.SeedRow("/interface/bridge", routeros.Row{"name": "br-customers", "comment": "ftn: customer bridge"})
 	m.selectSite(t, s.ID)
 	return m, s, rt
 }

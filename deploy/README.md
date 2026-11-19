@@ -79,7 +79,7 @@ Options (environment variables): `DOMAIN`, `GH_TOKEN`, `VERSION` (a release tag;
 | Swap and logs | A 1 GB `/swapfile` (`vm.swappiness=10`) when RAM is 2 GB or less and there is no swap; journald `SystemMaxUse=500M` |
 | Updates | `unattended-upgrades`, security updates only, never reboots by itself |
 | Backups | `ftnbilling-dump.timer` every 6 hours (database dump, daily file tar), `ftnbilling-drill.timer` monthly restore drill, `ftnbilling-backup.timer` weekly Google Drive upload once you run `sudo ftnbilling-backup setup`. See [BACKUP.md](BACKUP.md). The old daily cron job is removed |
-| Tools | `/usr/local/sbin/`: `ftnbilling-admin-reset`, `ftnbilling-doctor`, `ftnbilling-backup`, `ftnbilling-wg-sync` |
+| Tools | `/usr/local/sbin/`: `ftnbilling-admin-reset`, `ftnbilling-wipe`, `ftnbilling-doctor`, `ftnbilling-backup`, `ftnbilling-wg-sync` |
 
 `DATA_KEY` (encrypts national IDs and the secrets saved in Settings) is generated once into the settings file on every install, with or without PostgreSQL. The `MPESA_*`, `WA_*` and `SMTP_*` lines are written commented out: set these up in Admin > Settings instead.
 
@@ -112,6 +112,11 @@ sudo ftnbilling-admin-reset --generate          # a new random password, printed
 sudo ftnbilling-admin-reset --revoke-sessions   # sign everything out
 ```
 
+### Start fresh (delete all data)
+
+`sudo ftnbilling-wipe` lists what it would delete, asks you to type `WIPE` (or pass `--yes`), saves a backup to `/var/backups/ftnbilling/pre-wipe-<UTC time>.dump` (`.json` on the JSON file) and aborts if that fails, then stops the service, deletes every customer, flat, router, payment and log, starts it again and removes the old routers from `wg0`.
+Admin users, Settings (M-Pesa, branding) and `DATA_KEY` are kept; everybody signs in again, and you add the routers again with the one-line bootstrap.
+
 ### Check the server: the doctor
 
 ```bash
@@ -134,12 +139,12 @@ To restore from a local dump on the same server instead: `sudo systemctl stop ft
 
 1. Open the admin and go to **Routers, Add router**. Give the name; the router layout defaults suit a standard install (WAN `ether1`, OLT port `sfp-sfpplus1`). Change the WAN mode (dhcp, static or pppoe), the admin LAN ports, the VLAN, the customer subnet or the bench port there if this router differs. A PPPoE password is write-only: the page shows that one is set, never the password.
 2. The dialog then shows the **one line** to paste. It is shown once, works once, and expires after 30 minutes. (On the router page, Setup, **Make the line** makes a new one.)
-3. Paste it in the router's terminal (WinBox, New Terminal). The router fetches its setup script, **erases itself and builds itself again** (WAN, admin LAN, customer network, DHCP, firewall, WireGuard tunnel, the API login), and reports back. The private key never reaches the server in the clear. Nothing else is typed on the router, and the server never changes its users, services, tunnel, routes or WAN afterwards.
+3. Paste it in the router's terminal (WinBox, New Terminal). The router fetches its setup script, **erases itself and builds itself again** (WAN, admin LAN, customer network, DHCP, firewall, WireGuard tunnel, the API login), and reports back. The server generates the router's WireGuard private key when the router fetches the script, serves it once inside that script and does not store it (it keeps only the public key); the script deletes itself from the router. Nothing else is typed on the router, and the server never changes its users, services, tunnel, routes or WAN afterwards.
 4. The router page, Setup, shows four steps that refresh by themselves: the router fetched the script, the tunnel is up, the server can log in, the checks are green. When all four are done the server gives every flat its address and queue.
 
 If the line fails with a certificate error, correct the router's clock; the page also offers the same line without the certificate check for a router that cannot have a right clock.
 
-Run the line again to rebuild a router (it is safe: the firewall is never left open while it rebuilds). **Reset router** on the Setup tab (owner only, the router name typed to confirm) makes the server forget the router's keys and join state, so a new line can be made. It does not touch the router.
+To rebuild a router, press **Reset router** and paste the new line (the line erases the router first; running the set-up script a second time on a built router is refused). The router is never open while it builds: before any WAN connection exists the script puts a firewall hold at the top of the filter that drops new and invalid traffic from the WAN, the WAN connection is created switched off and is switched on only after the full rule set is in, and the hold is removed last. If the script stops on an error the hold stays and the WAN is switched on behind it so the failure report can reach the server. **Reset router** on the Setup tab (owner only, the router name typed to confirm) makes the server forget the router's keys and join state, so a new line can be made. It does not touch the router.
 
 A router that is "paused" in the admin gets no collection and no router changes, and tenants cannot buy there.
 

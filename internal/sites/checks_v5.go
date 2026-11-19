@@ -410,20 +410,36 @@ func ensureGroup(ctx context.Context, wr *fixWriter, rd rowReader, g ruleGroup, 
 		}
 	}
 	if !orderOK {
+		// Out of order: put a complete new copy of the group in the right order directly above the old rules
+		// first, and only then take the old rows out (by their ids), so a walled flat never meets a gap.
+		var old []routeros.Row
 		for _, r := range rows {
-			if known[r["comment"]] {
-				if err := wr.removeRow(ctx, g.path, r); err != nil {
-					return err
-				}
+			if known[r["comment"]] && r[routeros.RowID] != "" {
+				old = append(old, r)
 			}
 		}
-		have, dup = map[string]routeros.Row{}, nil
-		fresh, err := rd.Rows(ctx, g.path, nil)
-		if err != nil {
-			return classifyFixErr(err)
+		if len(old) == 0 {
+			return nil
 		}
-		rows = fresh
-		wr.note("put the walled-garden %s rules back in order", g.chain)
+		nextID := old[0][routeros.RowID]
+		for i := len(g.want) - 1; i >= 0; i-- {
+			body := g.want[i].Body(iface)
+			body["place-before"] = nextID
+			id, err := wr.addRowID(ctx, g.path, body)
+			if err != nil {
+				return err
+			}
+			if id != "" {
+				nextID = id
+			}
+		}
+		for _, r := range old {
+			if err := wr.removeRow(ctx, g.path, r); err != nil {
+				return err
+			}
+		}
+		wr.note("put the walled-garden %s rules back in order (the new set went in before the old one came out)", g.chain)
+		return nil
 	}
 	nextID := anchorOf(g, rows)
 	for i := len(g.want) - 1; i >= 0; i-- {

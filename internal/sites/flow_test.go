@@ -2,6 +2,7 @@ package sites
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -73,12 +74,12 @@ func TestSetupScriptAndResetStubDelivery(t *testing.T) {
 func TestDownloadScriptMakesNewKeysEachTime(t *testing.T) {
 	f := newFixture(t, nil)
 	s := f.create("Block A")
-	a, err := f.m.DownloadScript(s.ID, "owner")
+	a, err := f.m.DownloadScript(s.ID, "owner", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	k1 := f.site(s.ID).WGPublicKey
-	b, err := f.m.DownloadScript(s.ID, "owner")
+	b, err := f.m.DownloadScript(s.ID, "owner", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +98,7 @@ func TestPPPoEPasswordIsSealedAndOnlyInTheScript(t *testing.T) {
 	if got.PPPoEPassEnc == "" || strings.Contains(got.PPPoEPassEnc, "s3cretpw") {
 		t.Fatalf("not sealed: %q", got.PPPoEPassEnc)
 	}
-	script, err := f.m.DownloadScript(s.ID, "owner")
+	script, err := f.m.DownloadScript(s.ID, "owner", false)
 	if err != nil || !strings.Contains(string(script), "s3cretpw") {
 		t.Fatalf("script lacks the password: %v", err)
 	}
@@ -170,6 +171,7 @@ func checkRig(t *testing.T) (*fixture, store.Site, *routeros.Mock) {
 func seedHealthy(t *testing.T, f *fixture, s store.Site, m *routeros.Mock) {
 	m.SeedOne("/system/resource", R{"version": "7.25.1 (stable)", "board-name": "RB5009UG+S+"})
 	m.SeedRow("/ip/dhcp-server", R{"name": "ftn-dhcp", "interface": "br-customers", "disabled": "false"})
+	m.SeedRow("/interface/bridge", R{"name": "br-customers", "comment": "ftn: customer bridge"})
 	m.SeedRow("/ip/route", R{"dst-address": "0.0.0.0/0", "gateway": "192.168.1.1", "active": "true", "disabled": "false"})
 	w, err := f.m.walledSet(f.m.Effective(s))
 	if err != nil {
@@ -362,5 +364,175 @@ func TestSetupViewStates(t *testing.T) {
 	}
 	if _, ok := f.m.SetupView(context.Background(), "nope"); ok {
 		t.Fatal("unknown router")
+	}
+}
+
+// ---- rebuild gate, stalled setup, walled order, no gap ---------------------------------------
+
+// A router that answers but has no v5 layout (no customer bridge made by the script): the checks say rebuild,
+// every fix is off, a fix called by hand is refused, and nothing is written.
+func TestRouterWithoutTheV5LayoutGetsNoFixes(t *testing.T) {
+	f, s, m := checkRig(t)
+	for _, r := range m.Table("/interface/bridge") {
+		m.RemoveRow(context.Background(), "/interface/bridge", r[".id"])
+	}
+	for _, r := range m.Table("/ip/dhcp-server") {
+		m.SetRow(context.Background(), "/ip/dhcp-server", r[".id"], map[string]string{"disabled": "true"})
+	}
+	c, err := f.m.Checks(context.Background(), s.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Layout != LayoutOld {
+		t.Fatalf("layout %q", c.Layout)
+	}
+	lay, ok := c.Item(CheckLayout)
+	if !ok || lay.Status != StatusFail || !strings.Contains(lay.Detail, "Rebuild required: reset the router and paste a new line") {
+		t.Fatalf("%+v", lay)
+	}
+	for _, it := range c.Items {
+		if it.Fix.Kind != FixNone {
+			t.Errorf("%s offers a fix on a router that must be rebuilt: %+v", it.ID, it.Fix)
+		}
+	}
+	m.ResetWrites()
+	if _, err := f.m.ApplyFix(context.Background(), s.ID, CheckDHCP, false, store.RoleOperator); err == nil {
+		t.Fatal("a fix ran on a router without the v5 layout")
+	}
+	out, err := f.m.ApplyAutoFixes(context.Background(), s.ID)
+	if err != nil || len(out) != 0 {
+		t.Fatalf("auto fixes: %v %v", out, err)
+	}
+	if m.Writes() != 0 {
+		t.Fatalf("%d writes", m.Writes())
+	}
+	// the setup view tells the operator to rebuild
+	f.m.chk.put(s.ID, f.m.now(), c)
+	v, _ := f.m.SetupView(context.Background(), s.ID)
+	if v.NextAction.Kind != "paste_line" || !strings.Contains(v.NextAction.Text, "Rebuild required") {
+		t.Fatalf("%+v", v)
+	}
+}
+
+func TestCheckJSONHasNoCutoverFields(t *testing.T) {
+	f, s, _ := checkRig(t)
+	c, _ := f.m.Checks(context.Background(), s.ID, true)
+	b, _ := json.Marshal(c)
+	for _, bad := range []string{"cutover", "blocks_cutover", "override"} {
+		if strings.Contains(string(b), bad) {
+			t.Errorf("checks JSON still has %q", bad)
+		}
+	}
+	if !strings.Contains(string(b), `"layout":"v5"`) {
+		t.Errorf("no layout in %s", b)
+	}
+}
+
+// The script was fetched, the router never reported and never came back: after StallAfter the setup view says so
+// and tells the operator to reset and paste a new line. It never invents press_button.
+func TestSetupViewStalledAfterTheScriptWasFetched(t *testing.T) {
+	f := newFixture(t, nil)
+	s, err := f.m.CreateRouter(SiteInput{Name: "Block A"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, _, _ := f.m.MintJoin(s.ID)
+	if _, _, err := f.m.ConsumeJoin(tok, mt, "1.2.3.4", false); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := f.m.SetupView(context.Background(), s.ID)
+	if v.State != StateWaitingRouter {
+		t.Fatalf("right after the fetch: %s", v.State)
+	}
+	f.advance(StallAfter + time.Minute)
+	v, _ = f.m.SetupView(context.Background(), s.ID)
+	if v.State != StateStalled || v.NextAction.Kind != "paste_line" || !strings.Contains(v.NextAction.Text, "Reset") || v.Steps[1].Status != "failed" {
+		t.Fatalf("%+v", v)
+	}
+	if v.Join.Report != nil || v.LastError == "" {
+		t.Fatalf("%+v", v)
+	}
+}
+
+type recWriter struct {
+	*routeros.Mock
+	t    *testing.T
+	want []string
+	n    int
+}
+
+func (r *recWriter) check(what string) {
+	have := map[string]bool{}
+	for _, row := range r.Mock.Table("/ip/firewall/filter") {
+		have[row["comment"]] = true
+	}
+	for _, c := range r.want {
+		if !have[c] {
+			r.t.Errorf("after %s: the walled rule %q is gone (a gap)", what, c)
+		}
+	}
+	r.n++
+}
+func (r *recWriter) AddRow(ctx context.Context, p string, b map[string]string) (string, error) {
+	id, err := r.Mock.AddRow(ctx, p, b)
+	r.check("add " + b["comment"])
+	return id, err
+}
+func (r *recWriter) RemoveRow(ctx context.Context, p, id string) error {
+	err := r.Mock.RemoveRow(ctx, p, id)
+	r.check("remove " + id)
+	return err
+}
+
+// Putting a group back in order adds the whole new group first and only then removes the old rules, so no
+// walled rule is ever missing between two writes.
+func TestFixWalledOrderRepairLeavesNoGap(t *testing.T) {
+	f, s, m := checkRig(t)
+	w, err := f.m.walledSet(f.m.Effective(s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// swap the first two forward walled rules
+	rows := m.Table("/ip/firewall/filter")
+	var a, b R
+	for _, r := range rows {
+		if strings.HasPrefix(r["comment"], "ftn: ipoe") && a == nil {
+			a = r
+		} else if strings.HasPrefix(r["comment"], "ftn: ipoe") && b == nil {
+			b = r
+		}
+	}
+	if a == nil || b == nil {
+		t.Fatal("no walled rows")
+	}
+	ctx := context.Background()
+	ca, cb := a["comment"], b["comment"]
+	m.SetRow(ctx, "/ip/firewall/filter", a[".id"], map[string]string{"comment": "tmp"})
+	m.SetRow(ctx, "/ip/firewall/filter", b[".id"], map[string]string{"comment": ca})
+	m.SetRow(ctx, "/ip/firewall/filter", a[".id"], map[string]string{"comment": cb})
+	if d := diffWalled(readSnapshot(ctx, m, nil, []string{"/ip/firewall/filter", "/ip/firewall/nat"}), w, CustomerBridge); !d.order {
+		t.Fatalf("the swap is not seen as out of order: %+v", d)
+	}
+	rec := &recWriter{Mock: m, t: t}
+	for _, r := range w.All() {
+		if r.Table == "filter" {
+			rec.want = append(rec.want, r.Comment)
+		}
+	}
+	fw := &fixWriter{rt: rec, insp: m, ifaces: map[string]bool{}, walled: walledComments(w)}
+	for _, g := range groupsOf(w) {
+		if g.path != "/ip/firewall/filter" {
+			continue
+		}
+		cur, _ := m.Rows(ctx, g.path, nil)
+		if err := ensureGroup(ctx, fw, m, g, CustomerBridge, cur); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rec.n == 0 {
+		t.Fatal("nothing was written")
+	}
+	if d := diffWalled(readSnapshot(ctx, m, nil, []string{"/ip/firewall/filter", "/ip/firewall/nat"}), w, CustomerBridge); !d.ok() {
+		t.Fatalf("not repaired: %+v", d)
 	}
 }

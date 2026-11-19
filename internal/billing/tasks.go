@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -193,7 +194,7 @@ func (s *Service) Sweep(ctx context.Context) {
 			// Full per-site diff every sweep; due tasks ride on the same pass.
 			if s.hasDueTasks(id) {
 				s.RunSiteTasks(ctx, id)
-			} else if _, err := s.ReconcileSite(ctx, id); err != nil {
+			} else if _, err := s.ReconcileSite(ctx, id); err != nil && !errors.Is(err, ErrNotSetUp) {
 				s.log.Warn("ipoe reconcile failed", "site", id, "err", err)
 			}
 		}()

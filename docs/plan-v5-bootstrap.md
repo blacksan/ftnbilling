@@ -57,8 +57,9 @@ Still used: `WANInterface`, `OLTInterface`, `VLANID`, `CustomerSubnet`, `BenchPo
 
 ### Delivery
 Line A (default), new `BootstrapCommand(base, token, checkCert)` replacing `JoinCommandIntent`, per M2: check `device-mode fetch` (if off: print button instruction and `/system/device-mode/update fetch=yes`, nothing else); trust anchors on; remove stale `ftn-setup.rsc`/`ftn-reset.rsc`; fetch both; `/import ftn-reset.rsc`. Second paste is safe (single-use token → fetch fails → nothing resets). `keep-users=yes` keeps the operator's admin login; the script removes old `ispbill`/`ftn-api` users and groups before re-adding. `command_nocheck` variant stays.
-Line B (Advanced): owner-only "Download script" (mints + consumes a token server-side, `no-store`), then `/import ftn-setup.rsc`.
-Non-reset routers (Line B on a configured router): section 0 aborts if any static address, bridge, DHCP server or firewall rule exists without an `ftn:` comment. No auto-clean of foreign config.
+Line B (API only, no web button): `POST /routers/{id}/script` with `{confirm_name, force}`, owner-only (mints + consumes a token server-side, `no-store`; 409 for a live router unless `force`), then `/import ftn-setup.rsc` on a blank router.
+The one-liner wraps both fetches and the import in `:do {...} on-error={...}` that removes both files and says nothing was changed. The server rotates the router's keys when it hands out the setup file, so a failure after that leaves the router and the server out of step: the Setup view then shows `stalled` after 10 minutes with "reset the router and paste a new line".
+The script runs on a blank router only: section 0 aborts if any `ftn:` object exists (an earlier run) or any static address, bridge, DHCP server or firewall rule exists without an `ftn:` comment, and says to reset the router and paste a new line. There is no re-run in place (that would tear down `br-lan` under the operator's own session), and no auto-clean of foreign config.
 Device-mode: only `fetch` is needed. The script never touches device-mode.
 BENCH-CHECK (risks, verified on the first real run): reset non-interactive via /import; files survive reset and `run-after-reset` runs; time limit on the run-after-reset script (keep total < 90 s); `:onerror` and self-deletion in that context; `builtin-trust-anchors` on 7.25.1.
 
@@ -67,7 +68,7 @@ BENCH-CHECK (risks, verified on the first real run): reset non-interactive via /
 |---|---|---|---|
 | 0 | Wait and guard | yes | wait ≤60 s for WAN and OLT interfaces; RouterOS 7.13+; foreign-config guard |
 | 1 | System | no | identity `FTN-<name>`, time zone `Africa/Nairobi`, NTP client on, trust anchors |
-| 2 | Lists and WAN | yes | lists `WAN`, `LAN`; DHCP client (`use-peer-dns=no`) / static address + route / `pppoe-wan`; WAN members |
+| 2 | Hold and WAN | yes | lists `WAN`, `LAN`; the `ftn: hold` rules (input and forward, drop new+invalid from `WAN`) FIRST; then the WAN client created switched off (`disabled=yes`): DHCP client (`use-peer-dns=no`) / static address + route / `pppoe-wan`; WAN members. Section 6 switches it on |
 | 3 | Admin LAN | yes | `br-lan` with `LANPorts`, gateway `.1`, pool, `ftn-lan-dhcp`, network; `LAN` member |
 | 4 | Customer network | yes | optional `vlan<N>-customers` on the OLT port; `br-customers` `arp=reply-only`; ports OLT/VLAN and bench with `horizon=1`; gateway from `PlanSubnet` |
 | 5 | DHCP | yes | pool `ftn-unreg` (.10–.59); `ftn-dhcp` enabled, `authoritative=yes add-arp=yes lease-time=1m`; network; `ftn-unreg` address-list range |
@@ -84,12 +85,12 @@ Firewall (script owns the whole table, top to bottom, no FastTrack so queues app
 - Forward: walled rules from `ipoeRuleSet`; accept est/rel; drop invalid; drop `wg-ftn` in/out; isolate flats; accept `LAN`→`WAN`; accept `LAN`→customers (OLT mgmt); accept customers→`WAN`; drop rest.
 - NAT: `ftn: customer masquerade` and `ftn: lan masquerade` out `WAN`; walled DNS redirect and HTTP→payment-page dst-nat from `ipoeRuleSet`.
 - Nothing opened on WAN (router is the WireGuard initiator).
-- Never unfiltered on a re-paste: section 6 first adds `ftn: hold` at the top of the filter table (drop new and invalid input from `WAN`), then removes the old `ftn:` rules except the hold, adds the new rule set, and removes the hold last. If a rule fails, the section stops with the hold still in place, so the router stays closed.
+- Never unfiltered, from the first second: section 2 adds the `ftn: hold` rules (drop new and invalid from `WAN`, both `input` and `forward`; established and related are not touched, so the router's own outbound flows return) before any WAN client exists. The WAN client is created switched off. Section 6 adds the whole rule set behind the hold, then switches the WAN on, then removes the hold, last. If any section fails, the hold stays and the error handler switches the WAN on behind it (waits up to 30 s for a default route) so the failure report can reach the server. After the WAN is up (section 12) the script checks the WAN address against the admin LAN and customer subnets and reports an overlap in the join report (it changes nothing). The server also validates that the LAN, customer, tunnel and static WAN networks do not overlap.
 No secrets printed or reported; `sanitizeReport` stays. Golden test per WAN mode.
 
 ### After the join
-`watchJoin` (`runtime.go`) records `JoinedAt`, then new `afterJoin` runs `Checks`, `EnsureIPs`, enqueues every flat and calls `ReconcileSite`. `reconcileSite` keeps one gate: no `ftn-dhcp` → "router not set up", nothing written. Static leases get `lease-time=1h`; unregistered renew every 30 s on the 1-min default, so a newly registered flat moves to its fixed IP in ~35 s.
-`Setup` JSON keeps `state`, `join`, `next_action`, `steps`, `checks`, `blockers`, `last_error`. States: `not_started`, `waiting_router`, `online`, `ready`. Steps derived: script fetched, tunnel up, server login works, checks green.
+`watchJoin` (`runtime.go`) records `JoinedAt`, then new `afterJoin` runs `Checks`, `EnsureIPs`, enqueues every flat and calls `ReconcileSite`. `reconcileSite` keeps one gate: the v5 layout marker (the `br-customers` bridge with the comment `ftn: customer bridge`, plus `ftn-dhcp`) → otherwise "router not set up", nothing written, and `ReconcileSite` returns `ErrNotSetUp` so queued tasks stay queued. Static leases get `lease-time=1h`; unregistered renew every 30 s on the 1-min default, so a newly registered flat moves to its fixed IP in ~35 s.
+`Setup` JSON keeps `state`, `join`, `next_action`, `steps`, `checks`, `blockers`, `last_error`. States: `not_started`, `waiting_router`, `stalled`, `online`, `ready`. Steps derived: script fetched, tunnel up, server login works, checks green.
 New checks: `walled.rules` (auto-fix via `ipoeRuleSet`), `dhcp.ftn` (auto-fix enable), `wan.internet`, `bootstrap.file` (leftover script file; fix removes exactly that file).
 
 ## C. Clean-up
@@ -113,7 +114,7 @@ Also: the 3 s timeouts in `internal/web` (`sites_view.go`, `devices.go`, `map.go
 
 ## E. Web and app
 - Add router form: name, WAN port, WAN type (+ static/PPPoE fields), OLT port, VLAN, customer subnet, admin LAN ports, LAN subnet, bench port, WAN capacity, support phone. Removed: hotspot server, WAN list, "script builds…", legacy container, "already serving customers".
-- Setup tab: 1) connect a laptop to the LAN port, open WinBox (by MAC); 2) paste this line (copy; the router erases itself and restarts); 3) watch the four steps go green (5 s poll). Below: checklist with Fix buttons, Recheck, New line, Advanced "Download script". Reset router + Reboot on the Danger tab.
+- Setup tab: 1) connect a laptop to the LAN port, open WinBox (by MAC); 2) paste this line (copy; the router erases itself and restarts); 3) watch the four steps go green (5 s poll). Below: checklist with Fix buttons, Recheck, New line. (The script download is API only: no web button.) Reset router + Reboot on the Danger tab.
 - Removed UI: mode selector, paste scripts, Start migration, Roll back now, Confirm cutover, Adopt leases, "Push speed profiles".
 - API: add `actions/reset`; extend `POST/PATCH /routers`; 410 for `mode`, `cutover*`, `setup/run|migrate|rollback`. Keep `bench/test-flat` and `bench/suspend-test` without the mode guard.
 - Android (`android-routers`): delete `SetupJobScreen.kt`, `SetupJobViewModel.kt`, migrate/rollback/confirm parts of `SetupScreen.kt`; `JoinCommandScreen.kt` → three-step Setup with polling; `AddRouterScreen.kt` + VM new fields; trim `SiteSetupModels.kt`/`SiteSetupRepository.kt`; reset in `RouterActionsViewModel.kt`; update tests. Load `anthropic-skills:android-m3-expressive` first.

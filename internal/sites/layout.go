@@ -126,11 +126,28 @@ func addInt(b [4]byte, n int) netip.Addr {
 // the LAN and customer subnets must not overlap.
 func Validate(s store.Site) error { return ValidateNet(s, netip.Prefix{}) }
 
+// DefaultTunnelRange is the tunnel subnet assumed when the caller has none.
+var DefaultTunnelRange = netip.MustParsePrefix("10.99.0.0/22")
+
+// HasControl reports whether s holds a control character (anything below 0x20
+// or 0x7f): a CR, LF or TAB inside a value would change the script around it.
+func HasControl(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 // ValidateNet is Validate with the tunnel subnet to keep clear of.
 func ValidateNet(s store.Site, wgNet netip.Prefix) error {
 	name := strings.TrimSpace(s.Name)
 	if name == "" || len([]rune(name)) > 60 {
 		return errors.New("the router needs a name of 1 to 60 characters")
+	}
+	if HasControl(s.Name) {
+		return errors.New("the router name has a control character (a line break or tab) that cannot be used")
 	}
 	for _, f := range []struct{ label, v string }{{"WAN interface", s.WANInterface}, {"OLT interface", s.OLTInterface}} {
 		if !ValidIface(f.v) {
@@ -173,8 +190,8 @@ func ValidateNet(s store.Site, wgNet netip.Prefix) error {
 		if s.PPPoEPassEnc == "" {
 			return errors.New("PPPoE needs a password")
 		}
-		if strings.ContainsAny(s.PPPoEUser, "\"\r\n") {
-			return errors.New("the PPPoE user name has a character that cannot be used")
+		if strings.Contains(s.PPPoEUser, "\"") || HasControl(s.PPPoEUser) {
+			return errors.New("the PPPoE user name has a character that cannot be used (a quote, line break, tab or other control character)")
 		}
 	default:
 		return fmt.Errorf("WAN type %q: use dhcp, static or pppoe", s.WANMode)
@@ -205,9 +222,27 @@ func ValidateNet(s store.Site, wgNet netip.Prefix) error {
 	if lp.Overlaps(cp) {
 		return fmt.Errorf("admin LAN subnet %s overlaps the customer subnet %s", lp, cp)
 	}
-	if wgNet.IsValid() {
-		if lp.Overlaps(wgNet) || cp.Overlaps(wgNet) {
-			return fmt.Errorf("the LAN and customer subnets must not overlap the tunnel subnet %s", wgNet)
+	if !wgNet.IsValid() {
+		wgNet = DefaultTunnelRange
+	}
+	wgNet = wgNet.Masked()
+	nets := []struct {
+		label string
+		p     netip.Prefix
+	}{{"admin LAN subnet", lp}, {"customer subnet", cp}, {"tunnel subnet", wgNet}}
+	if s.WANMode == WANStatic {
+		if a, err := netip.ParsePrefix(strings.TrimSpace(s.WANAddress)); err == nil {
+			nets = append(nets, struct {
+				label string
+				p     netip.Prefix
+			}{"static WAN network", a.Masked()})
+		}
+	}
+	for i := range nets {
+		for j := i + 1; j < len(nets); j++ {
+			if nets[i].p.Overlaps(nets[j].p) {
+				return fmt.Errorf("the %s %s overlaps the %s %s: they must be separate networks", nets[i].label, nets[i].p, nets[j].label, nets[j].p)
+			}
 		}
 	}
 	if s.WANCapMbps < 0 || s.OLTCapMbps < 0 || s.FUPTB < 0 {

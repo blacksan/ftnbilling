@@ -234,6 +234,9 @@ func RenderBootstrap(in BootstrapInput) ([]byte, error) {
 	if s.WANMode == WANPPPoE && in.PPPoEPass == "" {
 		return nil, errors.New("bootstrap script: the PPPoE password is not available")
 	}
+	if HasControl(in.PPPoEPass) || HasControl(s.PPPoEUser) || HasControl(s.Name) {
+		return nil, errors.New("bootstrap script: a name or PPPoE value has a control character (line break or tab)")
+	}
 	serverIP := ServerTunnelIP(in.WGSubnet)
 	d := bootstrapData{
 		SiteID: s.ID, SiteName: s.Name, Generated: in.Generated.UTC().Format("2006-01-02 15:04 UTC"), Identity: identityOf(s.Name), ROSVersion: in.ROSVersion,
@@ -348,8 +351,13 @@ const ResetStubScript = `# Fast Tech Net: reset stub. It erases the router and r
 // paste the same line again; nothing else happens. Otherwise it turns the
 // trust anchors on, removes stale files, fetches the two files (the second
 // fetch needs no new token: the reset stub is served for ResetWindow after the
-// setup fetch) and imports the stub. A second paste is harmless: the token is
-// single use, the fetch fails and nothing is reset.
+// setup fetch) and imports the stub. The fetches and the import are wrapped: if
+// any of them fails the two files are removed and the router says that nothing
+// was changed. A second paste is harmless: the token is single use, the fetch
+// fails and nothing is reset. Note that the server has already made new keys for
+// the router when the setup file was handed out, so a failure after the first
+// fetch leaves the server and the router out of step until a new line is made;
+// the Setup view says so (state "stalled").
 // BENCH-CHECK: [/system/device-mode/get fetch] returns a bool or "yes"/"no"
 // on 7.25.1 (both are accepted); the update command's argument name.
 func BootstrapCommand(base, token string, checkCert bool) string {
@@ -358,7 +366,7 @@ func BootstrapCommand(base, token string, checkCert bool) string {
 	if !checkCert {
 		q, chk = NoCheckQuery, "no"
 	}
-	return fmt.Sprintf(`:local o "^(true|yes)\$"; :local v0 [:tostr [/system/device-mode/get fetch]]; :put ("ftn: device-mode fetch=" . $v0); :if ([:len $v0] = 0) do={ :put "ftn: cannot read device-mode, nothing was changed" } else={ :if ($v0 ~ $o) do={ :do { /certificate/settings/set builtin-trust-anchors=trusted } on-error={}; /file/remove [/file/find where name="%[1]s"]; /file/remove [/file/find where name="%[2]s"]; /tool/fetch url="%[3]s/j/%[4]s%[5]s" dst-path=%[1]s check-certificate=%[6]s; /tool/fetch url="%[3]s/j/%[4]s/reset" dst-path=%[2]s check-certificate=%[6]s; :delay 1s; /import %[2]s } else={ :put "ftn: press the router button within 5 minutes (it then reboots), then paste this same line again"; /system/device-mode/update fetch=yes } }`,
+	return fmt.Sprintf(`:local o "^(true|yes)\$"; :local v0 [:tostr [/system/device-mode/get fetch]]; :put ("ftn: device-mode fetch=" . $v0); :if ([:len $v0] = 0) do={ :put "ftn: cannot read device-mode, nothing was changed" } else={ :if ($v0 ~ $o) do={ :do { /certificate/settings/set builtin-trust-anchors=trusted } on-error={}; /file/remove [/file/find where name="%[1]s"]; /file/remove [/file/find where name="%[2]s"]; :do { /tool/fetch url="%[3]s/j/%[4]s%[5]s" dst-path=%[1]s check-certificate=%[6]s; /tool/fetch url="%[3]s/j/%[4]s/reset" dst-path=%[2]s check-certificate=%[6]s; :delay 1s; /import %[2]s } on-error={ /file/remove [/file/find where name="%[1]s"]; /file/remove [/file/find where name="%[2]s"]; :put "ftn: setup failed, nothing was changed, files removed" } } else={ :put "ftn: press the router button within 5 minutes (it then reboots), then paste this same line again"; /system/device-mode/update fetch=yes } }`,
 		SetupFile, ResetFile, base, token, q, chk)
 }
 

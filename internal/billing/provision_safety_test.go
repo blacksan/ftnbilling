@@ -22,9 +22,9 @@ func TestIPoEWritesNothingWhileFtnDHCPIsDisabled(t *testing.T) {
 		e.rt.RemoveRow(context.Background(), "/ip/dhcp-server", r[".id"])
 	}
 	e.rt.ResetWrites()
-	run := e.reconcile(t)
-	if !run.Waiting || e.rt.Writes() != 0 {
-		t.Fatalf("%+v writes=%d", run, e.rt.Writes())
+	run, err := e.svc.ReconcileSite(context.Background(), e.site)
+	if !errors.Is(err, ErrNotSetUp) || !run.Waiting || e.rt.Writes() != 0 {
+		t.Fatalf("%+v err=%v writes=%d", run, err, e.rt.Writes())
 	}
 	if got := rowsBy(e.rt.Table("/ip/dhcp-server/lease"), "server", "dhcp-other"); len(got) != 1 {
 		t.Fatal("the other server's dynamic lease was removed")
@@ -231,5 +231,47 @@ func TestPausedSiteKeepsTasksQueuedWithoutAttempts(t *testing.T) {
 	})
 	if n := e.svc.RunTasks(ctx); n != 1 || len(e.svc.PendingTasks()) != 0 {
 		t.Fatalf("resumed building must catch up: %d", n)
+	}
+}
+
+// The gate is the v5 layout marker (the customer bridge the script makes): a router with an ftn-dhcp server but
+// no such bridge (an older build) gets no writes, the reconcile says so with ErrNotSetUp, and the queued tasks
+// stay queued instead of being deleted as done.
+func TestIPoEWritesNothingWithoutTheV5LayoutAndKeepsTasksQueued(t *testing.T) {
+	e := newEnv(t)
+	e.ipoe(t, store.AccessIPoE)
+	e.flat(t, "Flat 1", macA)
+	for _, r := range e.rt.Table("/interface/bridge") {
+		e.rt.RemoveRow(context.Background(), "/interface/bridge", r[".id"])
+	}
+	// a bridge of the same name without the script's comment is not the marker either
+	e.rt.SeedRow("/interface/bridge", routeros.Row{"name": CustomerBridgeName, "comment": "made by hand"})
+	e.rt.ResetWrites()
+	e.svc.EnqueueSite(e.site, "test")
+	queued := func() int {
+		n := 0
+		e.st.View(func(d *store.Data) {
+			for _, tk := range d.TaskList() {
+				if tk.SiteID == e.site {
+					n++
+				}
+			}
+		})
+		return n
+	}
+	before := queued()
+	if before == 0 {
+		t.Fatal("nothing was queued")
+	}
+	run, err := e.svc.ReconcileSite(context.Background(), e.site)
+	if !errors.Is(err, ErrNotSetUp) || !run.Waiting {
+		t.Fatalf("run %+v err %v", run, err)
+	}
+	e.svc.RunSiteTasks(context.Background(), e.site)
+	if e.rt.Writes() != 0 {
+		t.Fatalf("%d writes to a router without the v5 layout", e.rt.Writes())
+	}
+	if queued() != before {
+		t.Fatalf("tasks were deleted for a router that was never written: %d of %d left", queued(), before)
 	}
 }

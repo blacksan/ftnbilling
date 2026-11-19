@@ -41,7 +41,7 @@ func JoinReportKey(siteID string) string { return "site." + siteID + ".join_repo
 
 // sanitizeReport keeps printable ASCII and newlines (anything else becomes
 // "?") and masks secrets the way router output is masked.
-func sanitizeReport(b []byte, restPass string) string {
+func sanitizeReport(b []byte, secrets ...string) string {
 	out := make([]byte, 0, len(b))
 	for _, c := range b {
 		switch {
@@ -54,10 +54,12 @@ func sanitizeReport(b []byte, restPass string) string {
 	}
 	t := routeros.RedactOutput(string(out))
 	// Backstops for a secret that appears without a key name: anything shaped like a WireGuard key, and the
-	// building's own REST password.
+	// building's own REST and PPPoE passwords.
 	t = wgKeyShape.ReplaceAllString(t, "[hidden]")
-	if len(restPass) >= 8 {
-		t = strings.ReplaceAll(t, restPass, "[hidden]")
+	for _, sec := range secrets { // the REST password and the PPPoE password
+		if len(sec) >= 4 {
+			t = strings.ReplaceAll(t, sec, "[hidden]")
+		}
 	}
 	return t
 }
@@ -118,7 +120,8 @@ func (m *Manager) SubmitJoinReport(token string, body []byte) error {
 		if prev, ok := d.Settings[JoinReportKey(site.ID)]; ok && !prev.UpdatedAt.Before(site.Join.UsedAt) {
 			return ErrReportDuplicate
 		}
-		rep := parseReport(sanitizeReport(body, site.RESTPass), now)
+		pppoe, _ := m.OpenPPPoEPass(site) // "" when there is none or it cannot be opened
+		rep := parseReport(sanitizeReport(body, site.RESTPass, pppoe), now)
 		v := formatStoredReport(rep)
 		k := JoinReportKey(site.ID)
 		if d.Settings == nil {
@@ -252,9 +255,3 @@ func (m *Manager) noteRefusedUA(token, ua string) {
 		m.refused.note(sid, ua, now)
 	}
 }
-
-// stageROS carries the fetching router's RouterOS version from
-// ConsumeJoinForce to the cutover and cleanup renderers (which build their
-// own ScriptInput in ipoe.go), keyed by building. Used only when
-// ScriptInput.ROSVersion is empty. Set and cleared around the render.
-var stageROS sync.Map

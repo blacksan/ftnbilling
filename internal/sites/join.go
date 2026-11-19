@@ -242,11 +242,29 @@ func (m *Manager) ResetStub(token, userAgent string) ([]byte, error) {
 	return []byte(ResetStubScript), nil
 }
 
-// DownloadScript is Line B: for a router that cannot take the paste line. It
-// mints a token and consumes it on the server, and returns the same script for
-// the owner to put on the router by hand (Files, then /import ftn-setup.rsc).
-// Every download makes new keys: the previous script stops working.
-func (m *Manager) DownloadScript(siteID, from string) ([]byte, error) {
+// ErrRouterLive: the router is joined and its tunnel is up, so a new script (new
+// keys) would cut it off from the server. force overrides it.
+var ErrRouterLive = errors.New("this router is joined and its tunnel is up: a new script makes new keys and the router would drop off until the script is imported. Send force=true to do it anyway")
+
+// DownloadScript is the file download for a router that cannot take the paste
+// line (API only). It mints a token and consumes it on the server, and returns
+// the same script for the owner to put on the router by hand (Files, then
+// /import ftn-setup.rsc). Every download makes new keys: the previous script
+// stops working, and so would a live router's tunnel; unless force is set it
+// is refused (ErrRouterLive) for a router that is joined and whose tunnel is up.
+// The script runs only on a blank router (it refuses anything already built).
+func (m *Manager) DownloadScript(siteID, from string, force bool) ([]byte, error) {
+	var site store.Site
+	var ok bool
+	m.st.View(func(d *store.Data) { site, ok = d.Sites[siteID] })
+	if !ok || site.Removed {
+		return nil, billing.ErrNoSite
+	}
+	if !force && !site.JoinedAt.IsZero() {
+		if up, _ := m.tunnelState(site, m.now()); up {
+			return nil, ErrRouterLive
+		}
+	}
 	token, _, err := m.mintToken(siteID)
 	if err != nil {
 		return nil, err

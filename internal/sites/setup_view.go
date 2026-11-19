@@ -17,12 +17,18 @@ import (
 const (
 	StateNotStarted    = "not_started"
 	StateWaitingRouter = "waiting_router"
+	StateStalled       = "stalled" // the script was fetched but the router never came back
 	StateOnline        = "online"
 	StateReady         = "ready"
 )
 
 // TunnelFresh is how recent a WireGuard handshake must be for the tunnel to count as up.
 const TunnelFresh = 3 * time.Minute
+
+// StallAfter is how long after the script was fetched a router that has not
+// reported and has no fresh tunnel counts as lost: the reset and the build take
+// about two minutes, so ten is generous.
+const StallAfter = 10 * time.Minute
 
 // SetupJoin is the join part of Setup.
 type SetupJoin struct {
@@ -33,7 +39,7 @@ type SetupJoin struct {
 
 // SetupNext tells the client what to offer.
 type SetupNext struct {
-	Kind    string `json:"kind"` // paste_line | press_button | fix | wait | none
+	Kind    string `json:"kind"` // paste_line | fix | wait | none
 	Text    string `json:"text"`
 	CheckID string `json:"check_id"`
 }
@@ -136,20 +142,7 @@ func (m *Manager) SetupView(_ context.Context, siteID string) (Setup, bool) {
 
 	// Tunnel: a handshake younger than 3 minutes. Without the status dump
 	// (a dev machine) a joined router counts as up.
-	var handshakeAt *time.Time
-	tunnel := false
-	if site.WGPublicKey != "" {
-		ps, found, known := m.PeerStatus(siteID)
-		if known {
-			if age, has := ps.HandshakeAge(now); found && has {
-				t := now.Add(-age)
-				handshakeAt = &t
-				tunnel = age < TunnelFresh
-			}
-		} else {
-			tunnel = joined
-		}
-	}
+	tunnel, handshakeAt := m.tunnelState(site, now)
 
 	// Checks: from the cache; refresh in the background when old.
 	var cs Checks
@@ -172,9 +165,12 @@ func (m *Manager) SetupView(_ context.Context, siteID string) (Setup, bool) {
 		green = cs.Summary.Fail == 0 && len(out.Blockers) == 0
 	}
 
+	stalled := !tunnel && !joined && !site.Join.UsedAt.IsZero() && out.Join.Report == nil && now.Sub(site.Join.UsedAt) > StallAfter
 	switch {
 	case !fetched:
 		out.State = StateNotStarted
+	case stalled:
+		out.State = StateStalled
 	case !tunnel:
 		out.State = StateWaitingRouter
 	case !joined || !green:
@@ -207,6 +203,8 @@ func (m *Manager) SetupView(_ context.Context, siteID string) (Setup, bool) {
 	}
 	if tunnel {
 		s2.Status, s2.At = "ok", handshakeAt
+	} else if stalled {
+		s2.Status, s2.Detail = "failed", "The router fetched the script but never came back."
 	} else if fetched {
 		s2.Status, s2.Detail = "running", "Waiting for the router to build itself and connect."
 	}
@@ -229,8 +227,28 @@ func (m *Manager) SetupView(_ context.Context, siteID string) (Setup, bool) {
 	out.NextAction = nextAction(out, site, cs, haveChecks)
 	if failedReport {
 		out.LastError = firstLine(out.Join.Report.Lines)
+	} else if stalled {
+		out.LastError = "The router fetched the script but never came back."
 	}
 	return out, true
+}
+
+// tunnelState says whether the router's tunnel is up (a handshake younger than
+// TunnelFresh) and when the last handshake was. Without the status dump (a dev
+// machine) a joined router counts as up.
+func (m *Manager) tunnelState(site store.Site, now time.Time) (bool, *time.Time) {
+	if site.WGPublicKey == "" {
+		return false, nil
+	}
+	ps, found, known := m.PeerStatus(site.ID)
+	if !known {
+		return site.WGPublicKey != "" && !site.JoinedAt.IsZero(), nil
+	}
+	if age, has := ps.HandshakeAge(now); found && has {
+		t := now.Add(-age)
+		return age < TunnelFresh, &t
+	}
+	return false, nil
 }
 
 func firstLine(l []string) string {
@@ -254,16 +272,18 @@ func nextAction(s Setup, site store.Site, cs Checks, haveChecks bool) SetupNext 
 			return SetupNext{Kind: "paste_line", Text: "Paste the line on the router (it erases the router and builds it again)."}
 		}
 		return SetupNext{Kind: "paste_line", Text: "Make a new line, then paste it on the router."}
+	case StateStalled:
+		return SetupNext{Kind: "paste_line", Text: "The router fetched the script but never came back (it may have stopped before or during the reset). Reset the router with the Reset button here, then make a new line and paste it on the router."}
 	case StateWaitingRouter:
-		if it, ok := cs.Item(CheckDMFetch); haveChecks && ok && it.Status == StatusFail {
-			return SetupNext{Kind: "press_button", Text: "Press the router's reset button within 5 minutes when it asks, then paste the same line again.", CheckID: CheckDMFetch}
-		}
 		return SetupNext{Kind: "wait", Text: "The router is building itself. This takes about two minutes."}
 	case StateOnline:
 		if !haveChecks {
 			return SetupNext{Kind: "wait", Text: "Checking the router."}
 		}
 		for _, id := range s.Blockers {
+			if id == CheckLayout {
+				return SetupNext{Kind: "paste_line", Text: RebuildText, CheckID: id}
+			}
 			return SetupNext{Kind: "fix", Text: "Fix this first: " + id, CheckID: id}
 		}
 		for _, it := range cs.Items {

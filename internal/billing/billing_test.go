@@ -53,6 +53,7 @@ func (e *env) addSite(t *testing.T, name string) (id string, rt *routeros.Mock) 
 // server on the customer bridge.
 func seedRouter(rt *routeros.Mock) {
 	rt.SeedRow("/ip/dhcp-server", routeros.Row{"name": DHCPServerName, "interface": "br-customers", "disabled": "false"})
+	rt.SeedRow("/interface/bridge", routeros.Row{"name": CustomerBridgeName, "comment": CustomerBridgeComment})
 	rt.ResetWrites()
 }
 
