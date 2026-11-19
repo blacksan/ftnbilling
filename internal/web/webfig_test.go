@@ -2,6 +2,7 @@ package web_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -34,6 +35,7 @@ type wfRig struct {
 	hold     chan struct{}
 	now      atomic.Int64 // unix nanos; 0 = real time
 	clientIP string
+	holding  atomic.Bool // a test holds requests in flight on purpose
 }
 
 func (r *wfRig) clock() time.Time {
@@ -168,6 +170,16 @@ func (r *wfRig) techReq(method, path string, ip string, body io.Reader, hdr map[
 	resp, err := (&http.Client{CheckRedirect: noRedirect}).Do(req)
 	if err != nil {
 		panic(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(b))
+	// The proxy touches the session after the response; wait for that before the
+	// test moves its fake clock (requests held on purpose stay in flight: no wait then).
+	if !strings.HasPrefix(path, "/hold") {
+		for i := 0; i < 500 && r.srv.WebFigBusy() > 0 && !r.holding.Load(); i++ {
+			time.Sleep(2 * time.Millisecond)
+		}
 	}
 	return resp
 }
@@ -701,6 +713,7 @@ func TestWebFigSessionDiesWithTheOwnerRoleOrRouter(t *testing.T) {
 func TestWebFigConnectionLimits(t *testing.T) {
 	r := newWF(t)
 	wc := r.open(t, r.br, r.owner, r.site)
+	r.holding.Store(true)
 	var wg sync.WaitGroup
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
@@ -744,6 +757,7 @@ func TestWebFigTotalLimit(t *testing.T) {
 	for _, id := range ids {
 		cks[id] = r.open(t, r.br, r.owner, id)
 	}
+	r.holding.Store(true)
 	var wg sync.WaitGroup
 	for _, id := range ids[:4] {
 		for i := 0; i < 4; i++ {

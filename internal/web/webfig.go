@@ -138,6 +138,14 @@ func (s *Server) SetWebFigDial(f func(ctx context.Context, network, addr string)
 }
 func (s *Server) SetWebFigClock(f func() time.Time) { s.wf.now = f }
 
+// WebFigBusy is the number of proxied WebFig requests in flight (tests).
+func (s *Server) WebFigBusy() int {
+	if !s.webfigOn() {
+		return 0
+	}
+	return s.wf.mgr.Busy()
+}
+
 // WebFigSweep runs the timeout sweep now (tests).
 func (s *Server) WebFigSweep() {
 	if s.webfigOn() {

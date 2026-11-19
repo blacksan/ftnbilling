@@ -401,6 +401,14 @@ func (m *Manager) acquire(siteID string) (release func(), ok bool) {
 	}, true
 }
 
+// Busy is how many proxied requests are in flight now (tests wait for it to
+// reach 0 before moving a fake clock).
+func (m *Manager) Busy() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.total
+}
+
 // OpenURL is the address an admin is sent to with a ticket.
 func (m *Manager) OpenURL(tok string) string {
 	return "https://" + m.o.Domain + "/_ftn/open?t=" + tok
