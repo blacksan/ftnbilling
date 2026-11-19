@@ -1,23 +1,5 @@
-{{define "portalcss"}}<style>@font-face{font-family:Comfortaa;font-weight:700 800;font-display:swap;src:url(/brand.woff2) format("woff2")}.pkg input{accent-color:#f7931e}
-*{box-sizing:border-box}body{margin:0;font:16px/1.4 system-ui,sans-serif;background:#f3f5f7;color:#1c2630}
-main{max-width:480px;margin:0 auto;padding:12px}h1{font-size:22px;margin:8px 0}h2{font-size:15px;margin:18px 0 6px;color:#566}
-.card{background:#fff;border-radius:10px;padding:12px;margin:8px 0;box-shadow:0 1px 2px #0002}
-.pkg{display:block;border:2px solid #dde;border-radius:10px;padding:10px 12px;margin:6px 0;background:#fff}
-.pkg input{float:right;width:22px;height:22px}.pkg b{font-size:17px}.pkg small{display:block;color:#566}
-.pkg:has(input:checked){border-color:#f7931e;background:#fff5e8}
-.pkg.off{opacity:.6;background:#f3f4f6;border-style:dashed}.pkg.off .why{color:#8a5a00;font-weight:600;margin-top:2px}
-input[type=text],input[type=tel],input[type=password]{width:100%;font-size:18px;padding:10px;border:1px solid #bbc;border-radius:8px}
-button,.btn{display:block;width:100%;font-size:17px;padding:12px;margin:8px 0;border:0;border-radius:8px;background:#f7931e;color:#0e1a33;font-weight:700;text-align:center;text-decoration:none}
-button.alt{background:#0e1a33;color:#fff}button.grey{background:#667;color:#fff}.err{background:#fde8e8;color:#8a1c1c;padding:10px;border-radius:8px}
-.warn{background:#fff4d6;color:#6b4b00;padding:10px;border-radius:8px}
-.code{font:700 26px/1.2 monospace;letter-spacing:2px;background:#f3f5f7;padding:8px;border-radius:8px;text-align:center}
-.flat{font-size:20px;font-weight:700}.pill{display:inline-block;padding:2px 10px;border-radius:99px;font-size:14px;font-weight:600}
-.pill.active{background:#d9f3e3;color:#07622d}.pill.expired,.pill.new{background:#ffe9c7;color:#7a4a00}.pill.suspended{background:#fde8e8;color:#8a1c1c}
-.muted{color:#667;font-size:14px}details summary{padding:6px 0;color:#c96f00}
-.brandbar{display:flex;align-items:center;gap:12px;margin:6px 0 10px;padding:14px 16px;border-radius:14px;color:#fff;background:linear-gradient(100deg,#0e1a33 0%,#16284f 60%,#22396b 100%)}
-.brandbar img{height:58px;width:auto;display:block}.brandbar .ftnmark{width:40px;height:50px;flex:0 0 40px}.brandbar .ftnmark .bars{fill:#f2f4f8}.brandbar .bw{font:800 21px/1.2 Comfortaa,"Varela Round",Nunito,system-ui,sans-serif;letter-spacing:.6px;text-transform:uppercase}.brandbar .bwa{color:#f7931e}.brandbar small{display:block;color:#c9d2e6;font-size:13px;font-weight:400}
-</style>{{end}}
+{{define "portalcss"}}<meta name="color-scheme" content="light dark"><script src="{{static "theme.js"}}"></script><link rel="stylesheet" href="{{static "app.css"}}">{{end}}
 {{define "top"}}<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Brand}}</title><link rel="icon" type="image/svg+xml" href="/favicon.svg">{{template "portalcss"}}{{end}}
-{{define "head"}}{{template "top" .}}</head><body><main>{{end}}
-{{define "foot"}}<p class="muted" style="text-align:center;margin-top:24px"><a href="/admin/login" rel="nofollow">Admin login</a></p></main></body></html>{{end}}
+{{define "head"}}{{template "top" .}}</head><body class="portal"><main>{{end}}
+{{define "foot"}}<p class="muted foot-link"><a href="/admin/login" rel="nofollow">Admin login</a></p></main></body></html>{{end}}
 {{define "brandbar"}}<div class="brandbar"><img src="/brand/logo-white-text.svg" alt="{{.}}"></div>{{end}}

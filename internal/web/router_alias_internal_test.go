@@ -20,7 +20,7 @@ func TestAddRouterAliasesUnit(t *testing.T) {
 }
 
 func TestStaticAssets(t *testing.T) {
-	for p, ct := range map[string]string{"app.css": "text/css", "app.js": "text/javascript", "theme.js": "text/javascript", "comfortaa-700.woff2": "font/woff2", "favicon.svg": "image/svg+xml"} {
+	for p, ct := range map[string]string{"app.css": "text/css", "app.js": "text/javascript", "theme.js": "text/javascript", "fonts/ibm-plex-sans-latin-wght-normal.woff2": "font/woff2", "favicon.svg": "image/svg+xml"} {
 		w := httptest.NewRecorder()
 		mux := http.NewServeMux()
 		(&Server{}).staticRoutes(mux)

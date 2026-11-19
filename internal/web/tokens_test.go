@@ -108,9 +108,9 @@ func TestDesignTokensContrast(t *testing.T) {
 		tok  map[string]string
 	}{{"light", light}, {"dark", dark}} {
 		tok := th.tok
-		for _, k := range []string{"bg", "surface", "surface-2", "surface-3", "ink", "ink-2", "muted", "brand", "on-brand", "brand-ink", "brand-soft",
-			"side", "on-side", "side-mut", "ok", "ok-soft", "warn", "warn-soft", "bad", "bad-soft", "info", "info-soft", "teal", "teal-soft",
-			"plum", "plum-soft", "field", "focus", "line", "line-strong", "feat-bg", "feat-ink", "feat-accent", "chart-1", "chart-2", "chart-3", "chart-4", "chart-grid"} {
+		for _, k := range []string{"bg", "surface", "surface-2", "surface-3", "ink", "ink-2", "muted", "brand", "on-brand", "brand-hover", "brand-ink", "brand-soft",
+			"side", "on-side", "side-mut", "side-accent", "ok", "ok-soft", "warn", "warn-soft", "warn-fill", "on-warn-fill", "bad", "bad-soft", "on-bad", "info", "info-soft",
+			"field", "focus", "line", "line-strong", "chart-1", "chart-2", "chart-3", "chart-4", "chart-grid"} {
 			if tok[k] == "" {
 				t.Fatalf("%s: token --%s missing", th.name, k)
 			}
@@ -134,34 +134,39 @@ func TestDesignTokensContrast(t *testing.T) {
 			text("brand-ink", bg)
 		}
 		text("on-brand", "brand")
-		text("brand-ink", "brand-soft")
+		text("on-brand", "brand-hover") // primary button, hovered
+		text("brand-ink", "brand-soft") // active tab, selected plan
 		text("ink", "brand-soft")
 		text("on-side", "side")
 		text("side-mut", "side")
-		text("on-brand", "brand") // active sidebar pill, highlighter, buttons
-		text("feat-ink", "feat-bg")
-		text("bg", "ink") // inverted: toasts, selected tab (light)
-		for _, tone := range []string{"ok", "warn", "bad", "info", "teal", "plum"} {
+		text("side-accent", "side") // active sidebar item
+		text("bg", "ink")           // inverted: toasts
+		for _, tone := range []string{"ok", "warn", "bad", "info"} {
 			text(tone, tone+"-soft")
-			text(tone, "surface")
+			text(tone, "surface") // stat sub-lines and icons sit on the card
+			text(tone, "bg")
 			text("ink", tone+"-soft")
 			text("ink-2", tone+"-soft")
-			// the stat card chip: icon (soft) on the solid tone
-			ui(tone+"-soft", tone)
 		}
-		text("bg", "bad") // danger buttons
-		// interface parts: input borders, focus ring, chart marks, feature accents
+		text("on-bad", "bad")             // danger buttons
+		text("on-warn-fill", "warn-fill") // yellow fill carries dark text
+		text("ink", "warn-soft")          // warning banners
+		// interface parts: input borders, button and card outlines, focus ring, chart marks
 		for _, bg := range []string{"bg", "surface", "surface-2"} {
 			ui("field", bg)
 			ui("focus", bg)
+			ui("line-strong", bg)
 		}
+		ui("brand", "surface")
+		ui("warn", "warn-soft") // the warning icon on its banner
 		// gridlines are decoration and exempt; marks are not
 		for _, c := range []string{"chart-1", "chart-2", "chart-3", "chart-4"} {
 			ui(c, "surface")
 		}
-		ui("feat-accent", "feat-bg")
-		ui("brand", "side")
-		ui("on-brand", "brand")
+		// the warning marker must not rely on the yellow fill alone against white
+		if th.name == "light" {
+			ui("warn", "surface")
+		}
 	}
 }
 
