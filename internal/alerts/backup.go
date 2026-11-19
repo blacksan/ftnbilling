@@ -20,6 +20,7 @@ func BackupProblem(path string, now time.Time) string {
 	}
 	var b struct {
 		DumpAt   time.Time `json:"dump_at"`
+		UploadAt time.Time `json:"upload_at"`
 		DrillOK  *bool     `json:"drill_ok"`
 		DrillMsg string    `json:"drill_msg"`
 		UploadOK *bool     `json:"upload_ok"`
@@ -31,6 +32,11 @@ func BackupProblem(path string, now time.Time) string {
 	switch {
 	case b.Error != "":
 		return "the last backup reported an error: " + b.Error
+	case b.DumpAt.IsZero() && !b.UploadAt.IsZero():
+		// A server on the JSON store has no database dump; its backup is the weekly Drive upload.
+		if b.UploadOK != nil && !*b.UploadOK {
+			return "the last upload to Google Drive failed"
+		}
 	case b.DumpAt.IsZero():
 		return "no database dump has been made yet"
 	case now.Sub(b.DumpAt) > BackupMaxAge:

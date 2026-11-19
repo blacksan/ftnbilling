@@ -112,6 +112,9 @@ else
 fi
 if unit_enabled unattended-upgrades; then pass "unattended-upgrades" "enabled"; else warn "unattended-upgrades" "not enabled (security updates will not install by themselves)"; fi
 if unit_active "$APP-wg-sync.path"; then pass "unit: $APP-wg-sync.path" "watching"; else fail "unit: $APP-wg-sync.path" "not active (routers' peers will not be applied)"; fi
+if [ -r /run/ftnbilling/wg-sync.status ] && grep -q '^skipped=[1-9]' /run/ftnbilling/wg-sync.status; then
+  warn "wg-sync: skipped peers" "$(grep -m1 '^problem=' /run/ftnbilling/wg-sync.status | cut -d= -f2-) (see /run/ftnbilling/wg-sync.status)"
+fi
 for t in $APP-wg-status.timer $APP-dump.timer; do
   if unit_active "$t"; then pass "timer: $t" "active"; else fail "timer: $t" "not active"; fi
 done

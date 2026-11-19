@@ -80,9 +80,23 @@ func (s *Store) Kind() string { return s.b.Kind() }
 
 // Healthy returns nil, or the reason the store cannot accept writes.
 func (s *Store) Healthy() error {
+	if lk, ok := s.b.(interface{ LockErr() error }); ok {
+		if err := lk.LockErr(); err != nil {
+			return err
+		}
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.degraded
+}
+
+// LockLost is closed when the backend's single-writer lock is gone (Postgres only); nil otherwise. The
+// service exits then, so that systemd starts a fresh one that takes the lock again.
+func (s *Store) LockLost() <-chan struct{} {
+	if lk, ok := s.b.(interface{ LockLost() <-chan struct{} }); ok {
+		return lk.LockLost()
+	}
+	return nil
 }
 
 // View runs fn under a read lock. fn must not retain or modify d's maps.
