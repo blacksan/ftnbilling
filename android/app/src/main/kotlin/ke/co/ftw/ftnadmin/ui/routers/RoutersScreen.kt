@@ -241,7 +241,7 @@ fun RouterDetailScreen(
 internal fun winboxNotice(tunnelAddress: String, mgmtWinbox: Boolean): String? = when {
     tunnelAddress.isBlank() -> null
     mgmtWinbox -> "Remote WinBox: connect your management WireGuard profile, then open WinBox to $tunnelAddress"
-    else -> "Built without remote WinBox: reset the router and paste a new line to add it."
+    else -> "No report that this router has remote WinBox. If it was set up before remote WinBox existed, reset it and paste a new line."
 }
 
 @Composable
@@ -251,7 +251,7 @@ private fun RemoteWinbox(s: Site) {
     Text(
         notice,
         style = MaterialTheme.typography.bodySmall,
-        color = if (s.mgmtWinbox) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     if (s.mgmtWinbox) CopyButton("Copy address", s.tunnelAddress)
 }

@@ -1,9 +1,11 @@
 # FTN Admin (Android)
 
-Native shell for the ftnbilling admin: it imports a WireGuard config from `ftnbilling-admin-peer`,
-brings up an embedded tunnel (wireguard-android `GoBackend`, no separate WireGuard app) that routes
-only the admin network `10.98.0.0/24`, and shows the admin at `http://10.98.0.1:8080/admin` in a
-hardened WebView, with a native home screen for tunnel, server health and fleet status.
+Native admin app for the ftnbilling server (`https://isp.ftw.co.ke`, REST API `/api/v1`): home
+dashboard and live router status, customers and payments, alerts, new devices on a router, router
+setup (bootstrap line, checks, reset) and remote WinBox details. It signs in with the admin's
+username and password (plus a second factor when the server asks for one); the access and refresh
+tokens are kept encrypted with an Android Keystore key, and the phone is listed as a device that an
+owner can revoke from the server or from Settings. There is no VPN or WebView in the app.
 
 Package `ke.co.ftw.ftnadmin`, minSdk 26, targetSdk 36. Single module `app`, Kotlin, Compose,
 Material 3, manual DI (`AppContainer`).
@@ -34,8 +36,9 @@ Each release has three assets: `ftn-admin-X.Y.Z.apk`, `ftn-admin-X.Y.Z.apk.sha25
 
 **Secret.** The signing key lives in this repository, encrypted: `android/signing/ftn-admin-signing.enc`
 (AES-256-CBC, PBKDF2, 600000 iterations; a tar of `release.jks` and `signing.env`). The only secret
-is its passphrase, stored as the repository secret `ANDROID_SIGNING_PASSPHRASE`
-(Settings > Secrets and variables > Actions). Without it the release job stops at once with a message
+is its passphrase, stored as the secret `ANDROID_SIGNING_PASSPHRASE` of the GitHub
+environment `release` (Settings > Environments > release > Environment secrets). The release job runs in that
+environment and only for commits that are on `main`. Without it the release job stops at once with a message
 naming it. The job also refuses to publish unless the APK is signed with the expected certificate
 (SHA-256 `B9:4C:E4:0D:7A:66:F0:7E:B3:FB:CC:56:F0:FE:9B:EA:1E:D6:CF:5A:46:B1:01:13:D7:F0:6C:96:FA:42:89:C4`).
 
@@ -74,48 +77,27 @@ adb install ftn-admin-X.Y.Z.apk      # or open the APK on the phone
 
 ## Using it
 
-1. On the server: `ftnbilling-admin-peer add <name>` prints a QR code.
-2. In the app: Get started, scan the QR (or pick/paste the `.conf`), allow the VPN request,
-   optionally save the admin login, optionally turn on the app lock.
-3. Revoke a phone with `ftnbilling-admin-peer remove <name>`. "Wipe app data" in Settings removes
-   everything from the phone but does not revoke it on the server.
-
-Limitations: Android allows one VPN at a time, so another VPN app disconnects this tunnel (and an
-always-on VPN elsewhere blocks it). Aggressive OEM battery savers may kill the process, which drops
-the tunnel (it fails closed). Connecting only works while the app is in the foreground.
+1. Install the release APK (see above), open the app and sign in with the admin account.
+2. Settings: app lock (biometric or screen lock), hiding content from screenshots, theme, signed-in
+   devices (revoke), updates, and Sign out (revokes this phone on the server and deletes the session).
 
 ## Security notes
 
-- The tunnel config and saved login are AES-256-GCM encrypted with an Android Keystore key
-  (StrongBox when available) in `noBackupFilesDir`; nothing is backed up or transferred.
-  The key is not bound to biometrics, so auto-connect works and enrolling a finger loses nothing.
-- Import accepts exactly one peer, only routes inside `10.98.0.0/24` including `10.98.0.1`, and
-  drops DNS lines: the app never takes over the device's traffic or resolver.
-- Credentials are released to the WebView and to `AdminApi` only while the tunnel is Up (handshake
-  seen and `/healthz` answered). With the tunnel down, `10.98.0.1` could route to the local network.
-- Stored credentials are offered once per navigation, so a changed password or the server's logout
-  (always 401) cannot loop into the login rate limiter (5 failures per IP per 15 minutes).
-- The WebView has no JS bridge, no file or content access, no mixed content, answers 403 to any
-  host except the admin host, and blocks `javascript:`, `file:`, `intent:` and other-origin links.
-- FLAG_SECURE is on by default (toggle in Settings) and always on for import, login and scanner screens.
-- Cleartext HTTP is permitted only for `10.98.0.1` (network security config).
+- Tokens and the install id are AES-256-GCM encrypted with an Android Keystore key (StrongBox when
+  available) in app storage; backups and device transfer are off (`allowBackup=false`).
+- All traffic is HTTPS to the server; cleartext is not permitted and only system certificate
+  authorities are trusted (network security config).
+- FLAG_SECURE (no screenshots or recents preview) is on by default and toggled in Settings.
+- The update check talks only to GitHub with a separate OkHttp client that carries no admin token.
 
 ## Manual test checklist (needs a phone and a server)
 
-- [ ] Import by QR; import by `.conf` file; import by clipboard. A config routing `0.0.0.0/0` is rejected.
-- [ ] VPN consent appears once; Connect reaches "Connected"; Admin loads and shows the dashboard.
-- [ ] Submit a POST form (CSRF token accepted).
-- [ ] A `confirm()` dialog (for example a delete) shows a native dialog and obeys Cancel/OK.
-- [ ] CSV export asks where to save and the file opens with the right rows (router selection respected).
-- [ ] Printing vouchers opens the system print dialog (top bar menu, Print).
-- [ ] Change the admin password in the web UI: the app asks to sign in; it does not lock you out.
-- [ ] Web logout: the app disconnects and locks (if app lock is on).
-- [ ] `ftnbilling-admin-peer remove <name>`, reconnect: "No handshake" message, no credentials sent.
-- [ ] Start another VPN app: the tunnel drops and the admin screen shows the reconnect panel.
-- [ ] App lock: biometric and device PIN; relock after the timeout; wipe offered after repeated failures.
-- [ ] Home screen: public and in-tunnel health; fleet card shows "server too old" until the summary
-      endpoint exists on the server, then the routers list.
-- [ ] Wipe app data returns to onboarding with the reminder to revoke the device on the server.
+- [ ] Sign in, then force-stop and reopen: still signed in. Sign out: the phone shows as revoked.
+- [ ] App lock: biometric or PIN prompt after the lock timeout.
+- [ ] Home shows the fleet and, per router, live numbers; pull to refresh works.
+- [ ] Router page shows the tunnel address and the remote WinBox line (or the "No report" line).
+- [ ] A release build offers an update when a higher `android-v*` release exists, downloads it,
+      and the system installer opens; a debug build shows the update section as switched off.
 
 ## Theme
 

@@ -21,8 +21,8 @@ class WinboxNoticeTest {
         )
     }
 
-    @Test fun builtWithoutWinboxTellsToResetAndPasteANewLine() {
-        assertEquals("Built without remote WinBox: reset the router and paste a new line to add it.", winboxNotice("10.99.0.2", false))
+    @Test fun noReportOfWinboxSuggestsResetAndANewLine() {
+        assertEquals("No report that this router has remote WinBox. If it was set up before remote WinBox existed, reset it and paste a new line.", winboxNotice("10.99.0.2", false))
     }
 
     @Test fun siteJsonCarriesTheTwoFieldsAndDefaultsWhenAbsent() {
