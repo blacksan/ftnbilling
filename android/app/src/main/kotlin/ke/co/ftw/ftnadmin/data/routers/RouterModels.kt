@@ -261,6 +261,8 @@ data class RouterInput(
     val benchPort: String = "",
     val wanCapMbps: Int? = null,
     val supportPhone: String = "",
+    /** Accepts the warning for a change of the OLT port or VLAN on a router that is set up. */
+    val confirm: Boolean = false,
 )
 
 /** `POST /routers`: 201, never replayed. The join command is a one-time secret; keep it in memory only. */

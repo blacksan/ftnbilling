@@ -74,6 +74,7 @@ func run(log *slog.Logger) error {
 	})
 	svc = billing.NewService(st, mgr, log)
 	mgr.SetProvisioner(svc)
+	svc.SetSweepHook(mgr.SweepSite)
 	if err := svc.SetDataKey(cfg.DataKey); err != nil {
 		return fmt.Errorf("DATA_KEY: %w", err)
 	}

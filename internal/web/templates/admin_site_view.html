@@ -15,6 +15,7 @@
 </div>
 <div class="grid c2">
 <section class="panel"><h2>Connection</h2><dl class="kv">
+{{with .Data.CustPort}}{{if .Text}}<dt>Customer port</dt><dd data-cport="{{.State}}">{{.Text}}</dd>{{end}}{{end}}
 <dt>Router API</dt><dd>{{if .Data.Status.RESTOK}}<span class="ok">reachable</span>{{else}}<span class="bad">not reachable</span> <span class="muted">{{.Data.Status.RESTErr}}</span>{{end}}</dd>
 <dt>Tunnel</dt><dd>{{if .Data.Status.Handshake}}up, last handshake {{.Data.Status.HandshakeAge}} s ago{{else if .Data.Status.WGKnown}}no handshake{{else}}unknown{{end}}</dd>
 {{if $s.TunnelIP}}<dt>Tunnel address</dt><dd class="mono">{{$s.TunnelIP}}</dd>
@@ -47,6 +48,10 @@
 {{else}}{{if and .Data.Insecure (not .Data.AllowInsecure)}}<p class="bad">PUBLIC_BASE_URL must start with https:// before a line can be made.</p>{{end}}
 <p class="muted">The router must run RouterOS 7 with the right clock. The line erases the router and builds it again, so use it on a new router, or on one you mean to rebuild. If the router asks for its reset button to be pressed (fetch is off in device mode), press it and paste the same line again.</p>
 {{if .CanWrite}}<form method="post" action="/admin/routers/join"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button>{{if .Data.Status.Joined}}Make a new line (rebuilds the router){{else}}Make the line{{end}}</button></form>{{end}}{{end}}</section>
+<section class="panel"><div class="panel-h"><h2>Automatic fixes</h2><span class="pill {{if .Data.Pause.Paused}}paused{{else}}online{{end}}" data-autofix-state>{{if .Data.Pause.Paused}}paused{{if .Data.Pause.Until}} until {{eat .Data.Pause.Until}}{{end}}{{else}}on{{end}}</span></div>
+<p class="muted">The server fixes safe problems by itself, and keeps customer DNS, the customer DHCP server and traffic reporting on. Pause this while you change one of them on purpose: nothing is then applied by itself (a customer port you save is still applied).</p>
+{{if eq .Role "owner"}}<form method="post" action="/admin/routers/auto-fixes" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
+{{if .Data.Pause.Paused}}<input type="hidden" name="paused" value="0"><button class="ghost">Resume automatic fixes</button>{{else}}<input type="hidden" name="paused" value="1"><label class="field">Until (optional)<input type="datetime-local" name="until"></label><button class="ghost">Pause automatic fixes</button>{{end}}</form>{{end}}</section>
 <section class="panel"><div class="panel-h"><h2>Checks</h2><button type="button" class="ghost sm" data-recheck>Check again</button></div>
 <p class="muted" data-checks-sum aria-live="polite"></p><ul class="checks" data-checks><li class="ph">Reading the router.</li></ul></section>
 {{with .Data.JoinReport}}<section class="panel"><div class="panel-h"><h2>Last join report</h2><span class="pill {{if .OK}}active{{else}}expired{{end}}">{{if .OK}}passed{{else}}needs a look{{end}}</span></div>
@@ -80,9 +85,11 @@
 {{else if eq $tab "profile"}}
 <div class="grid c2">
 <section class="panel"><h2>Details</h2>
-<form method="post" action="/admin/routers/update" class="stack-col" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
+<form method="post" action="/admin/routers/update" class="stack-col" style="margin-top:12px"{{if $s.WGPublicKey}} data-plumb{{if .Data.Pause.Paused}} data-paused{{end}} data-olt-default="sfp-sfpplus1" data-olt="{{.Data.Eff.OLTInterface}}" data-vlan="{{.Data.Eff.VLANID}}"{{end}}><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="confirm" value="">
 {{template "sitefields" $s}}
-<details><summary>Router layout</summary><div class="stack-col" style="margin-top:10px">{{template "sitelayout" .Data.Eff}}<p class="muted">Changes apply to the next line and to metrics. Paste a new line on the router to build it with the new layout.</p></div></details>
+{{with .Data.CustPort}}{{if .Text}}<p class="cport {{.State}}" data-cport="{{.State}}" role="status">{{.Text}}</p>{{end}}{{if .OLTMessage}}<p class="cport error" role="status">OLT uplink: {{.OLTMessage}}</p>{{end}}{{end}}
+{{if .Data.Ports}}<datalist id="router-ports">{{range .Data.Ports}}<option value="{{.}}">{{end}}</datalist>{{end}}
+<details><summary>Router layout</summary><div class="stack-col" style="margin-top:10px">{{template "sitelayout" .Data.Eff}}<p class="muted">The OLT uplink port and the customer port are set up on the router by the server as soon as you save. Other layout changes apply to the next line and to metrics: paste a new line on the router to build it with the new layout.</p></div></details>
 <div><button>Save</button></div></form></section>
 {{with .Data.Rep}}<section class="panel"><h2>Location</h2>
 <form method="post" action="/admin/routers/profile" class="stack-col" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">

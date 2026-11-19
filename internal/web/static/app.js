@@ -121,6 +121,23 @@
     if (m && !window.confirm(m)) e.preventDefault();
   }, true);
 
+  /* Changing the OLT port or the VLAN of a router that is set up cuts the customers off until the OLT uses
+     the new setting: ask before the form is sent, and send confirm=1. */
+  doc.addEventListener("submit", function (e) {
+    var f = e.target;
+    if (!f.hasAttribute || !f.hasAttribute("data-plumb") || f.__plumbOK) return;
+    var olt = $("input[name=olt]", f), vlan = $("input[name=vlan]", f), ok = $("input[name=confirm]", f);
+    if (!olt || !vlan || !ok) return;
+    /* effective values: a blank OLT port means the default port, so typing the default changes nothing */
+    var dflt = f.getAttribute("data-olt-default") || "sfp-sfpplus1";
+    if ((olt.value.trim() || dflt) === (f.getAttribute("data-olt") || dflt) && String(parseInt(vlan.value || "0", 10) || 0) === f.getAttribute("data-vlan")) return;
+    e.preventDefault();
+    var paused = f.hasAttribute("data-paused") ? " Automatic fixes are paused; this change is still applied now." : "";
+    ask("Change the OLT setting?", "Customers on the OLT lose service until the OLT uses the new setting. The server moves the port and the VLAN on the router by itself as soon as you confirm." + paused, "Change it").then(function (yes) {
+      if (!yes) return; ok.value = "1"; f.__plumbOK = true; f.submit();
+    });
+  }, true);
+
   /* A dialog that shows what a fix will do and asks for a yes. */
   function ask(title, text, yes) {
     return new Promise(function (resolve) {
@@ -392,6 +409,20 @@
     load(); setInterval(function () { if (!doc.hidden) load(); }, 10000);
   }
 
+  /* ---- customer port: the server applies it after a save; follow "applying" until it settles ---- */
+  var cpEl = $("[data-cport=applying]");
+  if (cpEl) {
+    var cpId = new URLSearchParams(location.search).get("id");
+    var pollCP = function () {
+      getJSON("/admin/routers/customer-port.json?id=" + enc(cpId)).then(function (j) {
+        if (j.__status !== 200) return;
+        $$("[data-cport]").forEach(function (n) { n.textContent = j.text || ""; n.setAttribute("data-cport", j.state || ""); });
+        if (j.state === "applying") setTimeout(pollCP, 3000);
+      }).catch(function () {});
+    };
+    setTimeout(pollCP, 3000);
+  }
+
   /* ---- Router setup tab: checklist, fixes, job stepper --------------------------------------------- */
   var setup = $("[data-setup]");
   if (setup) {
@@ -407,14 +438,18 @@
         li.appendChild(el("span", "st", MARK[it.status] || "?")); li.lastChild.setAttribute("aria-label", it.status);
         var body = el("div"); body.appendChild(el("h4", "", it.title));
         if (it.detail) body.appendChild(el("p", "", it.detail));
-        if (it.evidence && it.evidence.length) {
+        var evid = (it.evidence || []).filter(function (x) { return typeof x === "string" && x.trim() !== ""; });
+        if (evid.length) {
           var dt = el("details"); dt.appendChild(el("summary", "muted", "What the router said"));
-          var ul = el("ul", "ev"); it.evidence.slice(0, 12).forEach(function (x) { ul.appendChild(el("li", "", x)); }); dt.appendChild(ul); body.appendChild(dt);
+          var ul = el("ul", "ev"); evid.slice(0, 12).forEach(function (x) { ul.appendChild(el("li", "", x)); }); dt.appendChild(ul); body.appendChild(dt);
         }
         var fx = it.fix || {};
+        if (it.auto && it.auto.text) body.appendChild(el("p", "muted auto-" + (it.auto.state || ""), it.auto.text));
         li.appendChild(body);
-        if ((fx.kind === "auto" || fx.kind === "confirm") && it.status !== "ok" && it.status !== "info") {
-          var wrap = el("div", "fix"), b = el("button", "btn sm", fx.label || "Fix"); b.type = "button";
+        // The server applies a safe fix by itself: no button, except "Try now" after a failed automatic attempt.
+        var showBtn = (fx.kind === "confirm") || (fx.kind === "auto" && (!fx.automatic || fx.try_now));
+        if (showBtn && it.status !== "ok" && it.status !== "info") {
+          var wrap = el("div", "fix"), b = el("button", "btn sm", fx.kind === "auto" && fx.automatic ? "Try now" : (fx.label || "Fix")); b.type = "button";
           b.onclick = function () {
             var go = fx.kind === "confirm" ? ask(fx.label || "Confirm", fx.confirm_text || "Go ahead with this change?", fx.label || "Confirm") : Promise.resolve(true);
             go.then(function (yes) {

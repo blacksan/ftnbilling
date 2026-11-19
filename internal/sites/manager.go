@@ -64,9 +64,10 @@ type Manager struct {
 	chk          checksState   // cache of the setup checks (checks.go)
 	autoFixDelay time.Duration // wait after the first answer before the post-join fixes (runtime.go)
 
-	prov provMgr   // billing hooks and the reboot slot (provision.go)
-	live liveState // live router views (live.go)
-	box  *secretbox.Box
+	cport cpState   // customer-port and automatic-fix state per building (custport.go, autofix.go)
+	prov  provMgr   // billing hooks and the reboot slot (provision.go)
+	live  liveState // live router views (live.go)
+	box   *secretbox.Box
 }
 
 // SetForeignIPs lets the billing service tell the sites package which addresses
@@ -317,6 +318,9 @@ type SiteInput struct {
 	PPPoEUser, PPPoEPass                    string
 	PPPoEPassClear                          bool
 	LANPorts, LANSubnet                     string
+	// Confirm says the operator accepted the warning for a change of the OLT port or VLAN on a router
+	// that is set up (customers lose service until the OLT uses the new setting). Not stored.
+	Confirm bool
 }
 
 // SiteInputOf is the input that leaves a router as it is (a PATCH starts from it).
@@ -326,6 +330,9 @@ func SiteInputOf(st store.Site) SiteInput {
 		WANMode: st.WANMode, WANAddress: st.WANAddress, WANGateway: st.WANGateway, WANDNS: st.WANDNS, PPPoEUser: st.PPPoEUser,
 		LANPorts: st.LANPorts, LANSubnet: st.LANSubnet}
 }
+
+// ErrOLTConfirmRequired: the OLT port or the VLAN of a set-up router cannot change without confirm.
+var ErrOLTConfirmRequired = errors.New("Customers on the OLT lose service until the OLT uses the new setting. Confirm to change the OLT port or the VLAN.")
 
 // ErrNoDataKey: a PPPoE password cannot be stored without DATA_KEY.
 var ErrNoDataKey = errors.New("the PPPoE password cannot be saved: DATA_KEY is not set on the server")
@@ -414,10 +421,12 @@ func (m *Manager) CreateSite(in SiteInput) (store.Site, error) {
 		if err != nil {
 			return err
 		}
+		raw := s.OLTCapMbps
 		s = ApplyDefaults(m.cfg, s)
 		if err := ValidateNetMgmt(s, m.pfx, m.mgmt); err != nil {
 			return err
 		}
+		s.OLTCapMbps = raw // not set stays not set: the OLT port's type decides
 		if nameTaken(d, s.Name, "") {
 			return fmt.Errorf("there is already a router called %q", s.Name)
 		}
@@ -437,7 +446,12 @@ func (m *Manager) CreateSite(in SiteInput) (store.Site, error) {
 
 // UpdateSite saves the editable fields and restarts the building's runtime.
 func (m *Manager) UpdateSite(id string, in SiteInput) error {
+	var portsChanged bool
+	if err := m.checkPortsExist(id, in); err != nil {
+		return err
+	}
 	err := m.st.Update(func(d *store.Data) error {
+		portsChanged = false
 		cur, ok := d.Sites[id]
 		if !ok || cur.Removed {
 			return billing.ErrNoSite
@@ -446,8 +460,16 @@ func (m *Manager) UpdateSite(id string, in SiteInput) error {
 		if err != nil {
 			return err
 		}
+		// A form that was filled from the effective values sends the default
+		// back: it stays "not set" so the port type keeps deciding.
+		if cur.OLTCapMbps == 0 && in.OLTCapMbps == m.Effective(cur).OLTCapMbps {
+			s.OLTCapMbps = 0
+		}
+
+		raw := s.OLTCapMbps
 		if s.Mode == store.SiteModeWG {
 			s = ApplyDefaults(m.cfg, s)
+			s.OLTCapMbps = raw // not set stays not set: the OLT port's type decides
 		}
 		if err := ValidateNetMgmt(ApplyDefaults(m.cfg, s), m.pfx, m.mgmt); err != nil {
 			return err
@@ -455,13 +477,61 @@ func (m *Manager) UpdateSite(id string, in SiteInput) error {
 		if nameTaken(d, s.Name, id) {
 			return fmt.Errorf("there is already a router called %q", s.Name)
 		}
+		was, now := m.Effective(cur), m.Effective(s)
+		portsChanged = now.BenchPort != was.BenchPort || now.OLTInterface != was.OLTInterface || now.VLANID != was.VLANID
+		if (now.OLTInterface != was.OLTInterface || now.VLANID != was.VLANID) && siteIsSetUp(cur) && !in.Confirm {
+			return ErrOLTConfirmRequired
+		}
 		d.Sites[id] = s
 		return nil
 	})
 	if err == nil {
 		m.Reload(id)
+		if portsChanged {
+			m.QueueCustomerPort(id)
+		}
 	}
 	return err
+}
+
+// siteIsSetUp: the router has joined (its key is known and it has answered), whether or not billing has
+// paused it. Changing its OLT port or VLAN cuts customers off, so it asks for a confirm.
+func siteIsSetUp(s store.Site) bool { return s.WGPublicKey != "" && !s.JoinedAt.IsZero() }
+
+// checkPortsExist refuses a new OLT port or customer port the router does not have (a typo would
+// otherwise move the old port's membership away from working customers). It needs the router to
+// answer; when it does not, or the router is not set up yet, the layout validation alone decides.
+func (m *Manager) checkPortsExist(id string, in SiteInput) error {
+	var cur store.Site
+	var ok bool
+	m.st.View(func(d *store.Data) { cur, ok = d.Sites[id] })
+	if !ok || !siteIsSetUp(cur) {
+		return nil
+	}
+	was := m.Effective(cur)
+	bench := strings.TrimSpace(in.BenchPort)
+	olt := m.Effective(store.Site{OLTInterface: strings.TrimSpace(in.OLTInterface)}).OLTInterface
+	if (bench == "" || bench == was.BenchPort) && olt == was.OLTInterface {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), routeros.DefaultTimeout)
+	defer cancel()
+	choices := m.PortChoices(ctx, id)
+	if len(choices) == 0 {
+		return nil
+	}
+	has := map[string]bool{}
+	for _, c := range choices {
+		has[c] = true
+	}
+	// the WAN, the admin LAN port and the like are refused by the layout rules with their own words
+	if olt != was.OLTInterface && !has[olt] && olt != was.WANInterface {
+		return fieldErr("olt_interface", "The router has no port called %s. Its ports: %s.", olt, strings.Join(choices, ", "))
+	}
+	if bench != "" && bench != was.BenchPort && !has[bench] && bench != was.WANInterface {
+		return fieldErr("bench_port", "The router has no port called %s. Its ports: %s.", bench, strings.Join(choices, ", "))
+	}
+	return nil
 }
 
 // SetDisabled pauses or resumes a building. The WireGuard peer is kept.

@@ -1,5 +1,6 @@
 package ke.co.ftw.ftnadmin.ui.more
 
+import ke.co.ftw.ftnadmin.domain.customerPortLine
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -116,10 +117,22 @@ fun EditRouterScreen(routerId: String, onBack: () -> Unit) {
                 Modifier.padding(inner).fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                RouterFormFields(form, ui.fieldErrors, vm::edit)
+                customerPortLine(ui.customerPort)?.let {
+                    Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                RouterFormFields(form, ui.fieldErrors, vm::edit, ports = ui.ports)
                 ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
                 Button(onClick = vm::save, enabled = ui.canSave, modifier = Modifier.fillMaxWidth()) {
                     Text(if (ui.busy) "Saving..." else "Save", maxLines = 1)
+                }
+                if (ui.confirmOlt) {
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = vm::cancelConfirm,
+                        title = { Text("Change the OLT setting?") },
+                        text = { Text(RouterFormCopy.OLT_CONFIRM + " The server moves the port and the VLAN on the router by itself as soon as you confirm." + if (ui.autoFixesPaused) " " + RouterFormCopy.PAUSED_NOTE else "") },
+                        confirmButton = { TextButton(onClick = vm::confirmSave) { Text("Change it") } },
+                        dismissButton = { TextButton(onClick = vm::cancelConfirm) { Text("Cancel") } },
+                    )
                 }
             }
         }

@@ -109,4 +109,16 @@ class SetupViewModel(
     }
 
     fun clearMessage() = _state.update { it.copy(message = null) }
+
+    /** Owner: pause or resume the server's automatic fixes of this router, then read the checks again. */
+    fun setAutoFixesPaused(paused: Boolean) {
+        viewModelScope.launch {
+            val r = apiResult { repo.pauseAutoFixes(siteId, paused) }
+            r.fold(
+                { _state.update { it.copy(message = if (paused) "Automatic fixes paused." else "Automatic fixes resumed.") } },
+                { e -> _state.update { it.copy(message = e.userMessage()) } },
+            )
+            if (r.isSuccess) loadChecks(initial = false, fresh = false)
+        }
+    }
 }

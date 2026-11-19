@@ -56,5 +56,6 @@ class RouterLiveRepository(private val api: ApiClient) {
         str("bench_port", r.benchPort)
         r.wanCapMbps?.let { put("wan_cap_mbps", it) }
         str("support_phone", r.supportPhone)
+        if (r.confirm) put("confirm", true)
     }
 }

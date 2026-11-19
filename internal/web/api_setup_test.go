@@ -235,3 +235,97 @@ func TestSessionSetupJSON(t *testing.T) {
 		t.Fatalf("%d", g.StatusCode)
 	}
 }
+
+func TestAPIPortFieldsAreValidatedAndReportedPerField(t *testing.T) {
+	r := newAPIRig(t)
+	c := r.call(r.owner.Access, "POST", "/routers", map[string]any{"name": "Ports", "wan_interface": "ether1", "lan_ports": "ether2", "olt_interface": "ether3", "bench_port": "ether5"}, nil)
+	if c.Status != 201 {
+		t.Fatalf("%d %s", c.Status, c.Raw)
+	}
+	rt := c.JSON(t)["router"].(map[string]any)
+	id := str(rt, "id")
+	if rt["bench_port"] != "ether5" || rt["olt_interface"] != "ether3" || rt["olt_cap_mbps"].(float64) != 1000 {
+		t.Fatalf("%v", rt)
+	}
+	cp, ok := rt["customer_port"].(map[string]any)
+	if !ok || cp["state"] == nil {
+		t.Fatalf("no customer_port status: %v", rt)
+	}
+	for name, tc := range map[string]struct {
+		body  map[string]any
+		field string
+	}{
+		"bench is the WAN":  {map[string]any{"bench_port": "ether1"}, "bench_port"},
+		"bench is a LAN":    {map[string]any{"bench_port": "ether2"}, "bench_port"},
+		"bench is the OLT":  {map[string]any{"bench_port": "ether3"}, "bench_port"},
+		"olt is the WAN":    {map[string]any{"olt_interface": "ether1"}, "olt_interface"},
+		"olt is a LAN port": {map[string]any{"olt_interface": "ether2"}, "olt_interface"},
+		"olt is the bench":  {map[string]any{"olt_interface": "ether5"}, "olt_interface"},
+	} {
+		x := r.call(r.owner.Access, "PATCH", "/routers/"+id, tc.body, nil)
+		if x.Status != 400 && x.Status != 422 {
+			t.Errorf("%s: %d %s", name, x.Status, x.Raw)
+			continue
+		}
+		f, _ := x.JSON(t)["error"].(map[string]any)["details"].(map[string]any)["fields"].(map[string]any)
+		if f[tc.field] == nil {
+			t.Errorf("%s: no fields.%s in %s", name, tc.field, x.Raw)
+		}
+	}
+	var st store.Site
+	r.st.View(func(d *store.Data) { st = d.Sites[id] })
+	if st.BenchPort != "ether5" || st.OLTInterface != "ether3" {
+		t.Fatalf("a refused save changed the router: %+v", st)
+	}
+}
+
+func TestAPIOLTChangeNeedsConfirmOnASetUpRouterAndPauseIsOwnerOnly(t *testing.T) {
+	r := newAPIRig(t)
+	c := r.call(r.owner.Access, "POST", "/routers", map[string]any{"name": "Plumb", "olt_interface": "sfp-sfpplus1"}, nil)
+	if c.Status != 201 {
+		t.Fatalf("%d %s", c.Status, c.Raw)
+	}
+	id := str(c.JSON(t)["router"].(map[string]any), "id")
+	// not set up yet: free to change
+	if p := r.call(r.owner.Access, "PATCH", "/routers/"+id, map[string]any{"olt_interface": "ether3"}, nil); p.Status != 200 {
+		t.Fatalf("unjoined: %d %s", p.Status, p.Raw)
+	}
+	r.st.Update(func(d *store.Data) error {
+		x := d.Sites[id]
+		x.WGPublicKey = "KEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEY0="
+		x.JoinedAt = time.Now()
+		d.Sites[id] = x
+		return nil
+	})
+	p := r.call(r.owner.Access, "PATCH", "/routers/"+id, map[string]any{"olt_interface": "ether4"}, nil)
+	if p.Status != 409 || p.JSON(t)["error"].(map[string]any)["code"] != "confirm_required" {
+		t.Fatalf("%d %s", p.Status, p.Raw)
+	}
+	if p := r.call(r.owner.Access, "PATCH", "/routers/"+id, map[string]any{"vlan_id": 300}, nil); p.Status != 409 {
+		t.Fatalf("vlan: %d %s", p.Status, p.Raw)
+	}
+	if p := r.call(r.owner.Access, "PATCH", "/routers/"+id, map[string]any{"bench_port": "ether5", "support_phone": "0700"}, nil); p.Status != 200 {
+		t.Fatalf("a customer port needs no confirm: %d %s", p.Status, p.Raw)
+	}
+	if p := r.call(r.owner.Access, "PATCH", "/routers/"+id, map[string]any{"olt_interface": "ether4", "confirm": true}, nil); p.Status != 200 {
+		t.Fatalf("confirmed: %d %s", p.Status, p.Raw)
+	}
+	// pausing the automatic fixes: owner only, recorded, shown on the router
+	if x := r.call(r.oper.Access, "POST", "/routers/"+id+"/actions/pause-auto-fixes", map[string]any{"paused": true}, nil); x.Status != 403 {
+		t.Fatalf("operator: %d", x.Status)
+	}
+	x := r.call(r.owner.Access, "POST", "/routers/"+id+"/actions/pause-auto-fixes", map[string]any{"paused": true}, nil)
+	if x.Status != 200 || x.JSON(t)["paused"] != true {
+		t.Fatalf("%d %s", x.Status, x.Raw)
+	}
+	g := r.call(r.owner.Access, "GET", "/routers/"+id, nil, nil)
+	if af, _ := g.JSON(t)["auto_fixes"].(map[string]any); af["paused"] != true {
+		t.Fatalf("%s", g.Raw)
+	}
+	if x := r.call(r.owner.Access, "POST", "/routers/"+id+"/actions/pause-auto-fixes", map[string]any{"paused": true, "until": "2020-01-01T00:00:00Z"}, nil); x.Status != 400 && x.Status != 422 {
+		t.Fatalf("past: %d %s", x.Status, x.Raw)
+	}
+	if x := r.call(r.owner.Access, "POST", "/routers/"+id+"/actions/pause-auto-fixes", map[string]any{"paused": false}, nil); x.Status != 200 || x.JSON(t)["paused"] == true {
+		t.Fatalf("%d %s", x.Status, x.Raw)
+	}
+}

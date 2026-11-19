@@ -108,6 +108,10 @@ type CheckFix struct {
 	ConfirmText string `json:"confirm_text,omitempty"`
 	Physical    bool   `json:"physical,omitempty"`
 	Role        string `json:"role,omitempty"` // operator | owner
+	// Automatic: the server applies this fix by itself (no button). TryNow: the
+	// last automatic attempt failed, so a button to try again is shown.
+	Automatic bool `json:"automatic,omitempty"`
+	TryNow    bool `json:"try_now,omitempty"`
 }
 
 // CheckItem is one line of the checklist.
@@ -120,6 +124,8 @@ type CheckItem struct {
 	Detail   string   `json:"detail"`
 	Evidence []string `json:"evidence"`
 	Fix      CheckFix `json:"fix"`
+	// Auto says what the server did about the item by itself (nil if nothing).
+	Auto *AutoInfo `json:"auto,omitempty"`
 	// Override names the option that lets the operator go on in spite of this
 	// item ("keep_unknown", "force"); "" if none. Not part of the JSON.
 	Override string `json:"-"`
@@ -152,6 +158,8 @@ type Checks struct {
 	// "unknown" (the bridges could not be read).
 	Layout string      `json:"layout"`
 	Items  []CheckItem `json:"items"`
+	// AutoFixes says whether the server's automatic fixes of this router are paused.
+	AutoFixes *PauseState `json:"auto_fixes,omitempty"`
 	// Slow is true when some read of the router timed out: the server repeats the pass by itself.
 	Slow bool `json:"slow,omitempty"`
 }
@@ -493,7 +501,7 @@ var needs = map[string][]string{
 	CheckHooks:       {"/ip/dhcp-server", "/ip/dhcp-client", "/ppp/profile", "/tool/netwatch"},
 	CheckCustomerIf:  {"/ip/address", "/ip/dhcp-server"},
 	CheckOLT:         {"/interface/bridge/port", "/interface/vlan"},
-	CheckBench:       {"/interface/bridge/port", "/interface", "/ip/address", "/ip/dhcp-server"},
+	CheckBench:       {"/interface/bridge/port", "/interface", "/interface/vlan", "/interface/list/member", "/ip/address", "/ip/dhcp-server", "/ip/dhcp-client"},
 	CheckTrafficFlow: {"/ip/traffic-flow", "/ip/traffic-flow/target", "/ip/address", "/ip/dhcp-server"},
 	CheckWWW:         {"/ip/service"},
 	CheckIPv6:        {"/ipv6/settings"},
@@ -524,7 +532,7 @@ var checkDefs = []checkDef{
 	{CheckWalled, "network", "Unpaid and unregistered flats are walled", true, "", evalWalled},
 	{CheckWAN, "network", "Router has a way to the internet", false, "", evalWAN},
 	{CheckOLT, "network", "Fibre (OLT) port is not stuck in the bridge", true, "", evalOLT},
-	{CheckBench, "network", "Bench test port", false, "", evalBench},
+	{CheckBench, "network", "Customer port (extra)", false, "", evalBench},
 	{CheckTrafficFlow, "network", "Traffic reporting to the server", false, "", evalTrafficFlow},
 	{CheckWWW, "services", "Router web page (WebFig)", false, "", evalWWW},
 	{CheckBootFile, "router", "No set-up script left on the router", false, "", evalBootFile},
@@ -1327,7 +1335,9 @@ func assessPort(sn *snapshot, site store.Site, iface string) portAssess {
 // (or the building says VLANID > 0).
 func assessOLT(sn *snapshot, site store.Site) portAssess {
 	a := assessPort(sn, site, site.OLTInterface)
-	a.conflict = len(a.rows) > 0 && (len(a.vlans) > 0 || site.VLANID > 0)
+	// Only a customer VLAN makes a bridged OLT port a conflict. With no VLAN set a VLAN interface on the
+	// OLT port is reported in words by the server's own pass (custport.go), not "fixed" here.
+	a.conflict = len(a.rows) > 0 && site.VLANID > 0
 	if a.conflict && len(a.vlans) == 0 {
 		a.unknown = append(a.unknown, "the building has a VLAN id but no VLAN interface exists on the port yet")
 	}
@@ -1344,6 +1354,11 @@ func evalOLT(e *evalCtx, it *CheckItem) {
 		return
 	}
 	a := assessOLT(e.sn, e.site)
+	if msg := e.m.oltApplyError(e.site.ID); msg != "" && !a.conflict {
+		it.Status = StatusWarn
+		it.Detail = fmt.Sprintf("The server could not set the OLT uplink port %s up: %s. It tries again by itself.", e.site.OLTInterface, msg)
+		return
+	}
 	if !a.conflict {
 		it.Evidence = append(it.Evidence, fmt.Sprintf("%s bridge ports: %d, VLANs: %s", a.iface, len(a.rows), orNone(a.vlans)))
 		okItem(it, fmt.Sprintf("%s is not a bridge port with a VLAN on it.", a.iface))
@@ -1374,7 +1389,10 @@ func evalOLT(e *evalCtx, it *CheckItem) {
 		it.Fix = CheckFix{Kind: FixConfirm, Label: "Take the port out of the bridge", Role: store.RoleOwner,
 			ConfirmText: fmt.Sprintf("%s. Taking it out of the bridge may cut them off. Do it?", strings.Join(why, "; "))}
 	default:
-		it.Fix = CheckFix{Kind: FixAuto, Label: "Take the port out of the bridge", Role: store.RoleOperator}
+		// Never automatic: the server's own pass owns the OLT port; taking it out of the bridge
+		// by hand is the operator's decision.
+		it.Fix = CheckFix{Kind: FixConfirm, Label: "Take the port out of the bridge", Role: store.RoleOwner,
+			ConfirmText: fmt.Sprintf("%s is a bridge port and the customer VLAN sits on it. Taking it out of the bridge may cut customers off. Do it?", a.iface)}
 	}
 }
 
@@ -1397,98 +1415,41 @@ func orNone(l []string) string {
 	return strings.Join(l, ", ")
 }
 
-// benchPlan is the bench port's state against the customer bridge.
-type benchPlan struct {
-	portAssess
-	inCustomer bool
-	inOther    string // another bridge that holds it
-	noIface    bool
+// custPortApplied: the port is a member of br-customers with horizon=1 and the server's comment.
+func custPortApplied(sn *snapshot, port string) bool {
+	for _, r := range sn.tbl("/interface/bridge/port") {
+		if r["interface"] == port && r["bridge"] == CustomerBridge && !rowDisabled(r) && r["horizon"] == "1" && r["comment"] == CustPortComment {
+			return true
+		}
+	}
+	return false
 }
 
-func assessBench(sn *snapshot, site store.Site, cust custInfo) benchPlan {
-	b := benchPlan{portAssess: assessPort(sn, site, site.BenchPort)}
-	exists := false
-	for _, r := range sn.tbl("/interface") {
-		if r["name"] == site.BenchPort {
-			exists = true
-		}
-	}
-	b.noIface = !exists
-	for _, r := range b.rows {
-		switch {
-		case r["bridge"] == cust.iface:
-			b.inCustomer = true
-		case b.inOther == "":
-			b.inOther = r["bridge"]
-		}
-	}
-	if site.BenchPort == site.OLTInterface {
-		b.hard = append(b.hard, "it is the fibre (OLT) port")
-	}
-	// Learned hosts only matter when a port is moved out of another bridge.
-	if b.inOther == "" {
-		b.learned = nil
-		kept := b.unknown[:0]
-		for _, u := range b.unknown {
-			if u != "the learned hosts could not be read" {
-				kept = append(kept, u)
-			}
-		}
-		b.unknown = kept
-	}
-	return b
-}
-
+// evalBench judges the extra customer port. It is read only: the server puts
+// the port on the customer bridge by itself (custport.go), so there is no button;
+// the item says OK, or in words why the port is not applied.
 func evalBench(e *evalCtx, it *CheckItem) {
-	if e.site.BenchPort == "" {
+	port := e.site.BenchPort
+	if port == "" {
 		it.Status = StatusInfo
-		it.Detail = "No bench port is set for this building."
+		it.Detail = "No extra customer port is set for this router."
 		return
 	}
-	if !e.cust.found {
-		it.Status = StatusUnknown
-		it.Detail = "The customer interface is not known yet, so the bench port cannot be judged. See the customer network check."
-		return
-	}
-	if !e.cust.isBridge {
-		it.Status = StatusInfo
-		it.Detail = fmt.Sprintf("The customer network is on %s, which is not a bridge, so a bench port cannot be added to it.", e.cust.iface)
-		return
-	}
-	b := assessBench(e.sn, e.site, e.cust)
-	if b.noIface {
-		it.Status = StatusWarn
-		it.Detail = fmt.Sprintf("The router has no interface called %s. Check the bench port in the building's fields.", e.site.BenchPort)
-		it.Fix = CheckFix{Kind: FixManual, Label: "Fix the building's fields", Role: store.RoleOperator}
-		return
-	}
-	if b.inCustomer {
-		okItem(it, fmt.Sprintf("%s is on the customer bridge %s.", e.site.BenchPort, e.cust.iface))
+	if custPortApplied(e.sn, port) {
+		okItem(it, fmt.Sprintf("%s is a customer port on %s: a device plugged in gets a customer address and waits to be registered.", port, CustomerBridge))
 		return
 	}
 	it.Status = StatusWarn
-	where := "in no bridge"
-	if b.inOther != "" {
-		where = "in bridge " + b.inOther
-		it.Evidence = append(it.Evidence, "bench port is a port of "+b.inOther)
+	if pr := portProblems(e.sn, e.site, port, "bench"); len(pr) > 0 {
+		it.Evidence = append(it.Evidence, pr...)
+		it.Detail = fmt.Sprintf("The server cannot set %s up as a customer port: %s. Change the customer port in the router's fields.", port, strings.Join(pr, "; "))
+		return
 	}
-	it.Detail = fmt.Sprintf("The bench port %s is %s, not on the customer bridge %s, so a laptop there cannot be tested as a customer.", e.site.BenchPort, where, e.cust.iface)
-	switch {
-	case len(b.hard) > 0:
-		it.Evidence = append(it.Evidence, b.hard...)
-		it.Detail += " The server will not move it: " + strings.Join(b.hard, "; ") + ". Paste a new line on the router: it puts the bench port on the customer bridge."
-		it.Fix = CheckFix{Kind: FixManual, Label: "Put the bench port on the bridge"}
-	case len(b.unknown) > 0:
-		it.Evidence = append(it.Evidence, b.unknown...)
-		it.Detail += " Paste a new line on the router: it puts the bench port on the customer bridge."
-		it.Fix = CheckFix{Kind: FixManual, Label: "Put the bench port on the bridge"}
-	case len(b.learned) > 0:
-		it.Evidence = append(it.Evidence, "devices learned on the port: "+strings.Join(b.learned, ", "))
-		it.Fix = CheckFix{Kind: FixConfirm, Label: "Move the bench port", Role: store.RoleOwner,
-			ConfirmText: fmt.Sprintf("Devices are connected to %s (%s) in bridge %s. Moving it to %s will interrupt them. Do it?", e.site.BenchPort, strings.Join(b.learned, ", "), b.inOther, e.cust.iface)}
-	default:
-		it.Fix = CheckFix{Kind: FixAuto, Label: "Put the bench port on the bridge", Role: store.RoleOperator}
+	if st := e.m.CustomerPortStatus(e.site.ID); st.State == PortError && st.Message != "" {
+		it.Detail = fmt.Sprintf("The server could not set %s up as a customer port: %s. It tries again by itself.", port, st.Message)
+		return
 	}
+	it.Detail = fmt.Sprintf("The server is setting %s up as a customer port.", port)
 }
 
 // ---- traffic flow -------------------------------------------------------------------------
@@ -1649,6 +1610,14 @@ func summarize(items []CheckItem) CheckSummary {
 // answer is cached for 15 seconds; fresh bypasses the cache. A router that
 // cannot be read gives items with status unknown and Router.Reachable false.
 func (m *Manager) Checks(ctx context.Context, siteID string, fresh bool) (Checks, error) {
+	c, err := m.checksRaw(ctx, siteID, fresh)
+	if err != nil {
+		return c, err
+	}
+	return m.decorate(siteID, c), nil
+}
+
+func (m *Manager) checksRaw(ctx context.Context, siteID string, fresh bool) (Checks, error) {
 	var site store.Site
 	var ok bool
 	m.st.View(func(d *store.Data) { site, ok = d.Sites[siteID] })

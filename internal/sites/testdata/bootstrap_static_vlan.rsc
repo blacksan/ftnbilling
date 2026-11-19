@@ -128,7 +128,7 @@
   /interface/bridge add name=br-customers arp=reply-only comment="ftn: customer bridge"
   /interface/bridge/port add bridge=br-customers interface=vlan100-customers horizon=1 comment="ftn: customer port"
   /interface/bridge/port remove [find where interface="ether5"]
-  /interface/bridge/port add bridge=br-customers interface=ether5 horizon=1 comment="ftn: bench port"
+  /interface/bridge/port add bridge=br-customers interface=ether5 horizon=1 comment="ftn: customer port"
   /ip/address add address=10.5.50.1/24 interface=br-customers comment="ftn: customer gateway"
 } do={ :set report ($report . "4 customer network: " . $e . "\n"); :set abort ("ftn: section 4 customer network failed: " . $e); :error $abort }
 

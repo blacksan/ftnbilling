@@ -145,7 +145,7 @@
   /interface/bridge/port add bridge={{.CustBridge}} interface={{.CustIface}} horizon=1 comment="ftn: customer port"
 {{- if .BenchPort}}
   /interface/bridge/port remove [find where interface="{{.BenchPort}}"]
-  /interface/bridge/port add bridge={{.CustBridge}} interface={{.BenchPort}} horizon=1 comment="ftn: bench port"
+  /interface/bridge/port add bridge={{.CustBridge}} interface={{.BenchPort}} horizon=1 comment="ftn: customer port"
 {{- end}}
   /ip/address add address={{.Plan.GatewayIP}} interface={{.CustBridge}} comment="ftn: customer gateway"
 {{secClose 4 "customer network" true}}

@@ -280,7 +280,7 @@ func RenderBootstrap(in BootstrapInput) ([]byte, error) {
 	}
 	d.DNSServers = strings.Join(dns, ",")
 	if s.VLANID > 0 {
-		d.VLANName = fmt.Sprintf("vlan%d-customers", s.VLANID)
+		d.VLANName = customerVLANName(s.VLANID)
 		d.CustIface = d.VLANName
 	}
 	need := []string{s.WANInterface, s.OLTInterface}
@@ -383,7 +383,7 @@ func BootstrapCommand(base, token string, checkCert bool) string {
 	if !checkCert {
 		q, chk = NoCheckQuery, "no"
 	}
-	return fmt.Sprintf(`:local o "^(true|yes)\$"; :local v0 [:tostr [/system/device-mode/get fetch]]; :put ("ftn: device-mode fetch=" . $v0); :if ([:len $v0] = 0) do={ :put "ftn: cannot read device-mode, nothing was changed" } else={ :if ($v0 ~ $o) do={ :do { /certificate/settings/set builtin-trust-anchors=trusted } on-error={}; :do { :if (([:len [/ip/dns/get servers]] = 0) && ([:len [/ip/dns/get dynamic-servers]] = 0)) do={ /ip/dns/set servers=%[7]s; :put "ftn: the router had no DNS servers, set %[7]s"; :delay 1s } } on-error={}; :do { :resolve %[8]s } on-error={ :put "ftn: the router cannot look up %[8]s yet: check its internet connection" }; /file/remove [/file/find where name="%[1]s"]; /file/remove [/file/find where name="%[2]s"]; :do { /tool/fetch url="%[3]s/j/%[4]s%[5]s" dst-path=%[1]s check-certificate=%[6]s; /tool/fetch url="%[3]s/j/%[4]s/reset" dst-path=%[2]s check-certificate=%[6]s; :delay 1s; /import %[2]s } on-error={ /file/remove [/file/find where name="%[1]s"]; /file/remove [/file/find where name="%[2]s"]; :put "ftn: setup failed, nothing was changed, files removed" } } else={ :put "ftn: press the router button within 5 minutes (it then reboots), then paste this same line again"; /system/device-mode/update fetch=yes } }`,
+	return fmt.Sprintf(`:local o "^(true|yes)\$"; :local d 0; :local v0 [:tostr [/system/device-mode/get fetch]]; :put ("ftn: device-mode fetch=" . $v0); :if ([:len $v0] = 0) do={ :put "ftn: cannot read device-mode, nothing was changed" } else={ :if ($v0 ~ $o) do={ :do { /certificate/settings/set builtin-trust-anchors=trusted } on-error={}; :do { :if (([:len [/ip/dns/get servers]] = 0) && ([:len [/ip/dns/get dynamic-servers]] = 0)) do={ /ip/dns/set servers=%[7]s; :set d 1; :put "ftn: the router had no DNS servers, set %[7]s"; :delay 1s } } on-error={}; :do { :resolve %[8]s } on-error={ :put "ftn: the router cannot look up %[8]s yet: check its internet connection" }; /file/remove [/file/find where name="%[1]s"]; /file/remove [/file/find where name="%[2]s"]; :do { /tool/fetch url="%[3]s/j/%[4]s%[5]s" dst-path=%[1]s check-certificate=%[6]s; /tool/fetch url="%[3]s/j/%[4]s/reset" dst-path=%[2]s check-certificate=%[6]s; :delay 1s; /import %[2]s } on-error={ /file/remove [/file/find where name="%[1]s"]; /file/remove [/file/find where name="%[2]s"]; :put "ftn: setup failed, nothing was changed, files removed"; :if ($d = 1) do={ :do { /ip/dns/set servers="" } on-error={}; :put "ftn: the DNS servers this line set were put back to empty" } } } else={ :put "ftn: press the router button within 5 minutes (it then reboots), then paste this same line again"; /system/device-mode/update fetch=yes } }`,
 		SetupFile, ResetFile, base, token, q, chk, PasteLineDNS, hostOf(base))
 }
 

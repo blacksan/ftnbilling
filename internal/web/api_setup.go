@@ -13,6 +13,8 @@ import (
 )
 
 const (
+	// codeConfirm: the change needs {"confirm": true} (a 409 that names what the operator is accepting).
+	codeConfirm           = "confirm_required"
 	codeRouterUnreachable = "router_unreachable"
 	codeRouterRefused     = "router_refused"
 )
@@ -28,6 +30,7 @@ func (s *Server) setupRoutes(h func(pattern, role string, f apiFunc)) {
 	h("PATCH /api/v1/routers/{id}", owner, s.apiRouterPatch)
 	h("GET /api/v1/routers/{id}/setup", viewer, s.apiSetup)
 	h("POST /api/v1/routers/{id}/actions/reset", owner, s.apiRouterReset)
+	h("POST /api/v1/routers/{id}/actions/pause-auto-fixes", owner, s.apiPauseAutoFixes)
 	h("POST /api/v1/routers/{id}/script", owner, s.apiRouterScript)
 
 	h("GET /api/v1/sites/{id}/checks", viewer, s.apiChecks)
@@ -116,6 +119,9 @@ type routerReq struct {
 	OLTCapMbps     *float64 `json:"olt_cap_mbps"`
 	FUPTB          *float64 `json:"fup_tb"`
 	SupportPhone   *string  `json:"support_phone"`
+	// Confirm accepts the warning for a change of the OLT port or the VLAN on a router that is set up
+	// ("Customers on the OLT lose service until the OLT uses the new setting").
+	Confirm *bool `json:"confirm"`
 }
 
 func applyRouterReq(in sites.SiteInput, q routerReq) sites.SiteInput {
@@ -141,6 +147,7 @@ func applyRouterReq(in sites.SiteInput, q routerReq) sites.SiteInput {
 	if q.PPPoEPassClear != nil {
 		in.PPPoEPassClear = *q.PPPoEPassClear
 	}
+	in.Confirm = q.Confirm != nil && *q.Confirm
 	if q.VLANID != nil {
 		in.VLANID = *q.VLANID
 	}
@@ -171,11 +178,20 @@ func (s *Server) joinBody(st store.Site) (map[string]any, error) {
 
 // routerFieldErr turns a validation error of the router fields into a 422 on the field it is about.
 func routerFieldErr(w http.ResponseWriter, err error) {
+	var fe *sites.FieldError
+	if errors.As(err, &fe) {
+		fields := map[string]string{fe.Field: fe.Msg}
+		for _, f := range fe.Also {
+			fields[f] = fe.Msg
+		}
+		validationErr(w, fields)
+		return
+	}
 	field := "name"
 	msg := err.Error()
 	for _, f := range []struct{ key, word string }{
 		{"pppoe_pass", "PPPoE needs a password"}, {"pppoe_pass", "PPPoE password"}, {"pppoe_user", "PPPoE"}, {"wan_address", "WAN address"}, {"wan_gateway", "WAN gateway"},
-		{"wan_dns", "WAN DNS"}, {"wan_mode", "WAN type"}, {"wan_interface", "WAN interface"}, {"olt_interface", "OLT interface"}, {"bench_port", "bench port"},
+		{"wan_dns", "WAN DNS"}, {"wan_mode", "WAN type"}, {"wan_interface", "WAN interface"}, {"olt_interface", "OLT interface"}, {"olt_interface", "OLT uplink port"}, {"bench_port", "customer port"}, {"bench_port", "bench port"},
 		{"lan_ports", "admin LAN port"}, {"lan_subnet", "admin LAN subnet"}, {"customer_subnet", "customer subnet"}, {"vlan_id", "VLAN"},
 		{"lan_subnet", "LAN and customer subnets"}, {"lan_ports", "is used twice"},
 	} {
@@ -226,7 +242,9 @@ func (s *Server) apiRouterPatch(w http.ResponseWriter, r *http.Request, c *apiCt
 	}
 	in := sites.SiteInputOf(st)
 	if err := s.mgr.UpdateSite(st.ID, applyRouterReq(in, req)); err != nil {
-		if !s.storeErr(w, err) {
+		if errors.Is(err, sites.ErrOLTConfirmRequired) {
+			apiErr(w, http.StatusConflict, codeConfirm, err.Error(), nil)
+		} else if !s.storeErr(w, err) {
 			routerFieldErr(w, err)
 		}
 		return
@@ -483,4 +501,44 @@ func (s *Server) apiBenchSuspend(w http.ResponseWriter, r *http.Request, c *apiC
 	}
 	c.audit(s, "router "+st.Name+" suspend test")
 	writeJSON(w, http.StatusOK, map[string]any{"steps": steps})
+}
+
+// apiPauseAutoFixes is POST /routers/{id}/actions/pause-auto-fixes {paused, until?}: owner only. While paused the
+// server applies no check fix and no self-heal by itself (a save of the customer port still applies). until is an
+// RFC 3339 time in the future; without it the pause lasts until it is lifted with {"paused": false}.
+func (s *Server) apiPauseAutoFixes(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	st, ok := s.site404(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	var req struct {
+		Paused bool    `json:"paused"`
+		Until  *string `json:"until"`
+	}
+	if !decode(w, r, &req, false) {
+		return
+	}
+	var until time.Time
+	if req.Until != nil && strings.TrimSpace(*req.Until) != "" {
+		t, err := time.Parse(time.RFC3339, strings.TrimSpace(*req.Until))
+		if err != nil {
+			validationErr(w, map[string]string{"until": "use a date and time like 2026-11-20T08:00:00+03:00"})
+			return
+		}
+		until = t
+	}
+	if err := s.mgr.SetAutoFixPause(st.ID, req.Paused, until, c.user.Username); err != nil {
+		switch {
+		case errors.Is(err, sites.ErrPauseInPast):
+			validationErr(w, map[string]string{"until": err.Error()})
+		case errors.Is(err, store.ErrNoChange):
+		default:
+			if !s.storeErr(w, err) {
+				apiErr(w, http.StatusBadRequest, codeBadRequest, err.Error(), nil)
+			}
+			return
+		}
+	}
+	c.audit(s, "router "+st.Name+" automatic fixes "+map[bool]string{true: "paused", false: "resumed"}[req.Paused])
+	writeJSON(w, http.StatusOK, s.mgr.AutoFixPause(st.ID))
 }
