@@ -82,6 +82,7 @@ func printWipe(out io.Writer, kind string, rep store.WipeReport, files wipeFiles
 	fmt.Fprintf(out, "  %-34s %d\n", "metrics histories (files)", len(files.metrics))
 	fmt.Fprintf(out, "  %-34s %d\n", "spooled M-Pesa callbacks (files)", len(files.spool))
 	fmt.Fprintf(out, "  %-34s %d\n", "message queue, probe and alert state", files.state)
+	fmt.Fprintf(out, "  %-34s %d\n", "old database copies (.bak, imported)", len(files.old))
 	fmt.Fprintf(out, "kept: %d admin user(s), %d setting(s) (M-Pesa, branding, alerts), the schema version, DATA_KEY\n", rep.KeptAdminUser, rep.KeptSettings)
 	if applied {
 		fmt.Fprintln(out, "everybody must sign in again; add the routers again with the one-line bootstrap")
@@ -93,12 +94,19 @@ type wipeFiles struct {
 	metrics []string // DATA/metrics/*.json: usage history per router
 	spool   []string // DATA/spool/*.json: M-Pesa callbacks waiting for the database
 	state   int      // outbox.json, fleet.json, alerts.json that exist
+	// old: DATA/ispbill.json.v<N>.bak and DATA/ispbill.json.imported-*: full copies of earlier data. This command
+	// only counts them; deploy/ftnbilling-wipe moves them into the backup directory once the backup succeeded.
+	old []string
 }
 
 func dataFiles(dir string) wipeFiles {
 	var f wipeFiles
 	f.metrics, _ = filepath.Glob(filepath.Join(dir, "metrics", "*.json"))
 	f.spool, _ = filepath.Glob(filepath.Join(dir, "spool", "*.json"))
+	for _, pat := range []string{"ispbill.json.v*.bak", "ispbill.json.imported-*"} {
+		m, _ := filepath.Glob(filepath.Join(dir, pat))
+		f.old = append(f.old, m...)
+	}
 	for _, n := range []string{"outbox.json", "fleet.json", "alerts.json"} {
 		if _, err := os.Stat(filepath.Join(dir, n)); err == nil {
 			f.state++

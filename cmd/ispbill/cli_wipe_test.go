@@ -262,3 +262,22 @@ func serveOK(ln net.Listener) {
 }
 
 func wipeLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+// The old full copies of the data next to the database are counted in the dry run and are not touched by it.
+func TestWipeDryRunCountsOldDatabaseCopies(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "ispbill.json.v6.bak"), "{}")
+	writeFile(t, filepath.Join(dir, "ispbill.json.imported-20260101"), "{}")
+	writeFile(t, filepath.Join(dir, "unrelated.txt"), "x")
+	if got := dataFiles(dir).old; len(got) != 2 {
+		t.Fatalf("old copies: %v", got)
+	}
+	var out strings.Builder
+	printWipe(&out, "the JSON file", store.WipeReport{}, dataFiles(dir), false)
+	if !strings.Contains(out.String(), "old database copies (.bak, imported)") || !strings.Contains(out.String(), " 2\n") {
+		t.Fatalf("not listed:\n%s", out.String())
+	}
+	if !exists(filepath.Join(dir, "ispbill.json.v6.bak")) {
+		t.Fatal("the dry run removed a file")
+	}
+}

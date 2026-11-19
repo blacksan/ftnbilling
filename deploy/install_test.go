@@ -251,15 +251,21 @@ func TestWipeFlow(t *testing.T) {
 		logTo := func(name, extra string) {
 			os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\necho \""+name+" $*\" >>"+r.logf+"\n"+extra+"\nexit 0\n"), 0o755)
 		}
-		logTo("systemctl", "")
+		logTo("systemctl", "[ \"$FAKE_FAIL\" = start ] && [ \"$1\" = start ] && exit 1")
 		logTo("pg_restore", "[ \"$FAKE_FAIL\" = restore ] && exit 1")
-		os.WriteFile(filepath.Join(bin, "pg_dump"), []byte("#!/bin/sh\necho \"pg_dump $*\" >>"+r.logf+"\n[ \"$FAKE_FAIL\" = dump ] && exit 1\n[ \"$FAKE_FAIL\" = emptydump ] && exit 0\necho PGDMP-fake\n"), 0o755)
+		os.WriteFile(filepath.Join(bin, "pg_dump"), []byte("#!/bin/sh\necho \"pg_dump $*\" >>"+r.logf+"\nenv >"+filepath.Join(dir, "pgenv")+"\nF=$(cat "+filepath.Join(dir, "failmode")+" 2>/dev/null)\n[ \"$F\" = dump ] && exit 1\n[ \"$F\" = emptydump ] && exit 0\necho PGDMP-fake\n"), 0o755)
 		fake := filepath.Join(dir, "prog")
 		os.WriteFile(fake, []byte("#!/bin/sh\necho \"prog $*\" >>"+r.logf+"\nif [ \"$1\" = wipe-data ] && [ \"$2\" = -confirm ]; then [ \"$FAKE_FAIL\" = wipe ] && { echo boom >&2; exit 1; }; echo 'wiped the business data'; exit 0; fi\n[ \"$FAKE_FAIL\" = count ] && exit 1\necho 'would delete: routers 2'\n"), 0o755)
 		wgs := filepath.Join(dir, "wgsync")
 		os.WriteFile(wgs, []byte("#!/bin/sh\necho \"wg-sync\" >>"+r.logf+"\n[ \"$FAKE_FAIL\" = wgsync ] && exit 1\nexit 0\n"), 0o755)
 		r.run = func(env []string, args ...string) (string, error, []string) {
 			os.Remove(r.logf)
+			os.Remove(filepath.Join(dir, "failmode"))
+			for _, e := range env {
+				if v, ok := strings.CutPrefix(e, "FAKE_FAIL="); ok { // pg_dump runs with a clean environment: pass the mode by file
+					os.WriteFile(filepath.Join(dir, "failmode"), []byte(v), 0o600)
+				}
+			}
 			u, _ := exec.Command("id", "-un").Output()
 			cmd := exec.Command("bash", append([]string{"ftnbilling-wipe"}, args...)...)
 			cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "FTN_WIPE_NOROOT=1", "FTN_ENV_FILE="+envf, "FTN_BIN="+fake,
@@ -314,10 +320,11 @@ func TestWipeFlow(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v\n%s", err, out)
 		}
-		if len(calls) < 3 || calls[1] != "pg_dump -Fc ftnbilling" || !strings.HasPrefix(calls[2], "pg_restore -l ") {
+		// the service is stopped BEFORE the dump, so no payment can land between the two
+		if len(calls) < 5 || calls[3] != "pg_dump -Fc ftnbilling" || !strings.HasPrefix(calls[4], "pg_restore -l ") {
 			t.Fatalf("calls %q", calls)
 		}
-		want(t, append(append([]string{}, calls[:1]...), calls[3:]...), "prog wipe-data",
+		want(t, append(append([]string{}, calls[:3]...), calls[5:]...), "prog wipe-data",
 			svc[0], svc[1], "prog wipe-data -confirm WIPE", "systemctl start ftnbilling", "wg-sync")
 		var dump, tgz string
 		for _, f := range files(r) {
@@ -347,9 +354,13 @@ func TestWipeFlow(t *testing.T) {
 				t.Errorf("%s: want a failure, got %v\n%s", fail, err, out)
 			}
 			for _, c := range calls {
-				if strings.Contains(c, "-confirm") || strings.Contains(c, "systemctl stop") {
+				if strings.Contains(c, "-confirm") {
 					t.Errorf("%s: ran %q after a failed backup", fail, c)
 				}
+			}
+			// the service was stopped for the backup and must be running again
+			if len(calls) < 3 || calls[len(calls)-1] != "systemctl start ftnbilling" {
+				t.Errorf("%s: the service was not started again after the failed backup: %q", fail, calls)
 			}
 			if left := files(r); len(left) != 0 {
 				t.Errorf("%s: files left behind: %v", fail, left)
@@ -365,6 +376,80 @@ func TestWipeFlow(t *testing.T) {
 			t.Fatalf("want the failure, got %v\n%s", err, out)
 		}
 		want(t, calls, "prog wipe-data", svc[0], svc[1], "prog wipe-data -confirm WIPE", "systemctl start ftnbilling")
+	})
+
+	t.Run("a service that will not start is reported, wg-sync still runs, exit is non-zero", func(t *testing.T) {
+		r := newRig(t, "DATA_DIR=DATADIR\n")
+		out, err, calls := r.run([]string{"FAKE_FAIL=start"}, "--yes")
+		if err == nil || !strings.Contains(out, "could not start ftnbilling again") {
+			t.Fatalf("want a clear start error and a non-zero exit: %v\n%s", err, out)
+		}
+		if calls[len(calls)-1] != "wg-sync" {
+			t.Errorf("wg-sync must still run: %q", calls)
+		}
+		if strings.Contains(out, "the service was started again") {
+			t.Error("claims the service was started")
+		}
+	})
+
+	t.Run("an unreadable database name is refused, not guessed", func(t *testing.T) {
+		for _, url := range []string{"postgres://ftnbilling:x@localhost", "postgres://u@h/", "not a url", "postgres://u@h/na%20me"} {
+			r := newRig(t, "DATA_DIR=DATADIR\nDATABASE_URL="+url+"\n")
+			out, err, calls := r.run(nil, "--yes")
+			if err == nil || !strings.Contains(out, "cannot read the database name") {
+				t.Errorf("%q: %v\n%s", url, err, out)
+			}
+			for _, c := range calls {
+				if strings.Contains(c, "pg_dump") || strings.Contains(c, "-confirm") || strings.Contains(c, "systemctl stop") {
+					t.Errorf("%q: ran %q", url, c)
+				}
+			}
+		}
+	})
+
+	t.Run("pg_dump gets a clean environment and the settings file is not exported", func(t *testing.T) {
+		r := newRig(t, "DATA_DIR=DATADIR\nDATA_KEY=topsecretkey\nADMIN_PASS=abcdefghijklmnop\nDATABASE_URL=postgres://ftnbilling:pw9@/ftnbilling?host=/var/run/postgresql\n")
+		if out, err, _ := r.run(nil, "--yes"); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		env, _ := os.ReadFile(filepath.Join(r.dir, "pgenv"))
+		for _, bad := range []string{"topsecretkey", "pw9", "DATABASE_URL", "DATA_KEY", "ADMIN_PASS"} {
+			if strings.Contains(string(env), bad) {
+				t.Errorf("pg_dump sees %q in its environment:\n%s", bad, env)
+			}
+		}
+	})
+
+	t.Run("old full copies move to the backup directory", func(t *testing.T) {
+		r := newRig(t, "DATA_DIR=DATADIR\n")
+		os.WriteFile(filepath.Join(r.data, "ispbill.json"), []byte(`{"format":7}`), 0o600)
+		os.WriteFile(filepath.Join(r.data, "ispbill.json.v6.bak"), []byte("old6"), 0o644)
+		os.WriteFile(filepath.Join(r.data, "ispbill.json.imported-20260101"), []byte("imp"), 0o644)
+		os.WriteFile(filepath.Join(r.data, "other.txt"), []byte("keep"), 0o644)
+		out, err, _ := r.run(nil, "--yes")
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		left, _ := filepath.Glob(filepath.Join(r.data, "ispbill.json.*"))
+		if len(left) != 0 {
+			t.Errorf("old data left in DATA_DIR: %v", left)
+		}
+		if _, err := os.Stat(filepath.Join(r.data, "other.txt")); err != nil {
+			t.Error("an unrelated file was moved")
+		}
+		dirs, _ := filepath.Glob(filepath.Join(r.backups, "pre-wipe-*-old"))
+		if len(dirs) != 1 {
+			t.Fatalf("old dir: %v", files(r))
+		}
+		if st, _ := os.Stat(dirs[0]); st.Mode().Perm() != 0o700 {
+			t.Errorf("dir mode %v", st.Mode().Perm())
+		}
+		for _, n := range []string{"ispbill.json.v6.bak", "ispbill.json.imported-20260101"} {
+			st, err := os.Stat(filepath.Join(dirs[0], n))
+			if err != nil || st.Mode().Perm() != 0o600 {
+				t.Errorf("%s: %v %v", n, err, st)
+			}
+		}
 	})
 
 	t.Run("wg sync failure is reported", func(t *testing.T) {

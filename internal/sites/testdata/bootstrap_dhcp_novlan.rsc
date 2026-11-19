@@ -47,7 +47,7 @@
   :if ([:len [/ip/firewall/filter/find where comment~"^ftn:"]] > 0) do={ :set ours ($ours . " firewall rule;") }
   :if ([:len [/ip/firewall/nat/find where comment~"^ftn:"]] > 0) do={ :set ours ($ours . " nat rule;") }
   :if ([:len [/interface/wireguard/find where comment~"^ftn:"]] > 0) do={ :set ours ($ours . " wireguard;") }
-  :if ([:len $ours] > 0) do={ :error ("this router has already been set up by a Fast Tech Net script:" . $ours . " Nothing was changed. To rebuild it, reset the router with the button in the billing admin and paste the new line (running the script again on a built router is refused)") }
+  :if ([:len $ours] > 0) do={ :error ("this router has already been set up by a Fast Tech Net script:" . $ours . " Nothing was changed. To rebuild it, run /system/reset-configuration no-defaults=yes keep-users=yes on the router (or press the router reset button), then paste a new line from the billing admin (running this script again on a built router is refused)") }
   # Foreign settings: not ours either, nothing is replaced. (After the reset of the paste line the router is empty.)
   :local foreign ""
   :foreach i in=[/ip/address/find where dynamic=no] do={ :if (!([/ip/address/get $i comment] ~ "^ftn:")) do={ :set foreign ($foreign . " address " . [/ip/address/get $i address] . ";") } }
@@ -55,7 +55,7 @@
   :foreach i in=[/ip/dhcp-server/find] do={ :if (!([/ip/dhcp-server/get $i comment] ~ "^ftn:")) do={ :set foreign ($foreign . " dhcp-server " . [/ip/dhcp-server/get $i name] . ";") } }
   :foreach i in=[/ip/firewall/filter/find where dynamic=no] do={ :if (!([/ip/firewall/filter/get $i comment] ~ "^ftn:")) do={ :set foreign ($foreign . " firewall rule;") } }
   :foreach i in=[/ip/firewall/nat/find where dynamic=no] do={ :if (!([/ip/firewall/nat/get $i comment] ~ "^ftn:")) do={ :set foreign ($foreign . " nat rule;") } }
-  :if ([:len $foreign] > 0) do={ :error ("this router already has settings that are not ours:" . $foreign . " Nothing was changed. To rebuild, use the reset button in the billing admin and paste the new line (it erases the router first)") }
+  :if ([:len $foreign] > 0) do={ :error ("this router already has settings that are not ours:" . $foreign . " Nothing was changed. To rebuild, run /system/reset-configuration no-defaults=yes keep-users=yes on the router (or press the router reset button), then paste a new line from the billing admin") }
 } do={ :set report ($report . "0 wait and guard: " . $e . "\n"); :set abort ("ftn: section 0 wait and guard failed: " . $e); :error $abort }
 
 :put "ftn 1/12: name, clock, trust anchors"
@@ -72,6 +72,8 @@
   # the router (input) and through it (forward). Established and related traffic is not touched, so the
   # router's own outbound flows (the report, NTP) come back. The WAN client below is created switched off and
   # is switched on only after section 6 has put the whole rule set in.
+  # IPv6 is switched off before anything faces the WAN, so it is never reachable from there.
+  :do { /ipv6/settings set disable-ipv6=yes } on-error={ :put "   (no IPv6 on this router)" }
   :if ([:len [/interface/list/find where name="WAN"]] = 0) do={ /interface/list add name=WAN comment="ftn: WAN list" }
   :if ([:len [/interface/list/find where name="LAN"]] = 0) do={ /interface/list add name=LAN comment="ftn: LAN list" }
   /interface/list/member remove [find where list="WAN" and interface="ether1"]
@@ -193,7 +195,6 @@
 :put "ftn 7/12: DNS and IPv6"
 :onerror e in={
   /ip/dns set servers=1.1.1.1,8.8.8.8 allow-remote-requests=yes
-  /ipv6/settings set disable-ipv6=yes
   :do {
     /ipv6/firewall/filter remove [find where comment~"^ftn:"]
     /ipv6/firewall/filter add chain=forward action=drop in-interface=br-customers comment="ftn: ipv6 drop"

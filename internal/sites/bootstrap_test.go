@@ -326,6 +326,10 @@ func TestBootstrapHoldComesBeforeTheWANAndGoesLast(t *testing.T) {
 			return strings.HasPrefix(t, "/ip/dhcp-client add") || strings.HasPrefix(t, "/interface/pppoe-client add") ||
 				strings.HasPrefix(t, "/ip/address add address=198.51.100.5") || strings.HasPrefix(t, "/ip/route add dst-address=0.0.0.0/0")
 		}
+		v6 := lineIdx(lines, has("/ipv6/settings set disable-ipv6=yes"), false)
+		if v6 < 0 || v6 > holdAdd || v6 > lineIdx(lines, has("/interface/list add name=WAN"), false) {
+			t.Errorf("%s: IPv6 must be disabled (line %d) before the WAN list and the hold (%d)", name, v6, holdAdd)
+		}
 		firstWAN := lineIdx(lines, wanLine, false)
 		if holdAdd < 0 || firstWAN < 0 || holdAdd > firstWAN {
 			t.Fatalf("%s: hold at line %d, first WAN client at %d", name, holdAdd, firstWAN)
@@ -383,7 +387,7 @@ func TestBootstrapRefusesToRunTwiceAndHasNoPlaceBeforeZero(t *testing.T) {
 		}
 		refuse := strings.Index(script, "has already been set up by a Fast Tech Net script")
 		sec1 := strings.Index(script, `:put "ftn 1/12`)
-		if refuse < 0 || refuse > sec1 || !strings.Contains(script, `/interface/bridge/find where comment~"^ftn:"`) || !strings.Contains(script, "reset the router with the button in the billing admin and paste the new line") {
+		if refuse < 0 || refuse > sec1 || !strings.Contains(script, `/interface/bridge/find where comment~"^ftn:"`) || !strings.Contains(script, "/system/reset-configuration no-defaults=yes keep-users=yes") {
 			t.Errorf("%s: the script does not refuse a second run before it changes anything", name)
 		}
 		// nothing in the script tears down the admin LAN bridge any more

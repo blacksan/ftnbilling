@@ -13,10 +13,14 @@
 # Kept: the admin users (passwords, authenticator), Settings (M-Pesa,
 # branding, alerts), the database schema and DATA_KEY.
 #
-# Order: dry-run counts, confirmation, backup (pg_dump -Fc, or a copy of
-# ispbill.json, into /var/backups/ftnbilling/pre-wipe-<UTC time>.*; the wipe is
-# refused when the backup fails), stop the service, ispbill wipe-data -confirm
-# WIPE, start the service (also when the wipe fails), then ftnbilling-wg-sync so
+# Order: dry-run counts, confirmation, stop the service (so no payment can land
+# between the backup and the stop), backup (pg_dump -Fc, or a copy of
+# ispbill.json, into /var/backups/ftnbilling/pre-wipe-<UTC time>.*; nothing is
+# deleted and the service is started again when the backup fails), move the old
+# full copies of the data (ispbill.json.v<N>.bak, ispbill.json.imported-*) into
+# pre-wipe-<UTC time>-old/ so DATA_DIR holds no old customer data, ispbill
+# wipe-data -confirm WIPE, start the service (also when the wipe fails; a failed
+# start is reported and the exit code is non-zero), then ftnbilling-wg-sync so
 # the WireGuard peers of the deleted routers leave wg0. Add the routers again
 # with the one-line bootstrap. Works with PostgreSQL and the JSON file alike.
 #
@@ -35,7 +39,7 @@ WGSYNC=${FTN_WG_SYNC:-/usr/local/sbin/$APP-wg-sync}
 if [ "${FTN_PGRUN+set}" = set ]; then read -r -a PGRUN <<<"$FTN_PGRUN"; else PGRUN=(runuser -u postgres --); fi
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-usage() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; }
 
 yes=0
 for a in "$@"; do
@@ -49,7 +53,10 @@ done
 [ -r "$ENVF" ] || die "$ENVF not found or unreadable"
 [ -x "$BIN" ] || die "$BIN not found"
 
-# Export every KEY=VALUE of the settings file (not sourced: values may hold spaces).
+# Read every KEY=VALUE of the settings file (not sourced: values may hold spaces). Nothing is exported:
+# the values go only to the ispbill calls (prog), never to pg_dump or any other program.
+declare -A cfg=()
+ENVARGS=()
 while IFS= read -r line || [ -n "$line" ]; do
   line=${line%$'\r'}
   case "$line" in ''|'#'*) continue ;; esac
@@ -57,13 +64,21 @@ while IFS= read -r line || [ -n "$line" ]; do
   case "$key" in *[!A-Za-z0-9_]*|'') continue ;; esac
   val=${line#*=}
   case "$val" in \"*\") val=${val#\"}; val=${val%\"} ;; \'*\') val=${val#\'}; val=${val%\'} ;; esac
-  export "$key=$val"
+  cfg[$key]=$val
+  ENVARGS+=("$key=$val")
 done <"$ENVF"
-DATA=${DATA_DIR:-/var/lib/$APP}
+DATA=${cfg[DATA_DIR]:-/var/lib/$APP}
+DBURL=${cfg[DATABASE_URL]:-}
 
 prog() {
-  if [ "$(id -un)" = "$RUNAS" ]; then "$BIN" "$@"; else runuser -u "$RUNAS" -- "$BIN" "$@"; fi
+  if [ "$(id -un)" = "$RUNAS" ]; then env ${ENVARGS[@]+"${ENVARGS[@]}"} "$BIN" "$@"; else runuser -u "$RUNAS" -- env ${ENVARGS[@]+"${ENVARGS[@]}"} "$BIN" "$@"; fi
 }
+
+dbname=""
+if [ -n "$DBURL" ]; then
+  dbname=$(printf '%s' "$DBURL" | sed -nE 's#^[a-z]+://[^/]*/([^?]*).*#\1#p')
+  case "$dbname" in ''|*[!A-Za-z0-9_]*) die "cannot read the database name from DATABASE_URL (expected postgres://user@host/NAME); nothing was changed" ;; esac
+fi
 
 # 1. What would be deleted. Read-only, works while the service runs.
 echo "This will delete ALL business data on this server:"
@@ -79,21 +94,40 @@ if [ "$yes" != 1 ]; then
   [ "$answer" = WIPE ] || die "not confirmed; nothing was changed"
 fi
 
-# 3. Backup (the wipe is refused when it fails).
+# 3. Stop the service first (it keeps its own copy of the data, would write it back, and a payment
+# between the backup and the stop would be lost). The EXIT trap starts it again on every way out:
+# a failed backup (nothing is deleted then), a failed wipe, an interrupt.
+stopped=0
+startrc=0
+tmp=""
+svc_start() {
+  [ "$stopped" = 1 ] || return 0
+  stopped=0
+  if systemctl start "$APP"; then
+    echo "the service was started again"
+  else
+    startrc=1
+    printf 'ERROR: could not start %s again. Start it by hand: sudo systemctl start %s (see journalctl -u %s)\n' "$APP" "$APP" "$APP" >&2
+  fi
+}
+trap 'svc_start; [ -z "$tmp" ] || rm -f "$tmp"' EXIT
+if [ "${FTN_NO_RESTART:-0}" != 1 ] && command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "$APP" 2>/dev/null; then
+  systemctl stop "$APP" || die "could not stop $APP; nothing was changed"
+  stopped=1
+fi
+
+# 4. Backup (the wipe is refused when it fails; the EXIT trap starts the service again).
 ts=$(date -u +%Y%m%dT%H%M%SZ)
 ( umask 077; mkdir -p "$BACKDIR" )
 chmod 700 "$BACKDIR" 2>/dev/null || true
-tmp=""
-trap '[ -z "$tmp" ] || rm -f "$tmp"' EXIT
 backups=()
-if [ -n "${DATABASE_URL:-}" ]; then
+if [ -n "$DBURL" ]; then
   # Same method as ftnbilling-backup dump: root opens the 0600 file, postgres writes into the pipe.
-  command -v pg_dump >/dev/null && command -v pg_restore >/dev/null || die "pg_dump/pg_restore missing (apt install postgresql-client); nothing was changed"
-  dbname=$(printf '%s' "$DATABASE_URL" | sed -E 's#^[a-z]+://[^/]*/([^?]*).*#\1#')
-  case "$dbname" in ''|*[!A-Za-z0-9_]*) dbname=$APP ;; esac
+  # pg_dump gets a clean environment: none of the settings file's values.
+  if ! command -v pg_dump >/dev/null || ! command -v pg_restore >/dev/null; then die "pg_dump/pg_restore missing (apt install postgresql-client); nothing was changed"; fi
   final=$BACKDIR/pre-wipe-$ts.dump
   tmp=$BACKDIR/.tmp-pre-wipe-$ts.dump
-  ( umask 077; "${PGRUN[@]}" pg_dump -Fc "$dbname" >"$tmp" ) || die "pg_dump failed; nothing was changed"
+  ( umask 077; env -i PATH="$PATH" "${PGRUN[@]}" pg_dump -Fc "$dbname" >"$tmp" ) || die "pg_dump failed; nothing was changed"
   [ -s "$tmp" ] || die "pg_dump wrote an empty file; nothing was changed"
   pg_restore -l "$tmp" >/dev/null 2>&1 || die "the new dump does not pass pg_restore -l; nothing was changed"
   chmod 600 "$tmp"
@@ -125,29 +159,33 @@ if [ "${#files[@]}" -gt 0 ]; then
   tmp=""
   backups+=("$final")
 fi
+# Old full copies of the data (earlier format backups and imported files) must not stay in DATA_DIR:
+# they move to the backup directory, only after the backups above succeeded.
+old=()
+for f in "$DATA"/ispbill.json.v*.bak "$DATA"/ispbill.json.imported-*; do [ -e "$f" ] && old+=("$f"); done
+if [ "${#old[@]}" -gt 0 ]; then
+  olddir=$BACKDIR/pre-wipe-$ts-old
+  ( umask 077; mkdir -p "$olddir" ) || die "could not make $olddir; nothing was deleted"
+  chmod 700 "$olddir"
+  for f in "${old[@]}"; do
+    mv -f "$f" "$olddir/" || die "could not move $f to $olddir"
+    chmod 600 "$olddir/$(basename "$f")"
+  done
+  backups+=("$olddir")
+fi
 for b in "${backups[@]}"; do echo "backup: $b"; done
 
-# 4. Stop the service (it keeps its own copy of the data and would write it back),
-# wipe, and always start it again, even when the wipe fails or this script is interrupted.
-stopped=0
-svc_start() {
-  if [ "$stopped" = 1 ]; then stopped=0; systemctl start "$APP" && echo "the service was started again"; fi
-}
-if [ "${FTN_NO_RESTART:-0}" != 1 ] && command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "$APP" 2>/dev/null; then
-  trap 'svc_start; [ -z "$tmp" ] || rm -f "$tmp"' EXIT
-  systemctl stop "$APP" || die "could not stop $APP; nothing was changed"
-  stopped=1
-fi
+# 5. Wipe (the service is stopped), then start it again, also when the wipe failed.
 rc=0
 out=$(prog wipe-data -confirm WIPE 2>&1) || rc=$?
 if [ "$rc" != 0 ]; then
   printf '%s\n' "$out" >&2
-  die "the wipe failed (the service is started again). The backup is ${backups[0]:-not needed}"
+  die "the wipe failed. The backup is ${backups[0]:-not needed}. The service is being started again"
 fi
 printf '%s\n' "$out"
 svc_start
 
-# 5. Remove the WireGuard peers of the deleted routers from wg0.
+# 6. Remove the WireGuard peers of the deleted routers from wg0.
 syncrc=0
 if [ -x "$WGSYNC" ]; then
   "$WGSYNC" || syncrc=$?
@@ -159,4 +197,5 @@ fi
 echo
 echo "done: all business data was deleted. Add the routers again with the one-line bootstrap."
 for b in "${backups[@]}"; do echo "backup: $b"; done
+[ "$startrc" = 0 ] || exit 1
 exit "$syncrc"
