@@ -332,7 +332,7 @@ func TestInstallDryRunMgmt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	for _, want := range []string{"remote WinBox: WireGuard wg-mgmt (10.98.0.0/24, udp/51821)", "ufw allow 51821/udp", "forwarding block", "systemctl start wg-quick@wg-mgmt", "91-ftnbilling-mgmt.conf"} {
+	for _, want := range []string{"remote WinBox: WireGuard wg-mgmt (10.98.0.0/24, udp/51821)", "ufw allow 51821/udp", "forwarding block", "iptables-restore --test", "ufw default deny routed", "systemctl start wg-quick@wg-mgmt", "91-ftnbilling-mgmt.conf"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("dry run lacks %q", want)
 		}
@@ -409,6 +409,7 @@ mgmt_before_rules <"$2/twice" >"$2/changed"
 		"-A ufw-before-forward -i wg-mgmt -o wg0 -s 10.98.0.0/24 -d 10.99.0.0/22 -p icmp --icmp-type echo-request -j ACCEPT",
 		"-A ufw-before-forward -i wg-mgmt -j DROP",
 		"-A ufw-before-forward -i wg0 -o wg-mgmt -s 10.99.0.0/22 -d 10.98.0.0/24 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
+		"-A ufw-before-forward -i wg0 -j DROP", // router to router, or router to anywhere else: never
 		"-A ufw-before-forward -o wg-mgmt -j DROP",
 	}
 	var got []string
@@ -486,4 +487,265 @@ func fnSrcOne(t *testing.T, name string) string {
 	}
 	t.Fatalf("function %s not found in install.sh", name)
 	return ""
+}
+
+// ---- the installer's firewall step, run with a fake ufw, iptables-restore and sysctl ----------
+
+const fakeUFW = `#!/bin/bash
+echo "ufw $*" >>"$FAKE/calls.log"
+case "$1 ${2:-}" in
+  "status ") [ -e "$FAKE/inactive" ] && echo "Status: inactive" || echo "Status: active" ;;
+  "reload ") if [ -e "$FAKE/reload_fail" ]; then echo "ERROR: problem running ufw-init" >&2; exit 1; fi ;;
+esac
+exit 0
+`
+
+const fakeIPTRestore = `#!/bin/bash
+echo "iptables-restore $*" >>"$FAKE/calls.log"
+cat >"$FAKE/ir.in"
+if [ -e "$FAKE/ir_fail" ]; then echo "iptables-restore: line 9 failed" >&2; exit 1; fi
+`
+
+const fakeSysctl = `#!/bin/bash
+echo "sysctl $*" >>"$FAKE/calls.log"
+`
+
+type fwRig struct {
+	t    *testing.T
+	dir  string
+	rule string // the fake /etc/ufw/before.rules
+	sysf string // the fake /etc/sysctl.d file
+}
+
+const beforeRules = `*filter
+:ufw-before-input - [0:0]
+:ufw-before-output - [0:0]
+:ufw-before-forward - [0:0]
+:ufw-not-local - [0:0]
+# End required lines
+
+-A ufw-before-input -i lo -j ACCEPT
+-A ufw-before-forward -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+COMMIT
+`
+
+func newFWRig(t *testing.T, before string) *fwRig {
+	t.Helper()
+	bashOrSkip(t)
+	dir := t.TempDir()
+	r := &fwRig{t: t, dir: dir, rule: filepath.Join(dir, "before.rules"), sysf: filepath.Join(dir, "91-ftnbilling-mgmt.conf")}
+	os.Mkdir(filepath.Join(dir, "bin"), 0o755)
+	for name, body := range map[string]string{"ufw": fakeUFW, "iptables-restore": fakeIPTRestore, "sysctl": fakeSysctl} {
+		if err := os.WriteFile(filepath.Join(dir, "bin", name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(r.rule, []byte(before), 0o644)
+	return r
+}
+
+func (r *fwRig) flag(name string) { os.WriteFile(filepath.Join(r.dir, name), nil, 0o644) }
+
+func (r *fwRig) calls() string {
+	b, _ := os.ReadFile(filepath.Join(r.dir, "calls.log"))
+	return string(b)
+}
+
+func (r *fwRig) file(p string) string { b, _ := os.ReadFile(p); return string(b) }
+
+// run runs body (shell) with the installer's functions loaded; vars are extra assignments.
+func (r *fwRig) run(vars, body string) (string, error) {
+	r.t.Helper()
+	script := "set -euo pipefail\n"
+	for _, f := range []string{"have", "legacy_rule_numbers", "mgmt_before_rules", "mgmt_validate_rules", "mgmt_firewall", "mgmt_stale_ports",
+		"mgmt_forwarding", "mgmt_forwarding_off", "wireguard_mgmt", "firewall"} {
+		script += fnSrcOne(r.t, f) + "\n"
+	}
+	script += fnSrc(r.t, "mgmt_rules") + "\n"
+	script += `MGMT_SYSCTL=$FTN_MGMT_SYSCTL
+DRY=0; MGMT_IF=wg-mgmt; WG_IF=wg0; WG_SUBNET=10.99.0.0/22; MGMT_SUBNET=10.98.0.0/24; MGMT_PORT=51821; WG_PORT=51820
+MGMT_MARK=ftnbilling-mgmt; MGMT_ON=1; ENVF=/nonexistent; WG_SERVER_IP=10.99.0.1
+step() { :; }; note() { :; }; warn() { :; }; run() { "$@"; }; runq() { "$@" >/dev/null; }; try() { "$@" >/dev/null 2>&1 || true; }
+die() { echo "DIE: $*" >&2; exit 3; }
+writef() { cat >"$3"; }
+` + vars + "\n" + body + "\n"
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(), "PATH="+filepath.Join(r.dir, "bin")+":"+os.Getenv("PATH"), "FAKE="+r.dir,
+		"FTN_UFW_BEFORE_RULES="+r.rule, "FTN_MGMT_SYSCTL="+r.sysf)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func TestInstallMgmtFirewallRefusesAndKeepsTheOriginal(t *testing.T) {
+	// A BEGIN marker with no END: refused, the file untouched, no stray files.
+	broken := beforeRules + "# BEGIN ftnbilling-mgmt (hand edited)\n-A ufw-before-forward -i wg-mgmt -j ACCEPT\n"
+	r := newFWRig(t, broken)
+	out, err := r.run("", "mgmt_firewall")
+	if err == nil || !strings.Contains(out, "without its") || !strings.Contains(out, "# END ftnbilling-mgmt") {
+		t.Errorf("unmatched marker: %v\n%s", err, out)
+	}
+	if got := r.file(r.rule); got != broken {
+		t.Errorf("the file changed:\n%s", got)
+	}
+	if left, _ := filepath.Glob(r.rule + ".*"); len(left) != 0 {
+		t.Errorf("left behind: %v", left)
+	}
+	if strings.Contains(r.calls(), "reload") {
+		t.Error("ufw was reloaded")
+	}
+	// The same check at the function level: a clear error on stderr and a failing status.
+	if out, err := exec.Command("bash", "-c", "set -e\n"+fnSrc(t, "mgmt_rules")+"\n"+fnSrcOne(t, "mgmt_before_rules")+"\nMGMT_MARK=ftnbilling-mgmt; MGMT_IF=a; WG_IF=b; WG_SUBNET=1; MGMT_SUBNET=2\nprintf '# BEGIN ftnbilling-mgmt\\nx\\n' | mgmt_before_rules >/dev/null").CombinedOutput(); err == nil || !strings.Contains(string(out), "no matching") {
+		t.Errorf("mgmt_before_rules on an unmatched marker: %v %s", err, out)
+	}
+
+	// iptables-restore --test says no: nothing is written, nothing reloaded.
+	r = newFWRig(t, beforeRules)
+	r.flag("ir_fail")
+	out, err = r.run("", "mgmt_firewall")
+	if err == nil || !strings.Contains(out, "refused by iptables-restore --test") || !strings.Contains(out, "line 9 failed") {
+		t.Errorf("failed validation: %v\n%s", err, out)
+	}
+	if r.file(r.rule) != beforeRules || strings.Contains(r.calls(), "reload") {
+		t.Error("a rejected rule set changed the file or reloaded ufw")
+	}
+
+	// ufw reload fails: the old file is put back, the failure is not hidden.
+	r = newFWRig(t, beforeRules)
+	r.flag("reload_fail")
+	out, err = r.run("", "mgmt_firewall")
+	if err == nil || !strings.Contains(out, "ufw reload failed") || !strings.Contains(out, "previous") || !strings.Contains(out, "problem running ufw-init") {
+		t.Errorf("failed reload: %v\n%s", err, out)
+	}
+	if r.file(r.rule) != beforeRules {
+		t.Errorf("the original was not put back:\n%s", r.file(r.rule))
+	}
+
+	// What was validated is the block itself, in a ruleset of its own (--test: nothing is loaded).
+	r = newFWRig(t, beforeRules)
+	if out, err := r.run("", "mgmt_firewall"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	in := r.file(filepath.Join(r.dir, "ir.in"))
+	for _, want := range []string{"*filter\n", ":ufw-before-forward - [0:0]", "-A ufw-before-forward -i wg-mgmt -j DROP", "-A ufw-before-forward -i wg0 -j DROP", "COMMIT\n"} {
+		if !strings.Contains(in, want) {
+			t.Errorf("the validated ruleset lacks %q:\n%s", want, in)
+		}
+	}
+	if !strings.Contains(r.calls(), "iptables-restore --test") {
+		t.Errorf("iptables-restore ran without --test:\n%s", r.calls())
+	}
+	if !strings.Contains(r.file(r.rule), "# BEGIN ftnbilling-mgmt") || strings.Count(r.calls(), "ufw reload") != 1 {
+		t.Errorf("success: block missing or reload count wrong:\n%s\n%s", r.file(r.rule), r.calls())
+	}
+	// A second run changes nothing and reloads nothing; an inactive ufw is not reloaded (enable loads it).
+	before := r.file(r.rule)
+	if out, err := r.run("", "mgmt_firewall"); err != nil || r.file(r.rule) != before || strings.Count(r.calls(), "ufw reload") != 1 {
+		t.Errorf("second run: %v %s\n%s", err, out, r.calls())
+	}
+	r = newFWRig(t, beforeRules)
+	r.flag("inactive")
+	if out, err := r.run("", "mgmt_firewall"); err != nil || strings.Contains(r.calls(), "ufw reload") || !strings.Contains(r.file(r.rule), "# BEGIN") {
+		t.Errorf("inactive ufw: %v %s\n%s", err, out, r.calls())
+	}
+}
+
+func TestInstallFirewallStepDeniesRoutedAndDropsOldMgmtPort(t *testing.T) {
+	r := newFWRig(t, beforeRules)
+	// MGMT_PORT moved from 51999 (the settings file) and 51821 (the interface config) to 51850.
+	out, err := r.run("MGMT_PORT=51850; MGMT_PORT_ENVFILE=51999; MGMT_PORT_CONF=51821", "firewall; echo FW-DONE")
+	if err != nil || !strings.Contains(out, "FW-DONE") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	calls := r.calls()
+	idx := func(sub string) int { return strings.Index(calls, sub) }
+	if idx("ufw default deny incoming") < 0 || idx("ufw default deny routed") < idx("ufw default deny incoming") || idx("ufw --force enable") < idx("ufw default deny routed") {
+		t.Errorf("'ufw default deny routed' must come with the defaults, before enable:\n%s", calls)
+	}
+	for _, want := range []string{"ufw allow 51850/udp", "ufw delete allow 51999/udp", "ufw delete allow 51821/udp", "ufw allow 51820/udp"} {
+		if !strings.Contains(calls, want) {
+			t.Errorf("missing %q:\n%s", want, calls)
+		}
+	}
+	for _, bad := range []string{"delete allow 51850", "delete allow 51820"} {
+		if strings.Contains(calls, bad) {
+			t.Errorf("%q must never happen:\n%s", bad, calls)
+		}
+	}
+	// forwarding is switched on only after ufw is enabled (and the block is in)
+	if idx("sysctl -q -p") < idx("ufw --force enable") || !strings.Contains(r.file(r.sysf), "net.ipv4.ip_forward=1") || !strings.Contains(r.file(r.rule), "# BEGIN ftnbilling-mgmt") {
+		t.Errorf("forwarding order or files wrong:\n%s\n%s", calls, r.file(r.sysf))
+	}
+
+	// helper cases
+	for _, c := range []struct{ vars, want string }{
+		{"MGMT_PORT=51821; MGMT_PORT_ENVFILE=51821; MGMT_PORT_CONF=51821", ""},      // unchanged: nothing to delete
+		{"MGMT_PORT=51821; MGMT_PORT_ENVFILE=; MGMT_PORT_CONF=", ""},                // first install
+		{"MGMT_PORT=51999; MGMT_PORT_ENVFILE=51821; MGMT_PORT_CONF=51821", "51821"}, // one old port, named twice
+		{"MGMT_PORT=51999; MGMT_PORT_ENVFILE=51821; MGMT_PORT_CONF=51822", "51821 51822"},
+		{"MGMT_PORT=51999; MGMT_PORT_ENVFILE=51820; MGMT_PORT_CONF=51820", ""}, // wg0's port is never deleted
+		{"MGMT_PORT=51999; MGMT_PORT_ENVFILE='51821; reboot'; MGMT_PORT_CONF=", ""},
+	} {
+		out, err := r.run(c.vars, "mgmt_stale_ports | tr '\\n' ' '")
+		if err != nil || strings.TrimSpace(out) != c.want {
+			t.Errorf("%s: got %q (%v), want %q", c.vars, out, err, c.want)
+		}
+	}
+}
+
+// Remote WinBox off (NO_FIREWALL=1): forwarding set by an earlier run goes off again, and only that.
+func TestInstallMgmtForwardingOffWithoutFirewall(t *testing.T) {
+	ours := "# Fast Tech Net remote WinBox: devices on wg-mgmt are routed.\nnet.ipv4.ip_forward=1\n"
+	r := newFWRig(t, beforeRules)
+	os.WriteFile(r.sysf, []byte(ours), 0o644)
+	out, err := r.run("NO_FIREWALL=1", "wireguard_mgmt; echo \"ON=$MGMT_ON\"")
+	if err != nil || !strings.Contains(out, "ON=0") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if _, err := os.Stat(r.sysf); err == nil {
+		t.Error("our sysctl file is still there")
+	}
+	if !strings.Contains(r.calls(), "sysctl -q -w net.ipv4.ip_forward=0") {
+		t.Errorf("forwarding was not switched off:\n%s", r.calls())
+	}
+	if strings.Contains(r.calls(), "ufw") || r.file(r.rule) != beforeRules {
+		t.Error("NO_FIREWALL=1 must not touch ufw")
+	}
+	// A sysctl file that is not ours (or none) is left alone, and forwarding stays as the admin set it.
+	r = newFWRig(t, beforeRules)
+	os.WriteFile(r.sysf, []byte("net.ipv4.ip_forward=1\n"), 0o644)
+	if out, err := r.run("NO_FIREWALL=1", "wireguard_mgmt"); err != nil || r.file(r.sysf) == "" || strings.Contains(r.calls(), "sysctl") {
+		t.Errorf("foreign sysctl file: %v %s\n%s", err, out, r.calls())
+	}
+	r = newFWRig(t, beforeRules)
+	if out, err := r.run("NO_FIREWALL=1", "wireguard_mgmt"); err != nil || strings.Contains(r.calls(), "sysctl") {
+		t.Errorf("no sysctl file: %v %s\n%s", err, out, r.calls())
+	}
+}
+
+// The Drive snapshot carries wg-mgmt.conf next to wg0.conf, mode 600, only when it exists, and says how to put it back.
+func TestBackupIncludesMgmtConfig(t *testing.T) {
+	b, err := os.ReadFile("ftnbilling-backup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	for _, want := range []string{
+		"WGMGMTCONF=$ROOT/etc/wireguard/wg-mgmt.conf",
+		`if [ -f "$WGMGMTCONF" ]; then`,
+		`cp -a "$WGMGMTCONF" "$top/wireguard/"`,
+		`chmod 600 "$top/wireguard/wg-mgmt.conf"`,
+		"sudo cp -a $dir/wireguard/wg-mgmt.conf /etc/wireguard/wg-mgmt.conf",
+		"sudo chmod 600 /etc/wireguard/wg-mgmt.conf",
+		"sudo systemctl restart wg-quick@wg-mgmt",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("ftnbilling-backup lacks %q", want)
+		}
+	}
+	doc, _ := os.ReadFile("BACKUP.md")
+	for _, want := range []string{"wg-mgmt.conf", "chmod 600 /etc/wireguard/wg-mgmt.conf", "systemctl restart wg-quick@wg-mgmt"} {
+		if !strings.Contains(string(doc), want) {
+			t.Errorf("BACKUP.md lacks %q", want)
+		}
+	}
 }

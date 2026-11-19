@@ -178,7 +178,8 @@ prefixes_overlap() {
 # mgmt_settings: MGMT_SUBNET / MGMT_PORT from the environment, else from the
 # settings file of an earlier install, else the defaults; then validated.
 mgmt_settings() {
-  MGMT_PORT="${MGMT_PORT:-$(envget MGMT_PORT)}"; MGMT_PORT="${MGMT_PORT:-51821}"
+  MGMT_PORT_ENVFILE=$(envget MGMT_PORT)   # the port of the earlier run, before anything is overwritten
+  MGMT_PORT="${MGMT_PORT:-$MGMT_PORT_ENVFILE}"; MGMT_PORT="${MGMT_PORT:-51821}"
   MGMT_SUBNET="${MGMT_SUBNET:-$(envget MGMT_SUBNET)}"; MGMT_SUBNET="${MGMT_SUBNET:-10.98.0.0/24}"
   case $MGMT_PORT in ""|*[!0-9]*) die "MGMT_PORT must be a UDP port number, got: $MGMT_PORT" ;; esac
   { [ "$MGMT_PORT" -ge 1 ] && [ "$MGMT_PORT" -le 65535 ]; } || die "MGMT_PORT must be 1 to 65535, got: $MGMT_PORT"
@@ -551,6 +552,7 @@ WGEOF
 # in the chain, so nothing ufw adds later can let a device further than this:
 #   wg-mgmt -> wg0:    tcp/8291 (WinBox) and ping, to the routers' tunnel range only
 #   wg0 -> wg-mgmt:    replies only (established/related); a router cannot open a connection to a device
+#   wg0 -> anywhere else: dropped (no router-to-router, no router-to-internet forwarding through this server)
 #   wg-mgmt -> anywhere else, and wg-mgmt -> this server: dropped (no internet, no server services)
 # No NAT: routers see the device's own address.
 mgmt_rules() {
@@ -563,6 +565,7 @@ mgmt_rules() {
 -A ufw-before-forward -i $MGMT_IF -o $WG_IF -s $MGMT_SUBNET -d $WG_SUBNET -p icmp --icmp-type echo-request -j ACCEPT
 -A ufw-before-forward -i $MGMT_IF -j DROP
 -A ufw-before-forward -i $WG_IF -o $MGMT_IF -s $WG_SUBNET -d $MGMT_SUBNET -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A ufw-before-forward -i $WG_IF -j DROP
 -A ufw-before-forward -o $MGMT_IF -j DROP
 # END $MGMT_MARK
 EOF
@@ -577,7 +580,29 @@ mgmt_before_rules() {
     skip { if ($0 == "# END " mark) skip = 0; next }
     { print }
     !done && $0 == "# End required lines" { print blk; done = 1 }
+    END { if (skip) { print "a \"# BEGIN " mark "\" line has no matching \"# END " mark "\" line" > "/dev/stderr"; exit 1 } }
   '
+}
+
+# mgmt_stale_ports: the ports wg-mgmt had before this run (the settings file's
+# MGMT_PORT, and the ListenPort the interface config had), when they differ from
+# the new one. Never wg0's port.
+mgmt_stale_ports() {
+  local p
+  for p in "${MGMT_PORT_ENVFILE:-}" "${MGMT_PORT_CONF:-}"; do
+    case $p in "" | *[!0-9]*) continue ;; esac
+    if [ "$p" != "$MGMT_PORT" ] && [ "$p" != "$WG_PORT" ]; then echo "$p"; fi
+  done | sort -un
+}
+
+# mgmt_validate_rules: asks iptables-restore (--test: nothing is loaded) whether
+# the block is valid on this kernel, in a minimal ruleset of its own (the chains
+# it adds to, then the block), before the real file is touched.
+mgmt_validate_rules() {
+  have iptables-restore || die "iptables-restore not found, so the remote WinBox rules cannot be checked (ufw needs it too)"
+  local out
+  out=$({ printf '*filter\n:ufw-before-input - [0:0]\n:ufw-before-forward - [0:0]\n'; mgmt_rules | grep -v '^#'; printf 'COMMIT\n'; } | iptables-restore --test 2>&1) \
+    || { printf '%s\n' "$out" >&2; return 1; }
 }
 
 # ---------------------------------------------------------------------------
@@ -585,7 +610,9 @@ wireguard_mgmt() {
   step "remote WinBox: WireGuard $MGMT_IF ($MGMT_SUBNET, udp/$MGMT_PORT)"
   if [ "${NO_FIREWALL:-0}" = 1 ]; then
     note "NO_FIREWALL=1: skipped. Remote WinBox needs this server to forward packets, and its rules live in ufw"
-    MGMT_ON=0; return 0
+    MGMT_ON=0
+    mgmt_forwarding_off
+    return 0
   fi
   MGMT_ON=1
   local host=${BASE#*://} cur
@@ -611,6 +638,7 @@ WGEOF
     [ "$cur" = "$MGMT_SERVER_IP/${MGMT_SUBNET#*/}" ] || die "$MGMT_CONF has Address $cur but MGMT_SUBNET is $MGMT_SUBNET. Changing the subnet means new profiles for every device and rebuilt routers: remove the devices (ftnbilling-mgmt remove), delete $MGMT_CONF and run again, or set MGMT_SUBNET back."
     cur=$(awk '/^\[Peer\]/{exit} /^ListenPort *=/{print $3; exit}' "$MGMT_CONF")
     if [ "$cur" != "$MGMT_PORT" ]; then
+      MGMT_PORT_CONF=$cur
       note "changing the $MGMT_IF port from ${cur:-?} to $MGMT_PORT"
       awk -v p="$MGMT_PORT" '/^\[Peer\]/{peers=1} !peers && /^ListenPort *=/{print "ListenPort = " p; next} {print}' "$MGMT_CONF" >"$MGMT_CONF.new"
       chmod 600 "$MGMT_CONF.new"; mv -f "$MGMT_CONF.new" "$MGMT_CONF"
@@ -743,7 +771,7 @@ EOF
     addkv WG_PUBLIC_KEY "$WG_PUB"
     addkv WG_ENDPOINT "$PUBIP:$WG_PORT"
     addkv WG_SUBNET "$WG_SUBNET"
-    addkv MGMT_PORT "$MGMT_PORT"
+    setkv MGMT_PORT "$MGMT_PORT"
     addkv MGMT_SUBNET "$MGMT_SUBNET"
     [ -z "${ADMIN_PASS:-}" ] || setkv ADMIN_PASS "$ADMIN_PASS"
     BASE=$(envget PUBLIC_BASE_URL)
@@ -995,7 +1023,13 @@ firewall() {
   runq ufw allow 80/tcp
   runq ufw allow 443/tcp
   runq ufw allow "$WG_PORT"/udp          # routers (wg0)
-  if [ "${MGMT_ON:-0}" = 1 ]; then runq ufw allow "$MGMT_PORT"/udp; fi   # remote WinBox devices (wg-mgmt)
+  if [ "${MGMT_ON:-0}" = 1 ]; then
+    runq ufw allow "$MGMT_PORT"/udp   # remote WinBox devices (wg-mgmt)
+    # The port was changed: the rule for the old one goes (wg0's port never does).
+    for i in $(mgmt_stale_ports); do
+      if [ "$DRY" = 1 ]; then printf '    [dry-run] ufw delete allow %s/udp (the previous wg-mgmt port)\n' "$i"; else ufw delete allow "$i"/udp >/dev/null 2>&1 || true; fi
+    done
+  fi
   # NetFlow arrives only through the tunnel. A legacy install that still has a
   # router on ROUTER_URL sends it over the internet, so keep that rule there.
   if ! grep -qs '^ROUTER_URL=' "$ENVF"; then
@@ -1024,6 +1058,8 @@ firewall() {
   fi
   mgmt_firewall
   runq ufw default deny incoming
+  # Routed (forwarded) traffic is denied unless a rule says otherwise: the only forwarding here is the wg-mgmt block.
+  runq ufw default deny routed
   runq ufw --force enable
   mgmt_forwarding
 }
@@ -1031,31 +1067,50 @@ firewall() {
 # Forwarding between the two WireGuard interfaces, kept across reboots. It is
 # switched on only here, after the ufw block above is in place and ufw is enabled,
 # so there is no moment when this server routes without the rules.
+MGMT_SYSCTL=${FTN_MGMT_SYSCTL:-/etc/sysctl.d/91-ftnbilling-mgmt.conf}   # (the override is for the tests)
 mgmt_forwarding() {
   [ "${MGMT_ON:-0}" = 1 ] || return 0
-  printf '# Fast Tech Net remote WinBox: devices on %s are routed to the routers on %s. Allowed only by the ftnbilling-mgmt block of /etc/ufw/before.rules.\nnet.ipv4.ip_forward=1\n' "$MGMT_IF" "$WG_IF" | writef 644 root:root /etc/sysctl.d/91-ftnbilling-mgmt.conf
-  run sysctl -q -p /etc/sysctl.d/91-ftnbilling-mgmt.conf
+  printf '# Fast Tech Net remote WinBox: devices on %s are routed to the routers on %s. Allowed only by the ftnbilling-mgmt block of /etc/ufw/before.rules.\nnet.ipv4.ip_forward=1\n' "$MGMT_IF" "$WG_IF" | writef 644 root:root "$MGMT_SYSCTL"
+  run sysctl -q -p "$MGMT_SYSCTL"
   if [ -r /etc/ufw/sysctl.conf ] && grep -Eq '^net/ipv4/ip_forward *= *0' /etc/ufw/sysctl.conf; then
     warn "/etc/ufw/sysctl.conf sets net/ipv4/ip_forward=0, which ufw applies when it starts and which switches forwarding off again: change it to 1 for remote WinBox"
   fi
+}
+
+# Remote WinBox is off (NO_FIREWALL=1): do not leave forwarding on without the ufw
+# rules. Only what this installer turned on is turned off: its own sysctl file
+# is the evidence, and it is removed together with the setting.
+mgmt_forwarding_off() {
+  [ -f "$MGMT_SYSCTL" ] && grep -q 'Fast Tech Net remote WinBox' "$MGMT_SYSCTL" || return 0
+  note "NO_FIREWALL=1: switching forwarding off again (the remote WinBox setting of an earlier run: $MGMT_SYSCTL)"
+  run rm -f "$MGMT_SYSCTL"
+  run sysctl -q -w net.ipv4.ip_forward=0
 }
 
 # The wg-mgmt forwarding rules in /etc/ufw/before.rules (see mgmt_rules). Written
 # only when they differ, so a re-run changes nothing; loaded by ufw's reload/enable.
 mgmt_firewall() {
   [ "${MGMT_ON:-0}" = 1 ] || return 0
-  local f=/etc/ufw/before.rules tmp
-  if [ "$DRY" = 1 ]; then printf '    [dry-run] ufw before.rules: %s forwarding block (wg-mgmt -> wg0 tcp/8291 + ping only; everything else from wg-mgmt dropped)\n' "$MGMT_IF"; return 0; fi
+  local f=${FTN_UFW_BEFORE_RULES:-/etc/ufw/before.rules} tmp   # (the override is for the tests)
+  if [ "$DRY" = 1 ]; then printf '    [dry-run] ufw before.rules: %s forwarding block (wg-mgmt -> wg0 tcp/8291 + ping only; everything else dropped), checked with iptables-restore --test first\n' "$MGMT_IF"; return 0; fi
   [ -f "$f" ] || die "$f not found: ufw is not set up as expected"
+  mgmt_validate_rules || die "the remote WinBox firewall rules were refused by iptables-restore --test (output above). $f was not changed. Is the kernel missing the conntrack or icmp match modules?"
   tmp=$(mktemp "$f.XXXXXX")
-  mgmt_before_rules <"$f" >"$tmp"
-  grep -q "^# BEGIN $MGMT_MARK" "$tmp" || { rm -f "$tmp"; die "could not add the remote WinBox rules: no '# End required lines' in $f"; }
+  mgmt_before_rules <"$f" >"$tmp" || { rm -f "$tmp"; die "$f was not changed: it has a '# BEGIN $MGMT_MARK' line without its '# END $MGMT_MARK' line. Fix or delete that block by hand, then run the installer again."; }
+  grep -q "^# BEGIN $MGMT_MARK" "$tmp" || { rm -f "$tmp"; die "could not add the remote WinBox rules: no '# End required lines' in $f (it was not changed)"; }
   chmod --reference="$f" "$tmp"; chown --reference="$f" "$tmp"
   if cmp -s "$tmp" "$f"; then rm -f "$tmp"
   else
     cp -p "$f" "$f.pre-$MGMT_MARK"
     mv -f "$tmp" "$f"
-    try ufw reload
+    # Load it now when ufw is running (when it is not, "ufw enable" below loads it). A failed reload puts the old file back.
+    if ufw status 2>/dev/null | grep -q '^Status: active'; then
+      if ! ufw reload; then
+        cp -p "$f.pre-$MGMT_MARK" "$f"
+        ufw reload >/dev/null 2>&1 || true
+        die "ufw reload failed with the remote WinBox rules in $f; the previous $f was put back. See the ufw output above (journalctl -u ufw)."
+      fi
+    fi
     note "remote WinBox forwarding rules written to $f"
   fi
 }

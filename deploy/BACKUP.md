@@ -6,7 +6,7 @@ There are three layers, all installed by `deploy/install.sh`:
 |---|---|---|
 | Database dump | every 6 hours (`ftnbilling-dump.timer`) | `pg_dump -Fc` of the `ftnbilling` database into `/var/backups/ftnbilling/db/` (root only, mode 0600). Each dump is checked with `pg_restore -l` and written under a temporary name first. Kept: the newest 8, one per day for 14 days, one per week for 8 weeks, one per month for 12 months. The same run also makes the daily file tar (`ispbill.json*`, `outbox.json`, `alerts.json`, `fleet.json`, `spool/`, kept 30 days) and, on Sundays, the `metrics/` tar (kept 4 weeks). This replaces the old daily cron job. Run by hand: `sudo ftnbilling-backup dump` |
 | Restore drill | monthly (`ftnbilling-drill.timer`) | Creates a scratch database `ftnbilling_drill`, restores the newest dump into it, runs `ftnbilling db-check` against it and compares row counts and the sum of applied payments with production (the restored copy may be missing recent rows but must never have more), then drops it. A backup you have never restored is only a hope. Run by hand: `sudo ftnbilling-backup drill` |
-| Google Drive | weekly (below) | An encrypted snapshot off the server, with a fresh dump, the settings file (including `DATA_KEY`) and `wg0.conf` |
+| Google Drive | weekly (below) | An encrypted snapshot off the server, with a fresh dump, the settings file (including `DATA_KEY`), `wg0.conf` and, when remote WinBox is set up, `wg-mgmt.conf` |
 
 The last dump, drill and upload results are written to `/var/lib/ftnbilling/backup-status.json` (`dump_at`, `dump_file`, `dump_bytes`, `drill_at`, `drill_ok`, `drill_msg`, `upload_at`, `upload_ok`, `error`), which the admin Settings page shows; the app treats a dump older than 36 hours as stale. The app raises a "Backup problem" alert (email and WhatsApp, as set up in Settings) when the dump is older than 36 hours, or the status shows an `error`, `drill_ok` false or `upload_ok` false. `sudo ftnbilling-doctor` checks all of this.
 
@@ -103,6 +103,13 @@ In it:
   rebuilt server keeps the same identity and the routers reconnect on their
   own. (Older snapshots may also hold `wg-admin.conf`; the admin VPN no longer
   exists and that file is not needed.)
+- The remote WinBox interface: `/etc/wireguard/wg-mgmt.conf` (mode 600, only
+  when it exists): its private key and the devices added with
+  `ftnbilling-mgmt`. Restore it with `sudo cp -a <snapshot>/wireguard/wg-mgmt.conf
+  /etc/wireguard/wg-mgmt.conf`, `sudo chmod 600 /etc/wireguard/wg-mgmt.conf`,
+  `sudo systemctl restart wg-quick@wg-mgmt`; without it the devices must be
+  added again. The settings that go with it (`/etc/ftnbilling/mgmt.env`) come back
+  with the settings folder.
 - The web server settings: `/etc/caddy/Caddyfile`.
 - When PostgreSQL is in use (`DATABASE_URL` in the settings file): a fresh,
   verified full database dump, `database.dump` (the same kind the 6-hourly
