@@ -501,3 +501,31 @@ func TestUnitAndApartmentNameInvariants(t *testing.T) {
 		t.Fatalf("link to a missing router: %v", err)
 	}
 }
+
+// A server already on format 8 (the ports PR: customer_ports) must open after the
+// apartments upgrade and be moved to format 9, not refused as an "old PIN model".
+func TestFormat8OpensAndUpgradesToApartments(t *testing.T) {
+	dir := t.TempDir()
+	v8 := `{"format":8,"sites":{"s1":{"id":"s1","name":"Riverside","mode":"wg","customer_ports":"ether5"}},
+"packages":{},"accounts":{"a1":{"id":"a1","code":"AAA111","site_id":"s1","flat":"B4","mac":"AA:BB:CC:DD:EE:01"}},
+"orders":{},"vouchers":{},"payments":{},"devices":{},"tasks":{},"events":[],"event_seq":0}`
+	if err := os.WriteFile(filepath.Join(dir, "ispbill.json"), []byte(v8), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("a format-8 store must open: %v", err)
+	}
+	s.View(func(d *Data) {
+		if d.Format != FormatVersion {
+			t.Fatalf("format %d, want %d", d.Format, FormatVersion)
+		}
+		if got := d.Sites["s1"].CustomerPorts; got != "ether5" {
+			t.Fatalf("customer_ports %q lost in the upgrade", got)
+		}
+		a := d.Accounts["a1"]
+		if a.ApartmentID != MigratedApartmentID("s1") || a.Unit != "B4" {
+			t.Fatalf("account not moved into its router's apartment: %+v", a)
+		}
+	})
+}

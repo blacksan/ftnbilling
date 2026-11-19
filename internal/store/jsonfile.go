@@ -115,7 +115,7 @@ func decodeJSON(raw []byte, path string) (*Data, int, error) {
 	}
 	d := &Data{}
 	switch probe.Format {
-	case FormatVersion, 7, 6, 5, 4, 3, 2:
+	case FormatVersion, 8, 7, 6, 5, 4, 3, 2:
 		if err := json.Unmarshal(raw, d); err != nil {
 			return nil, 0, fmt.Errorf("corrupt %s: %w", path, err)
 		}
