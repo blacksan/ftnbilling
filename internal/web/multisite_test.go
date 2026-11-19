@@ -102,7 +102,9 @@ func newMultiOps(t *testing.T, mut func(*config.Config), mkOps func(cfg config.C
 	mgr.Start(ctx)
 	t.Cleanup(func() { cancel(); mgr.Wait(); svc.Wait() })
 	mp := payments.NewMpesa(payments.MpesaConfig{}, svc, st, log)
-	prov := map[string]payments.Provider{"test": &payments.Test{Enabled_: true, Delay: 30 * time.Millisecond, C: svc}, "voucher": payments.Voucher{C: svc}, "mpesa": mp}
+	tp := &payments.Test{Enabled_: true, Delay: 30 * time.Millisecond, C: svc}
+	t.Cleanup(tp.Wait)
+	prov := map[string]payments.Provider{"test": tp, "voucher": payments.Voucher{C: svc}, "mpesa": mp}
 	srv := web.New(cfg, st, svc, prov, mp, mgr, log)
 	if mkOps != nil {
 		srv.SetOps(mkOps(cfg, st, mgr, svc))

@@ -164,6 +164,8 @@ type Handle struct {
 	schema string
 }
 
+var strictOnce sync.Once
+
 // New opens an empty store on the selected backend.
 func New(t testing.TB) *Handle {
 	t.Helper()
@@ -173,7 +175,7 @@ func New(t testing.TB) *Handle {
 // NewIn is New with a given data directory (JSON backend).
 func NewIn(t testing.TB, dir string) *Handle {
 	t.Helper()
-	store.Strict = true // rigs catch an ErrNoChange that follows a change
+	strictOnce.Do(func() { store.Strict = true }) // rigs catch an ErrNoChange that follows a change
 	h := &Handle{t: t, Dir: dir, Fault: &Fault{}, Kind: "json"}
 	if Postgres() {
 		h.Kind = "postgres"

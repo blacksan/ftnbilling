@@ -69,8 +69,10 @@ func newAppCfg(t *testing.T, testMode bool, mut func(*config.Config)) *app {
 	t.Cleanup(func() { cancel(); mgr.Wait(); svc.Wait() })
 	rt := mgr.MockRouter()
 	mp := payments.NewMpesa(payments.MpesaConfig{}, svc, st, log)
+	tp := &payments.Test{Enabled_: testMode, Delay: 30 * time.Millisecond, C: svc}
+	t.Cleanup(tp.Wait) // runs before the store is closed
 	prov := map[string]payments.Provider{
-		"test":    &payments.Test{Enabled_: testMode, Delay: 30 * time.Millisecond, C: svc},
+		"test":    tp,
 		"voucher": payments.Voucher{C: svc}, "mpesa": mp,
 	}
 	srv := web.New(cfg, st, svc, prov, mp, mgr, log)
