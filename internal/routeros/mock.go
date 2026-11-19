@@ -142,8 +142,17 @@ func copyRow(r Row) Row {
 	return c
 }
 
-// RowsProps is Rows; the mock returns every property.
-func (m *Mock) RowsProps(ctx context.Context, path string, query map[string]string, _ []string) ([]Row, error) {
+// RowsProps is Rows; the mock returns every property, but records the
+// proplist as ".proplist" in the query LastQuery gives back.
+func (m *Mock) RowsProps(ctx context.Context, path string, query map[string]string, props []string) ([]Row, error) {
+	if len(props) > 0 {
+		q := make(map[string]string, len(query)+1)
+		for k, v := range query {
+			q[k] = v
+		}
+		q[".proplist"] = strings.Join(append([]string{RowID}, props...), ",")
+		query = q
+	}
 	return m.Rows(ctx, path, query)
 }
 

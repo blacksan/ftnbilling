@@ -52,6 +52,19 @@ data class CheckFix(
     val physical: Boolean = false,
     /** "operator" or "owner": the lowest role allowed to run the fix. */
     val role: String = "operator",
+    /** The server applies this fix by itself: no button. */
+    val automatic: Boolean = false,
+    /** The last automatic attempt failed: a "Try now" button is shown. */
+    @SerialName("try_now") val tryNow: Boolean = false,
+)
+
+/** What the server did about an item by itself: fixed, failed or pending. */
+@Serializable
+data class AutoInfo(
+    val state: String = "",
+    val at: String? = null,
+    val error: String = "",
+    val text: String = "",
 )
 
 @Serializable
@@ -63,7 +76,23 @@ data class CheckItem(
     val detail: String = "",
     val evidence: List<String> = emptyList(),
     val fix: CheckFix? = null,
-)
+    val auto: AutoInfo? = null,
+) {
+    /** Evidence lines with something in them: the card shows no "what the router said" block otherwise. */
+    val shownEvidence: List<String> get() = evidence.map { it.trim() }.filter { it.isNotEmpty() }
+
+    /** The fix button: confirm fixes always, auto fixes only when the server does not apply them itself or failed. */
+    val showsFixButton: Boolean
+        get() {
+            val f = fix ?: return false
+            if (status == CheckStatus.OK || status == CheckStatus.INFO) return false
+            return when (f.kind) {
+                FixKind.CONFIRM -> true
+                FixKind.AUTO -> !f.automatic || f.tryNow
+                else -> false
+            }
+        }
+}
 
 @Serializable
 data class Checks(
@@ -73,6 +102,14 @@ data class Checks(
     val summary: ChecksSummary = ChecksSummary(),
     @SerialName("join_report") val joinReport: JoinReport? = null,
     val items: List<CheckItem> = emptyList(),
+    @SerialName("auto_fixes") val autoFixes: AutoFixes? = null,
+)
+
+/** Whether the server's automatic fixes of this router are paused (owner toggle), and until when. */
+@Serializable
+data class AutoFixes(
+    val paused: Boolean = false,
+    val until: String? = null,
 )
 
 @Serializable

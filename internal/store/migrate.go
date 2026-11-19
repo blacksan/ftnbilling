@@ -415,8 +415,8 @@ func IsObsoleteSiteSetting(key string) bool {
 	return false
 }
 
-// MigratedApartmentID is the id of the apartment that migration 0007 (and
-// migrateV7toV8) creates for a router: "a" + the first 6 hex digits of
+// MigratedApartmentID is the id of the apartment that migration 0008 (and
+// migrateV8toV9) creates for a router: "a" + the first 6 hex digits of
 // md5("apt|" + router id). Postgres computes the same value in SQL, so the two
 // backends give the same ids.
 func MigratedApartmentID(siteID string) string {
@@ -428,7 +428,7 @@ var legacyPhoneStrip = strings.NewReplacer(" ", "", "-", "", "(", "", ")", "", "
 var legacyPhoneRe = regexp.MustCompile(`^254[17][0-9]{8}$`)
 
 // legacyPhone writes a Kenyan mobile number as +254XXXXXXXXX. Text that is not
-// one is kept as it was typed (migration 0007 does the same in SQL).
+// one is kept as it was typed (migration 0008 does the same in SQL).
 func legacyPhone(raw string) string {
 	s := legacyPhoneStrip.Replace(strings.TrimSpace(raw))
 	s = strings.TrimPrefix(s, "+")
@@ -448,7 +448,7 @@ var spaceRun = regexp.MustCompile(`\s+`)
 
 func tidy(s string) string { return strings.TrimSpace(spaceRun.ReplaceAllString(s, " ")) }
 
-// migrateV7toV8 upgrades format 7 data in memory (migration 0007 in Postgres):
+// migrateV8toV9 upgrades format 8 data in memory (migration 0008 in Postgres):
 //   - every router gets one apartment named after it (the router's name, with
 //     " (<router id>)" added when another apartment already has that name),
 //     linked to the router;
@@ -462,7 +462,7 @@ func tidy(s string) string { return strings.TrimSpace(spaceRun.ReplaceAllString(
 //     notes, a Kenyan phone is written +254....
 //
 // The old contacts are then gone. It is deterministic and safe to run twice.
-func (d *Data) migrateV7toV8(now time.Time) {
+func (d *Data) migrateV8toV9(now time.Time) {
 	sites := make([]Site, 0, len(d.Sites))
 	for _, s := range d.Sites {
 		sites = append(sites, s)
@@ -523,7 +523,7 @@ func (d *Data) migrateV7toV8(now time.Time) {
 				a.Unit += " (" + ref + ")"
 				k = a.ApartmentID + "|" + UnitKey(a.Unit)
 				d.AddEvent(Event{Time: now, SiteID: a.SiteID, Kind: "audit", AccountID: a.ID,
-					Msg: "Unit conflict found by migration 0007: flat " + was + " (" + a.Code + ") shares its label with another open account of the same apartment. Its unit is now " + a.Unit + "."})
+					Msg: "Unit conflict found by migration 0008: flat " + was + " (" + a.Code + ") shares its label with another open account of the same apartment. Its unit is now " + a.Unit + "."})
 			}
 			units[k] = true
 		}
@@ -599,4 +599,37 @@ func (d *Data) migrateV7toV8(now time.Time) {
 		d.Apartments[apt.ID] = apt
 	}
 	d.LegacyContacts = nil
+}
+
+// SplitList splits a comma list, trimming blanks and dropping empty and repeated items.
+func SplitList(list string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range strings.Split(list, ",") {
+		if p = strings.TrimSpace(p); p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// migrateV7toV8 upgrades format 7 data in memory: the single bench port of a
+// router becomes the first of its customer ports.
+func (d *Data) migrateV7toV8() {
+	for id, s := range d.Sites {
+		if s.BenchPort != "" {
+			list := SplitList(s.CustomerPorts)
+			found := false
+			for _, p := range list {
+				found = found || p == s.BenchPort
+			}
+			if !found {
+				list = append([]string{s.BenchPort}, list...)
+			}
+			s.CustomerPorts = strings.Join(list, ",")
+			s.BenchPort = ""
+			d.Sites[id] = s
+		}
+	}
 }

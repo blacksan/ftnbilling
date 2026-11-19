@@ -13,6 +13,7 @@ import (
 	"ispbill/internal/billing"
 	"ispbill/internal/fleet"
 	"ispbill/internal/metrics"
+	"ispbill/internal/sites"
 	"ispbill/internal/store"
 )
 
@@ -127,7 +128,11 @@ func (s *Server) siteJSON(st store.Site, h siteHealth, cnt *siteCounts) map[stri
 	if conflicts == nil {
 		conflicts = []string{}
 	}
+	eff := s.mgr.Effective(st)
 	return map[string]any{
+		"wan_interface": eff.WANInterface, "olt_interface": eff.OLTInterface, "vlan_id": st.VLANID, "customer_subnet": eff.CustomerSubnet,
+		"customer_ports": portsJSON(st.CustomerPorts), "disabled_ports": portsJSON(st.DisabledPorts), "bench_port": firstPort(st.CustomerPorts), "customer_port": s.mgr.CustomerPortStatus(st.ID), "auto_fixes": s.mgr.AutoFixPause(st.ID),
+		"wan_cap_mbps": eff.WANCapMbps, "olt_cap_mbps": eff.OLTCapMbps, "support_phone": st.SupportPhone,
 		"id": st.ID, "name": st.Name, "access_mode": accessMode(st), "online": h.online, "cause": h.cause,
 		"wan_mode": st.WANMode, "wan_address": st.WANAddress, "wan_gateway": st.WANGateway, "wan_dns": st.WANDNS,
 		"pppoe_user": st.PPPoEUser, "pppoe_pass_set": st.PPPoEPassEnc != "", "lan_ports": st.LANPorts, "lan_subnet": st.LANSubnet,
@@ -434,4 +439,20 @@ func (s *Server) apiAlertMute(w http.ResponseWriter, r *http.Request, c *apiCtx)
 		c.audit(s, "alerts muted for "+req.SiteID+" for "+strconv.Itoa(req.Minutes)+" min")
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// firstPort is the first of a comma list of ports ("" when empty): the deprecated bench_port.
+func firstPort(list string) string {
+	if p := sites.SplitPorts(list); len(p) > 0 {
+		return p[0]
+	}
+	return ""
+}
+
+// portsJSON is a port list as a JSON array ([] when empty, never null).
+func portsJSON(list string) []string {
+	if l := sites.SplitPorts(list); l != nil {
+		return l
+	}
+	return []string{}
 }

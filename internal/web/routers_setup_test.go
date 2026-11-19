@@ -17,18 +17,23 @@ func TestRouterFormWANFieldsAndWriteOnlyPPPoEPassword(t *testing.T) {
 	m, site, _ := uiRig(t)
 	const secret = "sekret-pppoe-pass-77"
 	form := url.Values{"id": {site}, "name": {"Alpha Court"}, "wanmode": {"pppoe"}, "wan": {"ether1"}, "pppoeuser": {"isp-user"}, "pppoepass": {secret},
-		"lanports": {"ether2"}, "lansubnet": {"192.168.88.0/24"}, "olt": {"sfp-sfpplus1"}, "vlan": {"100"}, "subnet": {"10.5.50.0/24"}, "bench": {"ether5"}}
+		"lanports": {"ether2"}, "lansubnet": {"192.168.88.0/24"}, "olt": {"sfp-sfpplus1"}, "vlan": {"100"}, "subnet": {"10.5.50.0/24"}, "customerports": {"ether5"}}
+	// the VLAN changes on a router that is set up: refused until the operator confirms
+	if loc := m.adminPost(t, "/admin/routers/update", form); !strings.Contains(loc, "Customers on the OLT lose service") {
+		t.Fatalf("an unconfirmed VLAN change was accepted: %s", loc)
+	}
+	form.Set("confirm", "1")
 	if loc := m.adminPost(t, "/admin/routers/update", form); !strings.Contains(loc, "Saved") {
 		t.Fatal(loc)
 	}
 	var st store.Site
 	m.st.View(func(d *store.Data) { st = d.Sites[site] })
-	if st.WANMode != "pppoe" || st.PPPoEUser != "isp-user" || st.PPPoEPassEnc == "" || st.LANPorts != "ether2" || st.VLANID != 100 || st.BenchPort != "ether5" {
+	if st.WANMode != "pppoe" || st.PPPoEUser != "isp-user" || st.PPPoEPassEnc == "" || st.LANPorts != "ether2" || st.VLANID != 100 || st.CustomerPorts != "ether5" {
 		t.Fatalf("not saved: %+v", st)
 	}
 	h := m.adminGet(t, "/admin/routers/view?id="+site+"&tab=profile")
 	for _, want := range []string{`name="wanmode"`, `name="wan"`, `name="wanaddr"`, `name="wangw"`, `name="wandns"`, `name="pppoeuser"`, `name="pppoepass"`,
-		`name="lanports"`, `name="lansubnet"`, `name="olt"`, `name="vlan"`, `name="subnet"`, `name="bench"`, "data-pppoe-set", `value="isp-user"`} {
+		`name="lanports"`, `name="lansubnet"`, `name="olt"`, `name="vlan"`, `name="subnet"`, `name="customerports"`, "data-pppoe-set", `value="isp-user"`} {
 		if !strings.Contains(h, want) {
 			t.Errorf("router form lacks %q", want)
 		}
@@ -38,7 +43,7 @@ func TestRouterFormWANFieldsAndWriteOnlyPPPoEPassword(t *testing.T) {
 	}
 	// The Add router dialog has the same fields.
 	list := m.adminGet(t, "/admin/routers")
-	for _, want := range []string{`name="wanmode"`, `name="lanports"`, `name="bench"`, `name="olt"`} {
+	for _, want := range []string{`name="wanmode"`, `name="lanports"`, `name="customerports"`, `name="olt"`} {
 		if !strings.Contains(list, want) {
 			t.Errorf("Add router lacks %q", want)
 		}
@@ -116,5 +121,35 @@ func TestNoRemovedEndpointsInUI(t *testing.T) {
 		if m := removed.FindString(string(b)); m != "" {
 			t.Errorf("%s still has %q", e.Name(), m)
 		}
+	}
+}
+
+// The owner can pause the server's automatic fixes of a router from the Setup tab; it is shown and recorded.
+func TestRouterPageAutoFixPause(t *testing.T) {
+	m, site, _ := uiRig(t)
+	loc := m.adminPost(t, "/admin/routers/auto-fixes", url.Values{"id": {site}, "paused": {"1"}})
+	if !strings.Contains(loc, "paused") {
+		t.Fatal(loc)
+	}
+	h := m.adminGet(t, "/admin/routers/view?id="+site+"&tab=setup")
+	if !strings.Contains(h, "data-autofix-state") || !strings.Contains(h, "Resume automatic fixes") {
+		t.Fatal("the paused state is not on the page")
+	}
+	var found bool
+	m.st.View(func(d *store.Data) {
+		for _, e := range d.Events {
+			if e.SiteID == site && strings.Contains(e.Msg, "automatic fixes paused") && e.Actor != "" {
+				found = true
+			}
+		}
+	})
+	if !found {
+		t.Fatal("not recorded in the router's activity")
+	}
+	if loc := m.adminPost(t, "/admin/routers/auto-fixes", url.Values{"id": {site}, "paused": {"0"}}); !strings.Contains(loc, "resumed") {
+		t.Fatal(loc)
+	}
+	if h := m.adminGet(t, "/admin/routers/view?id="+site+"&tab=setup"); !strings.Contains(h, "Pause automatic fixes") {
+		t.Fatal("not resumed")
 	}
 }

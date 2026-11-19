@@ -45,7 +45,7 @@ CREATE TEMP TABLE ftn_unit_dupes ON COMMIT DROP AS
                   FROM accounts WHERE closed_at IS NULL AND unit <> '') r WHERE rn > 1;
 INSERT INTO events (seq, time, site_id, kind, account_id, msg)
 SELECT (SELECT coalesce(max(seq),0) FROM events) + row_number() OVER (ORDER BY a.id), now(), a.site_id, 'audit', a.id,
-       'Unit conflict found by migration 0007: flat ' || a.unit || ' (' || a.code || ') shares its label with another open account of the same apartment. Its unit is now '
+       'Unit conflict found by migration 0008: flat ' || a.unit || ' (' || a.code || ') shares its label with another open account of the same apartment. Its unit is now '
        || a.unit || ' (' || coalesce(nullif(a.code, ''), a.id) || ').'
 FROM accounts a JOIN ftn_unit_dupes x ON x.id = a.id;
 UPDATE accounts a SET unit = a.unit || ' (' || coalesce(nullif(a.code, ''), a.id) || ')' FROM ftn_unit_dupes x WHERE x.id = a.id;

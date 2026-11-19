@@ -3,6 +3,8 @@ package ke.co.ftw.ftnadmin.data.routers
 import ke.co.ftw.ftnadmin.core.network.ApiClient
 import ke.co.ftw.ftnadmin.data.putIfNotBlank
 import ke.co.ftw.ftnadmin.domain.Site
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -15,6 +17,23 @@ class RouterLiveRepository(private val api: ApiClient) {
 
     suspend fun interfaces(routerId: String): List<NetInterface> =
         api.get<InterfacesResponse>("routers", routerId, "interfaces").items
+
+    /** Every physical port with its role; the server reads the router once per refresh (cached 4 s). */
+    suspend fun ports(routerId: String): PortsResponse = api.get("routers", routerId, "ports")
+
+    /**
+     * Enable/disable and change the role of one port (operator; owner for the admin LAN and the OLT uplink).
+     * [confirmName] is the typed router name the server asks for before risky changes.
+     */
+    suspend fun changePort(routerId: String, port: String, role: String? = null, disabled: Boolean? = null, confirmName: String? = null): PortChangeResponse =
+        api.patch(
+            "routers", routerId, "ports", port,
+            body = buildJsonObject {
+                role?.let { put("role", it) }
+                disabled?.let { put("disabled", it) }
+                if (!confirmName.isNullOrBlank()) put("confirm_name", confirmName)
+            },
+        )
 
     /** [kind] is `all`, `flats` or `unregistered`; [online] filters to connected devices. */
     suspend fun clients(routerId: String, query: String? = null, kind: String? = null, online: Boolean? = null): ClientsResponse =
@@ -53,8 +72,10 @@ class RouterLiveRepository(private val api: ApiClient) {
         str("olt_interface", r.oltInterface)
         r.vlanId?.let { put("vlan_id", it) }
         str("customer_subnet", r.customerSubnet)
-        str("bench_port", r.benchPort)
+        if (patch || r.customerPorts.isNotEmpty()) put("customer_ports", JsonArray(r.customerPorts.map { JsonPrimitive(it) }))
         r.wanCapMbps?.let { put("wan_cap_mbps", it) }
         str("support_phone", r.supportPhone)
+        if (r.confirm) put("confirm", true)
+        if (r.confirmName.isNotBlank()) put("confirm_name", r.confirmName.trim())
     }
 }

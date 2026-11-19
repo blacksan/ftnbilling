@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -138,7 +139,7 @@ func TestV3RoundTrip(t *testing.T) {
 }
 
 func TestUnknownFormatRefused(t *testing.T) {
-	for _, f := range []string{"1", "9", "0"} {
+	for _, f := range []string{"1", "10", "0"} {
 		dir := t.TempDir()
 		p := filepath.Join(dir, "ispbill.json")
 		raw := []byte(`{"format":` + f + `}`)
@@ -304,12 +305,41 @@ func TestMigrateV6ToV7MakesRoutersIPoEAndPurgesJobSettings(t *testing.T) {
 	})
 }
 
-// v7Apartments is a format 7 file with the cases migration 0007 has to get right:
+func TestMigrateV7ToV8MovesBenchPortIntoCustomerPorts(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{"format":7,"sites":{
+	"s1":{"id":"s1","name":"A","mode":"wg","bench_port":"ether5"},
+	"s2":{"id":"s2","name":"B","mode":"wg","bench_port":"ether5","customer_ports":"ether4,ether5"},
+	"s3":{"id":"s3","name":"C","mode":"wg"}}}`
+	p := filepath.Join(dir, "ispbill.json")
+	os.WriteFile(p, []byte(raw), 0o600)
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"s1": "ether5", "s2": "ether4,ether5", "s3": ""}
+	s.View(func(d *Data) {
+		for id, w := range want {
+			if got := d.Sites[id]; got.CustomerPorts != w || got.BenchPort != "" {
+				t.Fatalf("%s: customer_ports %q bench %q, want %q and none", id, got.CustomerPorts, got.BenchPort, w)
+			}
+		}
+	})
+	if b, err := os.ReadFile(p + ".v7.bak"); err != nil || string(b) != raw {
+		t.Fatalf("v7 backup: %v", err)
+	}
+	b, _ := os.ReadFile(p)
+	if strings.Contains(string(b), "bench_port") || !strings.Contains(string(b), `"format": 9`) {
+		t.Fatalf("saved file still has bench_port or the old format: %s", b)
+	}
+}
+
+// v7Apartments is a format 7 file with the cases migration 0008 has to get right:
 // two routers, a unit label used twice on one router, a closed account, and
 // router contacts of several roles (one section holds the first, the rest go
 // into its notes).
 const v7Apartments = `{"format":7,
-"sites":{"s1":{"id":"s1","name":"Riverside","address":"Ngong Rd","mode":"wg","created_at":"2026-01-01T00:00:00Z"},
+"sites":{"s1":{"id":"s1","name":"Riverside","address":"Ngong Rd","mode":"wg","bench_port":"ether5","created_at":"2026-01-01T00:00:00Z"},
          "s2":{"id":"s2","name":"Hilltop","mode":"wg","created_at":"2026-01-02T00:00:00Z"}},
 "accounts":{
  "a1":{"id":"a1","site_id":"s1","code":"AAA111","flat":"Flat 1","mac":"AA:BB:CC:DD:EE:01","created_at":"2026-01-03T00:00:00Z"},
@@ -326,7 +356,7 @@ const v7Apartments = `{"format":7,
 
 // MigrationV7Expect is what both backends must give for the fixture above; the
 // Postgres test in pgstore uses the same numbers.
-func TestMigrateV7ToV8Apartments(t *testing.T) {
+func TestMigrateV7ToV9Apartments(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "ispbill.json")
 	if err := os.WriteFile(p, []byte(v7Apartments), 0o600); err != nil {
@@ -341,6 +371,9 @@ func TestMigrateV7ToV8Apartments(t *testing.T) {
 			t.Fatalf("format %d, %d apartments, %d links, %d legacy contacts", d.Format, len(d.Apartments), len(d.ApartmentSites), len(d.LegacyContacts))
 		}
 		a1, a2 := d.Apartments[MigratedApartmentID("s1")], d.Apartments[MigratedApartmentID("s2")]
+		if s1 := d.Sites["s1"]; s1.CustomerPorts != "ether5" || s1.BenchPort != "" {
+			t.Fatalf("the v7 to v8 step (ports) did not run before apartments: %+v", s1)
+		}
 		if a1.Name != "Riverside" || a1.Address != "Ngong Rd" || a2.Name != "Hilltop" {
 			t.Fatalf("apartments %+v %+v", a1, a2)
 		}
@@ -383,7 +416,7 @@ func TestMigrateV7ToV8Apartments(t *testing.T) {
 	if err := json.Unmarshal(raw, &top); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := top["contacts"]; ok || string(top["format"]) != "8" {
+	if _, ok := top["contacts"]; ok || string(top["format"]) != "9" {
 		t.Errorf("file keeps contacts or the old format: format=%s contacts=%v", top["format"], ok)
 	}
 	s2, err := Open(dir)

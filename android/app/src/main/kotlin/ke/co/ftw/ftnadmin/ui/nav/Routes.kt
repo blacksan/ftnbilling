@@ -26,6 +26,8 @@ import kotlinx.serialization.Serializable
 
 @Serializable data class SetupRoute(val id: String)
 
+@Serializable data class PortsRoute(val id: String, val name: String = "")
+
 @Serializable data class EditRouterRoute(val id: String)
 
 @Serializable data class NewDevicesRoute(val routerId: String? = null)

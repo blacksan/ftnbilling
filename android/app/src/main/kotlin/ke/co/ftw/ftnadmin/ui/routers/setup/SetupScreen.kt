@@ -111,7 +111,7 @@ fun SetupScreen(siteId: String, user: UserInfo, onBack: () -> Unit) {
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    item { RouterSummary(c.value) }
+                    item { RouterSummary(c.value, user, vm::setAutoFixesPaused) }
                     c.value.joinReport?.let { r -> item { JoinReportCard(r) } }
                     val known = GROUPS.map { it.first }.toSet()
                     val groups = GROUPS + c.value.items.map { it.group }.filter { it !in known }.distinct().map { it to it.replaceFirstChar { ch -> ch.uppercase() } }
@@ -168,7 +168,7 @@ internal fun statusLabel(status: String) = when (status) {
 }
 
 @Composable
-private fun RouterSummary(c: Checks) {
+private fun RouterSummary(c: Checks, user: UserInfo, onPause: (Boolean) -> Unit) {
     SectionCard("Router") {
         ChipRow(horizontalPadding = 0.dp) {
             StatusChip(if (c.router.reachable) "Reachable" else "Unreachable", if (c.router.reachable) Tone.Good else Tone.Bad)
@@ -179,6 +179,15 @@ private fun RouterSummary(c: Checks) {
             StatusChip("${c.summary.warn} warnings", Tone.Warn)
             StatusChip("${c.summary.fail} failed", Tone.Bad)
             StatusChip("${c.summary.unknown} unknown", Tone.Neutral)
+        }
+        val paused = c.autoFixes?.paused == true
+        ChipRow(horizontalPadding = 0.dp) {
+            StatusChip(if (paused) "Automatic fixes paused" else "Automatic fixes on", if (paused) Tone.Warn else Tone.Good)
+        }
+        if (user.isOwner) {
+            OutlinedButton(onClick = { onPause(!paused) }, modifier = Modifier.fillMaxWidth()) {
+                Text(if (paused) "Resume automatic fixes" else "Pause automatic fixes")
+            }
         }
         if (c.router.board.isNotBlank()) LabeledValue("Board", c.router.board)
         LabeledValue("Checked", formatAge(c.generatedAt))
@@ -244,7 +253,10 @@ private fun CheckCard(item: CheckItem, user: UserInfo, busy: Boolean, onFix: () 
             if (item.detail.isNotBlank()) {
                 Text(item.detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
             }
-            item.evidence.forEach {
+            item.auto?.text?.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            item.shownEvidence.forEach {
                 Text(
                     it,
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
@@ -260,10 +272,12 @@ private fun CheckCard(item: CheckItem, user: UserInfo, busy: Boolean, onFix: () 
 private fun FixArea(item: CheckItem, user: UserInfo, busy: Boolean, onFix: () -> Unit) {
     val fix = item.fix ?: return
     if (item.status == CheckStatus.OK || fix.kind == FixKind.NONE) return
+    // A safe fix the server applies by itself has no button; "Try now" shows only after a failed attempt.
+    if ((fix.kind == FixKind.AUTO || fix.kind == FixKind.CONFIRM) && !item.showsFixButton) return
     when (fix.kind) {
         FixKind.AUTO, FixKind.CONFIRM -> {
             Button(onClick = onFix, enabled = canRunFix(user, fix) && !busy, modifier = Modifier.fillMaxWidth()) {
-                Text(if (busy) "Working..." else fix.label.ifBlank { "Fix" })
+                Text(if (busy) "Working..." else if (fix.kind == FixKind.AUTO && fix.automatic) "Try now" else fix.label.ifBlank { "Fix" })
             }
             if (!canRunFix(user, fix)) {
                 Text(

@@ -258,9 +258,14 @@ data class RouterInput(
     val oltInterface: String = "",
     val vlanId: Int? = null,
     val customerSubnet: String = "",
-    val benchPort: String = "",
+    /** Customer ports, as sent in `customer_ports`. */
+    val customerPorts: List<String> = emptyList(),
     val wanCapMbps: Int? = null,
     val supportPhone: String = "",
+    /** Accepts the warning for a change of the OLT port or VLAN on a router that is set up. */
+    val confirm: Boolean = false,
+    /** The typed router name a change of the admin LAN ports needs. */
+    val confirmName: String = "",
 )
 
 /** `POST /routers`: 201, never replayed. The join command is a one-time secret; keep it in memory only. */

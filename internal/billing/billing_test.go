@@ -39,7 +39,7 @@ func (e *env) addSite(t *testing.T, name string) (id string, rt *routeros.Mock) 
 	err := e.st.Update(func(d *store.Data) error {
 		d.Sites[id] = store.Site{ID: id, Name: name, Mode: store.SiteModeWG, WGPublicKey: "PUB" + id, TunnelIP: "10.99.0." + fmt.Sprint(len(d.Sites)+2),
 			AccessMode: store.AccessIPoE, CreatedAt: e.now}
-		// Like migration 0007: every router starts with one apartment named after it.
+		// Like migration 0008: every router starts with one apartment named after it.
 		apt := store.MigratedApartmentID(id)
 		d.Apartments[apt] = store.Apartment{ID: apt, Name: name, CreatedAt: e.now}
 		d.ApartmentSites[store.ApartmentSiteKey(apt, id)] = store.ApartmentSite{ApartmentID: apt, SiteID: id, CreatedAt: e.now}

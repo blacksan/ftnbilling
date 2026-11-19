@@ -26,7 +26,7 @@ const (
 func benchSite() store.Site {
 	return store.Site{ID: "s1", Name: "Block A", Mode: store.SiteModeWG, TunnelIP: "10.99.0.2", RESTPort: 8729,
 		WANMode: WANDHCP, WANInterface: "ether1", LANPorts: "ether2", LANSubnet: "192.168.88.0/24",
-		OLTInterface: "sfp-sfpplus1", VLANID: 100, CustomerSubnet: "10.5.50.0/24", BenchPort: "ether5"}
+		OLTInterface: "sfp-sfpplus1", VLANID: 100, CustomerSubnet: "10.5.50.0/24", CustomerPorts: "ether4,ether5"}
 }
 
 func benchInput(s store.Site) BootstrapInput {
@@ -39,13 +39,16 @@ func benchInput(s store.Site) BootstrapInput {
 
 func TestBootstrapGolden(t *testing.T) {
 	cases := map[string]func(*store.Site, *BootstrapInput){
-		"dhcp_vlan_bench": func(*store.Site, *BootstrapInput) {},
-		"dhcp_novlan":     func(s *store.Site, _ *BootstrapInput) { s.VLANID, s.BenchPort = 0, "" },
+		"dhcp_vlan_two_customer_ports": func(*store.Site, *BootstrapInput) {},
+		"ether_olt_vlan":               func(s *store.Site, _ *BootstrapInput) { s.OLTInterface, s.CustomerPorts = "ether3", "ether5" },
+		"sfp_olt_novlan":               func(s *store.Site, _ *BootstrapInput) { s.VLANID, s.CustomerPorts = 0, "ether5" },
+		"ether_olt_novlan":             func(s *store.Site, _ *BootstrapInput) { s.OLTInterface, s.VLANID = "ether3", 0 },
+		"dhcp_novlan":                  func(s *store.Site, _ *BootstrapInput) { s.VLANID, s.CustomerPorts = 0, "" },
 		"static_vlan": func(s *store.Site, _ *BootstrapInput) {
 			s.WANMode, s.WANAddress, s.WANGateway, s.WANDNS = WANStatic, "198.51.100.5/24", "198.51.100.1", "9.9.9.9"
 		},
 		"pppoe_novlan": func(s *store.Site, in *BootstrapInput) {
-			s.WANMode, s.PPPoEUser, s.PPPoEPassEnc, s.VLANID, s.BenchPort = WANPPPoE, "user1", "sealed", 0, ""
+			s.WANMode, s.PPPoEUser, s.PPPoEPassEnc, s.VLANID, s.CustomerPorts = WANPPPoE, "user1", "sealed", 0, ""
 			in.PPPoEPass = tPPP
 		},
 		"old_ros": func(_ *store.Site, in *BootstrapInput) { in.ROSVersion = "7.12" },
@@ -161,7 +164,7 @@ func TestBootstrapCommand(t *testing.T) {
 	// the fetches and the import are wrapped: a failure removes both files and says nothing was changed
 	wrap := strings.Index(c, ":do { /tool/fetch")
 	imp := strings.Index(c, "/import ftn-reset.rsc")
-	onErr := strings.Index(c, `on-error={ /file/remove [/file/find where name="ftn-setup.rsc"]; /file/remove [/file/find where name="ftn-reset.rsc"]; :put "ftn: setup failed, nothing was changed, files removed" }`)
+	onErr := strings.Index(c, `on-error={ /file/remove [/file/find where name="ftn-setup.rsc"]; /file/remove [/file/find where name="ftn-reset.rsc"]; :put "ftn: setup failed, nothing was changed, files removed"; :if ($d = 1) do={ :do { /ip/dns/set servers="" } on-error={}; :put "ftn: the DNS servers this line set were put back to empty" } }`)
 	if wrap < 0 || imp < wrap || onErr < imp || strings.Count(c, "/tool/fetch") != 2 || wrap > strings.Index(c, "/tool/fetch") {
 		t.Fatalf("fetch+fetch+import not wrapped in :do/on-error: %s", c)
 	}
@@ -594,7 +597,7 @@ func TestJoinReportMgmtField(t *testing.T) {
 // ("input does not match any value of interface"). Every interface a rule names
 // must be created on an earlier line of the script.
 func TestBootstrapCreatesInterfacesBeforeRulesNameThem(t *testing.T) {
-	for _, name := range []string{"bootstrap_dhcp_vlan_bench.rsc", "bootstrap_dhcp_novlan.rsc", "bootstrap_static_vlan.rsc", "bootstrap_pppoe_novlan.rsc", "bootstrap_old_ros.rsc"} {
+	for _, name := range []string{"bootstrap_dhcp_vlan_two_customer_ports.rsc", "bootstrap_dhcp_novlan.rsc", "bootstrap_static_vlan.rsc", "bootstrap_pppoe_novlan.rsc", "bootstrap_old_ros.rsc"} {
 		b, err := os.ReadFile(filepath.Join("testdata", name))
 		if err != nil {
 			t.Fatal(err)
@@ -630,7 +633,7 @@ func TestBootstrapCreatesInterfacesBeforeRulesNameThem(t *testing.T) {
 // RouterOS 7.25.1 refuses `comment` on /ip/traffic-flow/target ("bad parameter comment"),
 // so the script must neither set nor look up a comment there.
 func TestBootstrapTrafficFlowTargetHasNoComment(t *testing.T) {
-	for _, name := range []string{"bootstrap_dhcp_vlan_bench.rsc", "bootstrap_dhcp_novlan.rsc", "bootstrap_static_vlan.rsc", "bootstrap_pppoe_novlan.rsc", "bootstrap_old_ros.rsc"} {
+	for _, name := range []string{"bootstrap_dhcp_vlan_two_customer_ports.rsc", "bootstrap_dhcp_novlan.rsc", "bootstrap_static_vlan.rsc", "bootstrap_pppoe_novlan.rsc", "bootstrap_old_ros.rsc"} {
 		b, err := os.ReadFile(filepath.Join("testdata", name))
 		if err != nil {
 			t.Fatal(err)
@@ -660,5 +663,24 @@ func TestBootstrapCommandGivesDNSWhenNone(t *testing.T) {
 	}
 	if strings.ContainsAny(c, "\r\n") {
 		t.Fatal("the paste line must stay one line")
+	}
+}
+
+// A line that gave the router DNS servers puts them back to empty when the setup fails, and only then.
+func TestBootstrapCommandRestoresDNSOnFailure(t *testing.T) {
+	c := BootstrapCommand("https://isp.example.co.ke/", "TOK", true)
+	set, flag := strings.Index(c, ":set d 1"), strings.Index(c, ":local d 0")
+	onErr := strings.Index(c, `:if ($d = 1) do={ :do { /ip/dns/set servers="" } on-error={}`)
+	fail := strings.Index(c, "ftn: setup failed")
+	_ = fail
+	dns := strings.Index(c, "/ip/dns/set servers="+PasteLineDNS)
+	if flag < 0 || set < 0 || onErr < 0 || !(flag < dns && dns < set && set < onErr && fail < onErr) {
+		t.Fatalf("flag %d dns %d set %d restore %d failure %d", flag, dns, set, onErr, fail)
+	}
+	if strings.Count(c, ":set d 1") != 1 || strings.ContainsAny(c, "\r\n") {
+		t.Fatal("the flag is set once, only where the line sets DNS, and the line stays one line")
+	}
+	if n := BootstrapCommand("https://isp.example.co.ke", "TOK", false); !strings.Contains(n, `servers=""`) {
+		t.Fatal("the no-check line restores DNS too")
 	}
 }

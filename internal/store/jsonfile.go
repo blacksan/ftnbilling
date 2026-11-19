@@ -138,7 +138,10 @@ func decodeJSON(raw []byte, path string) (*Data, int, error) {
 		d.migrateV6toV7()
 	}
 	if probe.Format < 8 {
-		d.migrateV7toV8(timeNow())
+		d.migrateV7toV8()
+	}
+	if probe.Format < 9 {
+		d.migrateV8toV9(timeNow())
 	}
 	d.LegacyContacts = nil
 	d.Format = FormatVersion

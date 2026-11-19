@@ -552,6 +552,7 @@ func (s *Server) apiRoutes(mux *http.ServeMux) {
 	// One hook per later stream; each adds its routes in its own file.
 	s.setupRoutes(h)
 	s.liveRoutes(h)
+	s.portsRoutes(h)
 	s.overviewRoutes(h)
 
 	// Anything else under /api/v1/ is a clean JSON 404 (and cookies are never read here).

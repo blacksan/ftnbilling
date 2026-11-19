@@ -15,7 +15,7 @@ import (
 // per router named after it, accounts take its apartment and keep their flat
 // label as unit, a repeated unit is renamed with its code, router contacts
 // move onto the apartment, and site_contacts is gone.
-func TestMigration0007Apartments(t *testing.T) {
+func TestMigration0008Apartments(t *testing.T) {
 	url, schema := newTestSchema(t)
 	ctx := context.Background()
 	old, err := Open(ctx, url, Options{Schema: schema, maxVersion: 6})
