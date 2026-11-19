@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -25,7 +27,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
@@ -177,14 +181,14 @@ private fun PortCard(p: PortRow, busy: Boolean, onToggle: () -> Unit, onRole: (S
                     style = MaterialTheme.typography.bodySmall,
                 )
             } else {
-                var menu by remember { androidx.compose.runtime.mutableStateOf(false) }
+                var menu by remember { mutableStateOf(false) }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = onToggle, enabled = !busy) { Text(if (p.disabled) "Enable" else "Disable") }
                     Column {
                         OutlinedButton(onClick = { menu = true }, enabled = !busy) { Text("Role") }
-                        androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                             PortsViewModel.roleChoices(p).forEach { r ->
-                                androidx.compose.material3.DropdownMenuItem(
+                                DropdownMenuItem(
                                     text = { Text(PortRole.label(r)) },
                                     onClick = {
                                         menu = false
