@@ -129,7 +129,7 @@ if [ "$DRY" != 1 ]; then
   printf 'DPkg::Lock::Timeout "900";\n' >"$APT_CONFIG"
   export APT_CONFIG
 fi
-apt_get() { run env DEBIAN_FRONTEND=noninteractive apt-get "$@"; }
+apt_get() { run env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 apt-get "$@" </dev/null; }
 apt_install() { if [ "$DRY" = 1 ]; then printf '    [dry-run] apt-get install %s\n' "$*"; else apt_get install -y -qq --no-install-recommends "$@" >/dev/null; fi; }
 have() { command -v "$1" >/dev/null 2>&1; }
 envget() { [ -f "$ENVF" ] && grep -m1 "^$1=" "$ENVF" | cut -d= -f2- || true; }
@@ -229,7 +229,7 @@ preflight() {
   fi
   if [ "$DRY" != 1 ]; then
     [ -d /run/systemd/system ] || die "systemd is required"
-    curl --version >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq curl ca-certificates >/dev/null; }
+    curl --version >/dev/null 2>&1 || { apt_get update -qq && apt_get install -y -qq curl ca-certificates >/dev/null; }
     curl -fsS --max-time 15 -o /dev/null https://github.com 2>/dev/null || curl -fsS --max-time 15 -o /dev/null https://dl.cloudsmith.io 2>/dev/null \
       || die "no outbound internet (HTTPS) from this server"
   fi
@@ -300,7 +300,7 @@ caddy_rclone() {
     else
       curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
       curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' >/etc/apt/sources.list.d/caddy-stable.list
-      apt-get update -qq && apt-get install -y -qq caddy >/dev/null
+      apt_get update -qq && apt_get install -y -qq caddy >/dev/null
     fi
   else
     note "caddy: already installed"
@@ -312,7 +312,7 @@ caddy_rclone() {
   elif [ "$DRY" = 1 ]; then
     printf '    [dry-run] apt install rclone; if older than 1.60, run the official installer (rclone.org/install.sh)\n'
   else
-    apt-get install -y -qq rclone >/dev/null 2>&1 || true
+    apt_get install -y -qq rclone >/dev/null 2>&1 || true
     if ! rclone_ok; then
       curl -fsSL https://rclone.org/install.sh | bash >/dev/null || die "could not install rclone"
       hash -r
