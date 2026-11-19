@@ -467,8 +467,8 @@ body.auth summary{margin-top:14px;font-size:13px;color:var(--muted)}
   .stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
   .stat{padding:12px 12px 10px;border-radius:var(--r2)}
   .stat .v{font-size:26px}.stat .k{font-size:11px}
-  .stat:has(svg.spark){grid-template-areas:"k ic" "v v" "s p"}
-  .stat svg.spark{width:56px;height:22px;align-self:center;margin:0}
+  /* Phones: no room for a trend line beside the figures; the sub-line keeps the full width. */
+  .stat{grid-template-areas:"k ic" "v v" "s s"}.stat svg.spark{display:none}
   .hero .act{width:100%}.hero .act>*{flex:1}
   .rsel{max-width:120px}
   .crumbs a:not(:last-of-type),.crumbs i{display:none}
