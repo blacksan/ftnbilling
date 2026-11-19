@@ -15,6 +15,7 @@
 </div>
 <div class="grid c2">
 <section class="panel"><h2>Connection</h2><dl class="kv">
+{{with .Data.CustPort}}{{if .Text}}<dt>Customer port</dt><dd data-cport="{{.State}}">{{.Text}}</dd>{{end}}{{end}}
 <dt>Router API</dt><dd>{{if .Data.Status.RESTOK}}<span class="ok">reachable</span>{{else}}<span class="bad">not reachable</span> <span class="muted">{{.Data.Status.RESTErr}}</span>{{end}}</dd>
 <dt>Tunnel</dt><dd>{{if .Data.Status.Handshake}}up, last handshake {{.Data.Status.HandshakeAge}} s ago{{else if .Data.Status.WGKnown}}no handshake{{else}}unknown{{end}}</dd>
 {{if $s.TunnelIP}}<dt>Tunnel address</dt><dd class="mono">{{$s.TunnelIP}}</dd>
@@ -82,7 +83,9 @@
 <section class="panel"><h2>Details</h2>
 <form method="post" action="/admin/routers/update" class="stack-col" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
 {{template "sitefields" $s}}
-<details><summary>Router layout</summary><div class="stack-col" style="margin-top:10px">{{template "sitelayout" .Data.Eff}}<p class="muted">Changes apply to the next line and to metrics. Paste a new line on the router to build it with the new layout.</p></div></details>
+{{with .Data.CustPort}}{{if .Text}}<p class="cport {{.State}}" data-cport="{{.State}}" role="status">{{.Text}}</p>{{end}}{{if .OLTMessage}}<p class="cport error" role="status">OLT uplink: {{.OLTMessage}}</p>{{end}}{{end}}
+{{if .Data.Ports}}<datalist id="router-ports">{{range .Data.Ports}}<option value="{{.}}">{{end}}</datalist>{{end}}
+<details><summary>Router layout</summary><div class="stack-col" style="margin-top:10px">{{template "sitelayout" .Data.Eff}}<p class="muted">The OLT uplink port and the customer port are set up on the router by the server as soon as you save. Other layout changes apply to the next line and to metrics: paste a new line on the router to build it with the new layout.</p></div></details>
 <div><button>Save</button></div></form></section>
 {{with .Data.Rep}}<section class="panel"><h2>Location</h2>
 <form method="post" action="/admin/routers/profile" class="stack-col" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">

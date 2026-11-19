@@ -392,6 +392,20 @@
     load(); setInterval(function () { if (!doc.hidden) load(); }, 10000);
   }
 
+  /* ---- customer port: the server applies it after a save; follow "applying" until it settles ---- */
+  var cpEl = $("[data-cport=applying]");
+  if (cpEl) {
+    var cpId = new URLSearchParams(location.search).get("id");
+    var pollCP = function () {
+      getJSON("/admin/routers/customer-port.json?id=" + enc(cpId)).then(function (j) {
+        if (j.__status !== 200) return;
+        $$("[data-cport]").forEach(function (n) { n.textContent = j.text || ""; n.setAttribute("data-cport", j.state || ""); });
+        if (j.state === "applying") setTimeout(pollCP, 3000);
+      }).catch(function () {});
+    };
+    setTimeout(pollCP, 3000);
+  }
+
   /* ---- Router setup tab: checklist, fixes, job stepper --------------------------------------------- */
   var setup = $("[data-setup]");
   if (setup) {
@@ -407,14 +421,18 @@
         li.appendChild(el("span", "st", MARK[it.status] || "?")); li.lastChild.setAttribute("aria-label", it.status);
         var body = el("div"); body.appendChild(el("h4", "", it.title));
         if (it.detail) body.appendChild(el("p", "", it.detail));
-        if (it.evidence && it.evidence.length) {
+        var evid = (it.evidence || []).filter(function (x) { return typeof x === "string" && x.trim() !== ""; });
+        if (evid.length) {
           var dt = el("details"); dt.appendChild(el("summary", "muted", "What the router said"));
-          var ul = el("ul", "ev"); it.evidence.slice(0, 12).forEach(function (x) { ul.appendChild(el("li", "", x)); }); dt.appendChild(ul); body.appendChild(dt);
+          var ul = el("ul", "ev"); evid.slice(0, 12).forEach(function (x) { ul.appendChild(el("li", "", x)); }); dt.appendChild(ul); body.appendChild(dt);
         }
         var fx = it.fix || {};
+        if (it.auto && it.auto.text) body.appendChild(el("p", "muted auto-" + (it.auto.state || ""), it.auto.text));
         li.appendChild(body);
-        if ((fx.kind === "auto" || fx.kind === "confirm") && it.status !== "ok" && it.status !== "info") {
-          var wrap = el("div", "fix"), b = el("button", "btn sm", fx.label || "Fix"); b.type = "button";
+        // The server applies a safe fix by itself: no button, except "Try now" after a failed automatic attempt.
+        var showBtn = (fx.kind === "confirm") || (fx.kind === "auto" && (!fx.automatic || fx.try_now));
+        if (showBtn && it.status !== "ok" && it.status !== "info") {
+          var wrap = el("div", "fix"), b = el("button", "btn sm", fx.kind === "auto" && fx.automatic ? "Try now" : (fx.label || "Fix")); b.type = "button";
           b.onclick = function () {
             var go = fx.kind === "confirm" ? ask(fx.label || "Confirm", fx.confirm_text || "Go ahead with this change?", fx.label || "Confirm") : Promise.resolve(true);
             go.then(function (yes) {

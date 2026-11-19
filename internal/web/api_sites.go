@@ -127,7 +127,11 @@ func (s *Server) siteJSON(st store.Site, h siteHealth, cnt *siteCounts) map[stri
 	if conflicts == nil {
 		conflicts = []string{}
 	}
+	eff := s.mgr.Effective(st)
 	return map[string]any{
+		"wan_interface": eff.WANInterface, "olt_interface": eff.OLTInterface, "vlan_id": st.VLANID, "customer_subnet": eff.CustomerSubnet,
+		"bench_port": st.BenchPort, "customer_port": s.mgr.CustomerPortStatus(st.ID),
+		"wan_cap_mbps": eff.WANCapMbps, "olt_cap_mbps": eff.OLTCapMbps, "support_phone": st.SupportPhone,
 		"id": st.ID, "name": st.Name, "access_mode": accessMode(st), "online": h.online, "cause": h.cause,
 		"wan_mode": st.WANMode, "wan_address": st.WANAddress, "wan_gateway": st.WANGateway, "wan_dns": st.WANDNS,
 		"pppoe_user": st.PPPoEUser, "pppoe_pass_set": st.PPPoEPassEnc != "", "lan_ports": st.LANPorts, "lan_subnet": st.LANSubnet,

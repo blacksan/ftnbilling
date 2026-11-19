@@ -24,11 +24,11 @@ Unknown fields are ignored. Validation errors are 400 `validation_failed` with a
 | `pppoe_pass` | string | "" | pppoe only. Write-only: never returned; stored sealed with `DATA_KEY`. On PATCH an empty string leaves it unchanged; `"pppoe_pass_clear": true` removes it |
 | `lan_ports` | string | `ether2` | comma list of interface names: the admin LAN (WinBox / laptop) |
 | `lan_subnet` | string | `192.168.88.0/24` | IPv4 /16 to /29 prefix; must not overlap `customer_subnet`, the WireGuard subnet or the management subnet (`MGMT_SUBNET`, default `10.98.0.0/24`); also applies to a static WAN network |
-| `olt_interface` | string | `sfp-sfpplus1` | fibre port |
+| `olt_interface` | string | `sfp-sfpplus1` | OLT uplink port: an SFP port (`sfp-sfpplus1`) or an Ethernet port (`ether3`). Must differ from `wan_interface`, every `lan_ports` entry and `bench_port` (a 400 names the field: `olt_interface`, or both `bench_port` and `olt_interface` when they are equal) |
 | `vlan_id` | int | 0 | 0 = untagged, else 1 to 4094 (the script makes `vlan<N>-customers` on the OLT port) |
 | `customer_subnet` | string | `10.5.50.0/24` | /20 to /24; gateway .1, unregistered pool .10-.59, flats from .60 |
-| `bench_port` | string | "" | optional extra customer-side port (e.g. `ether5`) |
-| `wan_cap_mbps`, `olt_cap_mbps`, `fup_tb` | number | 500 / 10000 / 15 | capacities |
+| `bench_port` | string | "" | the extra customer port (e.g. `ether5`; "Customer port (extra)" in the apps): a port where a customer device can be plugged in directly. Must not be the WAN port, an admin LAN port or the OLT port (400 on `bench_port`). The server puts it on `br-customers` by itself (see below) |
+| `wan_cap_mbps`, `olt_cap_mbps`, `fup_tb` | number | 500 / 10000 / 15 | capacities. When `olt_cap_mbps` is not set it follows the OLT port: `ether*`, `sfp*` (1G) and `combo*` 1000, `sfp-sfpplus*` and `qsfp*` 10000; an unknown name gets `OLT_CAPACITY_MBPS`. An explicit value is kept |
 | `support_phone` | string | "" | shown on the payment page |
 
 Router JSON (list, detail, and the `router` in create/patch answers) also has `tunnel_address` (string): the router's address inside the
@@ -42,6 +42,31 @@ WinBox for the management subnet the server uses now (`MGMT_SUBNET`). The script
 carries it. A router built before remote WinBox, one that has not reported, or one built for another subnet has `mgmt_winbox: false`: connecting to its tunnel
 address will not work until it is reset and given a new line. The admin page then says "Built without remote WinBox: reset the router and
 paste a new line to add it." instead of the connection line.
+
+### Customer port and OLT port: applied by the server
+
+Saving `bench_port`, `olt_interface` or `vlan_id` (web, app or `PATCH /routers/{id}`) makes the server apply them at once, in the background
+(the PATCH answer does not wait for the router), on a router with the v5 layout; any other router is not written to and shows
+"Rebuild required: reset the router and paste a new line". Over REST, through the `fixWriter` allowlist:
+
+- the customer port is made a member of `br-customers` with `horizon=1` and the comment `ftn: customer port`; a device plugged in gets a customer address from
+  `ftn-dhcp`, shows as unregistered and is walled until attached to a paid account;
+- when `bench_port` is cleared or changed, the server's own `ftn: customer port` (or older `ftn: bench port`) membership of the old port is removed (rows it did not make are left alone);
+- the OLT port: without a VLAN it is a member of `br-customers` the same way; with a VLAN the `vlan<N>-customers` interface (comment `ftn: customer VLAN`) is added or moved to the new port;
+- a port is refused, in words, when it is the WAN port or in the `WAN` list, an admin LAN port or in the `LAN` list, the OLT port, a port of any other bridge (the admin LAN bridge `br-lan` is named), or has its own address or DHCP. The server never moves a port out of another bridge.
+
+The sweep (every 60 s) repeats the work with a backoff of 5 s doubling to 5 min and records changes and errors in the router's activity (actor `system`).
+
+Router JSON gains `wan_interface`, `olt_interface`, `vlan_id`, `customer_subnet`, `bench_port`, `wan_cap_mbps`, `olt_cap_mbps`, `support_phone` and
+`customer_port`: `{port, state: off|ok|applying|error|rebuild, text, message, olt_message, at}`; `text` is ready to show ("ether5: customer port ✓", "ether5: applying…", or the error in words).
+The web admin has `GET /admin/routers/customer-port.json?id=` for the same object.
+
+## Automatic fixes
+
+On every sweep the server runs, for each joined router with the v5 layout, every check fix of kind `auto` (never `confirm`, never one that needs hands on the router)
+through the same path and allowlist as the button, with the actor `system` in the router's activity. One attempt per item per interval; after a failure the wait doubles (1 min to 15 min).
+Check items gain `fix.automatic` (the server applies it itself: no button), `fix.try_now` (the last automatic attempt failed: show "Try now") and `auto`:
+`{state: fixed|failed|pending, at, error, text}`, for example "Fixed by the server at 19 Nov 14:05". `evidence` never holds blank strings. The `bench.port` item has no fix: it is OK when the port is applied, or says in words why not.
 
 Removed from the body (ignored as unknown fields): `serving_customers`, `hotspot_server`, `wan_list`, `provision`,
 `legacy_container`. Router JSON keeps `access_mode` with the single value `"ipoe"`. Router JSON gains `wan_mode`,

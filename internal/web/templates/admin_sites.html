@@ -12,13 +12,13 @@
 {{if .PPPoEPassEnc}}<label class="ck" data-wan-only="pppoe"><input type="checkbox" name="pppoeclear" value="1"> clear the stored PPPoE password</label>{{end}}
 <label class="field">Admin LAN ports<input name="lanports" value="{{.LANPorts}}" placeholder="ether2"></label>
 <label class="field">Admin LAN subnet<input name="lansubnet" value="{{.LANSubnet}}" placeholder="192.168.88.0/24"></label>
-<label class="field">OLT port<input name="olt" value="{{.OLTInterface}}"></label>
+<label class="field">OLT uplink port<input name="olt" value="{{.OLTInterface}}" list="router-ports" autocomplete="off" aria-describedby="hint-olt"><span class="hint muted" id="hint-olt">The port the OLT is plugged into: an SFP port (sfp-sfpplus1) or an Ethernet port (for example ether3).</span></label>
 <label class="field">Customer subnet<input name="subnet" value="{{.CustomerSubnet}}" placeholder="10.5.50.0/24"></label>
 <label class="field">VLAN (0 = none)<input name="vlan" type="number" min="0" max="4094" value="{{.VLANID}}"></label>
 <label class="field">WAN capacity (Mbps)<input name="wancap" value="{{f0 .WANCapMbps}}"></label>
 <label class="field">OLT capacity (Mbps)<input name="oltcap" value="{{f0 .OLTCapMbps}}"></label>
 <label class="field">Fair-use limit (TB/month)<input name="fup" value="{{f0 .FUPTB}}"></label>
-<label class="field">Bench port (optional)<input name="bench" value="{{.BenchPort}}"></label></div>{{end}}
+<label class="field">Customer port (extra)<input name="bench" value="{{.BenchPort}}" list="router-ports" autocomplete="off" placeholder="optional" aria-describedby="hint-bench"><span class="hint muted" id="hint-bench">A port where you can plug a customer device directly (for example ether5). The server sets it up.</span></label></div>{{end}}
 
 {{define "admin_sites"}}{{template "ahead" .}}{{$d := .}}{{$c := .Data.Cnt}}
 <div class="stats">

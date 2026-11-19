@@ -296,6 +296,13 @@ func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site,
 		}
 	})
 	p.Data["Pkgs"], p.Data["Accounts"] = pkgs, accts
+	p.Data["CustPort"] = s.mgr.CustomerPortStatus(st.ID)
+	if tab == "profile" && st.Runnable() {
+		// a picker of the router's real ports (typed entry stays possible)
+		pc, pcancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
+		p.Data["Ports"] = s.mgr.PortChoices(pc, st.ID)
+		pcancel()
+	}
 	if tab == "setup" {
 		if v, ok := s.mgr.SetupView(ctx, st.ID); ok {
 			p.Data["SetupView"] = v
@@ -346,6 +353,17 @@ func (s *Server) adminSiteChecks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
+}
+
+// adminSiteCustomerPort is the apply status of the router's extra customer port.
+func (s *Server) adminSiteCustomerPort(w http.ResponseWriter, r *http.Request) {
+	st, ok := s.siteID(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, s.mgr.CustomerPortStatus(st.ID))
 }
 
 // adminSiteFix runs one fix from the checklist. A fix of kind "confirm" needs

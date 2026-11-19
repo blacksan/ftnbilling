@@ -171,11 +171,20 @@ func (s *Server) joinBody(st store.Site) (map[string]any, error) {
 
 // routerFieldErr turns a validation error of the router fields into a 422 on the field it is about.
 func routerFieldErr(w http.ResponseWriter, err error) {
+	var fe *sites.FieldError
+	if errors.As(err, &fe) {
+		fields := map[string]string{fe.Field: fe.Msg}
+		for _, f := range fe.Also {
+			fields[f] = fe.Msg
+		}
+		validationErr(w, fields)
+		return
+	}
 	field := "name"
 	msg := err.Error()
 	for _, f := range []struct{ key, word string }{
 		{"pppoe_pass", "PPPoE needs a password"}, {"pppoe_pass", "PPPoE password"}, {"pppoe_user", "PPPoE"}, {"wan_address", "WAN address"}, {"wan_gateway", "WAN gateway"},
-		{"wan_dns", "WAN DNS"}, {"wan_mode", "WAN type"}, {"wan_interface", "WAN interface"}, {"olt_interface", "OLT interface"}, {"bench_port", "bench port"},
+		{"wan_dns", "WAN DNS"}, {"wan_mode", "WAN type"}, {"wan_interface", "WAN interface"}, {"olt_interface", "OLT interface"}, {"olt_interface", "OLT uplink port"}, {"bench_port", "customer port"}, {"bench_port", "bench port"},
 		{"lan_ports", "admin LAN port"}, {"lan_subnet", "admin LAN subnet"}, {"customer_subnet", "customer subnet"}, {"vlan_id", "VLAN"},
 		{"lan_subnet", "LAN and customer subnets"}, {"lan_ports", "is used twice"},
 	} {

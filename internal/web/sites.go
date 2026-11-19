@@ -20,6 +20,7 @@ func (s *Server) siteRoutes(get, post func(string, http.HandlerFunc)) {
 	get("/admin/sites/view", s.adminSiteView)
 	get("/admin/sites/status.json", s.adminSiteStatus)
 	get("/admin/sites/checks.json", s.adminSiteChecks)
+	get("/admin/sites/customer-port.json", s.adminSiteCustomerPort)
 	post("/admin/sites/fix", s.adminSiteFix)
 	post("/admin/sites/create", s.adminSiteCreate)
 	post("/admin/sites/update", s.adminSiteUpdate)

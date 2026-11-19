@@ -235,3 +235,46 @@ func TestSessionSetupJSON(t *testing.T) {
 		t.Fatalf("%d", g.StatusCode)
 	}
 }
+
+func TestAPIPortFieldsAreValidatedAndReportedPerField(t *testing.T) {
+	r := newAPIRig(t)
+	c := r.call(r.owner.Access, "POST", "/routers", map[string]any{"name": "Ports", "wan_interface": "ether1", "lan_ports": "ether2", "olt_interface": "ether3", "bench_port": "ether5"}, nil)
+	if c.Status != 201 {
+		t.Fatalf("%d %s", c.Status, c.Raw)
+	}
+	rt := c.JSON(t)["router"].(map[string]any)
+	id := str(rt, "id")
+	if rt["bench_port"] != "ether5" || rt["olt_interface"] != "ether3" || rt["olt_cap_mbps"].(float64) != 1000 {
+		t.Fatalf("%v", rt)
+	}
+	cp, ok := rt["customer_port"].(map[string]any)
+	if !ok || cp["state"] == nil {
+		t.Fatalf("no customer_port status: %v", rt)
+	}
+	for name, tc := range map[string]struct {
+		body  map[string]any
+		field string
+	}{
+		"bench is the WAN":  {map[string]any{"bench_port": "ether1"}, "bench_port"},
+		"bench is a LAN":    {map[string]any{"bench_port": "ether2"}, "bench_port"},
+		"bench is the OLT":  {map[string]any{"bench_port": "ether3"}, "bench_port"},
+		"olt is the WAN":    {map[string]any{"olt_interface": "ether1"}, "olt_interface"},
+		"olt is a LAN port": {map[string]any{"olt_interface": "ether2"}, "olt_interface"},
+		"olt is the bench":  {map[string]any{"olt_interface": "ether5"}, "olt_interface"},
+	} {
+		x := r.call(r.owner.Access, "PATCH", "/routers/"+id, tc.body, nil)
+		if x.Status != 400 && x.Status != 422 {
+			t.Errorf("%s: %d %s", name, x.Status, x.Raw)
+			continue
+		}
+		f, _ := x.JSON(t)["error"].(map[string]any)["details"].(map[string]any)["fields"].(map[string]any)
+		if f[tc.field] == nil {
+			t.Errorf("%s: no fields.%s in %s", name, tc.field, x.Raw)
+		}
+	}
+	var st store.Site
+	r.st.View(func(d *store.Data) { st = d.Sites[id] })
+	if st.BenchPort != "ether5" || st.OLTInterface != "ether3" {
+		t.Fatalf("a refused save changed the router: %+v", st)
+	}
+}
