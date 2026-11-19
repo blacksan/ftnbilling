@@ -6,6 +6,9 @@ import ke.co.ftw.ftnadmin.core.network.ApiError
 import ke.co.ftw.ftnadmin.core.network.ErrorCode
 import ke.co.ftw.ftnadmin.core.network.MacOwner
 import ke.co.ftw.ftnadmin.data.accounts.AccountsRepository
+import ke.co.ftw.ftnadmin.data.apartments.ApartmentsRepository
+import ke.co.ftw.ftnadmin.domain.Apartment
+import ke.co.ftw.ftnadmin.domain.BelongsTo
 import ke.co.ftw.ftnadmin.data.routers.Client
 import ke.co.ftw.ftnadmin.data.routers.RouterLiveRepository
 import ke.co.ftw.ftnadmin.data.sites.SitesRepository
@@ -62,7 +65,10 @@ data class AddedCustomer(val account: Account, val status: ProvisionStatus)
 data class AddCustomerUiState(
     val tenant: String = "",
     val phone: String = "",
-    val flat: String = "",
+    /** Apartment (building) and the unit in it: the customer lives in one apartment, in one unit. */
+    val apartments: Loadable<List<Apartment>> = Loadable.Loading,
+    val apartmentId: String? = null,
+    val unit: String = "",
     val routers: List<Site> = emptyList(),
     val routerId: String? = null,
     val packages: Loadable<List<ServicePackage>> = Loadable.Loading,
@@ -75,12 +81,27 @@ data class AddCustomerUiState(
     val error: String? = null,
     /** Set on a 409 `mac_in_use`: names the flat and router that already own the MAC. */
     val macOwner: MacOwner? = null,
+    /** Set on a 409 `mac_other_building`: the MAC belongs to a customer of another apartment. */
+    val macOther: BelongsTo? = null,
     val added: AddedCustomer? = null,
 ) {
+    val apartment: Apartment? get() = (apartments as? Loadable.Ready)?.value?.firstOrNull { it.id == apartmentId }
+
+    /** The routers of the chosen apartment. One: it is used automatically. Several: the operator picks. */
+    val apartmentRouters: List<Site>
+        get() {
+            val keys = apartment?.routers?.map { it.key }.orEmpty().toSet()
+            val known = routers.filter { it.key in keys }
+            // A router the router list does not know yet still counts: the apartment names it.
+            val missing = apartment?.routers.orEmpty().filter { r -> routers.none { it.key == r.key } }.map { Site(id = it.key, name = it.label, routerId = it.key, routerName = it.label) }
+            return known + missing
+        }
+    val needsRouterChoice: Boolean get() = apartmentRouters.size > 1
+
     val macError: String? get() = MacAddress.errorFor(macInput)
     val macValid: Boolean get() = MacAddress.isValid(macInput)
     val canSubmit: Boolean
-        get() = !submitting && added == null && flat.isNotBlank() && routerId != null && packageId != null && macValid
+        get() = !submitting && added == null && unit.isNotBlank() && apartmentId != null && routerId != null && packageId != null && macValid
 
     /** Devices the router sees now, filtered by the search text. */
     val shownDevices: List<Client>
@@ -97,6 +118,7 @@ class AddCustomerViewModel(
     private val accounts: AccountsRepository,
     private val live: RouterLiveRepository,
     private val sites: SitesRepository,
+    private val apartmentsRepo: ApartmentsRepository,
     initialRouterId: String?,
     initialMac: String?,
     private val pollMs: Long = 2_000,
@@ -108,21 +130,24 @@ class AddCustomerViewModel(
 
     init {
         viewModelScope.launch {
-            apiResult { sites.sites() }.getOrNull()?.let { l ->
-                _state.update { cur ->
-                    // One router only: nothing to choose, so preselect it.
-                    cur.copy(routers = l, routerId = cur.routerId ?: l.singleOrNull()?.key)
-                }
-            }
-            _state.value.routerId?.let { loadRouterData(it) }
+            apiResult { sites.sites() }.getOrNull()?.let { l -> _state.update { cur -> cur.copy(routers = l) } }
+            val r = apiResult { apartmentsRepo.list() }
+            _state.update { cur -> cur.copy(apartments = r.fold({ l -> Loadable.Ready(l) }, { e -> Loadable.Failed(e.userMessage()) })) }
+            // Coming from a router or a device: the apartments that router serves. One of them is chosen for you.
+            val from = _state.value.routerId
+            val list = (_state.value.apartments as? Loadable.Ready)?.value.orEmpty()
+            val fit = if (from != null) list.filter { a -> a.routers.any { it.key == from } } else list
+            val pick = fit.singleOrNull() ?: list.singleOrNull()
+            if (pick != null) selectApartment(pick.id, preferRouter = from)
         }
     }
 
-    private suspend fun loadRouterData(id: String) {
+    /** [forRouter] null: no router is chosen yet, the packages shown are those of the apartment's first router. */
+    private suspend fun loadRouterData(id: String, forRouter: String? = id) {
         _state.update { it.copy(packages = Loadable.Loading, devices = Loadable.Loading) }
         val pk = apiResult { accounts.packages(id) }
         _state.update { cur ->
-            if (cur.routerId != id) return@update cur
+            if (cur.routerId != forRouter) return@update cur
             cur.copy(
                 packages = pk.fold(
                     { l -> Loadable.Ready(l.filterNot { p -> p.disabled }.sortedBy { p -> p.priceKes }) },
@@ -130,7 +155,7 @@ class AddCustomerViewModel(
                 ),
             )
         }
-        loadDevices(id)
+        if (forRouter != null) loadDevices(id) else _state.update { it.copy(devices = Loadable.Ready(emptyList())) }
     }
 
     private suspend fun loadDevices(id: String) {
@@ -147,9 +172,27 @@ class AddCustomerViewModel(
         viewModelScope.launch { loadDevices(id) }
     }
 
+    /** Choosing the apartment fixes the router when it has only one; the packages follow the router. */
+    private fun selectApartment(id: String, preferRouter: String? = null) {
+        val a = (_state.value.apartments as? Loadable.Ready)?.value?.firstOrNull { it.id == id } ?: return
+        val keys = a.routers.map { it.key }
+        val router = when {
+            keys.size == 1 -> keys.first()
+            preferRouter != null && preferRouter in keys -> preferRouter
+            else -> null
+        }
+        _state.update { it.copy(apartmentId = id, routerId = router, packageId = null, macOwner = null, macOther = null, error = null) }
+        val load = router ?: keys.firstOrNull()
+        if (load != null) viewModelScope.launch { loadRouterData(load, forRouter = router) }
+    }
+
+    fun onApartment(id: String) {
+        if (_state.value.apartmentId != id) selectApartment(id)
+    }
+
     fun setRouter(id: String) {
         if (_state.value.routerId == id) return
-        _state.update { it.copy(routerId = id, packageId = null, macOwner = null, error = null) }
+        _state.update { it.copy(routerId = id, packageId = null, macOwner = null, macOther = null, error = null) }
         viewModelScope.launch { loadRouterData(id) }
     }
 
@@ -157,16 +200,16 @@ class AddCustomerViewModel(
 
     fun onPhone(v: String) = _state.update { it.copy(phone = v) }
 
-    fun onFlat(v: String) = _state.update { it.copy(flat = v, error = null) }
+    fun onUnit(v: String) = _state.update { it.copy(unit = v, error = null) }
 
     fun onPackage(id: String) = _state.update { it.copy(packageId = id) }
 
-    fun onMac(v: String) = _state.update { it.copy(macInput = v, macOwner = null, error = null) }
+    fun onMac(v: String) = _state.update { it.copy(macInput = v, macOwner = null, macOther = null, error = null) }
 
     fun onDeviceQuery(v: String) = _state.update { it.copy(deviceQuery = v) }
 
     /** Picking a live device fills the MAC field. */
-    fun pickDevice(c: Client) = _state.update { it.copy(macInput = c.mac, macOwner = null, error = null) }
+    fun pickDevice(c: Client) = _state.update { it.copy(macInput = c.mac, macOwner = null, macOther = null, error = null) }
 
     fun onActivate(v: Boolean) = _state.update { it.copy(activate = v) }
 
@@ -174,12 +217,13 @@ class AddCustomerViewModel(
         val s = _state.value
         if (!s.canSubmit) return
         val mac = MacAddress.normalize(s.macInput) ?: return
-        _state.update { it.copy(submitting = true, error = null, macOwner = null) }
+        _state.update { it.copy(submitting = true, error = null, macOwner = null, macOther = null) }
         viewModelScope.launch {
             val r = apiResult {
                 accounts.create(
-                    routerId = s.routerId!!,
-                    flat = s.flat,
+                    apartmentId = s.apartmentId!!,
+                    routerId = s.routerId,
+                    unit = s.unit,
                     tenant = s.tenant,
                     phone = s.phone,
                     mac = mac,
@@ -198,8 +242,10 @@ class AddCustomerViewModel(
                     _state.update {
                         when {
                             api != null && api.code == ErrorCode.MAC_IN_USE && api.macOwner != null -> it.copy(submitting = false, macOwner = api.macOwner)
-                            api != null && api.code == ErrorCode.FLAT_IN_USE ->
-                                it.copy(submitting = false, error = "Flat ${s.flat.trim()} already exists on this router. Open that customer instead.")
+                            api != null && api.code == ErrorCode.MAC_OTHER_BUILDING && api.macOtherBuilding != null ->
+                                it.copy(submitting = false, macOther = api.macOtherBuilding)
+                            api != null && (api.code == ErrorCode.UNIT_IN_USE || api.code == ErrorCode.FLAT_IN_USE) ->
+                                it.copy(submitting = false, error = "Unit ${s.unit.trim()} is already used in this apartment. Open that customer instead.")
                             else -> it.copy(submitting = false, error = e.userMessage())
                         }
                     }
@@ -237,7 +283,12 @@ class AddCustomerViewModel(
     fun addAnother() {
         pollJob?.cancel()
         val id = _state.value.routerId
-        _state.update { AddCustomerUiState(routers = it.routers, routerId = id, packages = it.packages, devices = it.devices) }
+        _state.update {
+            AddCustomerUiState(
+                routers = it.routers, apartments = it.apartments, apartmentId = it.apartmentId, routerId = id,
+                packages = it.packages, devices = it.devices,
+            )
+        }
         if (id != null) viewModelScope.launch { loadDevices(id) }
     }
 }

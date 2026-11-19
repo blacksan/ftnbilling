@@ -6,6 +6,8 @@ import ke.co.ftw.ftnadmin.core.network.ApiError
 import ke.co.ftw.ftnadmin.core.network.ErrorCode
 import ke.co.ftw.ftnadmin.core.network.MacOwner
 import ke.co.ftw.ftnadmin.data.accounts.AccountsRepository
+import ke.co.ftw.ftnadmin.data.apartments.ApartmentsRepository
+import ke.co.ftw.ftnadmin.domain.Apartment
 import ke.co.ftw.ftnadmin.domain.Account
 import ke.co.ftw.ftnadmin.domain.MacAddress
 import ke.co.ftw.ftnadmin.domain.ServicePackage
@@ -28,6 +30,9 @@ sealed interface DetailDialog {
 
     data object EditMac : DetailDialog
 
+    /** The customer moves house: new apartment, unit and (when it has several) router. */
+    data object Move : DetailDialog
+
     data class ConfirmSuspend(val suspend: Boolean) : DetailDialog
 
     /** Server said a better plan is still running; ask before forcing. */
@@ -46,9 +51,15 @@ data class DetailUiState(
     val macFieldError: String? = null,
     /** Set on a 409 mac_in_use: names the flat and building that own the MAC. */
     val macOwner: MacOwner? = null,
+    /** Apartments to move to, loaded when the Move dialog opens. */
+    val apartments: Loadable<List<Apartment>> = Loadable.Loading,
 )
 
-class CustomerDetailViewModel(private val id: String, private val repo: AccountsRepository) : ViewModel() {
+class CustomerDetailViewModel(
+    private val id: String,
+    private val repo: AccountsRepository,
+    private val apartmentsRepo: ApartmentsRepository? = null,
+) : ViewModel() {
     private val _state = MutableStateFlow(DetailUiState())
     val state: StateFlow<DetailUiState> = _state.asStateFlow()
 
@@ -84,6 +95,23 @@ class CustomerDetailViewModel(private val id: String, private val repo: Accounts
             macFieldError = null,
             macInput = if (d == DetailDialog.EditMac) a?.mac.orEmpty() else it.macInput,
         )
+    }
+
+    /** Opens the Move dialog and loads the apartments to pick from. */
+    fun openMove() {
+        open(DetailDialog.Move)
+        val repo = apartmentsRepo ?: return
+        _state.update { it.copy(apartments = Loadable.Loading) }
+        viewModelScope.launch {
+            val r = apiResult { repo.list() }
+            _state.update { cur -> r.fold({ l -> cur.copy(apartments = Loadable.Ready(l)) }, { e -> cur.copy(apartments = Loadable.Failed(e.userMessage())) }) }
+        }
+    }
+
+    /** Re-provisioning happens on the server: the old router loses the lease and queue, the new one gets them. */
+    fun move(apartmentId: String, routerId: String?, unit: String) {
+        val repo = apartmentsRepo ?: return
+        act("Moved. The router change is in the account history.") { repo.moveAccount(id, apartmentId, routerId, unit) }
     }
 
     fun dismiss() = _state.update { it.copy(dialog = DetailDialog.None, error = null, macOwner = null, macFieldError = null) }
@@ -160,6 +188,7 @@ class CustomerDetailViewModel(private val id: String, private val repo: Accounts
                 val d = cur.dialog
                 cur.copy(busy = false, dialog = if (d == DetailDialog.Extend) cur.pendingLowerPlan(api) else d, error = null)
             }
+            ErrorCode.UNIT_IN_USE -> cur.copy(busy = false, error = "That unit is already used by another customer of the apartment.")
             ErrorCode.VALIDATION_FAILED ->
                 cur.copy(busy = false, macFieldError = api.fieldErrors["mac"], error = if (api.fieldErrors["mac"] == null) e.userMessage() else null)
             else -> cur.copy(busy = false, error = e.userMessage())

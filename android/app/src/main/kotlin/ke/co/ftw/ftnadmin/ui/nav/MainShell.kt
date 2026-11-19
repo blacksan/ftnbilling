@@ -31,6 +31,9 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import ke.co.ftw.ftnadmin.core.network.UserInfo
 import ke.co.ftw.ftnadmin.ui.alerts.AlertsScreen
+import ke.co.ftw.ftnadmin.ui.apartments.ApartmentDetailScreen
+import ke.co.ftw.ftnadmin.ui.apartments.ApartmentFormScreen
+import ke.co.ftw.ftnadmin.ui.apartments.ApartmentsScreen
 import ke.co.ftw.ftnadmin.ui.common.LocalContainer
 import ke.co.ftw.ftnadmin.ui.customers.CustomerDetailScreen
 import ke.co.ftw.ftnadmin.ui.customers.CustomersScreen
@@ -130,6 +133,7 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
                 onAlerts = openAlerts,
                 onOpen = openAccount,
                 onAdd = { nav.navigate(AddCustomerRoute()) },
+                onApartments = { nav.navigate(ApartmentsRoute) },
             )
         }
         composable<PaymentsRoute> { e ->
@@ -143,6 +147,7 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
                 onSetupChecks = { nav.navigate(SetupRoute(it)) },
                 onRouterSetup = { nav.navigate(RouterRoute(it)) },
                 onRouters = { nav.navigate(RoutersRoute) },
+                onApartments = { nav.navigate(ApartmentsRoute) },
                 onAlertList = { nav.navigate(AlertsRoute) },
                 onSettings = { nav.navigate(SettingsRoute) },
             )
@@ -200,6 +205,34 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
                 user = user,
                 onBack = { nav.popBackStack() },
                 onOpenAccount = openAccount,
+            )
+        }
+        composable<ApartmentsRoute> {
+            ApartmentsScreen(
+                user = user,
+                onBack = { nav.popBackStack() },
+                onOpen = { nav.navigate(ApartmentRoute(it)) },
+                onAdd = { nav.navigate(ApartmentFormRoute()) },
+            )
+        }
+        composable<ApartmentRoute> { e ->
+            ApartmentDetailScreen(
+                id = e.toRoute<ApartmentRoute>().id,
+                user = user,
+                onBack = { nav.popBackStack() },
+                onEdit = { nav.navigate(ApartmentFormRoute(it)) },
+                onOpenAccount = openAccount,
+                onOpenRouter = { nav.navigate(RouterRoute(it)) },
+            )
+        }
+        composable<ApartmentFormRoute> { e ->
+            ApartmentFormScreen(
+                id = e.toRoute<ApartmentFormRoute>().id,
+                onBack = { nav.popBackStack() },
+                onSaved = { id ->
+                    // Land on the apartment page; the form is not kept in the back stack.
+                    nav.navigate(ApartmentRoute(id)) { popUpTo<ApartmentFormRoute> { inclusive = true } }
+                },
             )
         }
         composable<AlertsRoute> { AlertsScreen(user, onBack = { nav.popBackStack() }) }

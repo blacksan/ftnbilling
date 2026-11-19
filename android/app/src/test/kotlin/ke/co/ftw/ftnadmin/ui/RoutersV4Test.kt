@@ -6,6 +6,7 @@ import ke.co.ftw.ftnadmin.core.network.Session
 import ke.co.ftw.ftnadmin.core.network.SessionManager
 import ke.co.ftw.ftnadmin.core.network.UserInfo
 import ke.co.ftw.ftnadmin.data.accounts.AccountsRepository
+import ke.co.ftw.ftnadmin.data.apartments.ApartmentsRepository
 import ke.co.ftw.ftnadmin.data.routers.RouterLiveRepository
 import ke.co.ftw.ftnadmin.data.sites.NewDevicesRepository
 import ke.co.ftw.ftnadmin.data.sites.SiteSetupRepository
@@ -226,17 +227,20 @@ class RoutersV4Test {
     private fun addRoutes(online: Boolean = true) {
         routes["GET /api/v1/routers"] = ok("""{"items":[{"router_id":"r1","router_name":"Kilimani","online":$online}]}""")
         routes["GET /api/v1/packages"] = ok("""{"items":[$pkg]}""")
+        routes["GET /api/v1/apartments"] = ok(
+            """{"items":[{"id":"ap1","name":"MG One Central","routers":[{"site_id":"r1","router_id":"r1","router_name":"Kilimani"}]}]}""",
+        )
         routes["GET /api/v1/routers/r1/clients"] = ok(deviceList)
     }
 
     private fun addVm() = AddCustomerViewModel(
-        AccountsRepository(api), RouterLiveRepository(api), SitesRepository(api),
+        AccountsRepository(api), RouterLiveRepository(api), SitesRepository(api), ApartmentsRepository(api),
         initialRouterId = "r1", initialMac = null, pollMs = 10, maxPolls = 5,
     )
 
     private fun TestScope.fill(vm: AddCustomerViewModel) {
-        await(vm.state) { it.routers.isNotEmpty() && it.packages is Loadable.Ready && it.devices is Loadable.Ready }
-        vm.onFlat("A1")
+        await(vm.state) { it.routers.isNotEmpty() && it.apartmentId != null && it.packages is Loadable.Ready && it.devices is Loadable.Ready }
+        vm.onUnit("A1")
         vm.onTenant("Jane")
         vm.onPackage("p1")
         vm.pickDevice((vm.state.value.devices as Loadable.Ready).value.first())
@@ -262,7 +266,8 @@ class RoutersV4Test {
         assertEquals("Kilimani", vm.state.value.added!!.account.routerLabel)
         val body = requests("POST /api/v1/accounts").single().body.readUtf8()
         assertTrue(body, body.contains("\"router_id\":\"r1\"") && body.contains("\"package_id\":\"p1\"") &&
-            body.contains("\"activate\":true") && body.contains("\"mac\":\"AA:BB:CC:DD:EE:09\"") && body.contains("\"flat\":\"A1\""))
+            body.contains("\"activate\":true") && body.contains("\"mac\":\"AA:BB:CC:DD:EE:09\"") && body.contains("\"unit\":\"A1\"") &&
+            body.contains("\"apartment_id\":\"ap1\""))
     }
 
     @Test fun addCustomerRefusesAnInvalidMacWithoutACall() = runTest(main.dispatcher) {

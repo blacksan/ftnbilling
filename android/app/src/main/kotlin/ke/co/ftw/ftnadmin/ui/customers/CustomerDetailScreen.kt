@@ -16,6 +16,12 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.FilterChip
+import ke.co.ftw.ftnadmin.ui.common.LoadingSpinner
+import ke.co.ftw.ftnadmin.ui.common.ChipLabel
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -59,7 +65,7 @@ import ke.co.ftw.ftnadmin.ui.common.vmFactory
 @Composable
 fun CustomerDetailScreen(id: String, user: UserInfo, onBack: () -> Unit, onOpenOther: (String) -> Unit) {
     val container = LocalContainer.current
-    val vm: CustomerDetailViewModel = viewModel(key = "detail-$id", factory = vmFactory { CustomerDetailViewModel(id, container.accounts) })
+    val vm: CustomerDetailViewModel = viewModel(key = "detail-$id", factory = vmFactory { CustomerDetailViewModel(id, container.accounts, container.apartments) })
     val ui by vm.state.collectAsStateWithLifecycle()
     val snack = remember { SnackbarHostState() }
     LaunchedEffect(ui.info) {
@@ -96,6 +102,7 @@ fun CustomerDetailScreen(id: String, user: UserInfo, onBack: () -> Unit, onOpenO
                             }
                             FilledTonalButton(onClick = { vm.open(DetailDialog.ChangePackage) }, enabled = !ui.busy) { Text("Change package") }
                             FilledTonalButton(onClick = { vm.open(DetailDialog.EditMac) }, enabled = !ui.busy) { Text("Edit MAC") }
+                            FilledTonalButton(onClick = vm::openMove, enabled = !ui.busy) { Text("Move apartment") }
                             OutlinedButton(onClick = { vm.open(DetailDialog.ConfirmSuspend(!acc.suspended)) }, enabled = !ui.busy) {
                                 Text(if (acc.suspended) "Unsuspend" else "Suspend")
                             }
@@ -149,11 +156,16 @@ fun CustomerDetailScreen(id: String, user: UserInfo, onBack: () -> Unit, onOpenO
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SummaryCard(a: Account) {
-    SectionCard("Flat ${a.flat}${if (a.floor.isNotBlank()) ", floor ${a.floor}" else ""}") {
+    SectionCard("Flat ${a.unitLabel}${if (a.floor.isNotBlank()) ", floor ${a.floor}" else ""}") {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             StatusChip(accountStateLabel(a), accountTone(a))
             if (a.macConflict) StatusChip("Not provisioned", Tone.Bad)
         }
+        if (a.problem.isNotBlank()) {
+            Text(a.problem, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+        }
+        LabeledValue("Apartment", a.apartment?.name.orEmpty())
+        LabeledValue("Unit", a.unitLabel)
         LabeledValue("Router", a.routerLabel)
         LabeledValue("Tenant", a.tenant)
         LabeledValue("Phone", a.phone)
@@ -213,6 +225,7 @@ private fun DetailDialogs(ui: DetailUiState, vm: CustomerDetailViewModel, onOpen
             onDismiss = vm::dismiss,
         ) { pkg, _, keep -> vm.changePackage(pkg, keep) }
         DetailDialog.EditMac -> MacDialog(account, ui, vm, onOpenOther)
+        DetailDialog.Move -> MoveDialog(account, ui, vm)
         is DetailDialog.ConfirmSuspend -> AlertDialog(
             onDismissRequest = vm::dismiss,
             title = { Text(if (d.suspend) "Suspend Flat ${account.flat}?" else "Unsuspend Flat ${account.flat}?") },
@@ -335,4 +348,66 @@ fun macConflictText(o: MacOwner): String {
     }
     return "${o.mac.ifBlank { "This MAC" }} is already used by $where. A MAC can belong to one account only. " +
         "Move it off that account first, or check you typed the right address."
+}
+
+/** Move a customer to another apartment: pick it, say the unit, and the router when the apartment has several. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MoveDialog(account: Account, ui: DetailUiState, vm: CustomerDetailViewModel) {
+    var aptId by remember { mutableStateOf(account.apartment?.id.orEmpty()) }
+    var unit by remember { mutableStateOf(account.unitLabel) }
+    var routerId by remember { mutableStateOf<String?>(null) }
+    val list = (ui.apartments as? Loadable.Ready)?.value.orEmpty()
+    val chosen = list.firstOrNull { it.id == aptId }
+    // One router: the server picks it. Several: the operator chooses.
+    val needsRouter = (chosen?.routers?.size ?: 0) > 1
+    AlertDialog(
+        onDismissRequest = vm::dismiss,
+        title = { Text("Move Flat ${account.unitLabel}") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "The lease and queue are removed from the old router and written on the new one. This is kept in the account history.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                when (val l = ui.apartments) {
+                    Loadable.Loading -> LoadingSpinner()
+                    is Loadable.Failed -> Text(l.message, color = MaterialTheme.colorScheme.error)
+                    is Loadable.Ready -> FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        l.value.forEach { a ->
+                            FilterChip(
+                                selected = a.id == aptId,
+                                onClick = {
+                                    aptId = a.id
+                                    routerId = null
+                                },
+                                label = { ChipLabel(a.name) },
+                            )
+                        }
+                    }
+                }
+                OutlinedTextField(unit, { unit = it }, label = { Text("Unit") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                if (needsRouter) {
+                    Text("Router", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        chosen?.routers?.forEach { r ->
+                            FilterChip(selected = routerId == r.key, onClick = { routerId = r.key }, label = { ChipLabel(r.label) })
+                        }
+                    }
+                }
+                if (chosen != null && chosen.routers.isEmpty()) {
+                    Text("This apartment has no router yet. Link one on its page first.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { vm.move(aptId, routerId, unit) },
+                enabled = !ui.busy && chosen != null && chosen.routers.isNotEmpty() && unit.isNotBlank() && (!needsRouter || routerId != null),
+            ) { Text(if (ui.busy) "Moving..." else "Move") }
+        },
+        dismissButton = { TextButton(onClick = vm::dismiss) { Text("Cancel") } },
+    )
 }

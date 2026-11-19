@@ -6,6 +6,9 @@ import ke.co.ftw.ftnadmin.core.network.ApiError
 import ke.co.ftw.ftnadmin.core.network.ErrorCode
 import ke.co.ftw.ftnadmin.core.network.MacOwner
 import ke.co.ftw.ftnadmin.data.accounts.AccountsRepository
+import ke.co.ftw.ftnadmin.data.apartments.ApartmentsRepository
+import ke.co.ftw.ftnadmin.domain.Apartment
+import ke.co.ftw.ftnadmin.domain.BelongsTo
 import ke.co.ftw.ftnadmin.data.sites.NewDevicesRepository
 import ke.co.ftw.ftnadmin.data.sites.SitesRepository
 import ke.co.ftw.ftnadmin.domain.Account
@@ -30,7 +33,11 @@ data class DeviceSheet(
     val device: NewDevice,
     val tab: SheetTab = SheetTab.Attach,
     val selected: Account? = null,
+    /** The unit (flat) in the chosen apartment. */
     val flat: String = "",
+    /** Apartments the device's router serves, and the one picked for a new account. */
+    val apartments: List<Apartment> = emptyList(),
+    val apartmentId: String? = null,
     val tenant: String = "",
     val phone: String = "",
     val packageId: String? = null,
@@ -39,6 +46,11 @@ data class DeviceSheet(
     /** 409 mac_in_use: who owns the MAC. Shown in plain words, never as a generic error. */
     val macOwner: MacOwner? = null,
     val confirmDismiss: Boolean = false,
+    /** 409 mac_other_building from Attach or Create: the customer who owns the MAC elsewhere. */
+    val macOther: BelongsTo? = null,
+    /** "Move customer here": the apartment to move into (when the router serves several) and the confirm step. */
+    val moveApartmentId: String? = null,
+    val confirmMove: Boolean = false,
 )
 
 data class NewDevicesUiState(
@@ -54,6 +66,7 @@ class NewDevicesViewModel(
     private val repo: NewDevicesRepository,
     private val sites: SitesRepository,
     private val accounts: AccountsRepository,
+    private val apartmentsRepo: ApartmentsRepository? = null,
 ) : ViewModel() {
     private val _state = MutableStateFlow(NewDevicesUiState())
     val state: StateFlow<NewDevicesUiState> = _state.asStateFlow()
@@ -98,24 +111,64 @@ class NewDevicesViewModel(
 
     fun clearMessage() = _state.update { it.copy(message = null) }
 
-    fun open(d: NewDevice) = _state.update {
-        it.copy(
-            sheet = DeviceSheet(
-                device = d,
-                selected = d.suggestedAccount?.let { s -> Account(id = s.id, code = s.code, flat = s.flat, siteId = d.routerKey) },
-            ),
-        )
+    fun open(d: NewDevice) {
+        val b = d.belongsTo
+        _state.update {
+            it.copy(
+                sheet = DeviceSheet(
+                    device = d,
+                    selected = d.suggestedAccount?.let { s -> Account(id = s.id, code = s.code, flat = s.flat, siteId = d.routerKey) },
+                    // The only apartment the router could move the customer into is preselected.
+                    moveApartmentId = b?.moveToChoices?.singleOrNull()?.id,
+                ),
+            )
+        }
+        if (b == null) loadApartments(d)
+    }
+
+    /** The apartments the device's router serves: a new account must be in one of them. */
+    private fun loadApartments(d: NewDevice) {
+        val aRepo = apartmentsRepo ?: return
+        viewModelScope.launch {
+            val l = apiResult { aRepo.list(routerId = d.routerKey) }.getOrNull() ?: return@launch
+            _state.update { s ->
+                val sh = s.sheet ?: return@update s
+                if (sh.device.mac != d.mac) return@update s
+                s.copy(sheet = sh.copy(apartments = l, apartmentId = sh.apartmentId ?: l.singleOrNull()?.id))
+            }
+        }
     }
 
     fun closeSheet() = _state.update { it.copy(sheet = null) }
 
-    private fun edit(t: (DeviceSheet) -> DeviceSheet) = _state.update { s -> s.sheet?.let { s.copy(sheet = t(it).copy(error = null, macOwner = null)) } ?: s }
+    private fun edit(t: (DeviceSheet) -> DeviceSheet) =
+        _state.update { s -> s.sheet?.let { s.copy(sheet = t(it).copy(error = null, macOwner = null, macOther = null)) } ?: s }
 
     fun setTab(t: SheetTab) = edit { it.copy(tab = t, confirmDismiss = false) }
 
     fun select(a: Account) = edit { it.copy(selected = a) }
 
     fun setFlat(v: String) = edit { it.copy(flat = v) }
+
+    fun setApartment(id: String) = edit { it.copy(apartmentId = id) }
+
+    fun setMoveApartment(id: String) = edit { it.copy(moveApartmentId = id, confirmMove = false) }
+
+    fun askMove() = _state.update { s -> s.sheet?.let { s.copy(sheet = it.copy(confirmMove = true)) } ?: s }
+
+    fun cancelMove() = _state.update { s -> s.sheet?.let { s.copy(sheet = it.copy(confirmMove = false)) } ?: s }
+
+    /**
+     * The device belongs to a customer of another apartment. After the operator's confirm the customer follows it
+     * to this router: the old router's lease and queue go, the new router gets them, the history says so.
+     */
+    fun moveHere() {
+        val sh = _state.value.sheet ?: return
+        val b = sh.device.belongsTo ?: return
+        run(sh.copy(confirmMove = false), "${b.customer.ifBlank { "Customer" }} moved to this router") {
+            repo.moveCustomerHere(sh.device.routerKey, sh.device.mac, sh.moveApartmentId)
+        }
+    }
 
     fun setTenant(v: String) = edit { it.copy(tenant = v) }
 
@@ -142,9 +195,10 @@ class NewDevicesViewModel(
 
     fun create() {
         val sh = _state.value.sheet ?: return
+        val apt = sh.apartmentId ?: return
         if (sh.flat.isBlank()) return
         run(sh, "Flat ${sh.flat.trim()} created") {
-            repo.create(sh.device.routerKey, sh.device.mac, sh.flat.trim(), sh.tenant.trim(), sh.phone.trim(), sh.packageId)
+            repo.create(sh.device.routerKey, apt, sh.device.mac, sh.flat.trim(), sh.tenant.trim(), sh.phone.trim(), sh.packageId)
         }
     }
 
@@ -164,7 +218,7 @@ class NewDevicesViewModel(
     }
 
     private fun run(sh: DeviceSheet, done: String, block: suspend () -> Account) {
-        _state.update { it.copy(sheet = sh.copy(busy = true, error = null, macOwner = null)) }
+        _state.update { it.copy(sheet = sh.copy(busy = true, error = null, macOwner = null, macOther = null)) }
         viewModelScope.launch {
             val r = apiResult(block)
             r.fold(
@@ -179,8 +233,11 @@ class NewDevicesViewModel(
                             sheet = sh.copy(
                                 busy = false,
                                 macOwner = if (api?.code == ErrorCode.MAC_IN_USE) api.macOwner else null,
+                                macOther = if (api?.code == ErrorCode.MAC_OTHER_BUILDING) api.macOtherBuilding else null,
                                 error = when {
                                     api?.code == ErrorCode.MAC_IN_USE && api.macOwner != null -> null
+                                    api?.code == ErrorCode.MAC_OTHER_BUILDING && api.macOtherBuilding != null -> null
+                                    api?.code == ErrorCode.UNIT_IN_USE -> "Unit ${sh.flat.trim()} is already used in this apartment. Use Attach instead."
                                     api?.code == ErrorCode.FLAT_IN_USE -> "Flat ${sh.flat.trim()} already exists on this router. Use Attach instead."
                                     else -> e.userMessage()
                                 },

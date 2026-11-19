@@ -20,6 +20,17 @@ object ErrorCode {
     const val NOT_FOUND = "not_found"
     const val MAC_IN_USE = "mac_in_use"
     const val FLAT_IN_USE = "flat_in_use"
+
+    /** 409: the MAC belongs to an open account of another apartment. */
+    const val MAC_OTHER_BUILDING = "mac_other_building"
+
+    /** 409: that unit is used by another open account of the apartment. */
+    const val UNIT_IN_USE = "unit_in_use"
+    const val APARTMENT_NAME_IN_USE = "apartment_name_in_use"
+    const val APARTMENT_IN_USE = "apartment_in_use"
+
+    /** 409: unlinking a router that still serves open accounts of the apartment. */
+    const val ROUTER_SERVES_ACCOUNTS = "router_serves_accounts"
     const val DUPLICATE_PAYMENT = "duplicate_payment"
     const val LOWER_PLAN_ACTIVE = "lower_plan_active"
     const val BAD_STATE = "bad_state"
@@ -90,6 +101,24 @@ class ApiError(
                 flat = s(acc, "flat"),
                 siteId = s(acc, "router_id").ifBlank { s(acc, "site_id") },
                 siteName = s(acc, "router_name").ifBlank { s(acc, "site_name") },
+            )
+        }
+
+    /** For `mac_other_building`: the customer who owns the MAC in another apartment. */
+    val macOtherBuilding: ke.co.ftw.ftnadmin.domain.BelongsTo?
+        get() {
+            if (code != ErrorCode.MAC_OTHER_BUILDING) return null
+            val b = details?.get("belongs_to") as? JsonObject ?: return null
+            fun s(o: JsonObject, k: String) = (o[k] as? JsonPrimitive)?.contentOrNull.orEmpty()
+            val apt = b["apartment"] as? JsonObject
+            return ke.co.ftw.ftnadmin.domain.BelongsTo(
+                accountId = s(b, "account_id"),
+                code = s(b, "code"),
+                customer = s(b, "customer"),
+                apartment = ke.co.ftw.ftnadmin.domain.AptRef(apt?.let { s(it, "id") }.orEmpty(), apt?.let { s(it, "name") }.orEmpty()),
+                unit = s(b, "unit"),
+                siteId = s(b, "site_id"),
+                siteName = s(b, "site_name"),
             )
         }
 

@@ -54,6 +54,9 @@ class ApiClient(
     suspend inline fun <reified T> patch(vararg segments: String, body: JsonObject? = null): T =
         request("PATCH", segments.toList(), emptyMap(), body, serializer<T>())
 
+    suspend inline fun <reified T> delete(vararg segments: String): T =
+        request("DELETE", segments.toList(), emptyMap(), null, serializer<T>())
+
     /** For endpoints that answer 204 or whose body is not needed. */
     suspend fun send(method: String, vararg segments: String, body: JsonObject? = null) {
         requestRaw(method, segments.toList(), emptyMap(), body)

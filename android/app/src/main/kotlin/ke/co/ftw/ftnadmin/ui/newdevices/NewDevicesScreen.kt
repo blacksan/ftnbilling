@@ -46,6 +46,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ke.co.ftw.ftnadmin.core.network.UserInfo
@@ -70,7 +71,7 @@ fun NewDevicesScreen(siteId: String?, user: UserInfo, onBack: () -> Unit, onOpen
     val container = LocalContainer.current
     val vm: NewDevicesViewModel = viewModel(
         key = "newdevices-${siteId.orEmpty()}",
-        factory = vmFactory { NewDevicesViewModel(siteId, container.newDevices, container.sites, container.accounts) },
+        factory = vmFactory { NewDevicesViewModel(siteId, container.newDevices, container.sites, container.accounts, container.apartments) },
     )
     val ui by vm.state.collectAsStateWithLifecycle()
     val snack = remember { SnackbarHostState() }
@@ -131,6 +132,14 @@ private fun DeviceRow(d: NewDevice, onClick: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                d.belongsTo?.let { b ->
+                    Text(
+                        b.text,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 if (d.routerUser.isNotBlank()) {
                     Text(
                         "Logged in on the router as ${d.routerUser}; no server account",
@@ -164,6 +173,10 @@ private fun DeviceSheetContent(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            val belongs = d.belongsTo
+            if (belongs != null) {
+                BelongsToSection(sheet, belongs, vm)
+            } else {
             ChipRow(horizontalPadding = 0.dp) {
                 FilterChip(sheet.tab == SheetTab.Attach, { vm.setTab(SheetTab.Attach) }, label = { ChipLabel("Attach to account") })
                 FilterChip(sheet.tab == SheetTab.Create, { vm.setTab(SheetTab.Create) }, label = { ChipLabel("Create account") })
@@ -181,7 +194,20 @@ private fun DeviceSheetContent(
                     }
                 }
                 SheetTab.Create -> {
-                    OutlinedTextField(sheet.flat, vm::setFlat, label = { Text("Flat") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Text("Apartment", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (sheet.apartments.isEmpty()) {
+                        Text(
+                            "This router serves no apartment yet. Link it to one on the Apartments page first.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    ChipRow(horizontalPadding = 0.dp) {
+                        sheet.apartments.forEach { a ->
+                            FilterChip(sheet.apartmentId == a.id, { vm.setApartment(a.id) }, label = { ChipLabel(a.name) })
+                        }
+                    }
+                    OutlinedTextField(sheet.flat, vm::setFlat, label = { Text("Unit (flat)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(sheet.tenant, vm::setTenant, label = { Text("Tenant (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(
                         sheet.phone, vm::setPhone, label = { Text("Phone (optional)") }, singleLine = true,
@@ -189,16 +215,39 @@ private fun DeviceSheetContent(
                     )
                     Text("Package (optional)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     PackagePicker(packages, sheet.packageId, vm::setPackage)
-                    Button(onClick = vm::create, enabled = sheet.flat.isNotBlank() && !sheet.busy, modifier = Modifier.fillMaxWidth()) {
+                    Button(onClick = vm::create, enabled = sheet.flat.isNotBlank() && sheet.apartmentId != null && !sheet.busy, modifier = Modifier.fillMaxWidth()) {
                         Text(if (sheet.busy) "Creating..." else "Create account")
                     }
                 }
+            }
+            }
+            sheet.macOther?.let { o ->
+                Text(
+                    "${o.text}. This MAC cannot be used in another apartment. Use Move customer here on the device instead.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
             }
             sheet.macOwner?.let { MacConflictNotice(it, onOpen = { id -> vm.closeSheet(); onOpenAccount(id) }) }
             sheet.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
             OutlinedButton(onClick = vm::askDismiss, enabled = !sheet.busy, modifier = Modifier.fillMaxWidth()) { Text("Dismiss this device") }
             Box(Modifier.size(16.dp))
         }
+    }
+    if (sheet.confirmMove) {
+        val b = d.belongsTo
+        AlertDialog(
+            onDismissRequest = vm::cancelMove,
+            title = { Text("Move ${b?.customer?.ifBlank { "this customer" }.orEmpty()} here?") },
+            text = {
+                Text(
+                    "Their lease and queue are removed from ${b?.siteName.orEmpty()} and written on ${d.routerLabel}. " +
+                        "Their apartment becomes the one you picked. This is kept in their history.",
+                )
+            },
+            confirmButton = { TextButton(onClick = vm::moveHere) { Text("Move") } },
+            dismissButton = { TextButton(onClick = vm::cancelMove) { Text("Cancel") } },
+        )
     }
     if (sheet.confirmDismiss) {
         AlertDialog(
@@ -207,6 +256,46 @@ private fun DeviceSheetContent(
             text = { Text("It is hidden from this list, for example a neighbour's router or a test device. It is not given any access.") },
             confirmButton = { TextButton(onClick = vm::dismissDevice) { Text("Dismiss") } },
             dismissButton = { TextButton(onClick = vm::cancelDismiss) { Text("Cancel") } },
+        )
+    }
+}
+
+/**
+ * The MAC belongs to a customer of another apartment, so it is never provisioned here. Attach and Create are
+ * disabled; the owner or an operator can move the customer to this router after a confirm.
+ */
+@Composable
+private fun BelongsToSection(sheet: DeviceSheet, b: ke.co.ftw.ftnadmin.domain.BelongsTo, vm: NewDevicesViewModel) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(b.text, style = MaterialTheme.typography.titleSmall)
+            Text(
+                "It stays unregistered on this router. A MAC of one apartment is never set up in another.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = {}, enabled = false) { Text("Attach", maxLines = 1) }
+        OutlinedButton(onClick = {}, enabled = false) { Text("Create account", maxLines = 1) }
+    }
+    if (!b.sameApartment && b.moveToChoices.size > 1) {
+        Text("Move into apartment", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ChipRow(horizontalPadding = 0.dp) {
+            b.moveToChoices.forEach { c ->
+                FilterChip(sheet.moveApartmentId == c.id, { vm.setMoveApartment(c.id) }, label = { ChipLabel(c.name) })
+            }
+        }
+    }
+    val needsChoice = !b.sameApartment && b.moveToChoices.size > 1 && sheet.moveApartmentId == null
+    Button(onClick = vm::askMove, enabled = !sheet.busy && !needsChoice && (b.sameApartment || b.moveToChoices.isNotEmpty()), modifier = Modifier.fillMaxWidth()) {
+        Text(if (sheet.busy) "Moving..." else "Move customer here")
+    }
+    if (!b.sameApartment && b.moveToChoices.isEmpty()) {
+        Text(
+            "This router serves no apartment. Link it to the customer's apartment, or to another one, on the Apartments page first.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

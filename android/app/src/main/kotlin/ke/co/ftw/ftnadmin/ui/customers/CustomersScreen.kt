@@ -64,7 +64,7 @@ fun accountStateLabel(a: Account): String = when {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CustomersScreen(user: UserInfo, onAlerts: () -> Unit, onOpen: (String) -> Unit, onAdd: () -> Unit) {
+fun CustomersScreen(user: UserInfo, onAlerts: () -> Unit, onOpen: (String) -> Unit, onAdd: () -> Unit, onApartments: () -> Unit = {}) {
     val container = LocalContainer.current
     val vm: CustomersViewModel = viewModel(
         factory = vmFactory { CustomersViewModel(container.accounts, selection = container.routerContext.selection) },
@@ -108,6 +108,7 @@ fun CustomersScreen(user: UserInfo, onAlerts: () -> Unit, onOpen: (String) -> Un
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             )
             ChipRow {
+                FilterChip(selected = false, onClick = onApartments, label = { ChipLabel("Apartments") })
                 FilterChip(selected = ui.stateFilter == null, onClick = { vm.onStateFilter(null) }, label = { ChipLabel("All") })
                 ACCOUNT_STATES.forEach { st ->
                     FilterChip(
@@ -152,13 +153,13 @@ fun AccountRow(a: Account, onClick: () -> Unit) {
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Flat ${a.flat}", style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(end = 8.dp))
+                Text("Flat ${a.unitLabel}", style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(end = 8.dp))
                 StatusChip(accountStateLabel(a), accountTone(a))
             }
             val who = listOf(a.tenant, a.phone).filter { it.isNotBlank() }.joinToString(" - ")
             if (who.isNotBlank()) Text(who, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
             Text(
-                listOfNotNull(a.routerLabel.takeIf { it.isNotBlank() }, a.pkg?.name, if (a.expiresAt != null) formatExpiry(a.expiresAt) else null).joinToString("  |  "),
+                listOfNotNull(a.apartment?.name?.takeIf { it.isNotBlank() }, a.routerLabel.takeIf { it.isNotBlank() }, a.pkg?.name, if (a.expiresAt != null) formatExpiry(a.expiresAt) else null).joinToString("  |  "),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

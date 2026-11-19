@@ -30,6 +30,13 @@ import kotlinx.serialization.Serializable
 
 @Serializable data class NewDevicesRoute(val routerId: String? = null)
 
+@Serializable data object ApartmentsRoute
+
+@Serializable data class ApartmentRoute(val id: String)
+
+/** Create (id = null) or edit an apartment. */
+@Serializable data class ApartmentFormRoute(val id: String? = null)
+
 @Serializable data object AlertsRoute
 
 @Serializable data object SettingsRoute

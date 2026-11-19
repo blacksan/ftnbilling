@@ -13,6 +13,7 @@ import ke.co.ftw.ftnadmin.core.network.SessionManager
 import ke.co.ftw.ftnadmin.core.prefs.Settings
 import ke.co.ftw.ftnadmin.data.accounts.AccountsRepository
 import ke.co.ftw.ftnadmin.data.alerts.AlertsRepository
+import ke.co.ftw.ftnadmin.data.apartments.ApartmentsRepository
 import ke.co.ftw.ftnadmin.data.auth.AuthRepository
 import ke.co.ftw.ftnadmin.data.auth.DeviceInfo
 import ke.co.ftw.ftnadmin.data.dashboard.DashboardRepository
@@ -59,6 +60,7 @@ class AppContainer(app: Application) {
     val sites = SitesRepository(api)
     val siteSetup = SiteSetupRepository(api)
     val newDevices = NewDevicesRepository(api)
+    val apartments = ApartmentsRepository(api)
     val alerts = AlertsRepository(api)
     val routerLive = RouterLiveRepository(api)
     val routerContext = RouterContext(sites, settings, appScope)
