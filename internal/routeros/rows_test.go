@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -124,5 +125,62 @@ func TestRESTSetRowFallsBackToSet(t *testing.T) {
 	}
 	if !SameValue("max-limit", "10M/10M", "10000k/10000k") || !SameValue("mac-address", "AA:BB", "aa:bb") || SameValue("address", "10.0.0.1", "10.0.0.2") {
 		t.Fatal("SameValue")
+	}
+}
+
+// RouterOS 7.25.1 answers DELETE /rest/.../%2A2 with 400 "missing or invalid
+// resource identifier": it does not decode %2A. Item ids must go on the wire as "*2".
+func TestRESTRowIDsAreSentLiterally(t *testing.T) {
+	var uris []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		uris = append(uris, r.Method+" "+r.RequestURI)
+		if strings.Contains(r.RequestURI, "%2A") || strings.Contains(r.RequestURI, "%2a") {
+			w.WriteHeader(400)
+			w.Write([]byte(`{"error":400,"message":"Bad Request","detail":"missing or invalid resource identifier"}`))
+			return
+		}
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c := NewREST(srv.URL, "u", "p")
+	ctx := context.Background()
+	if err := c.RemoveRow(ctx, "/ip/firewall/address-list", "*2"); err != nil {
+		t.Fatalf("remove: %v (requests %v)", err, uris)
+	}
+	if err := c.SetRow(ctx, "/queue/simple", "*1A", map[string]string{"max-limit": "5M/5M"}); err != nil {
+		t.Fatalf("set: %v (requests %v)", err, uris)
+	}
+	if uris[0] != "DELETE /rest/ip/firewall/address-list/*2" || uris[1] != "PATCH /rest/queue/simple/*1A" {
+		t.Fatalf("ids must be sent as they are, got %v", uris)
+	}
+	if got := idPath("../x"); got == "../x" {
+		t.Fatalf("a value that is not a RouterOS id must be escaped, got %q", got)
+	}
+}
+
+// A DELETE RouterOS refuses (not "gone") is retried once as POST <path>/remove.
+func TestRESTRemoveRowFallsBackToRemove(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Method+" "+r.URL.Path)
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(400)
+			w.Write([]byte(`{"error":400,"message":"Bad Request"}`))
+			return
+		}
+		var body map[string]string
+		json.NewDecoder(r.Body).Decode(&body)
+		if body[".id"] != "*7" {
+			w.WriteHeader(400)
+			return
+		}
+		w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+	if err := NewREST(srv.URL, "u", "p").RemoveRow(context.Background(), "/ip/firewall/address-list", "*7"); err != nil {
+		t.Fatalf("fallback remove must succeed: %v (%v)", err, seen)
+	}
+	if len(seen) != 2 || seen[1] != "POST /rest/ip/firewall/address-list/remove" {
+		t.Fatalf("requests %v", seen)
 	}
 }
