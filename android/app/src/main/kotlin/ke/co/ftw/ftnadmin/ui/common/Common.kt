@@ -4,7 +4,10 @@ import android.app.KeyguardManager
 import android.content.Context
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -116,25 +119,41 @@ fun LabeledValue(label: String, value: String, modifier: Modifier = Modifier) {
 
 enum class Tone { Neutral, Good, Warn, Bad }
 
-/** Small coloured status pill using only theme colours. */
+/**
+ * Status badge, Slate Navy: a neutral chip with a small status marker (green, yellow with a dark rim, blue is
+ * not used here). Only errors get a tinted container, so colour stays reserved for what needs attention.
+ */
 @Composable
 fun StatusChip(text: String, tone: Tone, modifier: Modifier = Modifier) {
     val ext = AppTheme.extended
     val scheme = MaterialTheme.colorScheme
-    val (bg: Color, fg: Color) = when (tone) {
-        Tone.Good -> ext.successContainer to ext.onSuccessContainer
-        Tone.Warn -> ext.warningContainer to ext.onWarningContainer
-        Tone.Bad -> scheme.errorContainer to scheme.onErrorContainer
-        Tone.Neutral -> scheme.secondaryContainer to scheme.onSecondaryContainer
+    val bg: Color = if (tone == Tone.Bad) scheme.errorContainer else scheme.surfaceContainerHigh
+    val fg: Color = if (tone == Tone.Bad) scheme.onErrorContainer else scheme.onSurface
+    val dot: Color = when (tone) {
+        Tone.Good -> ext.success
+        Tone.Warn -> ext.warningFill
+        Tone.Bad -> scheme.error
+        Tone.Neutral -> scheme.outline
     }
     Surface(modifier, shape = MaterialTheme.shapes.small, color = bg, contentColor = fg) {
-        Text(
-            text,
-            style = MaterialTheme.typography.labelMedium,
-            maxLines = 1,
-            softWrap = false,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-        )
+        androidx.compose.foundation.layout.Row(
+            Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
+        ) {
+            Box(
+                Modifier
+                    .size(8.dp)
+                    .background(dot, androidx.compose.foundation.shape.CircleShape)
+                    .then(if (tone == Tone.Warn) Modifier.border(1.dp, ext.warning, androidx.compose.foundation.shape.CircleShape) else Modifier),
+            )
+            Text(
+                text,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
     }
 }
 

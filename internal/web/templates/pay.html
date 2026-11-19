@@ -1,8 +1,8 @@
 {{define "pay"}}{{template "head" .}}
-{{template "brandbar" .Brand}}{{if .SiteName}}<p class="muted" style="margin:0 0 4px">{{.SiteName}}</p>{{end}}
+{{template "brandbar" .Brand}}{{if .SiteName}}<p class="muted mt-0 mb-1">{{.SiteName}}</p>{{end}}
 {{if .Found}}
 <div class="card"><div class="flat">{{.Flat}}{{if .ByCode}} · Account {{.Code}}{{end}}</div>
-{{if .ByCode}}<p style="margin:6px 0">{{if eq .State "active"}}<span class="pill active">Active</span> until <b>{{eat .ExpiresAt}}</b>
+{{if .ByCode}}<p class="mt-2 mb-2">{{if eq .State "active"}}<span class="pill active">Active</span> until <b>{{eat .ExpiresAt}}</b>
 {{else if eq .State "expired"}}<span class="pill expired">Expired</span> on {{eat .ExpiresAt}}
 {{else}}<span class="pill new">No package yet</span>{{end}}</p>{{end}}</div>
 {{if .Error}}<p class="err">{{.Error}}</p>{{end}}

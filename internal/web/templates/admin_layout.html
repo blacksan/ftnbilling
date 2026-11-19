@@ -6,7 +6,7 @@
 <body>{{$a := .Active}}<a class="skip" href="#main">Skip to content</a>
 <div class="shell">
 <aside class="side" id="side" aria-label="Main">
-<a class="logo" href="/admin" aria-label="{{.Brand}}"><img src="/brand/logo-white-text.svg" alt="{{.Brand}}"></a>
+<a class="logo" href="/admin" aria-label="{{.Brand}}"><img class="lg-light" src="/brand/logo-dark-text.svg" alt="{{.Brand}}"><img class="lg-dark" src="/brand/logo-white-text.svg" alt="" aria-hidden="true"></a>
 <a class="nav" href="/admin"{{if eq $a "dashboard"}} aria-current="page"{{end}}>{{template "navi" "dashboard"}}Overview</a>
 <details data-g="customers" open><summary>Customers</summary><div>
 <a class="nav" href="/admin/accounts"{{if eq $a "accounts"}} aria-current="page"{{end}}>{{template "navi" "accounts"}}Subscribers</a>
@@ -87,7 +87,7 @@
 <div class="stack" data-step="form">
 <label class="field">Name<input name="name" required maxlength="60" autocomplete="off" placeholder="Riverside Apartments"><span class="hint">Tenants and the team see this name.</span></label>
 <p class="hint">The server sets the router up from one line you paste on it. The router is erased and built again, so use a new router or one you mean to rebuild.</p>
-<details><summary>Router layout</summary><div class="stack" style="margin-top:10px">{{with .Data.RouterDefaults}}{{template "sitelayout" .}}<label class="field">Support phone<input name="support" value="{{.SupportPhone}}" placeholder="optional"></label>{{end}}</div></details>
+<details><summary>Router layout</summary><div class="stack mt-3">{{with .Data.RouterDefaults}}{{template "sitelayout" .}}<label class="field">Support phone<input name="support" value="{{.SupportPhone}}" placeholder="optional"></label>{{end}}</div></details>
 </div>
 <div class="stack" data-step="status" hidden aria-live="polite">
 <p><b>Paste this one line</b> into the router's terminal (WinBox, then New Terminal). It works once and expires in {{.Data.JoinTTL}} minutes. The router builds itself; nothing else is typed on it.</p>

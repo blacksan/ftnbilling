@@ -38,7 +38,7 @@
 <td><a class="btn ghost sm" href="/admin/site/select?site={{.S.ID}}&amp;next=/admin">Open</a></td></tr>{{end}}</tbody></table></div>
 {{else if eq .Data.All 0}}{{template "empty" (dict "Title" "No routers linked yet." "Text" "Add a router, paste the one line it gives you into the router's terminal, and the server does the rest." "Acts" (acts "Add router|#modal:addrouter"))}}
 {{else}}{{template "empty" (dict "Title" "No router in this view." "Text" "Try another tab." "Acts" (acts "Show all|/admin/routers"))}}{{end}}
-{{if .Data.Notices}}<section class="panel"><h2>Tenants waiting on a router</h2><p class="muted" style="margin:6px 0 10px">These routers are down. Send tenants a WhatsApp notice once per outage.</p>
+{{if .Data.Notices}}<section class="panel"><h2>Tenants waiting on a router</h2><p class="muted mt-2 mb-3">These routers are down. Send tenants a WhatsApp notice once per outage.</p>
 {{range .Data.Notices}}<form method="post" action="/admin/sites/outage-notice" class="row" data-confirm="Send a WhatsApp outage notice to every tenant of {{.S.Name}} who has a WhatsApp number?"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{.S.ID}}"><b>{{.S.Name}}</b><span class="muted">{{.Cause}}</span><button class="sm">Tell tenants about the outage</button>{{if .Notified}} <span class="muted">{{.Notified}} notices already sent</span>{{end}}</form>{{end}}</section>{{end}}
 <p class="muted">Flat labels and ONT MACs only need to be unique inside a router. Account codes are unique everywhere, so a Paybill payment always finds its flat.</p>
 {{if .Data.AutoOpen}}<span hidden data-autoopen="addrouter"></span>{{end}}

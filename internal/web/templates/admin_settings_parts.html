@@ -1,4 +1,4 @@
-{{define "set_tabs"}}<div class="row" style="margin:0 0 14px">{{$t := .Data.ActiveTab}}{{range .Data.Tabs}}<a href="{{.URL}}" class="tab{{if eq .Key $t}} on{{end}}">{{.Label}}</a>{{end}}</div>
+{{define "set_tabs"}}<div class="row mt-0 mb-4">{{$t := .Data.ActiveTab}}{{range .Data.Tabs}}<a href="{{.URL}}" class="tab{{if eq .Key $t}} on{{end}}">{{.Label}}</a>{{end}}</div>
 {{if .Data.Problems}}<div class="flash bad"><b>A saved setting could not be read.</b> {{range .Data.Problems}}<div>{{.}}</div>{{end}}</div>{{end}}
 {{if .Data.NoManager}}<div class="flash">Settings editing is off in this build: values come from the environment file only.</div>{{end}}{{end}}
 
@@ -14,5 +14,5 @@
 
 {{define "set_form"}}<form method="post" action="{{.Action}}" class="card setf"><input type="hidden" name="_csrf" value="{{.P.CSRF}}"><input type="hidden" name="next" value="{{.P.Data.Next}}">
 <div class="fgrid">{{range .Fields}}{{template "set_field" (dict "F" .)}}{{end}}</div>
-{{if .P.Data.Production}}<div class="row" style="margin-top:10px"><label><input type="checkbox" name="confirm_reregister" value="1"> Production: I understand that replacing or going back on the callback token changes the URLs Safaricom must call, and they must be registered again (the old token works for 7 days)</label></div>{{end}}
-<div class="row" style="margin-top:10px"><label>Current admin password <small class="muted">(needed only when you set or replace a secret)</small><input type="password" name="current_password" autocomplete="current-password"></label><button>Save</button></div></form>{{end}}
+{{if .P.Data.Production}}<div class="row mt-3"><label><input type="checkbox" name="confirm_reregister" value="1"> Production: I understand that replacing or going back on the callback token changes the URLs Safaricom must call, and they must be registered again (the old token works for 7 days)</label></div>{{end}}
+<div class="row mt-3"><label>Current admin password <small class="muted">(needed only when you set or replace a secret)</small><input type="password" name="current_password" autocomplete="current-password"></label><button>Save</button></div></form>{{end}}

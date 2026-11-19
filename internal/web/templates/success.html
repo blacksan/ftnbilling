@@ -1,8 +1,8 @@
 {{define "success"}}{{template "head" .}}
-{{template "brandbar" .Brand}}{{if .SiteName}}<p class="muted" style="margin:0 0 4px">{{.SiteName}}</p>{{end}}
+{{template "brandbar" .Brand}}{{if .SiteName}}<p class="muted mt-0 mb-1">{{.SiteName}}</p>{{end}}
 <div class="card"><b>Payment received. Your internet comes back within a minute. If it is still paused after 2 minutes, restart your router and call us.</b>
-<p class="flat" style="margin:10px 0 2px">{{.Acct.Flat}}</p>
-<p class="muted" style="margin:0 0 2px">Account number (use it as the Paybill account)</p><div class="code">{{.Acct.Code}}</div>
+<p class="flat mt-3 mb-1">{{.Acct.Flat}}</p>
+<p class="muted mt-0 mb-1">Account number (use it as the Paybill account)</p><div class="code">{{.Acct.Code}}</div>
 <p>Package: <b>{{.Pkg.Name}}</b><br>Valid until: <b>{{eat .Expires}}</b></p></div>
 {{if .Support}}<p class="muted">Help: {{.Support}}</p>{{end}}
 {{template "foot"}}{{end}}
