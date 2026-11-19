@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"net/netip"
 	"regexp"
 	"strings"
 	"sync"
@@ -30,10 +31,13 @@ var ErrReportTooLarge = errors.New("join report is too large")
 // JoinReport is what the join script said about itself: whether every section
 // worked, and one line per problem with the router's own error text.
 type JoinReport struct {
-	At    time.Time `json:"at"`
-	OK    bool      `json:"ok"`
-	ROS   string    `json:"ros,omitempty"`
-	Lines []string  `json:"lines"`
+	At  time.Time `json:"at"`
+	OK  bool      `json:"ok"`
+	ROS string    `json:"ros,omitempty"`
+	// Mgmt is the remote-WinBox subnet the script built into the router (not secret); empty when the script
+	// never got that far, or is from before remote WinBox.
+	Mgmt  string   `json:"mgmt,omitempty"`
+	Lines []string `json:"lines"`
 }
 
 // JoinReportKey is the setting that holds a building's last join report.
@@ -76,8 +80,13 @@ func parseReport(text string, at time.Time) JoinReport {
 		if len(f) >= 2 && f[0] == "result" {
 			r.OK = f[1] == "ok"
 			for i := 2; i+1 < len(f); i++ {
-				if f[i] == "ros" {
+				switch f[i] {
+				case "ros":
 					r.ROS = f[i+1]
+				case "mgmt":
+					if p, err := netip.ParsePrefix(f[i+1]); err == nil && p.Addr().Is4() {
+						r.Mgmt = p.Masked().String()
+					}
 				}
 			}
 			lines = lines[1:]
@@ -141,7 +150,11 @@ func (m *Manager) SubmitJoinReport(token string, body []byte) error {
 //	...
 func formatStoredReport(r JoinReport) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "at=%s ok=%t ros=%s\n", r.At.UTC().Format(time.RFC3339), r.OK, r.ROS)
+	fmt.Fprintf(&b, "at=%s ok=%t ros=%s", r.At.UTC().Format(time.RFC3339), r.OK, r.ROS)
+	if r.Mgmt != "" {
+		fmt.Fprintf(&b, " mgmt=%s", r.Mgmt)
+	}
+	b.WriteString("\n")
 	for _, l := range r.Lines {
 		b.WriteString(l + "\n")
 	}
@@ -162,6 +175,8 @@ func parseStoredReport(raw string) (JoinReport, bool) {
 			r.OK = v == "true"
 		case "ros":
 			r.ROS = v
+		case "mgmt":
+			r.Mgmt = v
 		}
 	}
 	r.Lines = append(r.Lines, lines[1:]...)
@@ -254,4 +269,14 @@ func (m *Manager) noteRefusedUA(token, ua string) {
 	if sid != "" {
 		m.refused.note(sid, ua, now)
 	}
+}
+
+// MgmtWinbox reports whether the router was built with remote WinBox: its join
+// report says the script put in the management subnet, and that is the subnet
+// the server uses now (a router built for another MGMT_SUBNET does not accept
+// WinBox from it). A router that never reported, or was built before remote
+// WinBox, is false: it needs a reset and a new line.
+func (m *Manager) MgmtWinbox(siteID string) bool {
+	r, ok := m.JoinReport(siteID)
+	return ok && r.Mgmt != "" && r.Mgmt == m.mgmt.String()
 }

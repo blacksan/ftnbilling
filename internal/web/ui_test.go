@@ -291,7 +291,7 @@ func TestRouterPageShowsRemoteWinbox(t *testing.T) {
 		return nil
 	})
 	h := m.adminGet(t, "/admin/routers/view?id="+site+"&tab=overview")
-	for _, want := range []string{"Tunnel address", "Remote WinBox", "Connect your management WireGuard profile, then open WinBox to", "10.99.0.7"} {
+	for _, want := range []string{"Tunnel address", "Remote WinBox", "Built without remote WinBox: reset the router and paste a new line to add it.", "10.99.0.7"} {
 		if !strings.Contains(h, want) {
 			t.Errorf("router page lacks %q", want)
 		}

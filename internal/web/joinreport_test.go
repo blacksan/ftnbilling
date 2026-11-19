@@ -5,8 +5,10 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"ispbill/internal/sites"
+	"ispbill/internal/store"
 )
 
 func (m *multi) joinPost(token, body string) (*http.Response, string) {
@@ -108,5 +110,84 @@ func TestRefusedUserAgentShowsInStatus(t *testing.T) {
 	st, _ = m.mgr.Status(t.Context(), site.ID)
 	if st.RefusedUA != "" {
 		t.Fatalf("a used token still shows a refusal: %+v", st)
+	}
+}
+
+// The router page and the API say whether a router was built with remote
+// WinBox: only when its join report named the management subnet the server uses now.
+func TestMgmtWinboxFollowsTheJoinReport(t *testing.T) {
+	r := newAPIRig(t)
+	// newSite makes a built router (it has a tunnel address). posted: the report goes through the real
+	// endpoint (the join fetch and report are rate limited, so only one router does that); otherwise the
+	// stored report text is written directly ("" for none).
+	newSite := func(name string) string {
+		site, err := r.mgr.CreateSite(sites.SiteInput{Name: name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.st.Update(func(d *store.Data) error {
+			x := d.Sites[site.ID]
+			x.TunnelIP = "10.99.0.9"
+			d.Sites[site.ID] = x
+			return nil
+		})
+		return site.ID
+	}
+	seed := func(id, stored string) {
+		r.st.Update(func(d *store.Data) error {
+			k := sites.JoinReportKey(id)
+			d.Settings[k] = store.Setting{Key: k, Value: stored, UpdatedAt: time.Now()}
+			return nil
+		})
+	}
+	apiFlag := func(id string) any {
+		return r.call(r.view.Access, "GET", "/sites/"+id, nil, nil).JSON(t)["mgmt_winbox"]
+	}
+	const built = "Remote WinBox</dt><dd>Connect your management WireGuard profile, then open WinBox to"
+	const notBuilt = "Built without remote WinBox: reset the router and paste a new line to add it."
+
+	with := newSite("With")
+	page := body(t, r.admin("POST", "/admin/sites/join", url.Values{"id": {with}}))
+	rest := page[strings.Index(page, "/j/")+3:]
+	token := rest[:strings.IndexAny(rest, "\"' <&?")]
+	if x, _ := r.joinGet(token, "RouterOS 7.25.1"); x.StatusCode != 200 {
+		t.Fatal("join fetch failed")
+	}
+	if x, _ := r.joinPost(token, "result ok ros 7.25.1 mgmt 10.98.0.0/24\n"); x.StatusCode != 204 {
+		t.Fatalf("report: %d", x.StatusCode)
+	}
+	page = r.adminGet(t, "/admin/routers/view?id="+with+"&tab=overview")
+	if !strings.Contains(page, built) || strings.Contains(page, notBuilt) || apiFlag(with) != true {
+		t.Errorf("a router built with the current management subnet: api %v\n%s", apiFlag(with), page)
+	}
+	if rep, _ := r.mgr.JoinReport(with); rep.Mgmt != "10.98.0.0/24" || !rep.OK {
+		t.Errorf("stored report: %+v", rep)
+	}
+	at := time.Now().UTC().Format(time.RFC3339)
+	for name, stored := range map[string]string{
+		"other subnet":   "at=" + at + " ok=true ros=7.25.1 mgmt=172.20.9.0/24\n", // built for a subnet that is not the current MGMT_SUBNET
+		"before the fix": "at=" + at + " ok=true ros=7.25.1\n",                    // no mgmt field (or the script stopped before section 9)
+		"no report":      "",
+	} {
+		id := newSite("Without " + name)
+		if stored != "" {
+			seed(id, stored)
+		}
+		page := r.adminGet(t, "/admin/routers/view?id="+id+"&tab=overview")
+		if strings.Contains(page, built) || !strings.Contains(page, notBuilt) || apiFlag(id) != false {
+			t.Errorf("%s: api %v\n%s", name, apiFlag(id), page)
+		}
+	}
+	// a router that is not built yet (no tunnel address) shows neither line
+	site, _ := r.mgr.CreateSite(sites.SiteInput{Name: "Blank"})
+	if page := r.adminGet(t, "/admin/routers/view?id="+site.ID+"&tab=overview"); strings.Contains(page, "Remote WinBox") {
+		t.Error("a router with no tunnel address shows a Remote WinBox line")
+	}
+	// the list carries the flag too
+	items := r.call(r.view.Access, "GET", "/sites", nil, nil).JSON(t)["items"].([]any)
+	for _, it := range items {
+		if _, ok := it.(map[string]any)["mgmt_winbox"].(bool); !ok {
+			t.Errorf("the list lacks a boolean mgmt_winbox: %v", it)
+		}
 	}
 }

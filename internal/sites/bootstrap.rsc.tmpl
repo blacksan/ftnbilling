@@ -15,6 +15,7 @@
 :local abort ""
 :local report ""
 :local ver ""
+:local mgmt ""
 :local result "fail"
 :do {
 
@@ -215,6 +216,8 @@
   # Replies to the admin devices go back into the tunnel (the tunnel address only has a route to the server).
   /ip/route remove [find where comment="ftn: mgmt route"]
   /ip/route add dst-address={{.MgmtSubnet}} gateway={{.WGIface}} comment="ftn: mgmt route"
+  # Tells the server (in the report, not a secret) that this router has remote WinBox for this subnet.
+  :set mgmt "{{.MgmtSubnet}}"
 {{secClose 9 "WireGuard" true}}
 
 :put "ftn 10/12: API user for the billing server"

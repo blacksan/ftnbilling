@@ -88,6 +88,6 @@ func reportPostLine(base, token string, httpsBase, noCheck bool) string {
 			chk = " check-certificate=no"
 		}
 	}
-	return fmt.Sprintf(`:if ([:len $report] > 1500) do={ :set report [:pick $report 0 1500] }; :do { /tool/fetch url="%s/j/%s/report" http-method=post http-header-field="Content-Type: text/plain" http-data=("result " . $result . " ros " . $ver . "\n" . $report) output=none%s } on-error={ :put "   could not send the join report to the server" }`,
+	return fmt.Sprintf(`:if ([:len $report] > 1500) do={ :set report [:pick $report 0 1500] }; :do { /tool/fetch url="%s/j/%s/report" http-method=post http-header-field="Content-Type: text/plain" http-data=("result " . $result . " ros " . $ver . " mgmt " . $mgmt . "\n" . $report) output=none%s } on-error={ :put "   could not send the join report to the server" }`,
 		base, token, chk)
 }

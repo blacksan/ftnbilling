@@ -564,3 +564,28 @@ func TestValidateNetMgmtOverlap(t *testing.T) {
 		t.Errorf("LAN on the old default is fine when the management subnet is elsewhere: %v", err)
 	}
 }
+
+// The router's report carries the management subnet it was built with; only a
+// real private IPv4 prefix is kept, and it survives the stored text.
+func TestJoinReportMgmtField(t *testing.T) {
+	at := time.Now()
+	for line, want := range map[string]string{
+		"result ok ros 7.25.1 mgmt 10.98.0.0/24":   "10.98.0.0/24",
+		"result ok ros 7.25.1 mgmt 10.98.0.77/24":  "10.98.0.0/24",
+		"result ok ros 7.25.1 mgmt ":               "",
+		"result ok ros 7.25.1 mgmt":                "",
+		"result ok ros 7.25.1":                     "",
+		"result fail ros 7.25.1 mgmt not-a-subnet": "",
+		"result ok ros 7.25.1 mgmt fd00::/64":      "",
+		"result ok ros 7.25.1 mgmt 10.98.0.0/24 x": "10.98.0.0/24",
+	} {
+		r := parseReport(line+"\n1 problem", at)
+		if r.Mgmt != want || len(r.Lines) != 1 {
+			t.Errorf("%q: mgmt %q (want %q), lines %v", line, r.Mgmt, want, r.Lines)
+		}
+		back, ok := parseStoredReport(formatStoredReport(r))
+		if !ok || back.Mgmt != want || back.ROS != "7.25.1" {
+			t.Errorf("%q: stored round trip %+v", line, back)
+		}
+	}
+}

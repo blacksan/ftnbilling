@@ -36,6 +36,13 @@ WireGuard tunnel (for example `10.99.0.2`), empty until the router has fetched i
 WireGuard profile (remote WinBox, `deploy/README.md`); the admin router page shows it with the line "Remote WinBox: connect your management
 WireGuard profile, then open WinBox to <tunnel address>". No private key or password is ever in router JSON.
 
+Router JSON also has `mgmt_winbox` (bool): true only when the router's own join report said the bootstrap script built it with remote
+WinBox for the management subnet the server uses now (`MGMT_SUBNET`). The script adds ` mgmt <subnet>` to the first line of its report
+(`result ok ros 7.25.1 mgmt 10.98.0.0/24`; not a secret) once the management route and peer are in; `join.report.mgmt` in `GET /routers/{id}/setup`
+carries it. A router built before remote WinBox, one that has not reported, or one built for another subnet has `mgmt_winbox: false`: connecting to its tunnel
+address will not work until it is reset and given a new line. The admin page then says "Built without remote WinBox: reset the router and
+paste a new line to add it." instead of the connection line.
+
 Removed from the body (ignored as unknown fields): `serving_customers`, `hotspot_server`, `wan_list`, `provision`,
 `legacy_container`. Router JSON keeps `access_mode` with the single value `"ipoe"`. Router JSON gains `wan_mode`,
 `wan_address`, `wan_gateway`, `wan_dns`, `pppoe_user`, `pppoe_pass_set` (bool), `lan_ports`, `lan_subnet`; it never has the password.
