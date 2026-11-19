@@ -6,3 +6,11 @@ dist/*.tar.gz
 dist/SHA256SUMS
 /ispbill
 /cmd/ispbill/ispbill
+
+# Android signing: only the encrypted bundle android/signing/ftn-admin-signing.enc is committed.
+signing.env
+signing.tar
+*.p12
+*.jks
+*.keystore
+ftn-signing/

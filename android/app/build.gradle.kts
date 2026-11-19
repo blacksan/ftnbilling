@@ -9,6 +9,26 @@ plugins {
 // Release signing comes from the environment (CI). Without it the release build stays unsigned.
 val signingPath: String? = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull
 
+// CI keeps the signing secrets in a 0600 file (decrypted from android/signing) and passes only its path,
+// so the passwords are never environment variables. Lines look like ANDROID_KEY_ALIAS=value.
+val signingFile: Map<String, String> = providers.environmentVariable("ANDROID_SIGNING_ENV_FILE").orNull
+    ?.let { path ->
+        file(path).readLines().mapNotNull { raw ->
+            val line = raw.trimEnd('\r')
+            val i = line.indexOf('=')
+            if (i <= 0) {
+                null
+            } else {
+                var v = line.substring(i + 1)
+                if (v.length >= 2 && (v.first() == '"' || v.first() == '\'') && v.last() == v.first()) v = v.substring(1, v.length - 1)
+                line.substring(0, i) to v
+            }
+        }.toMap()
+    }
+    ?: emptyMap()
+
+fun signingValue(name: String): String? = signingFile[name] ?: providers.environmentVariable(name).orNull
+
 android {
     namespace = "ke.co.ftw.ftnadmin"
     compileSdk = 37
@@ -29,9 +49,13 @@ android {
         if (signingPath != null) {
             create("release") {
                 storeFile = file(signingPath)
-                storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
-                keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
-                keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").orNull
+                storePassword = signingValue("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = signingValue("ANDROID_KEY_ALIAS")
+                keyPassword = signingValue("ANDROID_KEY_PASSWORD")
+                // AGP leaves v1 (JAR) signing off for minSdk 24+. Android 8.0/8.1 phones (minSdk is 26) need it
+                // to read the signer of a downloaded update, so it is switched on explicitly.
+                enableV1Signing = true
+                enableV2Signing = true
             }
         }
     }
