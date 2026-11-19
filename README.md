@@ -1,32 +1,31 @@
 # ispbill
 
-> **Two ways to run it.** On the RB5009 as a container (this README), or on a
-> VPS with WireGuard tunnels to the routers and PostgreSQL: see
-> [deploy/README.md](deploy/README.md) for the one-command install of a new server.
+An internet-billing server for ISPs that serve flats over IPoE behind MikroTik
+routers (RouterOS 7). It bills one account per flat, takes M-Pesa and voucher
+payments on a public payment page, and keeps each router in step with the
+bills over the router's REST API: a fixed DHCP lease and a speed queue per
+flat, and a walled address list for flats that have not paid. Go, vendored
+dependencies, PostgreSQL (or a JSON file for small installs), one static binary.
+It runs on a VPS; each router joins it over WireGuard. See
+[deploy/README.md](deploy/README.md) for the one-command install and
+[docs/plan-v5-bootstrap.md](docs/plan-v5-bootstrap.md) for how a router is set up.
 
-A small internet-billing app with a captive portal. It runs as a container on a
-MikroTik RB5009UG+S+IN (RouterOS 7, arm64) and controls the router's Hotspot
-through the RouterOS REST API. Go standard library only, JSON-file storage, one
-static binary.
-
-> **TEST BUILD.** M-Pesa Paybill is not available yet, so payments use a
-> simulated "Test payment" button (`TEST_MODE=true`) and voucher codes. With
-> `TEST_MODE=true` **anyone on the hotspot can get free internet by tapping the
-> button.** Never leave it on for real customers. The M-Pesa (Daraja) code is
-> written but stays disabled until its credentials are set.
+> **TEST BUILD.** With `TEST_MODE=true` the payment page has a "Test payment"
+> button that grants free access to anyone who taps it. Never leave it on for
+> real customers. The M-Pesa (Daraja) code stays disabled until its credentials are set.
 
 ## What it does
 
-- **One account per flat.** The admin creates an account: flat label (e.g. "Flat 3B"), the ONT's WAN MAC (required, unique), optional tenant, phone and notes. The app generates a 6-character code (no 0/O/1/I/L) that never changes and is also the **Paybill account number**.
-- **Login is driven by the MAC.** The portal looks at the MAC the router reports. A known MAC shows "Flat 3B · Account K7Q2MX", the status (active until ..., expired, suspended), the packages, payment and voucher. If the flat is active the portal logs it in through the REST API on its own. An unknown MAC shows "This connection isn't registered yet. Please contact <SUPPORT_PHONE>", is recorded under Admin -> Unregistered devices, and cannot pay. There is no PIN and no "Already paid?" step; the router-side hotspot password is internal and never shown.
-- **One hotspot user per account** on the router: name = code, `mac-address` = ONT MAC, profile = package, mac-cookie kept. Phone numbers are only the M-Pesa payer; they are not identities.
+- **One account per flat.** The admin creates an account: flat label (e.g. "Flat 3B"), the ONT's WAN MAC (required, unique), optional tenant, phone and notes. The app generates a 6-character code (no 0/O/1/I/L) that never changes and is also the **Paybill account number**. The flat also gets a fixed address from the router's customer subnet.
+- **Every router is IPoE and set up by the server.** The router page gives one line to paste on a new router; the router erases itself and builds the whole layout (WAN, admin LAN, customer network, DHCP, firewall, tunnel, the server's API login). After that the server only changes the flats' leases, queues, address lists and ARP entries. It never writes users, services, the tunnel, routes or the WAN.
+- **Payment is by account number.** An unpaid or expired flat is walled by the router: it can reach only the payment page at `/pay`, where the tenant enters the account number (or the flat label when the visit comes from a known router), picks a package and pays by M-Pesa or enters a voucher. The server un-walls the flat within about a minute. Phone numbers are only the M-Pesa payer; they are not identities.
 - **Prices are plain KES.** No tax lines or tax wording anywhere.
-- Admin UI at `/admin` (basic auth): Dashboard, Accounts (create, edit, change MAC, suspend/unsuspend, extend, kick), Unregistered devices, Payments (ledger plus CSV), Record M-Pesa, Unmatched, Metrics, Orders, Packages, Vouchers, Settings (shows the lifecycle policy).
+- Admin UI at `/admin` (sign-in with an authenticator code): Overview, Subscribers (create, edit, change MAC, suspend, extend), New devices, Payments (ledger plus CSV), Record M-Pesa, Unmatched, Routers, Plans, Vouchers, Usage and quality, Settings.
 - `/healthz` returns `{ok, router_ok, test_mode, mpesa_enabled}`.
 
-### Unregistered devices
+### New devices
 
-Admin -> Unregistered devices lists MACs that opened the portal plus hotspot hosts that are not authorised and match no account. For each you can **create an account** for that MAC (enter the flat label) or **attach** it to an existing account (an ONT swap: the account's MAC changes, the router user is updated and the old session is kicked). Changing a MAC by hand on the account page does the same.
+Admin, New devices lists MACs the routers have seen that match no account (from the DHCP leases and the ARP table, read only). For each you can **create an account** for that MAC (enter the flat label) or **attach** it to an existing account (an ONT swap: the account's MAC changes and the router's lease follows). Changing a MAC by hand on the account page does the same.
 
 ### Payments, ledger and reconciliation
 
@@ -34,8 +33,8 @@ Admin -> Unregistered devices lists MACs that opened the portal plus hotspot hos
 - Paybill payments (C2B) are matched by account code (`BillRefNumber`) and then to the package whose price equals the amount. STK push uses the account code as `AccountReference`. Old order ids are still accepted.
 - Anything that cannot be matched (unknown account, amount that fits no package) goes to Admin -> Unmatched. Resolve it with **Assign** (pick the account, the package is applied), **Refunded** or **Ignored**, each with a note.
 - **Admin -> Record M-Pesa** is for payments seen on the M-Pesa statement that never reached the app: pick the account, enter the 10-character code (uppercase letters and digits), amount, payer phone and date; the package is preselected from the amount. It applies exactly like an automatic payment, and a code can be recorded once.
-- Router updates (create user, change profile, remove on expiry, kick) are queued, retried with backoff (5 s doubling to 5 min), kept across restarts and shown on the dashboard. If the router is down when someone pays, the payment is safe and the router catches up when it returns.
-- Lifecycle defaults (shown in Settings): the expiry is calendar based; paying while active adds time to the current expiry; an upgrade (same or higher speed) switches the speed immediately and counts from the current expiry (no pro-rata credit); a **downgrade is not allowed while a plan is active** (the portal greys out slower packages with "Available when your current plan ends on <date>", checkout refuses them, and Paybill or manual payments for a slower package are put in Unmatched with the reason "lower plan while active" for the admin to decide; the admin extend and Record M-Pesa forms have an "apply even if lower speed" box); expired or suspended accounts can buy any package; an expired flat reconnects automatically when it pays; there is no reconnection fee. Reminder hook points are logged as events 3 days before expiry and on expiry (`REMINDER_DAYS`, `REMINDER_ON_EXPIRY`); no SMS is sent, they only create log events for a future sender.
+- Router updates (a flat's lease, queue and walled state) are queued per flat, answered by one reconcile pass per router, retried with backoff (5 s doubling to 5 min), kept across restarts and shown on the dashboard. A paused or not yet set up router keeps its tasks without using attempts. If the router is down when someone pays, the payment is safe and the router catches up when it returns.
+- Lifecycle defaults (shown in Settings): the expiry is calendar based; paying while active adds time to the current expiry; an upgrade (same or higher speed) switches the speed immediately and counts from the current expiry (no pro-rata credit); a **downgrade is not allowed while a plan is active** (the payment page greys out slower packages with "Available when your current plan ends on <date>", checkout refuses them, and Paybill or manual payments for a slower package are put in Unmatched with the reason "lower plan while active" for the admin to decide; the admin extend and Record M-Pesa forms have an "apply even if lower speed" box); expired or suspended accounts can buy any package; an expired flat reconnects automatically when it pays; there is no reconnection fee. Reminder hook points are logged as events 3 days before expiry and on expiry (`REMINDER_DAYS`, `REMINDER_ON_EXPIRY`); no SMS is sent, they only create log events for a future sender.
 
 Default packages (seeded when none exist; edit in `/admin/packages`):
 
@@ -64,8 +63,7 @@ How the numbers are collected:
 
 | Source | Interval | Notes |
 |---|---|---|
-| Hotspot sessions | 60 s | Per-flat bytes: the difference between readings per (user, session). A counter reset counts as a new session starting from the new value. |
-| Simple queues | 60 s | Package speed and queue state, for "time at cap". |
+| Simple queues | 60 s | Per-flat bytes (the difference between readings of each flat's queue counters; a counter reset counts from the new value), package speed and queue state, for "time at cap". |
 | Interfaces | 30 s | `WAN_INTERFACE`, `OLT_INTERFACE` and the customer VLAN rx/tx. |
 | Traffic flow (NetFlow v5) | as exported | UDP `NETFLOW_ADDR` (default `:2055`). Services are guessed from the router's DNS cache and then from ports. |
 | Ping | 60 s | `QOE_PING_TARGETS` (8.8.8.8, 1.1.1.1) from the router: latency and loss. |
@@ -80,7 +78,7 @@ QoE flags and their thresholds (named constants in `internal/metrics/report.go`)
 **Service classification: accuracy caveats.** The split into YouTube, Netflix and so on is a good guide, not an exact count.
 - NetFlow only has IP addresses and ports. The app maps addresses to names using the router's DNS cache. That only works for clients that use the router for DNS. If an ONT or a phone uses its own resolver, or DNS-over-HTTPS, the name is never seen and the bytes are shown as "HTTPS (other)" or "CDN (other)".
 - The DNS cache expires, and one IP can serve many sites (CDNs), so some bytes land in the wrong or the generic bucket.
-- Fasttracked connections skip traffic-flow entirely. Check the fasttrack rule (see `routeros/setup.rsc`, section 5b), otherwise traffic is missing.
+- Fasttracked connections skip traffic-flow entirely. The bootstrap script keeps the customer rules above FastTrack; if you add a FastTrack rule by hand, traffic is missing.
 - Flow records leave the router only at the flow timeouts, so the newest minute is incomplete.
 - Per-flat totals do not use NetFlow, so they are not affected by any of this.
 Edit the rules table (`ServiceRules` and `PortRules` in `internal/metrics/netflow.go`) to add services and rebuild.
@@ -89,42 +87,35 @@ Edit the rules table (`ServiceRules` and `PortRules` in `internal/metrics/netflo
 
 ```sh
 ./build.sh                       # tests, builds, image
-ROUTER_MOCK=true TEST_MODE=true ADMIN_PASS=change-me DATA_DIR=/tmp/ispbill \
-  LISTEN_ADDR=127.0.0.1:8080 build/ispbill-amd64
+ROUTER_MOCK=true TEST_MODE=true ADMIN_PASS=change-me-please DATA_DIR=/tmp/ispbill \
+  LISTEN_ADDR=127.0.0.1:8080 DATA_KEY=$(openssl rand -base64 32) build/ispbill-amd64
 ```
-Open http://127.0.0.1:8080/admin (user `admin`), create an account with MAC `AA:BB:CC:DD:EE:01`, then http://127.0.0.1:8080/portal?mac=AA:BB:CC:DD:EE:01&ip=10.5.50.20 and tap "Test payment" (it completes after about 3 s). A different MAC shows the "not registered" page. `ROUTER_MOCK=true` uses an in-memory fake router, so nothing is sent anywhere. Screenshots of the pages are in `dist/screenshots/`.
+Open http://127.0.0.1:8080/admin, sign in, add a router (the mock serves every router) and a flat, then open http://127.0.0.1:8080/pay, enter the flat's account number and tap "Test payment" (it completes after about 3 s).
 
-## Many routers (multi-site)
+## Many routers
 
-One server can bill many routers. Each router is a MikroTik with
-its own hotspot and a `Site` record. Account codes are global (they are the
-Paybill account numbers); ONT MACs and flat labels only have to be unique
-inside a router. Packages are shared, and each router can hide a plan or
-give it a different price (Admin, Routers, the router page). Prices must
-stay unique inside a router because Paybill payments are matched by amount.
-The admin has a router switcher in the top bar (`All routers` or one) and
-list pages gain a Router column when all are shown. An account can be moved
-to another router from its page.
+One server bills many routers. Account codes are global (they are the Paybill
+account numbers); ONT MACs and flat labels only have to be unique inside a
+router. Packages are shared, and each router can hide a plan or give it a
+different price (Admin, Routers, the router page). Prices must stay unique
+inside a router because Paybill payments are matched by amount. The admin has a
+router switcher in the top bar (`All routers` or one) and list pages gain a
+Router column when all are shown. An account can be moved to another router
+from its page.
 
-Routers join over WireGuard with a one-time command from the admin: see
-[deploy/README.md](deploy/README.md) for the server setup (one command on a
-fresh VPS: PostgreSQL, Caddy, WireGuard for the routers, a public admin behind
-the app's own sign-in, firewall, backups, `ftnbilling-doctor`) and
-for the join flow. The
-design target is about 40 routers and 1500 flats on a 1 vCPU / 1 GB VPS.
+Routers join over WireGuard with a one-time line pasted on the router: see
+[deploy/README.md](deploy/README.md) for the server setup (PostgreSQL, Caddy,
+WireGuard, a public admin behind the app's own sign-in, firewall, backups,
+`ftnbilling-doctor`) and for the paste flow. The design target is about 40
+routers and 1500 flats on a 1 vCPU / 2 GB VPS.
 
-Upgrading from the single-router version needs no admin action: the data file
-is converted (the old one is kept as `ispbill.json.v2.bak`), and a server with
-`ROUTER_URL`/`ROUTER_PASS` (or the container on the router) gets one router
-called "Main building" that keeps working from the environment settings.
-`routeros/setup.rsc` and `internal/web/routerfiles/remote.rsc` are the legacy
-one-router setup; new routers use the join command.
+Per-router REST traffic is budgeted: at most two reads and one write in flight
+per router, 10 s per call (`ROUTER_READ_TIMEOUT` sets the read limit).
 
-The extra settings are `WG_PUBLIC_KEY`, `WG_ENDPOINT` (default `PUBLIC_IP:51820`),
-`WG_SUBNET` (`10.99.0.0/22`), `WG_DUMP_PATH`, `JOIN_TOKEN_TTL` (`30m`),
-`ALLOW_INSECURE_JOIN` (bench tests only), `JOIN_REQUIRE_MIKROTIK_UA` (`true`)
-and `SITE_NAME` (renames the legacy router once). `ROUTER_PASS` is only needed
-while a legacy router exists.
+The settings for the tunnel are `WG_PUBLIC_KEY`, `WG_ENDPOINT` (default
+`PUBLIC_IP:51820`), `WG_SUBNET` (`10.99.0.0/22`), `WG_DUMP_PATH`,
+`JOIN_TOKEN_TTL` (`30m`), `ALLOW_INSECURE_JOIN` (bench tests only) and
+`JOIN_REQUIRE_MIKROTIK_UA` (`true`).
 
 ## Monitoring, alerts and WhatsApp
 
@@ -262,19 +253,16 @@ With PostgreSQL this works while the service runs (it then restarts the service)
 | `DATA_DIR` | `/data` | holds `ispbill.json`, `metrics/` (one file per router), `fleet.json`, `alerts.json` and `outbox.json` |
 | `BRAND_NAME` | `Fast Tech Net` | |
 | `TEST_MODE` | `false` | enables the Test payment button |
-| `ROUTER_URL` | `http://172.17.0.1` | `setup.rsc` sets `http://172.17.0.1:8081` |
-| `ROUTER_USER` / `ROUTER_PASS` | `ispbill` / | legacy single-router mode only (the "Main building"); not needed on a server that only uses join commands |
-| `ROUTER_MOCK` | `false` | fake router |
-| `HOTSPOT_SERVER` | `hotspot1` | |
+| `ROUTER_MOCK` | `false` | one fake router answers for every router (development) |
 | `ADMIN_USER` / `ADMIN_PASS` | `admin` / required until a password is saved in Settings | app refuses to start if there is no saved password and PASS is empty or `admin` |
-| `SUPPORT_PHONE` | | shown on the portal, including on the "not registered" page |
+| `SUPPORT_PHONE` | | shown on the payment page |
 | `PUBLIC_BASE_URL` | | needed for M-Pesa callbacks |
 | `MPESA_ENV` | `sandbox` | or `production`. The M-Pesa, WhatsApp and email variables are a fallback: Settings wins once you save there |
 | `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORTCODE`, `MPESA_PASSKEY` | | all four (with `PUBLIC_BASE_URL`) switch M-Pesa on |
 | `MPESA_CALLBACK_TOKEN` | | required once the M-Pesa key, secret and shortcode are set (the app refuses to start without it): callbacks must carry the token (`?t=<token>` or `/pay/cb/t/<token>/...`). Settings > M-Pesa makes one when you save there |
 | `REMINDER_DAYS` | `3` | days before expiry for the reminder event (0 = off) |
 | `REMINDER_ON_EXPIRY` | `true` | log an event when an account expires |
-| `WAN_INTERFACE` / `OLT_INTERFACE` | `ether1` / `sfp-sfpplus1` | for the ports charts; these layout settings (with the two capacity values, `FUP_TB`, `CUSTOMER_SUBNET`) apply to the legacy router only. Join-command routers have them on their own page |
+| `WAN_INTERFACE` / `OLT_INTERFACE` | `ether1` / `sfp-sfpplus1` | defaults for a new router's layout (with the two capacity values, `FUP_TB`, `CUSTOMER_SUBNET`); each router has its own on its page |
 | `WAN_CAPACITY_MBPS` / `OLT_CAPACITY_MBPS` | `500` / `10000` | |
 | `FUP_TB` | `15` | monthly fair-use figure used for the projection |
 | `SMTP_*`, `ALERT_EMAIL_TO`, `WA_*` | | alerts and tenant messages, see "Monitoring, alerts and WhatsApp" above |
@@ -287,54 +275,33 @@ With PostgreSQL this works while the service runs (it then restarts the service)
 ## Topology
 
 ```
-Safaricom fibre/line --> RB5009 ether1 (WAN)
-                         RB5009 sfp-sfpplus1 --10G DAC--> V-SOL V1600GS-R (OLT, pure Layer 2)
-                                                           PON --> 1:32 splitter --> router fibre --> ONT per flat
+Safaricom fibre/line --> router ether1 (WAN)
+                         router sfp-sfpplus1 --10G DAC--> OLT (pure Layer 2)
+                                                           PON --> splitter --> fibre --> ONT per flat
                                                                                       (ONT in ROUTE mode, WAN = DHCP)
-RB5009 br-containers 172.17.0.0/24: router .1, ispbill container .2
-RB5009 br-hotspot    10.5.50.0/24 : vlan100-customers (from the OLT) [+ optional ether5 bench port]
+router br-customers  10.5.50.0/24 : customer VLAN from the OLT [+ optional bench port]
+router wg-ftn        10.99.0.x    : the tunnel to the billing server
 ```
 
-- All billing and account control is on the MikroTik. The OLT only switches frames.
-- OLT side (see the comments at the top of `routeros/setup.rsc`): service VLAN 100 tagged on the OLT uplink; each ONT's WAN port untagged on the ONT and translated to VLAN 100 on the OLT; ONT-to-ONT isolation enabled so flats cannot see each other.
-- Each ONT is in **route mode** (NAT and Wi-Fi) with a DHCP WAN. The MikroTik therefore sees **one client per flat**: the ONT's WAN MAC and IP. One login on the captive page unlocks every device in that flat, and the hotspot user is bound to that MAC.
+- Billing and account control is on the server; the router holds the flats' leases, queues and the walled list. The OLT only switches frames.
+- OLT side: service VLAN tagged on the OLT uplink; each ONT's WAN port untagged on the ONT and translated to the VLAN on the OLT; ONT-to-ONT isolation enabled so flats cannot see each other (the router also drops flat-to-flat traffic).
+- Each ONT is in **route mode** (NAT and Wi-Fi) with a DHCP WAN. The router therefore sees **one client per flat**: the ONT's WAN MAC. The flat's lease is a static one on `ftn-dhcp`, so it always gets its fixed address; unknown MACs get an address from the walled range (.10 to .59).
 - The account code (6 characters) is the flat's account number and the M-Pesa Paybill account number.
-- Because the MAC is the ONT's, replacing an ONT changes the MAC: the admin edits the account's MAC (or attaches the new MAC from Unregistered devices) and the router user moves to the new ONT.
+- Because the MAC is the ONT's, replacing an ONT changes the MAC: the admin edits the account's MAC (or attaches the new MAC from New devices) and the lease moves to the new ONT.
 
-## Installing on the RB5009
+## Setting up a router
 
-You need: RouterOS 7 with the **container** extra package and a USB stick. For the first test you do not need the OLT: use the bench port (next section).
-
-1. **Build**: `./build.sh` produces `dist/ispbill-arm64.tar`. (Or use the one in the zip.)
-2. **Enable container mode** (physical access needed): install the `container` package for your RouterOS version (upload the `.npk`, reboot), then `/system/device-mode/update container=yes hotspot=yes fetch=yes` (7.20 gates all three) and press the reset button / power-cycle when the router asks. Check `/system/device-mode/print`.
-3. **USB stick**: format it ext4 on the router: `/disk/print`, then `/disk/format usb1 file-system=ext4 label=usb1` (7.20; older versions use `format-drive`; check the disk name first, this erases it). Then pin the name so a reboot cannot flip it to `usb2`: `/disk/settings/set default-mount-point-template="[fs-label]"` and `/disk/set [find] mount-point-template="[fs-label]"`.
-   **Clock**: the RB5009 has no clock battery. Set `/system/clock/set time-zone-name=Africa/Nairobi`, enable NTP, and until WAN is connected set date and time by hand after every reboot.
-4. **Upload**: put `ispbill-arm64.tar` on `usb1`. Upload the folder `routeros/hotspot` as `hotspot-ispbill` on the router root (WinBox Files, FTP, or `scp -r`). See `routeros/hotspot/README.txt`.
-5. **Edit `routeros/setup.rsc`**: replace every `CHANGE_ME_*` (router API password in two places, admin password) and check `out-interface-list=WAN` matches your config. Paste it **section by section** into the terminal; read the output after each. The values you may need to change (`sfp-sfpplus1`, `100`, `ether5`) are written literally and marked `>>> CHANGE IF NEEDED <<<`; there are no variables to define. Read the notes above the container section about `/container/envs` and `/file add type=directory` property names on your RouterOS version. Sections: container network and firewall, REST user and service, env list and container, customer network (vlan100-customers on sfp-sfpplus1 in br-hotspot), hotspot and walled garden, then the optional traffic-flow section (5b) for the metrics page.
-6. **Start**: `/container/print` until the status is `stopped`, then `/container/start [find comment=ispbill]`. Watch `/log/print where topics~"container"` for "starting ...".
-7. **Check**: from the router, `/tool/fetch url=http://172.17.0.2:8080/healthz output=user` should return `"router_ok":true`. `router_ok:false` means the REST user, port 8081 or the firewall input rules are wrong.
-8. **Test flow**: see "Bench test" below, then, with the OLT cabled, repeat from an ONT-connected flat.
-
-## Bench test with ether5 (no OLT needed)
-
-1. In section 4 of `setup.rsc`, uncomment the `/interface/bridge/port add ... interface=ether5` line (remove ether5 from any other bridge first). It joins `br-hotspot` next to the OLT VLAN.
-2. Plug a laptop directly into ether5, or a spare router/AP (in bridge/AP mode, or a router in route mode to imitate an ONT) and connect a phone to it.
-3. The device gets a 10.5.50.x address. Open http://10.5.50.1 (with no WAN, outside names like neverssl.com do not resolve and the phone shows a DNS error instead of the portal; once WAN is up any http:// site redirects).
-4. First create an account in Admin -> Accounts with the MAC of the device (or ONT/router) on ether5; the Unregistered devices page shows it once it has opened the portal. Then pick a package, enter a phone number such as 0712345678, tap "Test payment", wait about 3 s. The success page shows the flat, account code and expiry (EAT), and the device is online. With a route-mode router on ether5, every device behind it is online too.
-5. Check Admin -> Accounts, and `/ip/hotspot/active/print` and `/ip/hotspot/user/print` on the router.
-6. Expiry test: in Admin -> Packages add a package of 2 minutes, buy it, and watch the user disappear within about 3 minutes.
-
-Admin access: the admin UI is served by the same port as the portal. Hotspot clients can technically open `/admin` too (it needs the password). For production, block `/admin` from the hotspot network with a firewall rule or keep the container reachable only from your management LAN.
+See [deploy/README.md](deploy/README.md), "Add a router". In short: Routers, Add router, paste the one line on the router, watch the four steps on the router page turn green. The optional bench port (a spare port on the customer bridge for testing as a flat) is a field of the router form; paste a new line after changing it.
 
 ## Vouchers
 
-Admin -> Vouchers -> pick package and count (up to 500) -> "Generate and print". You get a printable page of 8-character codes (no 0/O/1/I/L). A registered flat enters the code under "Have a voucher?". A voucher works once; redeeming it creates a ledger entry with method `voucher` (not counted as revenue).
+Admin -> Vouchers -> pick package and count (up to 500) -> "Generate and print". You get a printable page of 8-character codes (no 0/O/1/I/L). A tenant enters the code under "Have a voucher?" on the payment page, after naming their account. A voucher made for one router is refused at every other router. A voucher works once; redeeming it creates a ledger entry with method `voucher` (not counted as revenue).
 
 ## Switching M-Pesa on later
 
 1. Get a Paybill/Till, then create a Daraja app at developer.safaricom.co.ke. Use the **sandbox** first (`MPESA_ENV=sandbox`, test shortcode 174379 and the passkey shown in the Daraja simulator).
-2. Make the container reachable from the internet over **HTTPS** at `PUBLIC_BASE_URL` (a public IP plus a TLS reverse proxy, or a tunnel such as Cloudflare Tunnel). The app itself speaks plain HTTP. Expose only `/pay/cb/*`, not `/admin`.
-3. Open Settings > M-Pesa and save the environment, consumer key and secret, shortcode, passkey and public URL (or put them in the environment file, `MPESA_*`, as a fallback). `/healthz` then shows `mpesa_enabled:true` and the portal shows "Pay with M-Pesa". Set `TEST_MODE=false`.
+2. The installer puts Caddy in front of the app with HTTPS at `PUBLIC_BASE_URL`; the app itself speaks plain HTTP on `127.0.0.1`.
+3. Open Settings > M-Pesa and save the environment, consumer key and secret, shortcode, passkey and public URL (or put them in the environment file, `MPESA_*`, as a fallback). `/healthz` then shows `mpesa_enabled:true` and the payment page shows "Pay with M-Pesa". Set `TEST_MODE=false`.
 4. Callback paths. Daraja rejects URLs containing "mpesa" or "safaricom", so the app uses:
    - STK Push result: `PUBLIC_BASE_URL/pay/cb/stk` (sent automatically with each push)
    - C2B validation: `PUBLIC_BASE_URL/pay/cb/c2b/validate`
@@ -348,16 +315,15 @@ STK Push uses the account code as AccountReference; Daraja usually also sends a 
 
 ## Backup
 
-Everything important is in `ispbill.json` under the data folder (`usb1/ispbill-data` for the container); the `metrics/` folder is history that is nice to keep but can be lost. On a VPS with PostgreSQL the data is in the database: the installer sets up a verified `pg_dump` every 6 hours, a monthly restore drill (restore into a scratch database and compare with production) and an encrypted weekly upload to Google Drive (see [deploy/BACKUP.md](deploy/BACKUP.md)); `sudo ftnbilling-doctor` shows their status. Copy both off the USB stick regularly (`/file` download, scp, or a scheduled `/tool/fetch` upload). Restore by putting them back and restarting the container. Writes are atomic, so a live copy is consistent.
+Everything important is in `ispbill.json` under the data folder; the `metrics/` folder is history that is nice to keep but can be lost. On a VPS with PostgreSQL the data is in the database: the installer sets up a verified `pg_dump` every 6 hours, a monthly restore drill (restore into a scratch database and compare with production) and an encrypted weekly upload to Google Drive (see [deploy/BACKUP.md](deploy/BACKUP.md)); `sudo ftnbilling-doctor` shows their status. Copy both off the USB stick regularly (`/file` download, scp, or a scheduled `/tool/fetch` upload). Restore by putting them back and restarting the container. Writes are atomic, so a live copy is consistent.
 
 ## Known limitations
 
-- **Not tested on a real RouterOS device, a real Daraja account or a real OLT.** The REST calls follow the RouterOS 7 documentation; the first real run may need small fixes, especially container, hotspot and traffic-flow settings in `setup.rsc` and the exact field names RouterOS returns for hosts, queues and `/system/health`.
+- **Not tested on a real RouterOS device, a real Daraja account or a real OLT.** The REST calls follow the RouterOS 7 documentation; the first real run may need small fixes, especially the bootstrap script on other RouterOS versions and the exact field names RouterOS returns for leases, queues and `/system/health`.
 - JSON file storage: fine for a router, not for thousands of users. All data is held in memory.
-- One router and one hotspot server per router. Each account is locked to one MAC (the ONT WAN); `shared-users=1`. Flat isolation relies on the OLT configuration, which this project cannot check.
+- Each account is locked to one MAC (the ONT WAN) and one fixed address. Flat isolation relies on the OLT configuration, which this project cannot check.
 - No refunds on the router side, no pro-rata upgrades, no SMS or receipts (reminders are log events, and WhatsApp messages when WhatsApp is set up).
 - Daraja callbacks are unsigned. `MPESA_CALLBACK_TOKEN` is required. To also restrict the source IPs, run the installer with `CADDY_MPESA_IPS="<ip/cidr> ..."`; get the current Safaricom callback ranges from Safaricom (they are not hard-coded because a wrong list would drop real payments). Caddy must be the only reverse proxy in front of the app, because the app trusts `X-Forwarded-For` from loopback.
-- The portal is plain HTTP inside the router. The admin UI has no login rate limit and no HTTPS; keep it off the open internet and block `/admin` from the hotspot network.
 - Test payments count in "revenue" while `TEST_MODE=true`.
 - Metrics are estimates: see the NetFlow caveats above. The WAN figures are the router's interface counters, not the ISP's invoice.
 
@@ -368,4 +334,4 @@ go vet ./... && go test ./...
 ./build.sh                      # also writes dist/ispbill-arm64.tar
 build/mkimage -verify dist/ispbill-arm64.tar
 ```
-Layout: `cmd/ispbill` (main), `internal/config`, `store` (JSON file), `routeros` (REST client + mock), `billing` (rules, sweeper), `payments` (test, voucher, Daraja), `web` (portal, admin, callbacks, embedded templates), `tools/mkimage` (docker-save tarball builder), `routeros/` (setup script and hotspot pages).
+Layout: `cmd/ispbill` (main), `internal/config`, `store` (JSON file), `routeros` (REST client + mock), `billing` (rules, sweeper), `payments` (test, voucher, Daraja), `web` (payment page, admin, callbacks, embedded templates), `sites` (router setup, checks, live views), `tools/mkimage` (docker-save tarball builder).

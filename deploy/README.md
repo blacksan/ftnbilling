@@ -1,32 +1,29 @@
 # Online billing server for many routers (VPS + WireGuard)
 
-One VPS runs billing, the tenant portal and the admin pages for every router.
-Each router keeps its own MikroTik router doing the hotspot. Routers join a
+One VPS runs billing, the payment page and the admin pages for every router.
+Each router is a MikroTik serving its flats over IPoE (one fixed address and one speed queue per flat). Routers join a
 private WireGuard network at the VPS; the VPS reaches each router's REST API
 through its tunnel address.
 
 ```
  Router A router ──┐                                 ┌─ ftnbilling 127.0.0.1:8080 (behind Caddy only)
- Router B router ──┼── WireGuard udp/51820 ──► VPS ──┤  Caddy :80/:443  (portal, /admin, /api, M-Pesa callbacks)
+ Router B router ──┼── WireGuard udp/51820 ──► VPS ──┤  Caddy :80/:443  (/pay, /admin, /api, M-Pesa callbacks)
  Router C router ──┘   10.99.0.0/22, wg0             ├─ NetFlow udp/2055 on 10.99.0.1 (tunnel only)
                                                        └─ PostgreSQL (local socket only, no TCP)
- you, phones, the operator app ── https://DOMAIN/admin, /api, /portal ──► Caddy
+ you, phones, the operator app ── https://DOMAIN/admin, /api, /pay ──► Caddy
 ```
 
 | Path | How |
 |---|---|
 | VPS to router REST API | Over the tunnel, to the router's tunnel address (`10.99.0.x:8081`). The router allows REST only from `10.99.0.1`. |
-| Phones to portal | Public internet, `https://DOMAIN/portal?site=<router id>`. The hotspot walled garden lets unpaid phones reach only the VPS. |
+| Tenants to the payment page | Public internet, `https://DOMAIN/pay`. A flat that has not paid is walled by the router: it can reach only the VPS payment page. |
 | Router to NetFlow | Through the tunnel, to `10.99.0.1:2055`. The server tells routers apart by the tunnel source address. |
 | You to admin | Public, over HTTPS: `https://DOMAIN/admin` (password, then an authenticator code) and `https://DOMAIN/api` for the operator app. Caddy proxies both; the app listens on `127.0.0.1:8080` only, and refuses `/admin` and `/api` from the routers' tunnel. There is no admin VPN any more. |
 
 Design size: about 40 routers and 1500 flats on a 1 vCPU / 2 GB VPS. The
 service runs with `GOMEMLIMIT=600MiB GOGC=50`.
 
-The portal is public, so the server trusts a `mac`/`ip` pair only if that
-router currently lists it in `/ip/hotspot/host`. This check is
-always on for WireGuard routers. Someone outside the router who guesses a
-flat's MAC gets the neutral "open this page from the WiFi login" page.
+The payment page is public. A tenant finds their flat by account number (or by flat label when the visit comes from a known router), and the page never shows a phone number, a MAC or a name.
 
 ## 1. New server in one command
 
@@ -34,9 +31,9 @@ You need a brand-new, minimal VPS (Ubuntu 22.04/24.04 or Debian 12, 1 vCPU, 2 GB
 
 Before you start:
 
-1. **Domain:** an A record such as `billing.yourdomain.co.ke` pointing to the VPS. HTTPS is required for M-Pesa and for the router join command (the join script carries the router's keys, so it is never served over plain HTTP). You can install without it and re-run later with `DOMAIN=...`.
+1. **Domain:** an A record such as `billing.yourdomain.co.ke` pointing to the VPS. HTTPS is required for M-Pesa and for the router paste line (the setup script carries the router's keys, so it is never served over plain HTTP). You can install without it and re-run later with `DOMAIN=...`.
 2. **GitHub token:** the repo is private. Create a fine-grained token for `blacksan/ftnbilling` with **Contents: Read-only**. It is used to fetch the installer and the release (or the source).
-3. **Routers:** RouterOS 7 with the NTP client on, and the hotspot and fetch features enabled: `/system/device-mode/update hotspot=yes fetch=yes` (confirm as the router asks).
+3. **Routers:** RouterOS 7.13 or newer. The paste line checks that the fetch feature is on in device mode and, if it is not, tells you to press the router's button; nothing else is typed on the router.
 
 Then, as a normal sudo user on the new VPS:
 
@@ -135,14 +132,14 @@ To restore from a local dump on the same server instead: `sudo systemctl stop ft
 
 ## 2. Add a router
 
-1. Open the admin and go to **Routers, Add router**. Give the name; the router layout defaults suit a standard install (hotspot server `hotspot1`, WAN `ether1`, OLT port `sfp-sfpplus1`).
-2. On the router page press **Make the join command**. It is shown once, works once, and expires after 30 minutes.
-3. Paste it in the router's terminal (WinBox, New Terminal). The router downloads its setup script, creates its own WireGuard key (the private key never reaches the server), brings the tunnel up, restricts REST to the server, sends NetFlow through the tunnel, installs the hotspot pages for that router and whitelists the VPS in the walled garden.
-4. The router page switches to "Connected" when the tunnel is up and the REST API answers.
+1. Open the admin and go to **Routers, Add router**. Give the name; the router layout defaults suit a standard install (WAN `ether1`, OLT port `sfp-sfpplus1`). Change the WAN mode (dhcp, static or pppoe), the admin LAN ports, the VLAN, the customer subnet or the bench port there if this router differs. A PPPoE password is write-only: the page shows that one is set, never the password.
+2. The dialog then shows the **one line** to paste. It is shown once, works once, and expires after 30 minutes. (On the router page, Setup, **Make the line** makes a new one.)
+3. Paste it in the router's terminal (WinBox, New Terminal). The router fetches its setup script, **erases itself and builds itself again** (WAN, admin LAN, customer network, DHCP, firewall, WireGuard tunnel, the API login), and reports back. The private key never reaches the server in the clear. Nothing else is typed on the router, and the server never changes its users, services, tunnel, routes or WAN afterwards.
+4. The router page, Setup, shows four steps that refresh by themselves: the router fetched the script, the tunnel is up, the server can log in, the checks are green. When all four are done the server gives every flat its address and queue.
 
-If the router's clock is wrong or it has no certificate store, the page offers a fallback command with `check-certificate=no`.
+If the line fails with a certificate error, correct the router's clock; the page also offers the same line without the certificate check for a router that cannot have a right clock.
 
-The script moves WebFig off port 80 (the hotspot uses it). Keep WinBox or SSH to reach the router.
+Run the line again to rebuild a router (it is safe: the firewall is never left open while it rebuilds). **Reset router** on the Setup tab (owner only, the router name typed to confirm) makes the server forget the router's keys and join state, so a new line can be made. It does not touch the router.
 
 A router that is "paused" in the admin gets no collection and no router changes, and tenants cannot buy there.
 
@@ -151,18 +148,18 @@ A router that is "paused" in the admin gets no collection and no router changes,
 - `sudo ftnbilling-doctor` checks the whole server.
 - `curl -s localhost:8080/healthz` on the VPS shows `sites_total`, `sites_online` and `router_ok` (and `db_ok` on builds that report it).
 - `wg show wg0` on the VPS lists one peer per joined router.
-- The router page shows the router, the WireGuard handshake and the portal URL.
-- A phone on that router's WiFi should open the online portal.
+- The router page shows the router, the WireGuard handshake and the payment page address.
+- A flat that has not paid, on that router, should reach the payment page and nothing else.
 
 | Symptom | Fix |
 |---|---|
-| Join command refused | `PUBLIC_BASE_URL` must start with `https://` (set `DOMAIN` and re-run the installer). For a bench test only, `ALLOW_INSECURE_JOIN=true`. |
-| Router says 404 for the join link | The command was used, expired or cancelled. Make a new one. A chat or browser preview also fetches links; the server ignores clients that do not identify as MikroTik, so paste into the terminal, not a chat. |
+| Paste line refused | `PUBLIC_BASE_URL` must start with `https://` (set `DOMAIN` and re-run the installer). For a bench test only, `ALLOW_INSECURE_JOIN=true`. |
+| Router says 404 for the line | The line was used, expired or cancelled. Make a new one. A chat or browser preview also fetches links; the server ignores clients that do not identify as MikroTik, so paste into the terminal, not a chat. |
 | Tunnel never comes up | UDP 51820 must reach the VPS (`ufw status`, provider firewall). `WG_ENDPOINT` in the env file must be the VPS public address. Check `wg show wg0`. |
 | `/admin` does not open | `sudo ftnbilling-doctor` shows which part fails (Caddy, the app, DNS). The app must answer on `127.0.0.1:8080`; `curl -I https://DOMAIN/admin/login` should say 200. Locked out: `sudo ftnbilling-admin-reset --setup-code`. |
-| Tunnel up but the router is "not reachable" | The router firewall must accept `10.99.0.1` to port 8081 (the join script adds this). Re-run the join command to rebuild it. |
-| Phone shows an error instead of the portal | Check `/ip/hotspot/walled-garden/ip/print` on the router and that the domain resolves. |
-| Portal says "open this page from the WiFi login" | The router's host table must list the phone: `/ip/hotspot/host/print`. |
+| Tunnel up but the router is "not reachable" | The router firewall must accept `10.99.0.1` to port 8081 (the setup script adds this). Paste a new line to rebuild it. |
+| A paused flat sees an error instead of the payment page | The flat must be in the router's `ftn-suspended` address list, and the router must be able to reach `https://DOMAIN/pay`. The router page, Setup, checks list what is wrong; paste a new line if the router drifted. |
+| A paying tenant is still walled | Admin, Routers, the router page: Clients shows "On router" for the flat. A flat is un-walled by the server within about a minute of the payment; if the router is down the change is queued and retried. |
 | No traffic charts | Check `/ip/traffic-flow/target/print` (should be `10.99.0.1:2055`). The admin Settings page counts NetFlow packets from unknown sources. |
 
 ## 4. Alerts, email and WhatsApp
@@ -205,17 +202,9 @@ A tenant only gets messages if the account has a WhatsApp number (Accounts, the 
 
 Optional inbound replies (BALANCE, STATUS, STOP, START): set `WA_APP_SECRET` and `WA_VERIFY_TOKEN`, set the Meta app's webhook to `https://YOUR-DOMAIN/wa/webhook` with the same verify token, and subscribe to `messages`. The webhook is the only part of this server besides the portal and the payment callbacks that is reachable from the internet; it refuses anything without a valid `X-Hub-Signature-256`.
 
-## Legacy: one router with the app in a container, or ROUTER_URL
+## Upgrading a server that still has a ROUTER_URL router
 
-An install that already has `ROUTER_URL`/`ROUTER_PASS` in its settings keeps
-working with no change: its data becomes a router called "Main building"
-(legacy mode, configured by the environment). The old files `routeros/setup.rsc`
-and `internal/web/routerfiles/remote.rsc` (the old router-container setup) are
-legacy; new routers use the join command instead.
-
-To move such a router onto WireGuard, add a new router, run its join
-command on that router, then move the accounts to it (account page, Move to
-another router) and remove the old one.
+`ROUTER_URL`, `ROUTER_PASS` and the other single-router settings are gone: a server no longer makes a "Main building" router from the environment. A router that was only configured that way is listed as not set up. Add it with **Routers, Add router** (or **Make the line** on its page), paste the line on it (this rebuilds it), then move its accounts to it (account page, Move to another router).
 
 ## Moving data between servers
 

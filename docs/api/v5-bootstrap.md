@@ -115,7 +115,7 @@ re-reads. Checks kept: `router.version`, `api_user.policy`, `device_mode.fetch`,
 `customer.dns_input`, `customer.interface`, `olt.bridge_conflict`, `bench.port`, `traffic_flow`, `service.www`, `ipv6`,
 `server.public_ip`, `router.script_hooks`. New: `walled.rules` (fix rewrites the walled-garden rules), `dhcp.ftn` (fix
 enables `ftn-dhcp`), `wan.internet` (the router can reach the internet; no fix), `bootstrap.file` (a leftover
-`ftn-setup.rsc`/`ftn-reset.rsc`; the fix removes exactly those files). Removed: `device_mode.scheduler`, `device_mode.hotspot`,
+`ftn-setup.rsc`/`ftn-reset.rsc`; the fix removes exactly those files). Checks never carry a command to copy: each either has an auto fix (the server issues it) or explains in words (most say to paste a new line, which rebuilds the item). The fix object has no `command` field. Removed: `device_mode.scheduler`, `device_mode.hotspot`,
 `kit.installed`, `hotspot.orphan_users`, `containers`, `unmanaged.devices`, `flats.unseen`.
 
 ## Bench
@@ -131,3 +131,11 @@ enables `ftn-dhcp`), `wan.internet` (the router can reach the internet; no fix),
 ## Unchanged
 
 `POST /accounts` (including the one synchronous attempt to put a flat on the router), `/pay`, M-Pesa callbacks, live data.
+
+## Public payment page (WS6 follow-up)
+
+The hotspot portal is gone. `GET /portal` redirects to `/pay`. Vouchers are redeemed on the payment page:
+`POST /pay/voucher` (form: `tok` or `code` of the account, `voucher`, the `_pcsrf` double-submit token). A voucher made for
+another router, a used voucher and an unknown voucher all answer 400 with the same words. The `router_user` setting
+(`ROUTER_USER`), `ROUTER_URL`, `ROUTER_PASS`, `HOTSPOT_SERVER`, `SITE_NAME` and the "Main building" seed from the
+environment are removed; a router exists only by being added and set up with the paste line.
