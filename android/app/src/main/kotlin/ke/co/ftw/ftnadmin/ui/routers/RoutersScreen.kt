@@ -32,6 +32,19 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ke.co.ftw.ftnadmin.data.sites.SetupState
+import ke.co.ftw.ftnadmin.ui.routers.setup.BootstrapLineCard
+import ke.co.ftw.ftnadmin.ui.routers.setup.ResetRouterCard
+import ke.co.ftw.ftnadmin.ui.routers.setup.ResetRouterDialog
+import ke.co.ftw.ftnadmin.ui.routers.setup.RouterSetupViewModel
+import ke.co.ftw.ftnadmin.ui.routers.setup.SetupStepsCard
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import ke.co.ftw.ftnadmin.domain.Ont
 import ke.co.ftw.ftnadmin.domain.Qoe
 import ke.co.ftw.ftnadmin.domain.Site
@@ -115,7 +128,7 @@ private fun RouterRow(s: Site, onClick: () -> Unit) {
             if (s.openAlerts > 0 || s.setupState.isNotBlank()) {
                 ChipRow(horizontalPadding = 0.dp) {
                     if (s.openAlerts > 0) StatusChip("${s.openAlerts} open alerts", Tone.Warn)
-                    if (s.setupState.isNotBlank() && s.setupState != "live") StatusChip("Setup: ${SetupState.label(s.setupState)}", Tone.Neutral)
+                    if (s.setupState.isNotBlank() && s.setupState != SetupState.READY) StatusChip("Setup: ${SetupState.label(s.setupState)}", Tone.Neutral)
                 }
             }
         }
@@ -126,31 +139,75 @@ private fun RouterRow(s: Site, onClick: () -> Unit) {
 @Composable
 fun RouterDetailScreen(
     id: String,
+    user: UserInfo,
     onBack: () -> Unit,
     onNewDevices: (String) -> Unit,
     onOpenAccount: (String) -> Unit,
-    onSetup: (String) -> Unit,
-    onSetupJob: (String) -> Unit,
+    onChecks: (String) -> Unit,
+    onEdit: (String) -> Unit,
 ) {
     val container = LocalContainer.current
     val vm: RouterDetailViewModel = viewModel(key = "router-$id", factory = vmFactory { RouterDetailViewModel(id, container.sites) })
+    val setupVm: RouterSetupViewModel = viewModel(
+        key = "router-setup-$id",
+        factory = vmFactory { RouterSetupViewModel(id, container.siteSetup, container.sites, user) },
+    )
     val ui by vm.state.collectAsStateWithLifecycle()
+    val setupUi by setupVm.state.collectAsStateWithLifecycle()
     val title = (ui.site as? Loadable.Ready)?.value?.label ?: "Router"
+    val snack = remember { SnackbarHostState() }
+    LaunchedEffect(setupUi.message) {
+        setupUi.message?.let {
+            snack.showSnackbar(it)
+            setupVm.clearMessage()
+        }
+    }
+    // Poll the setup steps only while this page is on screen.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, setupVm) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> setupVm.resume()
+                Lifecycle.Event.ON_STOP -> setupVm.pause()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            setupVm.pause()
+        }
+    }
 
-    Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = { AppTopBar(title, onBack = onBack) }) { inner ->
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = { AppTopBar(title, onBack = onBack) },
+        snackbarHost = { SnackbarHost(snack) },
+    ) { inner ->
         when (val s = ui.site) {
             Loadable.Loading -> CenteredLoading(Modifier.padding(inner))
             is Loadable.Failed -> ErrorState(s.message, vm::retry, Modifier.padding(inner))
-            is Loadable.Ready -> PullToRefreshBox(ui.refreshing, vm::refresh, Modifier.padding(inner).fillMaxSize()) {
+            is Loadable.Ready -> PullToRefreshBox(
+                isRefreshing = ui.refreshing || setupUi.refreshing,
+                onRefresh = {
+                    vm.refresh()
+                    setupVm.refresh()
+                },
+                modifier = Modifier.padding(inner).fillMaxSize(),
+            ) {
                 LazyColumn(
                     Modifier.fillMaxSize(),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     item { SiteSummary(s.value) }
+                    item { SetupStepsCard(setupUi, onRetry = setupVm::retry, onChecks = { onChecks(id) }) }
+                    item { BootstrapLineCard(setupUi, user.isOwner, onGet = setupVm::getLine, onHide = setupVm::hideLine) }
                     item { Button(onClick = { onNewDevices(id) }, modifier = Modifier.fillMaxWidth()) { Text("New devices on this router") } }
-                    item { Button(onClick = { onSetup(id) }, modifier = Modifier.fillMaxWidth()) { Text("Setup and checks") } }
-                    item { OutlinedButton(onClick = { onSetupJob(id) }, modifier = Modifier.fillMaxWidth()) { Text("Automatic setup status") } }
+                    item { Button(onClick = { onChecks(id) }, modifier = Modifier.fillMaxWidth()) { Text("Setup and checks") } }
+                    if (user.isOwner) {
+                        item { OutlinedButton(onClick = { onEdit(id) }, modifier = Modifier.fillMaxWidth()) { Text("Router settings") } }
+                    }
                     item { QoeSection(ui.qoe, ui.period, vm::setPeriod) }
                     item { Text("ONTs", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground) }
                     when (val o = ui.onts) {
@@ -162,9 +219,20 @@ fun RouterDetailScreen(
                             items(o.value, key = { it.accountId + it.mac }) { ont -> OntRow(ont) { onOpenAccount(ont.accountId) } }
                         }
                     }
+                    if (user.isOwner) item { ResetRouterCard(onReset = setupVm::openReset) }
                 }
             }
         }
+    }
+
+    if (setupUi.resetDialog) {
+        ResetRouterDialog(
+            ui = setupUi,
+            canReset = setupVm.canReset(),
+            onTyped = setupVm::setTypedName,
+            onConfirm = setupVm::reset,
+            onClose = setupVm::closeReset,
+        )
     }
 }
 
@@ -173,14 +241,6 @@ private fun SiteSummary(s: Site) {
     SectionCard(s.label) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatusChip(if (s.online) "Online" else "Offline", if (s.online) Tone.Good else Tone.Bad)
-            StatusChip(
-                when (s.accessMode) {
-                    "ipoe" -> "IPoE live"
-                    "ipoe_observe" -> "IPoE observing"
-                    else -> "Hotspot"
-                },
-                Tone.Neutral,
-            )
         }
         if (!s.online && s.cause.isNotBlank()) Text(s.cause, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         LabeledValue("Flats", "${s.accounts.total} (${s.accounts.active} active, ${s.accounts.expired} expired, ${s.accounts.suspended} suspended)")

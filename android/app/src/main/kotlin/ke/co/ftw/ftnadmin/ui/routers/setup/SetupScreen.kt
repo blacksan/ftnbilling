@@ -45,9 +45,7 @@ import ke.co.ftw.ftnadmin.data.sites.CheckItem
 import ke.co.ftw.ftnadmin.data.sites.CheckStatus
 import ke.co.ftw.ftnadmin.data.sites.Checks
 import ke.co.ftw.ftnadmin.data.sites.FixKind
-import ke.co.ftw.ftnadmin.data.sites.JoinCommand
 import ke.co.ftw.ftnadmin.data.sites.JoinReport
-import ke.co.ftw.ftnadmin.data.sites.SiteMode
 import ke.co.ftw.ftnadmin.data.sites.Step
 import ke.co.ftw.ftnadmin.ui.common.AppTopBar
 import ke.co.ftw.ftnadmin.ui.common.CenteredLoading
@@ -73,11 +71,11 @@ private val GROUPS = listOf("router" to "Router", "network" to "Network", "devic
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SetupScreen(siteId: String, user: UserInfo, onBack: () -> Unit, onStatus: () -> Unit) {
+fun SetupScreen(siteId: String, user: UserInfo, onBack: () -> Unit) {
     val container = LocalContainer.current
     val vm: SetupViewModel = viewModel(
         key = "setup-$siteId",
-        factory = vmFactory { SetupViewModel(siteId, container.siteSetup, container.sites) },
+        factory = vmFactory { SetupViewModel(siteId, container.siteSetup) },
     )
     val bench: BenchViewModel = viewModel(
         key = "bench-$siteId",
@@ -113,9 +111,7 @@ fun SetupScreen(siteId: String, user: UserInfo, onBack: () -> Unit, onStatus: ()
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    item { RouterSummary(c.value, onStatus) }
-                    item { ModeCard(ui, user, vm) }
-                    if (user.isOwner) item { JoinCommandCard(ui.join, vm) }
+                    item { RouterSummary(c.value) }
                     c.value.joinReport?.let { r -> item { JoinReportCard(r) } }
                     val known = GROUPS.map { it.first }.toSet()
                     val groups = GROUPS + c.value.items.map { it.group }.filter { it !in known }.distinct().map { it to it.replaceFirstChar { ch -> ch.uppercase() } }
@@ -145,15 +141,6 @@ fun SetupScreen(siteId: String, user: UserInfo, onBack: () -> Unit, onStatus: ()
             dismissButton = { TextButton(onClick = vm::cancelFix) { Text("Cancel") } },
         )
     }
-    ui.modeConflict?.let { conflict ->
-        AlertDialog(
-            onDismissRequest = vm::dismissModeConflict,
-            title = { Text("Mode not changed") },
-            text = { Text(conflict.message) },
-            confirmButton = { TextButton(onClick = vm::overrideMode) { Text("Switch anyway") } },
-            dismissButton = { TextButton(onClick = vm::dismissModeConflict) { Text("Cancel") } },
-        )
-    }
 }
 
 @Composable
@@ -181,12 +168,11 @@ internal fun statusLabel(status: String) = when (status) {
 }
 
 @Composable
-private fun RouterSummary(c: Checks, onStatus: () -> Unit) {
+private fun RouterSummary(c: Checks) {
     SectionCard("Router") {
         ChipRow(horizontalPadding = 0.dp) {
             StatusChip(if (c.router.reachable) "Reachable" else "Unreachable", if (c.router.reachable) Tone.Good else Tone.Bad)
             if (c.router.version.isNotBlank()) StatusChip("RouterOS ${c.router.version}", Tone.Neutral)
-            StatusChip(if (c.summary.cutoverReady) "Ready to migrate" else "Not ready to migrate", if (c.summary.cutoverReady) Tone.Good else Tone.Warn)
         }
         ChipRow(horizontalPadding = 0.dp) {
             StatusChip("${c.summary.ok} ok", Tone.Good)
@@ -201,29 +187,6 @@ private fun RouterSummary(c: Checks, onStatus: () -> Unit) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Button(onClick = onStatus, modifier = Modifier.fillMaxWidth()) { Text("Automatic setup status") }
-    }
-}
-
-@Composable
-private fun ModeCard(ui: SetupUiState, user: UserInfo, vm: SetupViewModel) {
-    SectionCard("Access mode") {
-        ChipRow(horizontalPadding = 0.dp) {
-            SiteMode.all.forEach { m ->
-                FilterChip(
-                    selected = ui.mode == m,
-                    onClick = { vm.setMode(m) },
-                    enabled = user.canWrite && !ui.modeBusy,
-                    label = { ChipLabel(SiteMode.label(m)) },
-                )
-            }
-        }
-        Text(
-            "Hotspot logs people in on the router. IPoE observe learns devices without changing the router. IPoE gives each flat a fixed address.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (!user.canWrite) Text("Your role cannot change the mode.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -252,37 +215,6 @@ internal fun expiryText(expiresAt: String, now: Instant = Instant.now()): String
 }
 
 @Composable
-private fun JoinCommandCard(join: JoinCommandState, vm: SetupViewModel) {
-    SectionCard("Join command") {
-        val cmd: JoinCommand? = join.command
-        if (cmd == null) {
-            Text(
-                "Creates a one-time command to paste into the router terminal. It is shown here only, never saved on this phone.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            join.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            Button(onClick = vm::getJoinCommand, enabled = !join.busy, modifier = Modifier.fillMaxWidth()) {
-                Text(if (join.busy) "Getting command..." else "Get join command")
-            }
-        } else {
-            Text(expiryText(cmd.expiresAt), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-            CommandBox(cmd.command)
-            CopyButton("Copy command", cmd.command)
-            if (cmd.commandNocheck.isNotBlank()) {
-                Text(
-                    "Skips the device-mode check. Use only if the router is already set up for scripts.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                CopyButton("Copy command without check", cmd.commandNocheck)
-            }
-            TextButton(onClick = vm::clearJoinCommand) { Text("Hide command") }
-        }
-    }
-}
-
-@Composable
 private fun JoinReportCard(r: JoinReport) {
     SectionCard("Last join report") {
         ChipRow(horizontalPadding = 0.dp) {
@@ -308,7 +240,6 @@ private fun CheckCard(item: CheckItem, user: UserInfo, busy: Boolean, onFix: () 
             }
             ChipRow(horizontalPadding = 0.dp) {
                 StatusChip(statusLabel(item.status), statusTone(item.status))
-                if (item.blocksCutover && item.status != CheckStatus.OK) StatusChip("Blocks migration", Tone.Bad)
             }
             if (item.detail.isNotBlank()) {
                 Text(item.detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)

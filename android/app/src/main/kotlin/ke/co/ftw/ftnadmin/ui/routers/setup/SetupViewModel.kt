@@ -2,16 +2,12 @@ package ke.co.ftw.ftnadmin.ui.routers.setup
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import ke.co.ftw.ftnadmin.core.network.ApiError
-import ke.co.ftw.ftnadmin.core.network.ErrorCode
 import ke.co.ftw.ftnadmin.core.network.UserInfo
 import ke.co.ftw.ftnadmin.data.sites.CheckFix
 import ke.co.ftw.ftnadmin.data.sites.CheckItem
 import ke.co.ftw.ftnadmin.data.sites.Checks
 import ke.co.ftw.ftnadmin.data.sites.FixKind
-import ke.co.ftw.ftnadmin.data.sites.JoinCommand
 import ke.co.ftw.ftnadmin.data.sites.SiteSetupRepository
-import ke.co.ftw.ftnadmin.data.sites.SitesRepository
 import ke.co.ftw.ftnadmin.ui.common.Loadable
 import ke.co.ftw.ftnadmin.ui.common.apiResult
 import ke.co.ftw.ftnadmin.ui.common.userMessage
@@ -29,42 +25,24 @@ fun canRunFix(user: UserInfo, fix: CheckFix?): Boolean = when {
     else -> user.canWrite
 }
 
-/** A mode change the server refused with 409 `bad_state`; the person may override it. */
-data class ModeConflict(val mode: String, val message: String)
-
-data class JoinCommandState(
-    val busy: Boolean = false,
-    /** Held in memory only: never persisted, never logged, dropped when the screen closes. */
-    val command: JoinCommand? = null,
-    val error: String? = null,
-)
-
 data class SetupUiState(
     val checks: Loadable<Checks> = Loadable.Loading,
     val refreshing: Boolean = false,
-    val mode: String = "",
-    val modeBusy: Boolean = false,
-    val modeConflict: ModeConflict? = null,
     val fixing: Set<String> = emptySet(),
     /** Check whose confirm dialog is open. */
     val confirmFix: CheckItem? = null,
-    val join: JoinCommandState = JoinCommandState(),
     val message: String? = null,
 )
 
 class SetupViewModel(
     private val siteId: String,
     private val repo: SiteSetupRepository,
-    private val sites: SitesRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(SetupUiState())
     val state: StateFlow<SetupUiState> = _state.asStateFlow()
 
     init {
         loadChecks(initial = true, fresh = false)
-        viewModelScope.launch {
-            apiResult { sites.site(siteId) }.getOrNull()?.let { s -> _state.update { it.copy(mode = s.accessMode) } }
-        }
     }
 
     fun retry() = loadChecks(initial = true, fresh = false)
@@ -128,62 +106,6 @@ class SetupViewModel(
             // The summary and sibling items may have changed; reread without the server cache.
             if (r.isSuccess) loadChecks(initial = false, fresh = true)
         }
-    }
-
-    // ---- mode ----
-
-    fun setMode(mode: String, override: Boolean = false) {
-        val cur = _state.value
-        if (cur.modeBusy || (mode == cur.mode && !override)) return
-        _state.update { it.copy(modeBusy = true, modeConflict = null) }
-        viewModelScope.launch {
-            val r = apiResult { repo.setMode(siteId, mode, override) }
-            _state.update { s ->
-                r.fold(
-                    { site -> s.copy(modeBusy = false, mode = site.accessMode.ifBlank { mode }, message = "Mode changed.") },
-                    { e ->
-                        if (e is ApiError && e.status == 409 && e.code == ErrorCode.BAD_STATE) {
-                            s.copy(modeBusy = false, modeConflict = ModeConflict(mode, e.message))
-                        } else {
-                            s.copy(modeBusy = false, message = e.userMessage())
-                        }
-                    },
-                )
-            }
-            if (r.isSuccess) loadChecks(initial = false, fresh = true)
-        }
-    }
-
-    fun overrideMode() {
-        val c = _state.value.modeConflict ?: return
-        setMode(c.mode, override = true)
-    }
-
-    fun dismissModeConflict() = _state.update { it.copy(modeConflict = null) }
-
-    // ---- join command (owner) ----
-
-    fun getJoinCommand() {
-        if (_state.value.join.busy) return
-        _state.update { it.copy(join = JoinCommandState(busy = true)) }
-        viewModelScope.launch {
-            val r = apiResult { repo.joinCommand(siteId) }
-            _state.update {
-                it.copy(
-                    join = r.fold(
-                        { c -> JoinCommandState(command = c) },
-                        { e -> JoinCommandState(error = e.userMessage()) },
-                    ),
-                )
-            }
-        }
-    }
-
-    fun clearJoinCommand() = _state.update { it.copy(join = JoinCommandState()) }
-
-    override fun onCleared() {
-        // The command is a one-time secret: nothing keeps a copy once the screen is gone.
-        _state.update { it.copy(join = JoinCommandState()) }
     }
 
     fun clearMessage() = _state.update { it.copy(message = null) }

@@ -37,7 +37,7 @@ import ke.co.ftw.ftnadmin.ui.customers.CustomersScreen
 import ke.co.ftw.ftnadmin.ui.customers.add.AddCustomerScreen
 import ke.co.ftw.ftnadmin.ui.home.HomeScreen
 import ke.co.ftw.ftnadmin.ui.more.AddRouterScreen
-import ke.co.ftw.ftnadmin.ui.more.JoinCommandScreen
+import ke.co.ftw.ftnadmin.ui.more.EditRouterScreen
 import ke.co.ftw.ftnadmin.ui.more.MoreScreen
 import ke.co.ftw.ftnadmin.ui.network.NetworkScreen
 import ke.co.ftw.ftnadmin.ui.newdevices.NewDevicesScreen
@@ -45,7 +45,6 @@ import ke.co.ftw.ftnadmin.ui.payments.PaymentFilter
 import ke.co.ftw.ftnadmin.ui.payments.PaymentsScreen
 import ke.co.ftw.ftnadmin.ui.routers.RouterDetailScreen
 import ke.co.ftw.ftnadmin.ui.routers.RoutersScreen
-import ke.co.ftw.ftnadmin.ui.routers.setup.SetupJobScreen
 import ke.co.ftw.ftnadmin.ui.routers.setup.SetupScreen
 import ke.co.ftw.ftnadmin.ui.settings.SettingsScreen
 import kotlin.reflect.KClass
@@ -110,7 +109,7 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
             HomeScreen(
                 user = user,
                 onAlerts = openAlerts,
-                onSetup = { nav.navigate(SetupJobRoute(it)) },
+                onSetup = { nav.navigate(RouterRoute(it)) },
                 onRouter = { nav.navigate(RouterRoute(it)) },
                 onExpiring = { nav.navigate(CustomersRoute) { launchSingleTop = true } },
                 onNewDevices = { nav.navigate(NewDevicesRoute()) },
@@ -142,8 +141,7 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
                 user = user,
                 onAlerts = openAlerts,
                 onSetupChecks = { nav.navigate(SetupRoute(it)) },
-                onSetupJob = { nav.navigate(SetupJobRoute(it)) },
-                onJoin = { nav.navigate(JoinCommandRoute(it)) },
+                onRouterSetup = { nav.navigate(RouterRoute(it)) },
                 onRouters = { nav.navigate(RoutersRoute) },
                 onAlertList = { nav.navigate(AlertsRoute) },
                 onSettings = { nav.navigate(SettingsRoute) },
@@ -178,26 +176,23 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
             val id = e.toRoute<RouterRoute>().id
             RouterDetailScreen(
                 id = id,
+                user = user,
                 onBack = { nav.popBackStack() },
                 onNewDevices = { nav.navigate(NewDevicesRoute(it)) },
                 onOpenAccount = openAccount,
-                onSetup = { nav.navigate(SetupRoute(it)) },
-                onSetupJob = { nav.navigate(SetupJobRoute(it)) },
+                onChecks = { nav.navigate(SetupRoute(it)) },
+                onEdit = { nav.navigate(EditRouterRoute(it)) },
             )
         }
         composable<AddRouterRoute> {
-            AddRouterScreen(onBack = { nav.popBackStack() }, onOpenSetup = { nav.navigate(SetupJobRoute(it)) })
+            AddRouterScreen(onBack = { nav.popBackStack() }, onOpenRouter = { nav.navigate(RouterRoute(it)) })
         }
         composable<SetupRoute> { e ->
             val id = e.toRoute<SetupRoute>().id
-            SetupScreen(id, user, onBack = { nav.popBackStack() }, onStatus = { nav.navigate(SetupJobRoute(id)) })
+            SetupScreen(id, user, onBack = { nav.popBackStack() })
         }
-        composable<SetupJobRoute> { e ->
-            val id = e.toRoute<SetupJobRoute>().id
-            SetupJobScreen(id, user, onBack = { nav.popBackStack() }, onJoin = { nav.navigate(JoinCommandRoute(id)) })
-        }
-        composable<JoinCommandRoute> { e ->
-            JoinCommandScreen(e.toRoute<JoinCommandRoute>().id, user, onBack = { nav.popBackStack() })
+        composable<EditRouterRoute> { e ->
+            EditRouterScreen(e.toRoute<EditRouterRoute>().id, onBack = { nav.popBackStack() })
         }
         composable<NewDevicesRoute> { e ->
             NewDevicesScreen(

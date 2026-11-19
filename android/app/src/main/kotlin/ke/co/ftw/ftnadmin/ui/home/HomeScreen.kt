@@ -187,13 +187,13 @@ private fun LazyGridScope.routerCards(
             }
         }
     }
-    if (l.setupState.isNotBlank() && l.setupState != SetupState.LIVE) {
+    if (l.setupState.isNotBlank() && l.setupState != SetupState.READY) {
         full {
             StatCard(
                 label = "Setup",
                 value = SetupState.label(l.setupState),
-                sub = "Tap to see the automatic setup progress.",
-                tone = if (l.setupState == SetupState.FAILED || l.setupState == SetupState.NEEDS_ACTION) CardTone.Warn else CardTone.Info,
+                sub = "Tap to see the setup steps.",
+                tone = CardTone.Info,
                 icon = Icons.Default.Build,
                 onClick = onSetup,
                 modifier = Modifier.fillMaxWidth(),

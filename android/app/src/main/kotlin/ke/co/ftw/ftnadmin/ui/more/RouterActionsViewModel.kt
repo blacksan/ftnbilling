@@ -30,7 +30,7 @@ data class RouterActionsUiState(
 
 /**
  * Router actions of the More tab for the router chosen in the top bar. Reboot is owner only and needs
- * the router's name typed in full; the server also refuses it while a setup job runs (409 bad_state).
+ * the router's name typed in full; the server may refuse it with 409 bad_state while the router is busy.
  */
 class RouterActionsViewModel(
     private val repo: SiteSetupRepository,
@@ -106,7 +106,7 @@ class RouterActionsViewModel(
                         { m -> m },
                         { e ->
                             if (e is ApiError && e.status == 409 && e.code == ErrorCode.BAD_STATE) {
-                                "A setup job is running on this router. Try again when it has finished."
+                                "The router is busy with another action. Try again in a moment."
                             } else {
                                 e.userMessage()
                             }

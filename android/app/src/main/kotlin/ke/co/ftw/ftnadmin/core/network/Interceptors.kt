@@ -18,8 +18,9 @@ class BearerInterceptor(private val sessions: SessionManager) : Interceptor {
     }
 }
 
-/** The join command is a one-time secret: the server must never replay a stored copy of it. */
-internal fun isJoinCommandPath(segments: List<String>): Boolean = segments.lastOrNull() == "join-command"
+/** The join line is a one-time secret (join-command and the reset answer): the server must never replay a stored copy. */
+internal fun isJoinCommandPath(segments: List<String>): Boolean =
+    segments.lastOrNull() == "join-command" || (segments.takeLast(2) == listOf("actions", "reset"))
 
 /**
  * Adds an `Idempotency-Key` to mutating calls so the server can replay the stored response if a

@@ -225,14 +225,40 @@ data class Overview(
     val health: OverviewHealth = OverviewHealth(),
 )
 
-/** Settings the operator may give a new router (all optional except the name). */
-data class NewRouter(
+object WanMode {
+    const val DHCP = "dhcp"
+    const val STATIC = "static"
+    const val PPPOE = "pppoe"
+    val all = listOf(DHCP, STATIC, PPPOE)
+
+    fun label(mode: String) = when (mode) {
+        DHCP -> "DHCP"
+        STATIC -> "Static IP"
+        PPPOE -> "PPPoE"
+        else -> mode
+    }
+}
+
+/**
+ * The router record body of `POST /routers` and `PATCH /routers/{id}` (docs/api/v5-bootstrap.md).
+ * [pppoePass] is write-only; [pppoePassClear] removes the stored one.
+ */
+data class RouterInput(
     val name: String,
-    val servingCustomers: Boolean = false,
     val wanInterface: String = "",
+    val wanMode: String = WanMode.DHCP,
+    val wanAddress: String = "",
+    val wanGateway: String = "",
+    val wanDns: String = "",
+    val pppoeUser: String = "",
+    val pppoePass: String = "",
+    val pppoePassClear: Boolean = false,
+    val lanPorts: String = "",
+    val lanSubnet: String = "",
     val oltInterface: String = "",
     val vlanId: Int? = null,
     val customerSubnet: String = "",
+    val benchPort: String = "",
     val wanCapMbps: Int? = null,
     val supportPhone: String = "",
 )

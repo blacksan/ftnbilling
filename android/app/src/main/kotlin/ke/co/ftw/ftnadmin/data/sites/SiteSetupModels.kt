@@ -1,9 +1,10 @@
 package ke.co.ftw.ftnadmin.data.sites
 
+import ke.co.ftw.ftnadmin.domain.Site
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-// Mirrors docs/setup-automation-plan.md section 6 (router onboarding automation).
+// Mirrors docs/api/v5-bootstrap.md (one bootstrap line, derived four-step setup view, no provisioning job).
 // Every field has a default so a server that adds, drops or nulls a field never crashes the app.
 
 object CheckStatus {
@@ -21,20 +22,6 @@ object FixKind {
     const val NONE = "none"
 }
 
-object SiteMode {
-    const val HOTSPOT = "hotspot"
-    const val IPOE_OBSERVE = "ipoe_observe"
-    const val IPOE = "ipoe"
-    val all = listOf(HOTSPOT, IPOE_OBSERVE, IPOE)
-
-    fun label(mode: String) = when (mode) {
-        HOTSPOT -> "Hotspot"
-        IPOE_OBSERVE -> "IPoE observe"
-        IPOE -> "IPoE"
-        else -> mode
-    }
-}
-
 @Serializable
 data class RouterInfo(
     val reachable: Boolean = false,
@@ -48,7 +35,6 @@ data class ChecksSummary(
     val warn: Int = 0,
     val fail: Int = 0,
     val unknown: Int = 0,
-    @SerialName("cutover_ready") val cutoverReady: Boolean = false,
 )
 
 @Serializable
@@ -74,7 +60,6 @@ data class CheckItem(
     val id: String = "",
     val group: String = "",
     val status: String = CheckStatus.UNKNOWN,
-    @SerialName("blocks_cutover") val blocksCutover: Boolean = false,
     val title: String = "",
     val detail: String = "",
     val evidence: List<String> = emptyList(),
@@ -104,49 +89,31 @@ data class JoinCommand(
     @SerialName("expires_at") val expiresAt: String = "",
 )
 
-/** Job states of the router provisioning job (release plan section 2.2). Unknown states are treated as "working". */
+/** `GET /routers/{id}/setup` states (v5): derived by the server, nothing is run by a job. */
 object SetupState {
+    const val NOT_STARTED = "not_started"
     const val WAITING_ROUTER = "waiting_router"
-    const val CHECKING = "checking"
-    const val FIXING = "fixing"
-    const val NEEDS_ACTION = "needs_action"
-    const val STAGING = "staging"
-    const val BUILDING = "building"
+    const val ONLINE = "online"
     const val READY = "ready"
-    const val ARMING = "arming"
-    const val SWITCHING = "switching"
-    const val VERIFYING = "verifying"
-    const val LIVE = "live"
-    const val ROLLING_BACK = "rolling_back"
-    const val ROLLED_BACK = "rolled_back"
-    const val FAILED = "failed"
 
-    private val settled = setOf("", "idle", NEEDS_ACTION, READY, LIVE, ROLLED_BACK, FAILED, "confirmed")
-
-    /** States in which the server is still working on its own: the app polls. */
-    fun isLive(state: String) = state !in settled
-
-    /** States after the old setup has been touched, where an emergency rollback makes sense. */
-    fun canRollBack(state: String) = state == ARMING || state == SWITCHING || state == VERIFYING
+    /** The app polls (every 5 s) until every step is green. */
+    fun isReady(state: String) = state == READY
 
     fun label(state: String) = when (state) {
+        "", NOT_STARTED -> "Not started"
         WAITING_ROUTER -> "Waiting for the router"
-        CHECKING -> "Checking"
-        FIXING -> "Fixing"
-        NEEDS_ACTION -> "Needs your action"
-        STAGING -> "Preparing"
-        BUILDING -> "Building the network"
-        READY -> "Ready to migrate"
-        ARMING -> "Arming the safety net"
-        SWITCHING -> "Switching over"
-        VERIFYING -> "Verifying"
-        LIVE -> "Live"
-        ROLLING_BACK -> "Rolling back"
-        ROLLED_BACK -> "Rolled back"
-        FAILED -> "Failed"
-        "", "idle" -> "Not started"
+        ONLINE -> "Online, checking"
+        READY -> "Ready"
         else -> state.replace('_', ' ').replaceFirstChar { it.uppercase() }
     }
+}
+
+/** The four derived steps of `GET /routers/{id}/setup`, in order. */
+object SetupStepKey {
+    const val SCRIPT_FETCHED = "script_fetched"
+    const val TUNNEL_UP = "tunnel_up"
+    const val SERVER_LOGIN = "server_login"
+    const val CHECKS_GREEN = "checks_green"
 }
 
 @Serializable
@@ -160,16 +127,8 @@ data class Step(
 )
 
 @Serializable
-data class SetupEvidence(
-    @SerialName("tunnel_up") val tunnelUp: Boolean = false,
-    @SerialName("internet_ok") val internetOk: Boolean = false,
-    @SerialName("flats_required") val flatsRequired: Int = 0,
-    @SerialName("flats_bound") val flatsBound: Int = 0,
-)
-
-@Serializable
 data class NextAction(
-    /** paste_join, press_button, fix, migrate, retry or none. */
+    /** paste_line, press_button, fix, wait or none. */
     val kind: String = "none",
     val text: String = "",
     @SerialName("check_id") val checkId: String = "",
@@ -182,25 +141,27 @@ data class SetupJoin(
     val report: JoinReport? = null,
 )
 
-/** `GET /routers/{id}/setup`: the whole automatic job in one view. No manual confirm exists (amendment A1). */
+/** `GET /routers/{id}/setup`: the four steps, the join state and what to do next. */
 @Serializable
 data class RouterSetup(
     @SerialName("router_id") val routerId: String = "",
     val state: String = "",
-    /** fresh, migrate or empty. */
-    val kind: String = "",
-    @SerialName("serving_customers") val servingCustomers: Boolean = false,
-    @SerialName("auto_start") val autoStart: Boolean = false,
     val join: SetupJoin = SetupJoin(),
     @SerialName("next_action") val nextAction: NextAction = NextAction(),
     val steps: List<Step> = emptyList(),
     val checks: ChecksSummary = ChecksSummary(),
     val blockers: List<String> = emptyList(),
-    @SerialName("live_devices") val liveDevices: Int = 0,
-    val evidence: SetupEvidence = SetupEvidence(),
-    @SerialName("deadline_at") val deadlineAt: String? = null,
-    @SerialName("seconds_left") val secondsLeft: Int = 0,
     @SerialName("last_error") val lastError: String = "",
+) {
+    /** True when all four steps are ok (the poll stops). */
+    val allGreen: Boolean get() = state == SetupState.READY
+}
+
+/** `POST /routers/{id}/actions/reset`: the router record and a fresh one-time line. */
+@Serializable
+data class ResetResult(
+    val router: Site = Site(),
+    val join: JoinCommand = JoinCommand(),
 )
 
 @Serializable

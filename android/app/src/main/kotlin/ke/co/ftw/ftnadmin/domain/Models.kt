@@ -193,7 +193,22 @@ data class Site(
     @SerialName("router_id") val routerId: String = "",
     @SerialName("router_name") val routerName: String = "",
     @SerialName("setup_state") val setupState: String = "",
-    @SerialName("access_mode") val accessMode: String = "hotspot",
+    // Router record (API v5). The WAN password is never returned: only whether one is set.
+    @SerialName("wan_interface") val wanInterface: String = "",
+    @SerialName("wan_mode") val wanMode: String = "dhcp",
+    @SerialName("wan_address") val wanAddress: String = "",
+    @SerialName("wan_gateway") val wanGateway: String = "",
+    @SerialName("wan_dns") val wanDns: String = "",
+    @SerialName("pppoe_user") val pppoeUser: String = "",
+    @SerialName("pppoe_pass_set") val pppoePassSet: Boolean = false,
+    @SerialName("lan_ports") val lanPorts: String = "",
+    @SerialName("lan_subnet") val lanSubnet: String = "",
+    @SerialName("olt_interface") val oltInterface: String = "",
+    @SerialName("vlan_id") val vlanId: Int = 0,
+    @SerialName("customer_subnet") val customerSubnet: String = "",
+    @SerialName("bench_port") val benchPort: String = "",
+    @SerialName("wan_cap_mbps") val wanCapMbps: Int = 0,
+    @SerialName("support_phone") val supportPhone: String = "",
     val online: Boolean = false,
     val cause: String = "",
     val tunnel: SiteTunnel = SiteTunnel(),
@@ -320,7 +335,7 @@ data class NewDevice(
     @SerialName("last_seen") val lastSeen: String? = null,
     val hits: Int = 0,
     @SerialName("suggested_account") val suggestedAccount: SuggestedAccount? = null,
-    /** Name of the router hotspot user holding this MAC when the server has no account for it. */
+    /** Name of the router entry holding this MAC when the server has no account for it. */
     @SerialName("router_user") val routerUser: String = "",
 ) {
     val routerKey: String get() = routerId.ifBlank { siteId }

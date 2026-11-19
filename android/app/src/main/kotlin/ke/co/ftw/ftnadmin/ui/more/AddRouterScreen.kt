@@ -2,13 +2,11 @@ package ke.co.ftw.ftnadmin.ui.more
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -17,25 +15,25 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ke.co.ftw.ftnadmin.ui.common.AppTopBar
+import ke.co.ftw.ftnadmin.ui.common.CenteredLoading
+import ke.co.ftw.ftnadmin.ui.common.ErrorState
 import ke.co.ftw.ftnadmin.ui.common.LocalContainer
 import ke.co.ftw.ftnadmin.ui.common.SectionCard
 import ke.co.ftw.ftnadmin.ui.common.vmFactory
+import ke.co.ftw.ftnadmin.ui.routers.setup.BootstrapCommandBlock
 
 @Composable
-fun AddRouterScreen(onBack: () -> Unit, onOpenSetup: (String) -> Unit) {
+fun AddRouterScreen(onBack: () -> Unit, onOpenRouter: (String) -> Unit) {
     val container = LocalContainer.current
     val vm: AddRouterViewModel = viewModel(
         factory = vmFactory { AddRouterViewModel(container.routerLive, onCreated = { container.routerContext.refresh() }) },
@@ -54,65 +52,74 @@ fun AddRouterScreen(onBack: () -> Unit, onOpenSetup: (String) -> Unit) {
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)) {
                     Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("Router added", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold)
-                        Text(created.router.label.ifBlank { ui.name }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text(created.router.label.ifBlank { ui.form.name }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         Text(
-                            "Paste the command below in the router terminal. The server does the rest by itself.",
+                            "Paste the line below in the terminal of a blank router. The router erases itself and the server does the rest.",
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
                 }
-                SectionCard("Join command") {
+                SectionCard("Bootstrap line") {
                     Text(
                         "Shown once. It is never saved on this phone.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    JoinCommandBlock(created.join)
+                    BootstrapCommandBlock(created.join)
                 }
                 val id = created.router.key
                 if (id.isNotBlank()) {
-                    Button(onClick = { onOpenSetup(id) }, modifier = Modifier.fillMaxWidth()) { Text("Watch setup progress", maxLines = 1) }
+                    Button(onClick = { onOpenRouter(id) }, modifier = Modifier.fillMaxWidth()) { Text("Watch setup progress", maxLines = 1) }
                 }
                 OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Done", maxLines = 1) }
             } else {
                 SectionCard("New router") {
-                    OutlinedTextField(ui.name, vm::onName, label = { Text("Router name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f).padding(end = 12.dp)) {
-                            Text("Already serving customers?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                            Text(
-                                "Turn on for a live router that customers use today. It is migrated safely after it joins.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Switch(checked = ui.serving, onCheckedChange = vm::onServing)
-                    }
-                    TextButton(onClick = vm::toggleAdvanced) { Text(if (ui.advanced) "Hide advanced" else "Advanced settings", maxLines = 1) }
-                    if (ui.advanced) {
-                        OutlinedTextField(ui.wanInterface, vm::onWan, label = { Text("WAN port") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                        OutlinedTextField(ui.oltInterface, vm::onOlt, label = { Text("OLT port") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                        OutlinedTextField(
-                            ui.vlan, vm::onVlan, label = { Text("VLAN") }, singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        OutlinedTextField(ui.subnet, vm::onSubnet, label = { Text("Customer subnet") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                        OutlinedTextField(
-                            ui.wanCap, vm::onWanCap, label = { Text("WAN capacity (Mbps)") }, singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        OutlinedTextField(
-                            ui.supportPhone, vm::onSupportPhone, label = { Text("Support phone") }, singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                    ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
-                    Button(onClick = vm::submit, enabled = ui.canSubmit, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (ui.busy) "Adding..." else "Add router", maxLines = 1)
-                    }
+                    OutlinedTextField(
+                        ui.form.name, { v -> vm.edit(RouterField.NAME) { it.copy(name = v) } },
+                        label = { Text("Router name") }, singleLine = true,
+                        isError = ui.fieldErrors[RouterField.NAME] != null,
+                        supportingText = ui.fieldErrors[RouterField.NAME]?.let { t -> { Text(t) } },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    TextButton(onClick = vm::toggleAdvanced) { Text(if (ui.advanced) "Hide settings" else "Network settings", maxLines = 1) }
+                }
+                if (ui.advanced) RouterFormFields(ui.form, ui.fieldErrors, vm::edit, includeName = false)
+                ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
+                Button(onClick = vm::submit, enabled = ui.canSubmit, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (ui.busy) "Adding..." else "Add router", maxLines = 1)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun EditRouterScreen(routerId: String, onBack: () -> Unit) {
+    val container = LocalContainer.current
+    val vm: EditRouterViewModel = viewModel(
+        key = "edit-router-$routerId",
+        factory = vmFactory {
+            EditRouterViewModel(routerId, container.sites, container.routerLive, onSaved = { container.routerContext.refresh() })
+        },
+    )
+    val ui by vm.state.collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(ui.saved) { if (ui.saved) onBack() }
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = { AppTopBar("Router settings", onBack = onBack) },
+    ) { inner ->
+        val form = ui.form
+        when {
+            form == null && ui.loadError != null -> ErrorState(ui.loadError.orEmpty(), vm::load, Modifier.padding(inner))
+            form == null -> CenteredLoading(Modifier.padding(inner))
+            else -> Column(
+                Modifier.padding(inner).fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                RouterFormFields(form, ui.fieldErrors, vm::edit)
+                ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
+                Button(onClick = vm::save, enabled = ui.canSave, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (ui.busy) "Saving..." else "Save", maxLines = 1)
                 }
             }
         }

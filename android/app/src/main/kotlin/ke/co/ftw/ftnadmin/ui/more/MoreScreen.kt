@@ -60,8 +60,7 @@ fun MoreScreen(
     user: UserInfo,
     onAlerts: () -> Unit,
     onSetupChecks: (String) -> Unit,
-    onSetupJob: (String) -> Unit,
-    onJoin: (String) -> Unit,
+    onRouterSetup: (String) -> Unit,
     onRouters: () -> Unit,
     onAlertList: () -> Unit,
     onSettings: () -> Unit,
@@ -108,7 +107,7 @@ fun MoreScreen(
                 }
             } else {
                 ActionCard("Setup and checks", "Router checks and fixes", Icons.Default.Build, s.primaryContainer, s.onPrimaryContainer, s.primary, s.onPrimary) { onSetupChecks(id) }
-                ActionCard("Setup status", "Automatic setup progress and result", Icons.Default.Info, s.secondaryContainer, s.onSecondaryContainer, s.secondary, s.onSecondary) { onSetupJob(id) }
+                ActionCard("Router setup", "Setup steps, bootstrap line and reset", Icons.Default.Info, s.secondaryContainer, s.onSecondaryContainer, s.secondary, s.onSecondary) { onRouterSetup(id) }
                 if (user.canWrite) {
                     ActionCard(
                         "Recheck", "Read every check from the router again", Icons.Default.Check,
@@ -122,14 +121,13 @@ fun MoreScreen(
                     ) { vm.resync() }
                 }
                 if (user.isOwner) {
-                    ActionCard("Join command", "One-time command for a new or re-joining router", Icons.Default.Lock, s.surfaceContainerHigh, s.onSurface, s.outline, s.surface) { onJoin(id) }
                     ActionCard(
                         "Reboot", "Restarts the router. Type its name to confirm.", Icons.Default.Warning,
                         s.errorContainer, s.onErrorContainer, s.error, s.onError,
                         busy = ui.busy == "reboot",
                     ) { vm.openReboot() }
                 } else {
-                    Text("Join command and Reboot are for owners.", style = MaterialTheme.typography.bodySmall, color = s.onSurfaceVariant)
+                    Text("Reboot is for owners.", style = MaterialTheme.typography.bodySmall, color = s.onSurfaceVariant)
                 }
             }
 

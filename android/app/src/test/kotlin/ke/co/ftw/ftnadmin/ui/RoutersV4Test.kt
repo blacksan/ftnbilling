@@ -374,7 +374,7 @@ class RoutersV4Test {
         assertFalse(vm.state.value.rebootDialog)
     }
 
-    @Test fun rebootRefusedWhileAJobRunsExplainsWhy() = runTest(main.dispatcher) {
+    @Test fun rebootRefusedWhileTheRouterIsBusyExplainsWhy() = runTest(main.dispatcher) {
         routes["POST /api/v1/routers/r1/actions/reboot"] = err(409, "bad_state", msg = "job running")
         val vm = actionsVm(owner)
         await(vm.state) { it.routerName == "Kilimani" }
@@ -382,7 +382,7 @@ class RoutersV4Test {
         vm.setTypedName("Kilimani")
         vm.reboot()
         await(vm.state) { it.message != null }
-        assertTrue(vm.state.value.message!!, vm.state.value.message!!.contains("setup job"))
+        assertTrue(vm.state.value.message!!, vm.state.value.message!!.contains("busy"))
     }
 
     @Test fun recheckAndResyncUseTheActionEndpoints() = runTest(main.dispatcher) {
