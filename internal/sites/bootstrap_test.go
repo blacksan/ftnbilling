@@ -589,3 +589,40 @@ func TestJoinReportMgmtField(t *testing.T) {
 		}
 	}
 }
+
+// RouterOS refuses a filter rule that names an interface that does not exist yet
+// ("input does not match any value of interface"). Every interface a rule names
+// must be created on an earlier line of the script.
+func TestBootstrapCreatesInterfacesBeforeRulesNameThem(t *testing.T) {
+	for _, name := range []string{"bootstrap_dhcp_vlan_bench.rsc", "bootstrap_dhcp_novlan.rsc", "bootstrap_static_vlan.rsc", "bootstrap_pppoe_novlan.rsc", "bootstrap_old_ros.rsc"} {
+		b, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(string(b), "\n")
+		created := map[string]int{}
+		mk := regexp.MustCompile(`^\s*/interface/(?:wireguard|bridge|vlan|pppoe-client)(?:\s+)add\b.*\bname=("?)([A-Za-z0-9._-]+)`)
+		use := regexp.MustCompile(`^\s*/ip/firewall/(?:filter|nat)\s+add\b.*\b(?:in|out)-interface=("?)([A-Za-z0-9._-]+)`)
+		for i, l := range lines {
+			if m := mk.FindStringSubmatch(l); m != nil {
+				if _, ok := created[m[2]]; !ok {
+					created[m[2]] = i
+				}
+			}
+		}
+		for i, l := range lines {
+			m := use.FindStringSubmatch(l)
+			if m == nil {
+				continue
+			}
+			ifc := m[2]
+			if regexp.MustCompile(`^(ether|sfp|combo|wlan|wifi)`).MatchString(ifc) {
+				continue // physical ports exist from the start
+			}
+			at, ok := created[ifc]
+			if !ok || at > i {
+				t.Errorf("%s:%d: rule names %q before the script creates it (created at line %d, ok=%v)", name, i+1, ifc, at+1, ok)
+			}
+		}
+	}
+}
