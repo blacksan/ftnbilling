@@ -260,7 +260,7 @@ func TestMigration0004CleanDatabase(t *testing.T) {
 	}
 	var mode string
 	b.pool.QueryRow(ctx, "SELECT access_mode FROM sites WHERE id = 's1'").Scan(&mode)
-	if mode != "hotspot" {
+	if mode != "ipoe" {
 		t.Fatalf("access_mode default %q", mode)
 	}
 }

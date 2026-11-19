@@ -28,8 +28,10 @@ var ErrOldFormat = errors.New("ispbill.json is in an old or unknown data format"
 // sequence numbers; 5 = adds admin settings (and the admin password hash);
 // 6 = adds IPoE and sign-in data: Account.MACConflict and IP, Site.AccessMode,
 // Event.Actor and IP, admin users, admin sessions and API devices, and makes
-// an ONT MAC unique across all buildings.
-const FormatVersion = 6
+// an ONT MAC unique across all buildings; 7 = the bootstrap script: Site.WANMode
+// and the WAN, PPPoE and admin LAN fields, every router is IPoE, and the
+// settings of the old provisioning job are gone.
+const FormatVersion = 7
 
 const (
 	OrderPending = "pending"
@@ -48,8 +50,9 @@ const (
 	SiteModeEnv = "env" // legacy / container mode: router settings come from the environment
 )
 
-// Site access modes (Site.AccessMode). Hotspot is the original captive-portal
-// model; the IPoE modes are driven by the provisioning reconciler.
+// Site access modes (Site.AccessMode). From format 7 every router is IPoE: the
+// column keeps the single value "ipoe". The other constants stay only so old
+// data and tests still read.
 const (
 	AccessHotspot     = "hotspot"
 	AccessIPoEObserve = "ipoe_observe" // computes and reports, never suspends
@@ -89,6 +92,20 @@ type Site struct {
 	BenchPort      string  `json:"bench_port,omitempty"`
 	// LegacyContainer makes the script stop the old ispbill/tailscale containers.
 	LegacyContainer bool `json:"legacy_container,omitempty"`
+
+	// Bootstrap script (format 7). WANMode is dhcp (the default, also when
+	// empty), static or pppoe. The static fields are used for static only. The
+	// PPPoE password is stored sealed with DATA_KEY (internal/secretbox), never
+	// in clear. LANPorts is the admin LAN (comma list, default ether2) and
+	// LANSubnet its network (default 192.168.88.0/24).
+	WANMode      string `json:"wan_mode,omitempty"`
+	WANAddress   string `json:"wan_address,omitempty"`
+	WANGateway   string `json:"wan_gateway,omitempty"`
+	WANDNS       string `json:"wan_dns,omitempty"`
+	PPPoEUser    string `json:"pppoe_user,omitempty"`
+	PPPoEPassEnc string `json:"pppoe_pass_enc,omitempty"`
+	LANPorts     string `json:"lan_ports,omitempty"`
+	LANSubnet    string `json:"lan_subnet,omitempty"`
 
 	// PkgOverrides adjust the shared package list for this building, by package
 	// ID. The map is always reassigned, never edited in place.

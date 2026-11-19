@@ -73,7 +73,7 @@ func TestMigrateV5ToV6FlagsDuplicateMACs(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.View(func(d *Data) {
-		if d.Format != 6 || len(d.Accounts) != 6 || len(d.ClosedAccounts) != 2 {
+		if d.Format != FormatVersion || len(d.Accounts) != 6 || len(d.ClosedAccounts) != 2 {
 			t.Fatalf("format %d, %d open, %d closed", d.Format, len(d.Accounts), len(d.ClosedAccounts))
 		}
 		want := map[string]struct {
@@ -126,7 +126,7 @@ func TestMigrateV5ToV6FlagsDuplicateMACs(t *testing.T) {
 	var probe struct{ Format int }
 	raw, _ := os.ReadFile(p)
 	json.Unmarshal(raw, &probe)
-	if probe.Format != 6 {
+	if probe.Format != FormatVersion {
 		t.Fatalf("saved format %d", probe.Format)
 	}
 	// A second start changes nothing (no second migration, no new events).

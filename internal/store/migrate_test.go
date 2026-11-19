@@ -138,7 +138,7 @@ func TestV3RoundTrip(t *testing.T) {
 }
 
 func TestUnknownFormatRefused(t *testing.T) {
-	for _, f := range []string{"1", "7", "0"} {
+	for _, f := range []string{"1", "8", "0"} {
 		dir := t.TempDir()
 		p := filepath.Join(dir, "ispbill.json")
 		raw := []byte(`{"format":` + f + `}`)
@@ -281,4 +281,25 @@ func TestMigrateV4ToV5(t *testing.T) {
 	if probe.Format != FormatVersion {
 		t.Fatalf("saved format %d", probe.Format)
 	}
+}
+
+func TestMigrateV6ToV7MakesRoutersIPoEAndPurgesJobSettings(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{"format":6,"sites":{"s1":{"id":"s1","name":"A","mode":"wg","access_mode":"hotspot"},"s2":{"id":"s2","name":"B","mode":"wg"}},
+	"settings":{"site.s1.prov_job":{"key":"site.s1.prov_job","value":"x"},"site.s1.serving_customers":{"key":"site.s1.serving_customers","value":"yes"},
+	"site.s1.join_report":{"key":"site.s1.join_report","value":"keep"},"site.s2.hotspot_bypass_at":{"key":"site.s2.hotspot_bypass_at","value":"x"},
+	"site.s2.cutover_confirmed_at":{"key":"site.s2.cutover_confirmed_at","value":"x"},"other":{"key":"other","value":"keep"}}}`
+	os.WriteFile(filepath.Join(dir, "ispbill.json"), []byte(raw), 0o600)
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.View(func(d *Data) {
+		if d.Format != 7 || d.Sites["s1"].AccessMode != AccessIPoE || d.Sites["s2"].AccessMode != AccessIPoE {
+			t.Fatalf("format %d, modes %q %q", d.Format, d.Sites["s1"].AccessMode, d.Sites["s2"].AccessMode)
+		}
+		if len(d.Settings) != 2 || d.Settings["site.s1.join_report"].Value != "keep" || d.Settings["other"].Value != "keep" {
+			t.Fatalf("settings %v", d.Settings)
+		}
+	})
 }

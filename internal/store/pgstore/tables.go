@@ -205,7 +205,7 @@ func (c *codec[V]) scan(rows pgx.Rows) ([]V, error) {
 // callers that bypass the Store).
 func accessMode(m string) string {
 	if m == "" {
-		return store.AccessHotspot
+		return store.AccessIPoE
 	}
 	return m
 }
@@ -259,18 +259,21 @@ var sitesC = (&codec[store.Site]{
 	cols: []string{"id", "name", "mode", "notes", "support_phone", "disabled", "removed", "tunnel_ip", "wg_pub", "rest_user", "rest_pass", "rest_port",
 		"join_hash", "join_expires_at", "join_created_at", "join_used_at", "join_used_from", "joined_at", "hotspot_server", "wan_interface", "wan_list",
 		"olt_interface", "vlan_id", "customer_subnet", "wan_cap_mbps", "olt_cap_mbps", "fup_tb", "provision", "bench_port", "legacy_container",
-		"pkg_overrides", "address", "lat", "lng", "go_live", "access_mode", "created_at"},
+		"pkg_overrides", "address", "lat", "lng", "go_live", "access_mode", "created_at",
+		"wan_mode", "wan_address", "wan_gateway", "wan_dns", "pppoe_user", "pppoe_pass_enc", "lan_ports", "lan_subnet"},
 	args: func(v store.Site) []any {
 		return []any{v.ID, v.Name, v.Mode, v.Notes, v.SupportPhone, v.Disabled, v.Removed, v.TunnelIP, v.WGPublicKey, v.RESTUser, v.RESTPass, v.RESTPort,
 			v.Join.Hash, nt(v.Join.ExpiresAt), nt(v.Join.CreatedAt), nt(v.Join.UsedAt), v.Join.UsedFrom, nt(v.JoinedAt), v.HotspotServer, v.WANInterface, v.WANList,
 			v.OLTInterface, v.VLANID, v.CustomerSubnet, v.WANCapMbps, v.OLTCapMbps, v.FUPTB, v.Provision, v.BenchPort, v.LegacyContainer,
-			overridesArg(v.PkgOverrides), v.Address, v.Lat, v.Lng, nt(v.GoLive), accessMode(v.AccessMode), tm(v.CreatedAt)}
+			overridesArg(v.PkgOverrides), v.Address, v.Lat, v.Lng, nt(v.GoLive), accessMode(v.AccessMode), tm(v.CreatedAt),
+			v.WANMode, v.WANAddress, v.WANGateway, v.WANDNS, v.PPPoEUser, v.PPPoEPassEnc, v.LANPorts, v.LANSubnet}
 	},
 	dst: func(v *store.Site) []any {
 		return []any{&v.ID, &v.Name, &v.Mode, &v.Notes, &v.SupportPhone, &v.Disabled, &v.Removed, &v.TunnelIP, &v.WGPublicKey, &v.RESTUser, &v.RESTPass, &v.RESTPort,
 			&v.Join.Hash, t_(&v.Join.ExpiresAt), t_(&v.Join.CreatedAt), t_(&v.Join.UsedAt), &v.Join.UsedFrom, t_(&v.JoinedAt), &v.HotspotServer, &v.WANInterface, &v.WANList,
 			&v.OLTInterface, &v.VLANID, &v.CustomerSubnet, &v.WANCapMbps, &v.OLTCapMbps, &v.FUPTB, &v.Provision, &v.BenchPort, &v.LegacyContainer,
-			overridesDst{&v.PkgOverrides}, &v.Address, &v.Lat, &v.Lng, t_(&v.GoLive), &v.AccessMode, t_(&v.CreatedAt)}
+			overridesDst{&v.PkgOverrides}, &v.Address, &v.Lat, &v.Lng, t_(&v.GoLive), &v.AccessMode, t_(&v.CreatedAt),
+			&v.WANMode, &v.WANAddress, &v.WANGateway, &v.WANDNS, &v.PPPoEUser, &v.PPPoEPassEnc, &v.LANPorts, &v.LANSubnet}
 	},
 }).build()
 
