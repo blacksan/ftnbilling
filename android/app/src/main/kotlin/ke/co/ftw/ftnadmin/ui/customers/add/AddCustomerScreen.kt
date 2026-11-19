@@ -1,5 +1,6 @@
 package ke.co.ftw.ftnadmin.ui.customers.add
 
+import ke.co.ftw.ftnadmin.ui.theme.GeistMono
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -35,7 +36,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -211,7 +211,7 @@ private fun Form(ui: AddCustomerUiState, vm: AddCustomerViewModel) {
                     maxLines = 2,
                 )
             },
-            textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace),
+            textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = GeistMono),
             trailingIcon = { TextButton(onClick = { clipboard.getText()?.text?.let(vm::onMac) }) { Text("Paste", maxLines = 1, softWrap = false) } },
             modifier = Modifier.fillMaxWidth(),
         )
@@ -306,7 +306,7 @@ private fun DeviceCard(c: Client, selected: Boolean, onClick: () -> Unit) {
         Row(Modifier.padding(12.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             StatusDot(c.online, size = 10.dp)
             Column(Modifier.weight(1f)) {
-                Text(c.mac, style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace), fontWeight = FontWeight.Bold, maxLines = 1)
+                Text(c.mac, style = MaterialTheme.typography.bodyLarge.copy(fontFamily = GeistMono), fontWeight = FontWeight.Bold, maxLines = 1)
                 Text(
                     listOf(c.vendor, c.hostName, c.ip).filter { it.isNotBlank() }.joinToString("  |  ").ifBlank { "Unknown device" },
                     style = MaterialTheme.typography.bodySmall,

@@ -11,12 +11,12 @@ import (
 
 // Chart palette (validated reference palette, light surface).
 const (
-	ColDown  = "#2a78d6" // download / primary
-	ColUp    = "#eb6834" // upload
-	ColAqua  = "#1baf7a"
-	ColViol  = "#6250d6"
-	ColMag   = "#e87ba4"
-	ColCap   = "#e34948" // capacity / limit line
+	ColDown  = "#0072b2" // download / primary
+	ColUp    = "#009e73" // upload
+	ColAqua  = "#56b4e9"
+	ColViol  = "#cc79a7"
+	ColMag   = "#7a8aa6"
+	ColCap   = "#c0283d" // capacity / limit line
 	colInk   = "#1c2630"
 	colMuted = "#5b6670"
 	colGrid  = "#e3e7ec"

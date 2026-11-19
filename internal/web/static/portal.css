@@ -1,0 +1,38 @@
+/* Customer portal (/pay, wait, success): the same tokens as the admin, so it
+   follows light and dark and the same type scale. tokens.css loads first. */
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;font:400 var(--fs-16)/1.45 var(--f-sans);background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+main{max-width:480px;margin:0 auto;padding:var(--sp-4) var(--sp-3) var(--sp-8)}
+h1{font-size:var(--fs-24);font-weight:600;letter-spacing:-.02em;line-height:1.2;margin:var(--sp-2) 0}
+h2{font-size:var(--fs-14);font-weight:600;margin:var(--sp-5) 0 var(--sp-2);color:var(--muted)}
+a{color:var(--brand-ink);text-underline-offset:2px}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:6px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r2);padding:var(--sp-4);margin:var(--sp-2) 0}
+.pkg{display:block;border:1px solid var(--line-strong);border-radius:var(--r2);padding:var(--sp-3) var(--sp-4);margin:var(--sp-2) 0;background:var(--surface)}
+.pkg input{float:right;width:22px;height:22px;accent-color:var(--brand)}
+.pkg b{font-size:var(--fs-16);font-weight:600}
+.pkg small{display:block;color:var(--muted);font-size:var(--fs-13)}
+.pkg:has(input:checked){border-color:var(--brand);background:var(--brand-soft);box-shadow:0 0 0 1px var(--brand)}
+.pkg.off{opacity:.65;background:var(--surface-2);border-style:dashed}
+.pkg.off .why{color:var(--warn);font-weight:500;margin-top:2px}
+input[type=text],input[type=tel],input[type=password]{width:100%;font:inherit;font-size:var(--fs-16);min-height:48px;padding:0 var(--sp-3);color:var(--ink);background:var(--surface);border:1px solid var(--field);border-radius:var(--r1)}
+input::placeholder{color:var(--muted);opacity:1}
+button,.btn{display:block;width:100%;font:500 var(--fs-16)/1 var(--f-sans);min-height:48px;padding:0 var(--sp-4);margin:var(--sp-2) 0;border:1px solid var(--brand);border-radius:var(--r1);background:var(--brand);color:var(--on-brand);text-align:center;text-decoration:none;cursor:pointer;display:flex;align-items:center;justify-content:center}
+button:hover,.btn:hover{filter:brightness(.93)}
+button.alt{background:var(--surface);color:var(--ink);border-color:var(--line-strong)}
+button.grey{background:var(--surface-3);color:var(--ink);border-color:var(--surface-3)}
+.err{background:var(--bad-soft);color:var(--bad);padding:var(--sp-3);border-radius:var(--r1)}
+.warn{background:var(--warn-soft);color:var(--warn);border-left:3px solid var(--warn-fill);padding:var(--sp-3);border-radius:var(--r1)}
+.code{font:500 var(--fs-24)/1.2 var(--f-mono);letter-spacing:2px;background:var(--surface-2);border:1px solid var(--line);padding:var(--sp-2);border-radius:var(--r1);text-align:center}
+.flat{font-size:var(--fs-20);font-weight:600}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:99px;font-size:var(--fs-13);font-weight:500;background:var(--surface-2);border:1px solid var(--line);color:var(--ink-2)}
+.pill::before{content:"";width:6px;height:6px;border-radius:99px;background:var(--muted)}
+.pill.active::before{background:var(--ok)}.pill.expired::before,.pill.new::before{background:var(--warn-fill)}
+.pill.suspended{background:var(--bad-soft);color:var(--bad);border-color:transparent}.pill.suspended::before{background:var(--bad)}
+.muted{color:var(--muted);font-size:var(--fs-14)}
+details summary{padding:var(--sp-2) 0;color:var(--brand-ink);cursor:pointer;font-weight:500}
+.brandbar{display:flex;align-items:center;gap:var(--sp-3);margin:var(--sp-2) 0 var(--sp-3);padding:var(--sp-4);border-radius:var(--r2);color:var(--on-side);background:var(--side)}
+.brandbar img{height:44px;width:auto;display:block}
+.brandbar small{display:block;color:var(--side-mut);font-size:var(--fs-13);font-weight:400}
+.bw{font-weight:600;letter-spacing:-.01em}.bwa{color:var(--side-accent)}
+.center{text-align:center}

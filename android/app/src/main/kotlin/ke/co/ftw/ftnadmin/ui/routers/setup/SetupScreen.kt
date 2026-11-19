@@ -1,5 +1,6 @@
 package ke.co.ftw.ftnadmin.ui.routers.setup
 
+import ke.co.ftw.ftnadmin.ui.theme.GeistMono
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -36,7 +37,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -204,7 +204,7 @@ internal fun CommandBox(text: String, modifier: Modifier = Modifier) {
     Surface(modifier.fillMaxWidth(), shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceContainerHighest) {
         Text(
             text,
-            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            style = MaterialTheme.typography.bodySmall.copy(fontFamily = GeistMono),
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.padding(10.dp),
         )
@@ -259,7 +259,7 @@ private fun CheckCard(item: CheckItem, user: UserInfo, busy: Boolean, onFix: () 
             item.shownEvidence.forEach {
                 Text(
                     it,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = GeistMono),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }

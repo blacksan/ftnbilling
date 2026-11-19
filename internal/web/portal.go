@@ -14,11 +14,6 @@ import (
 func (s *Server) portalRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /portal", toPay)
 	s.payRoutes(mux)
-	mux.HandleFunc("GET /brand.woff2", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "font/woff2")
-		w.Header().Set("Cache-Control", "public, max-age=604800")
-		w.Write(brandFont)
-	})
 	mux.HandleFunc("GET /brand/{name}", func(w http.ResponseWriter, r *http.Request) {
 		b, err := logoFS.ReadFile("static/" + r.PathValue("name"))
 		if err != nil || !strings.HasPrefix(r.PathValue("name"), "logo-") {
