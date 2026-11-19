@@ -79,7 +79,7 @@ Options (environment variables): `DOMAIN`, `GH_TOKEN`, `VERSION` (a release tag;
 | Swap and logs | A 1 GB `/swapfile` (`vm.swappiness=10`) when RAM is 2 GB or less and there is no swap; journald `SystemMaxUse=500M` |
 | Updates | `unattended-upgrades`, security updates only, never reboots by itself |
 | Backups | `ftnbilling-dump.timer` every 6 hours (database dump, daily file tar), `ftnbilling-drill.timer` monthly restore drill, `ftnbilling-backup.timer` weekly Google Drive upload once you run `sudo ftnbilling-backup setup`. See [BACKUP.md](BACKUP.md). The old daily cron job is removed |
-| Tools | `/usr/local/sbin/`: `ftnbilling-admin-reset`, `ftnbilling-doctor`, `ftnbilling-backup`, `ftnbilling-wg-sync` |
+| Tools | `/usr/local/sbin/`: `ftnbilling-admin-reset`, `ftnbilling-wipe`, `ftnbilling-doctor`, `ftnbilling-backup`, `ftnbilling-wg-sync` |
 
 `DATA_KEY` (encrypts national IDs and the secrets saved in Settings) is generated once into the settings file on every install, with or without PostgreSQL. The `MPESA_*`, `WA_*` and `SMTP_*` lines are written commented out: set these up in Admin > Settings instead.
 
@@ -111,6 +111,11 @@ sudo ftnbilling-admin-reset --reset-totp        # forget the authenticator and r
 sudo ftnbilling-admin-reset --generate          # a new random password, printed once
 sudo ftnbilling-admin-reset --revoke-sessions   # sign everything out
 ```
+
+### Start fresh (delete all data)
+
+`sudo ftnbilling-wipe` lists what it would delete, asks you to type `WIPE` (or pass `--yes`), saves a backup to `/var/backups/ftnbilling/pre-wipe-<UTC time>.dump` (`.json` on the JSON file) and aborts if that fails, then stops the service, deletes every customer, flat, router, payment and log, starts it again and removes the old routers from `wg0`.
+Admin users, Settings (M-Pesa, branding) and `DATA_KEY` are kept; everybody signs in again, and you add the routers again with the one-line bootstrap.
 
 ### Check the server: the doctor
 

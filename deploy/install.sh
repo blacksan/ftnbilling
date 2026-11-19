@@ -371,7 +371,7 @@ acquire_program() {
   fi
   ASSETS=$BUNDLE/deploy
   local f
-  for f in $APP-wg-sync $APP-backup $APP-admin-reset $APP-doctor $APP-backup.service $APP-backup.timer $APP-dump.service $APP-dump.timer $APP-drill.service $APP-drill.timer; do
+  for f in $APP-wg-sync $APP-backup $APP-admin-reset $APP-wipe $APP-doctor $APP-backup.service $APP-backup.timer $APP-dump.service $APP-dump.timer $APP-drill.service $APP-drill.timer; do
     [ -f "$ASSETS/$f" ] || die "$ASSETS/$f is missing: incomplete bundle or source tree"
   done
   [ -f "$BIN_SRC" ] || die "program binary not found at $BIN_SRC"
@@ -395,7 +395,7 @@ users_and_tools() {
   install -d -o root -g $APP -m 750 "$ETC"
   install -d -o root -g root -m 700 "$BACKUPS"
   local t
-  for t in wg-sync backup admin-reset doctor; do install -m 0755 "$ASSETS/$APP-$t" "$SBIN/$APP-$t"; done
+  for t in wg-sync backup admin-reset wipe doctor; do install -m 0755 "$ASSETS/$APP-$t" "$SBIN/$APP-$t"; done
   printf '%s\n' "$PROG_VERSION" >"$ETC/VERSION"; chmod 644 "$ETC/VERSION"
 }
 
