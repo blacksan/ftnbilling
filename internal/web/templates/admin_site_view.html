@@ -75,6 +75,16 @@
 {{else}}{{template "empty" (dict "Title" "No interfaces to show." "Text" "The router could not be read. Ports show here once it answers.")}}{{end}}
 </div>
 
+{{else if eq $tab "ports"}}
+<section class="panel" data-ports="{{$s.ID}}" data-name="{{$s.Name}}" data-role="{{.Role}}">
+<div class="panel-h"><h2>Ports</h2><span class="muted" data-ports-at aria-live="polite"></span></div>
+<p class="muted">Every physical port of the router. The server sets roles on the router by itself and keeps them there; nothing is typed on the router. The Internet uplink (WAN) is locked.</p>
+<p class="flash bad" role="status" data-ports-warn hidden>The router could not be read just now. These are the last readings the server kept.</p>
+<p class="cport" role="status" data-ports-apply hidden></p>
+<div class="tw"><table class="rs"><thead><tr><th>Port</th><th>Role</th><th>Link</th><th>State</th><th class="n">Receive</th><th class="n">Send</th><th>MAC</th><th>Actions</th></tr></thead><tbody data-ports-body><tr><td colspan="8" class="muted">Reading the router.</td></tr></tbody></table></div>
+<p class="muted">Updated every 5 seconds while this page is open.{{if ne .Role "owner"}} Changing the admin LAN or the OLT uplink needs an owner.{{end}}</p>
+</section>
+
 {{else if eq $tab "plans"}}
 <section class="panel"><h2>Plans at this router</h2><p class="muted" style="margin:6px 0 12px">Hide a plan here, or give it a different price. Prices must stay unique inside the router.</p>
 <form method="post" action="/admin/routers/packages"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">

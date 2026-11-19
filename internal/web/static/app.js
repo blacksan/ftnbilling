@@ -406,6 +406,99 @@
     load(); setInterval(function () { if (!doc.hidden) load(); }, 10000);
   }
 
+
+  /* ---- Ports tab: every physical port, enable/disable, change role --------------------------------- */
+  var portsBox = $("[data-ports]");
+  if (portsBox) {
+    (function () {
+      var rid = portsBox.getAttribute("data-ports"), rname = portsBox.getAttribute("data-name");
+      var body = $("[data-ports-body]", portsBox), at = $("[data-ports-at]", portsBox), warn = $("[data-ports-warn]", portsBox), applyEl = $("[data-ports-apply]", portsBox);
+      var roles = {}, busy = false, timer = null;
+      function rate(v) { return v == null ? "-" : bps(v); }
+      function pill(p) {
+        if (p.disabled) return el("span", "pill paused", "disabled");
+        return el("span", "pill " + (p.running ? "online" : "offline"), p.running ? "running" : "no link");
+      }
+      function call(p, data) {
+        data.id = rid; data.port = p.name; busy = true;
+        return postForm("/admin/routers/ports/update", data).then(function (j) {
+          busy = false;
+          if (j.__status === 200) { toast(data.disabled === "1" ? p.name + " disabled" : data.disabled === "0" ? p.name + " enabled" : p.name + " is now: " + (roles[data.role] || data.role)); load(); return j; }
+          var m = (j.error && j.error.message) || "The change was refused.";
+          toast(m, true); return j;
+        }).catch(function () { busy = false; toast("The server did not answer.", true); });
+      }
+      // The typed-name confirmation is asked only when the server says it is needed; a wrong name is refused there too.
+      function withName(p, warnText, title, yes, data) {
+        return askName(title, warnText, yes, rname).then(function (typed) {
+          if (typed == null) return;
+          data.confirm_name = typed; return call(p, data);
+        });
+      }
+      function toggle(p) {
+        var off = !p.disabled, data = { disabled: off ? "1" : "0" };
+        if (off && p.confirm_disable) return withName(p, p.disable_warning + " Type the router name to disable " + p.name + ".", "Disable " + p.name + "?", "Disable", data);
+        if (off) return ask("Disable " + p.name + "?", p.disable_warning || (p.name + " stops carrying traffic until you enable it."), "Disable").then(function (y) { if (y) call(p, data); });
+        return call(p, data);
+      }
+      function setRole(p, role) {
+        var data = { role: role }, label = roles[role] || role;
+        var needName = p.role === "lan" || role === "olt";
+        var warnText = p.role === "lan" ? p.role_warning : role === "olt" ? "All customers on the OLT go offline while the OLT uplink moves to " + p.name + "." : "";
+        if (needName) return withName(p, warnText + " Type the router name to make " + p.name + ": " + label + ".", "Make " + p.name + " " + label + "?", "Change role", data);
+        return ask("Make " + p.name + " " + label + "?", "The server sets it up on the router by itself.", "Change role").then(function (y) { if (y) call(p, data); });
+      }
+      function row(p) {
+        var tr = el("tr");
+        function td(label, content, cls) { var c = el("td", cls || ""); c.setAttribute("data-label", label); if (content instanceof Node) c.appendChild(content); else c.textContent = content; tr.appendChild(c); return c; }
+        var nm = el("span"); nm.appendChild(el("b", "mono", p.name)); if (p.comment) { nm.appendChild(el("br")); nm.appendChild(el("span", "muted", p.comment)); }
+        td("Port", nm, "mono");
+        var rl = el("span"); if (p.locked) { var lk = el("span", "", "🔒 "); lk.setAttribute("aria-hidden", "true"); rl.appendChild(lk); }
+        rl.appendChild(document.createTextNode(p.role_label));
+        if (p.locked) rl.appendChild(el("span", "sr-only", " (locked)"));
+        if (p.flats != null) rl.appendChild(el("span", "muted", " " + p.flats + " flat" + (p.flats === 1 ? "" : "s")));
+        if (p.apply && p.apply.state !== "ok") { var ap = el("div", "cport " + p.apply.state, p.apply.state === "applying" ? "applying…" : (p.apply.message || "not applied")); rl.appendChild(ap); }
+        td("Role", rl);
+        td("Link", p.link || "");
+        td("State", pill(p));
+        td("Receive", rate(p.rx_bps), "n"); td("Send", rate(p.tx_bps), "n"); td("MAC", p.mac || "", "mono");
+        var act = el("td"); act.setAttribute("data-label", "Actions");
+        if (p.locked) { act.appendChild(el("span", "muted", "locked: set in the router's network settings")); }
+        else if (!p.can_change) { act.appendChild(el("span", "muted", p.needs_owner ? "owner only" : "")); }
+        else {
+          var b = el("button", "ghost sm", p.disabled ? "Enable" : "Disable"); b.type = "button"; b.onclick = function () { toggle(p); }; act.appendChild(b);
+          if (p.role_options && p.role_options.length) {
+            var sel = el("select"); sel.setAttribute("aria-label", "Change the role of " + p.name);
+            var o0 = el("option", "", "Change role…"); o0.value = ""; sel.appendChild(o0);
+            p.role_options.forEach(function (r) { var o = el("option", "", roles[r] || r); o.value = r; sel.appendChild(o); });
+            sel.onchange = function () { var v = sel.value; sel.value = ""; if (v) setRole(p, v); };
+            act.appendChild(doc.createTextNode(" ")); act.appendChild(sel);
+          }
+        }
+        tr.appendChild(act);
+        return tr;
+      }
+      function draw(j) {
+        (j.roles || []).forEach(function (r) { roles[r.key] = r.label; });
+        body.textContent = "";
+        (j.items || []).forEach(function (p) { body.appendChild(row(p)); });
+        if (!(j.items || []).length) { var tr = el("tr"), c = el("td", "muted", "The router could not be read. Ports show here once it answers."); c.colSpan = 8; tr.appendChild(c); body.appendChild(tr); }
+        warn.hidden = j.reachable !== false || !(j.items || []).length;
+        var cp = j.customer_port || {};
+        var msgs = [cp.olt_message && ("OLT uplink: " + cp.olt_message), cp.lan_message && ("Admin LAN: " + cp.lan_message), cp.state === "error" && cp.text].filter(Boolean);
+        applyEl.hidden = msgs.length === 0; applyEl.className = "cport error"; applyEl.textContent = msgs.join(" ");
+        at.textContent = "Read " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      }
+      function load() {
+        if (busy) return;
+        getJSON("/admin/routers/ports.json?id=" + enc(rid)).then(function (j) { if (j.items) draw(j); }).catch(function () {});
+      }
+      load();
+      timer = setInterval(function () { if (!doc.hidden && !doc.querySelector("dialog[open]")) load(); }, 5000);
+      window.addEventListener("pagehide", function () { clearInterval(timer); });
+    })();
+  }
+
   /* ---- customer port: the server applies it after a save; follow "applying" until it settles ---- */
   var cpEl = $("[data-cport=applying]");
   if (cpEl) {

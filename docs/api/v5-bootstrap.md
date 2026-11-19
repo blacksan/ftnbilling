@@ -27,7 +27,8 @@ Unknown fields are ignored. Validation errors are 400 `validation_failed` with a
 | `olt_interface` | string | `sfp-sfpplus1` | OLT uplink port: an SFP port (`sfp-sfpplus1`) or an Ethernet port (`ether3`). Must differ from `wan_interface`, every `lan_ports` entry and `bench_port` (a 400 names the field: `olt_interface`, or both `bench_port` and `olt_interface` when they are equal) |
 | `vlan_id` | int | 0 | 0 = untagged, else 1 to 4094 (the script makes `vlan<N>-customers` on the OLT port) |
 | `customer_subnet` | string | `10.5.50.0/24` | /20 to /24; gateway .1, unregistered pool .10-.59, flats from .60 |
-| `bench_port` | string | "" | the extra customer port (e.g. `ether5`; "Customer port (extra)" in the apps): a port where a customer device can be plugged in directly. Must not be the WAN port, an admin LAN port or the OLT port (400 on `bench_port`). The server puts it on `br-customers` by itself (see below) |
+| `customer_ports` | list of strings | [] | the extra customer ports (e.g. `["ether5","ether4"]`; a comma string is accepted too): ports where a customer device can be plugged in directly. Each must differ from the WAN port, every `lan_ports` entry and the OLT port, and may appear once (400 on `customer_ports`). The server puts them on `br-customers` by itself (see below). Router JSON returns the list |
+| `bench_port` | string | "" | **Deprecated alias** of the first customer port. In an answer it is `customer_ports[0]` (or ""). In a request without `customer_ports`, it replaces the first entry (an empty string removes it) and keeps the others. Errors about it are reported on `customer_ports` and, when the alias was used, on `bench_port` too. Stored data had a single `bench_port`: store format 8 (JSON) and schema 7 (Postgres) move it into `customer_ports` |
 | `wan_cap_mbps`, `olt_cap_mbps`, `fup_tb` | number | 500 / 10000 / 15 | capacities. When `olt_cap_mbps` is not set it follows the OLT port: `ether*`, `sfp*` (1G) and `combo*` 1000, `sfp-sfpplus*` and `qsfp*` 10000; an unknown name gets `OLT_CAPACITY_MBPS`. An explicit value is kept |
 | `support_phone` | string | "" | shown on the payment page |
 
@@ -45,13 +46,13 @@ paste a new line to add it." instead of the connection line.
 
 ### Customer port and OLT port: applied by the server
 
-Saving `bench_port`, `olt_interface` or `vlan_id` (web, app or `PATCH /routers/{id}`) makes the server apply them at once, in the background
+Saving `customer_ports`, `lan_ports`, `olt_interface` or `vlan_id` (web, app or `PATCH /routers/{id}`) makes the server apply them at once, in the background
 (the PATCH answer does not wait for the router), on a router with the v5 layout; any other router is not written to and shows
 "Rebuild required: reset the router and paste a new line". Over REST, through the `fixWriter` allowlist:
 
 - the customer port is made a member of `br-customers` with `horizon=1` and the comment `ftn: customer port`; a device plugged in gets a customer address from
   `ftn-dhcp`, shows as unregistered and is walled until attached to a paid account;
-- when `bench_port` is cleared or changed, the server's own `ftn: customer port` (or older `ftn: bench port`) membership of the old port is removed (rows it did not make are left alone);
+- when a port leaves `customer_ports`, the server's own `ftn: customer port` (or older `ftn: bench port`) membership of the old port is removed (rows it did not make are left alone);
 - the OLT port: without a VLAN it is a member of `br-customers` the same way; with a VLAN the `vlan<N>-customers` interface (comment `ftn: customer VLAN`) is added or moved to the new port;
 - a port is refused, in words, when it is the WAN port or in the `WAN` list, an admin LAN port or in the `LAN` list, the OLT port, a port of any other bridge (the admin LAN bridge `br-lan` is named), or has its own address or DHCP. The server never moves a port out of another bridge.
 
@@ -63,7 +64,7 @@ when anything is wrong (an unknown port, a port in another bridge) nothing is re
 
 The sweep (every 5 minutes while the last pass was clean, every minute after a change or a failure) repeats the work with a backoff of 5 s doubling to 5 min and records changes and errors in the router's activity (actor `system`).
 
-Router JSON gains `wan_interface`, `olt_interface`, `vlan_id`, `customer_subnet`, `bench_port`, `wan_cap_mbps`, `olt_cap_mbps`, `support_phone` and
+Router JSON gains `wan_interface`, `olt_interface`, `vlan_id`, `customer_subnet`, `customer_ports`, `bench_port` (deprecated), `wan_cap_mbps`, `olt_cap_mbps`, `support_phone` and
 `customer_port`: `{port, state: off|ok|applying|error|rebuild, text, message, olt_message, at}`; `text` is ready to show ("ether5: customer port ✓", "ether5: applying…", or the error in words).
 The web admin has `GET /admin/routers/customer-port.json?id=` for the same object.
 
@@ -190,3 +191,59 @@ The hotspot portal is gone. `GET /portal` redirects to `/pay`. Vouchers are rede
 another router, a used voucher and an unknown voucher all answer 400 with the same words. The `router_user` setting
 (`ROUTER_USER`), `ROUTER_URL`, `ROUTER_PASS`, `HOTSPOT_SERVER`, `SITE_NAME` and the "Main building" seed from the
 environment are removed; a router exists only by being added and set up with the paste line.
+
+## Ports
+
+The router page (web "Ports" tab) and the router detail (Android) list every physical interface (Ethernet, SFP, combo, wireless) and let a person
+switch it off and on and change its role. The server is the source of truth for roles; the server applies them over REST through the `fixWriter`
+allowlist and the sweep heals them. Nothing is typed on the router.
+
+| Role (`role`) | Label | Stored in |
+|---|---|---|
+| `wan` | Internet uplink (WAN) | `wan_interface`. **Locked**: no action, the server never writes the WAN interface |
+| `lan` | Admin LAN | `lan_ports` (members of `br-lan`, comment `ftn: LAN port`) |
+| `olt` | OLT uplink | `olt_interface` (with `vlan_id`: the `vlan<N>-customers` interface on it) |
+| `customer` | Customer port | `customer_ports` (members of `br-customers`, comment `ftn: customer port`) |
+| `unused` | Unused | none |
+
+One role per port; WAN, Admin LAN, OLT and customer ports can never overlap (checked on every save, `PATCH /routers/{id}` too).
+
+### GET /routers/{id}/ports (viewer)
+
+`{items: [port], roles: [{key, label}], generated_at, reachable, customer_port}`. One `/interface` read with a short `.proplist` per refresh (cached 4 s on the server);
+the negotiated speed and duplex (`/interface/ethernet`) and the bridge hosts (flats seen per customer port) are read at most every 60 s. Poll lightly (every 5 s) only
+while the page is open. A port: `name`, `kind` (`ethernet|sfp|combo|wlan`), `role`, `role_label`, `locked`, `running`, `link` ("1Gbps full duplex" where the router says), `speed`, `duplex`,
+`disabled`, `mac`, `rx_bps`, `tx_bps` (null until two readings exist), `comment`, `apply` (`{port, state: ok|applying|error, message}` for roles the server applies),
+`flats` (customer ports: flats whose ONT MAC is seen on the port, when known), and what the caller may do: `can_change`, `needs_owner`, `role_options` (roles the caller may give it),
+`disable_warning`, `role_warning`, `confirm_disable` (the router name must be typed to disable it). `customer_port` is the apply status (`items`, `olt_message`, `lan_message`).
+
+### PATCH /routers/{id}/ports/{name} (operator)
+
+Body `{role?, disabled?, confirm_name?}` (`role`: `lan|olt|customer|unused`). Answers 200 `{port, applied: [..], customer_port}`; the role is applied in the background (`port.apply.state` is `applying`),
+enable and disable are written at once (one read, one write).
+
+| Rule | Answer |
+|---|---|
+| WAN port, or `role: "wan"` | 409 `port_locked`, nothing written |
+| the last Admin LAN port leaves the admin LAN | 409 `last_lan_port` |
+| the OLT uplink asked to become something else (give the role to another port instead) | 409 `bad_state` |
+| a switched-off port made Admin LAN or OLT | 409 `bad_state` (enable it first) |
+| operator touching Admin LAN or the OLT uplink (role or enable/disable, either direction) | 403 `forbidden_role`; only an owner |
+| moving or disabling an Admin LAN port ("You may lose your WinBox session on this port."), disabling the OLT uplink or moving it ("All customers on the OLT go offline.") without the router name | 422 `validation_failed`, `details.fields.confirm_name`, `details.warning` |
+| no such physical port on the router | 404 `no_such_port` |
+| the router does not answer (enable/disable, or checking the port) | 503 `router_unreachable` |
+
+Disabling a customer port needs no typed name; `disable_warning` carries the number of flats seen on it, when known. An operator may enable, disable and change the role of customer and unused ports.
+Every change is in the router's activity with the actor (`port ether5: role Unused -> Customer port`, `port ether5 disabled`). A port the server switched off is remembered and kept off by the
+sweep (`switched off ether5`, actor `system`); enabling it forgets it. The sweep and the apply honour "Pause automatic fixes"; an explicit change from the page runs anyway.
+
+Allowlist (`fixWriter`) additions: `disabled=yes|no` on `/interface` rows of non-WAN physical ports the pass named (nothing else on `/interface`); `br-lan` membership rows the server made
+(`ftn: LAN port`), new members first and an old one only when another wanted member is in; the existing `br-customers` and customer VLAN rows. The server still never writes `/user`, `/ip/service`,
+`/system` (except reboot), WireGuard, routes or the WAN.
+
+Web: `GET /admin/routers/ports.json?id=` (same body) and `POST /admin/routers/ports/update` (form `id`, `port`, `role`, `disabled=1|0`, `confirm_name`, session and CSRF).
+
+### WebFig
+
+The script sets `/ip/service www` (and `www-ssl`, which stays off) `address` to the admin LAN network plus the server's tunnel `/32` (`192.168.88.0/24,10.99.0.1/32`); the `service.www` check is OK for it.
+The REST user is still limited to the server's address. A router built earlier shows the old server-only address as info until a new line is pasted.

@@ -250,7 +250,7 @@ func (s *Server) siteByID(id string) (store.Site, bool) {
 
 type tabDef struct{ Key, Label string }
 
-var routerTabs = []tabDef{{"overview", "Overview"}, {"setup", "Setup"}, {"clients", "Clients"}, {"interfaces", "Interfaces"}, {"plans", "Plans"}, {"profile", "Profile"}, {"danger", "Danger"}}
+var routerTabs = []tabDef{{"overview", "Overview"}, {"setup", "Setup"}, {"clients", "Clients"}, {"interfaces", "Interfaces"}, {"ports", "Ports"}, {"plans", "Plans"}, {"profile", "Profile"}, {"danger", "Danger"}}
 
 // siteView builds the router page; cmd and noCheck are set only in the
 // response to a join request, which is the one time the line is shown.
