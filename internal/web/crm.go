@@ -59,6 +59,14 @@ func day(t time.Time) string {
 	return t.In(billing.EAT).Format("2006-01-02")
 }
 
+// maskCode shows the first four characters of a voucher code and hides the rest.
+func maskCode(c string) string {
+	if len(c) <= 4 {
+		return strings.Repeat("*", len(c))
+	}
+	return c[:4] + strings.Repeat("*", len(c)-4)
+}
+
 func lastFour(s string) string {
 	if s == "" {
 		return ""

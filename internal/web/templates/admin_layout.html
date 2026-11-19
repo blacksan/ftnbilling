@@ -33,7 +33,7 @@
 {{if eq .Role "owner"}}<a class="nav" href="/admin/settings"{{if or (eq $a "settings") (eq $a "set-whatsapp") (eq $a "set-mpesa") (eq $a "set-email") (eq $a "set-equipment")}} aria-current="page"{{end}}>{{template "navi" "settings"}}Settings</a>{{end}}
 <a class="nav" href="/admin/security"{{if eq $a "security"}} aria-current="page"{{end}}>{{template "navi" "security"}}Security</a>
 <a class="nav" href="/admin/tools"{{if eq $a "set-tools"}} aria-current="page"{{end}}>{{template "navi" "set-tools"}}Router tools</a>
-<a class="nav" href="/admin/audit"{{if eq $a "audit"}} aria-current="page"{{end}}>{{template "navi" "audit"}}Audit</a></div></details>
+{{if eq .Role "owner"}}<a class="nav" href="/admin/audit"{{if eq $a "audit"}} aria-current="page"{{end}}>{{template "navi" "audit"}}Audit</a>{{end}}</div></details>
 <p class="foot">{{.Brand}}</p>
 </aside>
 <div class="scrim" data-nav-close></div>

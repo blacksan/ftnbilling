@@ -174,3 +174,47 @@ func TestWebSearchNationalIDAndRateLimit(t *testing.T) {
 		t.Error("the palette search was never limited")
 	}
 }
+
+// L-4 / M-3: audit log and voucher sheets by role.
+func TestAuditAndVoucherRoutesByRole(t *testing.T) {
+	r := newAPIRig(t)
+	pk := r.pkgIDByName(t, "1 Day")
+	batch, _, err := r.svc.GenerateVouchers(pk, "", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var code string
+	r.st.View(func(d *store.Data) {
+		for _, v := range d.VoucherList() {
+			code = v.Code
+		}
+	})
+	vb, ob, wb := signIn(t, r.ts, r.srv, r.st, r.vwW), signIn(t, r.ts, r.srv, r.st, r.operW), signIn(t, r.ts, r.srv, r.st, r.ownerW)
+	for _, tc := range []struct {
+		path                string
+		viewer, oper, owner int
+	}{
+		{"/admin/audit", 403, 403, 200},
+		{"/admin/vouchers", 200, 200, 200},
+		{"/admin/vouchers/print?batch=" + batch, 403, 200, 200},
+	} {
+		for name, x := range map[string]struct {
+			b    *browser
+			want int
+		}{"viewer": {vb, tc.viewer}, "operator": {ob, tc.oper}, "owner": {wb, tc.owner}} {
+			if got, _ := r.webGet(t, x.b, tc.path); got != x.want {
+				t.Errorf("%s GET %s: %d, want %d", name, tc.path, got, x.want)
+			}
+		}
+	}
+	_, vpage := r.webGet(t, vb, "/admin/vouchers")
+	if strings.Contains(vpage, code) || !strings.Contains(vpage, code[:4]+strings.Repeat("*", len(code)-4)) {
+		t.Errorf("a viewer must see masked voucher codes (code %s)", code)
+	}
+	if _, opage := r.webGet(t, ob, "/admin/vouchers"); !strings.Contains(opage, code) {
+		t.Error("operators see the full code")
+	}
+	if !strings.Contains(r.auditText(), "voucher sheet printed: batch "+batch) {
+		t.Error("printing a voucher sheet is not audited")
+	}
+}

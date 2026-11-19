@@ -952,6 +952,7 @@ func (s *Server) adminVouchers(w http.ResponseWriter, r *http.Request) {
 			v = v[:500]
 		}
 		p.Data["Vouchers"] = v
+		p.Data["SeeCodes"] = p.CanWrite // viewers get masked codes: an unused code is prepaid value
 		p.Data["Pkgs"] = d.PackageList()
 		p.Data["PkgMap"] = d.Packages
 	})
@@ -982,6 +983,9 @@ func (s *Server) adminPrintVouchers(w http.ResponseWriter, r *http.Request) {
 			pkgs[k] = v
 		}
 	})
+	if u, ok := userOf(r); ok {
+		s.authn.AuditNow(u.Username, realIP(r), fmt.Sprintf("voucher sheet printed: batch %s, %d unused codes", batch, len(list)))
+	}
 	s.render(w, "admin_print", map[string]any{"Brand": s.cfg.BrandName, "Vouchers": list, "Pkgs": pkgs, "Batch": batch, "Support": s.cfg.SupportPhone})
 }
 
