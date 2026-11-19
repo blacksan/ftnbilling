@@ -159,7 +159,12 @@ func TestCustomerPortRefusals(t *testing.T) {
 	}
 	// on the router: a port of the admin bridge is never moved
 	m.SeedRow("/interface/bridge/port", R{"bridge": "br-lan", "interface": "ether5", "comment": ""})
-	f.st.Update(func(d *store.Data) error { x := d.Sites[s.ID]; x.CustomerPorts = "ether5"; d.Sites[s.ID] = x; return nil })
+	f.st.Update(func(d *store.Data) error {
+		x := d.Sites[s.ID]
+		x.CustomerPorts = "ether5"
+		d.Sites[s.ID] = x
+		return nil
+	})
 	m.ResetWrites()
 	st := f.m.EnsureCustomerPort(context.Background(), s.ID, true)
 	if st.State != PortError || !strings.Contains(st.Message, "br-lan") || !strings.Contains(st.Text, "ether5:") {
@@ -306,7 +311,12 @@ func TestCustomerPortBackoffAfterFailure(t *testing.T) {
 func TestCustomerPortNonV5RouterIsUntouched(t *testing.T) {
 	f := newFixture(t, nil)
 	s := f.joined("Block A")
-	f.st.Update(func(d *store.Data) error { x := d.Sites[s.ID]; x.CustomerPorts = "ether5"; d.Sites[s.ID] = x; return nil })
+	f.st.Update(func(d *store.Data) error {
+		x := d.Sites[s.ID]
+		x.CustomerPorts = "ether5"
+		d.Sites[s.ID] = x
+		return nil
+	})
 	m := f.startedRouter(s.ID)
 	m.SeedRow("/interface/bridge", R{"name": "bridge"}) // an old layout: no v5 marker
 	m.SeedRow("/interface", R{"name": "ether5", "type": "ether"})

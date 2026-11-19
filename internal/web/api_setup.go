@@ -98,26 +98,26 @@ func (s *Server) apiSetup(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 // ---- add and edit a router -------------------------------------------------------------------
 
 type routerReq struct {
-	Name           *string  `json:"name"`
-	WANInterface   *string  `json:"wan_interface"`
-	WANMode        *string  `json:"wan_mode"`
-	WANAddress     *string  `json:"wan_address"`
-	WANGateway     *string  `json:"wan_gateway"`
-	WANDNS         *string  `json:"wan_dns"`
-	PPPoEUser      *string  `json:"pppoe_user"`
-	PPPoEPass      *string  `json:"pppoe_pass"`
-	PPPoEPassClear *bool    `json:"pppoe_pass_clear"`
-	LANPorts       *string  `json:"lan_ports"`
-	LANSubnet      *string  `json:"lan_subnet"`
-	OLTInterface   *string  `json:"olt_interface"`
-	VLANID         *int     `json:"vlan_id"`
-	CustomerSubnet *string  `json:"customer_subnet"`
+	Name           *string   `json:"name"`
+	WANInterface   *string   `json:"wan_interface"`
+	WANMode        *string   `json:"wan_mode"`
+	WANAddress     *string   `json:"wan_address"`
+	WANGateway     *string   `json:"wan_gateway"`
+	WANDNS         *string   `json:"wan_dns"`
+	PPPoEUser      *string   `json:"pppoe_user"`
+	PPPoEPass      *string   `json:"pppoe_pass"`
+	PPPoEPassClear *bool     `json:"pppoe_pass_clear"`
+	LANPorts       *string   `json:"lan_ports"`
+	LANSubnet      *string   `json:"lan_subnet"`
+	OLTInterface   *string   `json:"olt_interface"`
+	VLANID         *int      `json:"vlan_id"`
+	CustomerSubnet *string   `json:"customer_subnet"`
 	CustomerPorts  *portList `json:"customer_ports"`
-	BenchPort      *string  `json:"bench_port"` // deprecated alias: the first customer port
-	WANCapMbps     *float64 `json:"wan_cap_mbps"`
-	OLTCapMbps     *float64 `json:"olt_cap_mbps"`
-	FUPTB          *float64 `json:"fup_tb"`
-	SupportPhone   *string  `json:"support_phone"`
+	BenchPort      *string   `json:"bench_port"` // deprecated alias: the first customer port
+	WANCapMbps     *float64  `json:"wan_cap_mbps"`
+	OLTCapMbps     *float64  `json:"olt_cap_mbps"`
+	FUPTB          *float64  `json:"fup_tb"`
+	SupportPhone   *string   `json:"support_phone"`
 }
 
 // portList is a JSON array of port names, or a comma list in one string.

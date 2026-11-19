@@ -64,10 +64,11 @@ type Manager struct {
 	chk          checksState   // cache of the setup checks (checks.go)
 	autoFixDelay time.Duration // wait after the first answer before the post-join fixes (runtime.go)
 
-	cport cpState   // customer-port and automatic-fix state per building (custport.go, autofix.go)
-	prov  provMgr   // billing hooks and the reboot slot (provision.go)
-	live  liveState // live router views (live.go)
-	box   *secretbox.Box
+	cport     cpState    // customer-port and automatic-fix state per building (custport.go, autofix.go)
+	prov      provMgr    // billing hooks and the reboot slot (provision.go)
+	live      liveState  // live router views (live.go)
+	portRates portsRates // byte counters of the Ports view (ports.go)
+	box       *secretbox.Box
 }
 
 // SetForeignIPs lets the billing service tell the sites package which addresses
