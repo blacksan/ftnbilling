@@ -64,9 +64,6 @@ func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 		"Problems": s.problems(), "Tabs": s.settingsTabs("general"),
 		"WAOn": live.WhatsAppConfigured(), "EmailOn": live.EmailConfigured(),
 	}
-	if env, ok := s.envSite(); ok {
-		p.Data["Env"] = s.mgr.Effective(env)
-	}
 	s.render(w, "admin_settings", p)
 }
 
@@ -221,7 +218,6 @@ type ontRow struct {
 // found is one place a MAC address was seen.
 type found struct {
 	Site, IP, Host, State, Source string
-	Authorized                    bool
 }
 
 func (s *Server) settingsEquipment(w http.ResponseWriter, r *http.Request) {
@@ -246,7 +242,7 @@ func (s *Server) renderEquipment(w http.ResponseWriter, r *http.Request, mac str
 }
 
 // settingsEquipmentFind asks every connected building's router where a MAC
-// address is: the hotspot host table and the DHCP leases. Each building gets 5 s.
+// address is: the DHCP leases. Each building gets 5 s.
 func (s *Server) settingsEquipmentFind(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimSpace(r.URL.Query().Get("mac"))
 	if raw == "" {
@@ -283,15 +279,6 @@ func (s *Server) settingsEquipmentFind(w http.ResponseWriter, r *http.Request) {
 			rt := s.mgr.Router(st.ID)
 			rows := map[string]*found{}
 			var errs []string
-			if hs, err := rt.Hosts(ctx); err != nil {
-				errs = append(errs, "hotspot hosts: "+err.Error())
-			} else {
-				for _, h := range hs {
-					if m, err := billing.NormalizeMAC(h.MAC); err == nil && m == mac {
-						rows[h.Address] = &found{Site: st.Name, IP: h.Address, Host: h.HostName, Authorized: h.Authorized, Source: "hotspot host"}
-					}
-				}
-			}
 			if ex, ok := rt.(routeros.Executor); ok {
 				if ls, err := ex.Leases(ctx, mac); err != nil {
 					errs = append(errs, "DHCP leases: "+err.Error())

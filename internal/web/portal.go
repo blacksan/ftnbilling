@@ -1,58 +1,18 @@
 package web
 
 import (
-	"net"
 	"net/http"
 	"strings"
-	"time"
 
-	"ispbill/internal/billing"
 	"ispbill/internal/store"
 )
 
-// PortalCtx is the hotspot context carried through every portal step.
-type PortalCtx struct{ Site, MAC, IP, Dst string }
-
-// ctxFrom reads and sanitises site, mac, ip and dst from query or form.
-func ctxFrom(r *http.Request) PortalCtx {
-	c := PortalCtx{Site: strings.TrimSpace(r.FormValue("site")), IP: strings.TrimSpace(r.FormValue("ip")), Dst: strings.TrimSpace(r.FormValue("dst"))}
-	if len(c.Site) > 16 {
-		c.Site = ""
-	}
-	if m, err := billing.NormalizeMAC(r.FormValue("mac")); err == nil {
-		c.MAC = m
-	}
-	if net.ParseIP(c.IP) == nil {
-		c.IP = ""
-	}
-	if !isHTTPURL(c.Dst) {
-		c.Dst = ""
-	}
-	return c
-}
-
-type portalPage struct {
-	Brand, Support string
-	SiteName       string
-	Ctx            PortalCtx
-	Known          bool // MAC belongs to an account
-	Acct           store.Account
-	State          string
-	Pkg            store.Package // current package, if any
-	Active         bool
-	Suspended      bool
-	Groups         []packageGroup
-	Mpesa, Test    bool
-	Error, Notice  string
-	Phone          string
-	Selected       string
-	LoginFailed    bool
-	Blocked        map[string]bool // slower than the active plan: not purchasable yet
-	BlockedUntil   string
-}
+// The customer-facing pages: /pay (pay.go) is where a walled flat lands; the
+// pages below show the wait for the M-Pesa prompt and the receipt. Old
+// /portal links go to /pay.
 
 func (s *Server) portalRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /portal", s.portalHome)
+	mux.HandleFunc("GET /portal", toPay)
 	s.payRoutes(mux)
 	mux.HandleFunc("GET /brand.woff2", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "font/woff2")
@@ -74,252 +34,14 @@ func (s *Server) portalRoutes(mux *http.ServeMux) {
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		w.Write(faviconSVG)
 	})
-	mux.HandleFunc("POST /portal/pay", s.portalPay)
-	mux.HandleFunc("POST /portal/voucher", s.portalVoucher)
-	mux.HandleFunc("POST /portal/connect", s.portalConnect)
 	mux.HandleFunc("GET /portal/wait", s.portalWait)
 	mux.HandleFunc("GET /portal/success", s.portalSuccess)
-	mux.HandleFunc("GET /portal/status", s.portalHome)
+	mux.HandleFunc("GET /portal/status", toPay)
 	mux.HandleFunc("GET /api/orders/{id}", s.apiOrder)
 }
 
-// portalSite finds the building a portal request is about: the one named by
-// the request's site field, or, when that is missing or unknown, the only
-// active building if exactly one exists. With several buildings and no valid
-// site the visitor gets the neutral page.
-func (s *Server) portalSite(id string) (store.Site, bool) {
-	var out store.Site
-	found := false
-	s.st.View(func(d *store.Data) {
-		if st, ok := d.Sites[id]; ok && !st.Removed && !st.Disabled {
-			out, found = st, true
-			return
-		}
-		n := 0
-		for _, st := range d.Sites {
-			if !st.Removed && !st.Disabled {
-				out, n = st, n+1
-			}
-		}
-		found = n == 1
-	})
-	if !found {
-		return store.Site{}, false
-	}
-	return out, true
-}
-
-// pctx is ctxFrom plus the building lookup and, for a building whose host
-// guard is on (always for WireGuard buildings, and for the legacy one with
-// VERIFY_HOTSPOT_HOST), a check that the mac/ip really is a device on that
-// building's hotspot. Unverified requests lose their MAC and get the neutral
-// "open this page from the WiFi login" page. Everything is keyed by building:
-// every building uses the same customer subnet.
-func (s *Server) pctx(r *http.Request) PortalCtx {
-	pc := ctxFrom(r)
-	site, ok := s.portalSite(pc.Site)
-	if !ok {
-		return PortalCtx{Dst: pc.Dst}
-	}
-	pc.Site = site.ID
-	if billing.IPoE(site) {
-		// Hotspot login parameters mean nothing in an IPoE building: the flat
-		// is identified by its router lease, and pays on /pay.
-		return PortalCtx{Site: site.ID, Dst: pc.Dst}
-	}
-	if pc.MAC != "" && !s.mgr.VerifyHost(r.Context(), site.ID, pc.MAC, pc.IP) {
-		s.log.Warn("portal: mac/ip not on the hotspot, ignored", "site", site.ID, "mac", pc.MAC, "ip", pc.IP, "remote", r.RemoteAddr)
-		return PortalCtx{Site: site.ID, Dst: pc.Dst}
-	}
-	return pc
-}
-
-// view builds the portal page for the MAC in the request. Unknown MACs are
-// recorded for the admin ("Unregistered devices") and get the contact page.
-func (s *Server) view(r *http.Request, errMsg, phone, selected string) portalPage {
-	p := portalPage{
-		Brand: s.cfg.BrandName, Support: s.cfg.SupportPhone,
-		Mpesa: s.providers["mpesa"] != nil && s.providers["mpesa"].Enabled(),
-		Test:  s.providers["test"] != nil && s.providers["test"].Enabled(),
-		Error: errMsg, Phone: phone, Selected: selected,
-	}
-	p.Ctx = s.pctx(r)
-	if site, ok := s.portalSite(p.Ctx.Site); ok {
-		p.SiteName = site.Name
-		if site.SupportPhone != "" {
-			p.Support = site.SupportPhone
-		}
-	}
-	if p.Ctx.MAC == "" {
-		return p
-	}
-	a, ok := s.svc.PortalAccount(p.Ctx.Site, p.Ctx.MAC) // another building's customer is not ours
-	if !ok {
-		s.svc.NoteDevice(p.Ctx.Site, p.Ctx.MAC, p.Ctx.IP, "portal")
-		return p
-	}
-	p.Known, p.Acct = true, a
-	p.State = billing.AccountState(a, s.svc.Now())
-	p.Active = p.State == billing.StateActive
-	p.Suspended = a.Suspended
-	s.st.View(func(d *store.Data) {
-		p.Pkg = d.Packages[a.PackageID]
-		p.Groups = packageGroups(d.EffectivePackages(a.SiteID))
-	})
-	if p.Active {
-		p.Blocked = map[string]bool{}
-		for _, g := range p.Groups {
-			for _, pk := range g.Packages {
-				if until, bl := s.svc.LowerPlanBlocked(a, pk); bl {
-					p.Blocked[pk.ID] = true
-					p.BlockedUntil = until.In(billing.EAT).Format("Mon 2 Jan 2006")
-				}
-			}
-		}
-		if p.Blocked[p.Selected] {
-			p.Selected = ""
-		}
-	}
-	if p.Selected == "" {
-		for _, g := range p.Groups {
-			for _, pk := range g.Packages {
-				if p.Selected == "" && !p.Blocked[pk.ID] {
-					p.Selected = pk.ID
-				}
-			}
-		}
-	}
-	return p
-}
-
-func (s *Server) portalHome(w http.ResponseWriter, r *http.Request) {
-	if site, ok := s.portalSite(r.FormValue("site")); ok && billing.IPoE(site) {
-		http.Redirect(w, r, "/pay", http.StatusSeeOther)
-		return
-	}
-	p := s.view(r, "", "", "")
-	if p.Known && p.Active {
-		if !s.svc.AutoLogin(r.Context(), p.Acct, p.Ctx.IP) && p.Ctx.IP != "" {
-			p.LoginFailed = true
-		}
-	}
-	s.render(w, "portal", p)
-}
-
-// need returns the account behind the request's MAC, or renders the right page.
-func (s *Server) need(w http.ResponseWriter, r *http.Request) (store.Account, PortalCtx, bool) {
-	pc := s.pctx(r)
-	if pc.MAC == "" {
-		w.WriteHeader(http.StatusForbidden)
-		s.render(w, "portal", s.view(r, "", "", ""))
-		return store.Account{}, pc, false
-	}
-	a, ok := s.svc.PortalAccount(pc.Site, pc.MAC)
-	if !ok {
-		w.WriteHeader(http.StatusForbidden)
-		s.render(w, "portal", s.view(r, "", "", ""))
-		return a, pc, false
-	}
-	if a.Suspended {
-		w.WriteHeader(http.StatusForbidden)
-		s.render(w, "portal", s.view(r, "", "", ""))
-		return a, pc, false
-	}
-	return a, pc, true
-}
-
-func (s *Server) portalPay(w http.ResponseWriter, r *http.Request) {
-	a, pc, ok := s.need(w, r)
-	if !ok {
-		return
-	}
-	method := r.FormValue("method")
-	pkgID := r.FormValue("package")
-	prov := s.providers[method]
-	fail := func(msg string) {
-		w.WriteHeader(http.StatusBadRequest)
-		s.render(w, "portal", s.view(r, msg, r.FormValue("phone"), pkgID))
-	}
-	if prov == nil || !prov.Enabled() || method == "voucher" {
-		fail("That payment method is not available.")
-		return
-	}
-	phone := ""
-	if raw := strings.TrimSpace(r.FormValue("phone")); raw != "" || method == "mpesa" {
-		var err error
-		if phone, err = billing.NormalizePhone(raw); err != nil {
-			fail(err.Error())
-			return
-		}
-	}
-	o, err := s.svc.CreateOrder(billing.OrderInput{
-		AccountID: a.ID, PackageID: pkgID, Phone: phone, Method: method, MAC: pc.MAC, IP: pc.IP, Dst: pc.Dst,
-	})
-	if err != nil {
-		fail(err.Error())
-		return
-	}
-	if err := prov.Start(r.Context(), o); err != nil {
-		s.log.Warn("payment start failed", "order", o.ID, "method", method, "err", err)
-		_ = s.svc.FailOrder(r.Context(), o.ID, err.Error())
-		fail("Could not start the payment: " + err.Error())
-		return
-	}
-	http.Redirect(w, r, "/portal/wait?order="+o.ID, http.StatusSeeOther)
-}
-
-func (s *Server) portalVoucher(w http.ResponseWriter, r *http.Request) {
-	a, pc, ok := s.need(w, r)
-	if !ok {
-		return
-	}
-	fail := func(code int, msg string) {
-		w.WriteHeader(code)
-		s.render(w, "portal", s.view(r, msg, "", ""))
-	}
-	if !s.rl.allow("v:" + pc.MAC) {
-		fail(http.StatusTooManyRequests, "Too many attempts. Wait a minute and try again.")
-		return
-	}
-	v, err := s.svc.LookupVoucher(r.FormValue("voucher"))
-	if err != nil || (v.SiteID != "" && v.SiteID != a.SiteID) {
-		fail(http.StatusBadRequest, "That voucher is invalid or already used.")
-		return
-	}
-	o, err := s.svc.CreateOrder(billing.OrderInput{
-		AccountID: a.ID, PackageID: v.PackageID, Method: "voucher", VoucherCode: v.Code, MAC: pc.MAC, IP: pc.IP, Dst: pc.Dst,
-	})
-	if err != nil {
-		fail(http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := s.providers["voucher"].Start(r.Context(), o); err != nil {
-		fail(http.StatusBadRequest, "That voucher is invalid or already used.")
-		return
-	}
-	http.Redirect(w, r, "/portal/success?order="+o.ID, http.StatusSeeOther)
-}
-
-// portalConnect retries the automatic login ("Connect now" button).
-func (s *Server) portalConnect(w http.ResponseWriter, r *http.Request) {
-	a, pc, ok := s.need(w, r)
-	if !ok {
-		return
-	}
-	if !s.rl.allow("c:" + pc.MAC) {
-		w.WriteHeader(http.StatusTooManyRequests)
-		s.render(w, "portal", s.view(r, "Too many attempts. Wait a minute and try again.", "", ""))
-		return
-	}
-	s.svc.RunSiteTasks(r.Context(), a.SiteID)
-	cur, _ := s.svc.GetAccount(a.ID)
-	p := s.view(r, "", "", "")
-	if s.svc.AutoLogin(r.Context(), cur, pc.IP) {
-		p.LoginFailed = false
-	} else if billing.AccountState(cur, s.svc.Now()) == billing.StateActive {
-		p.LoginFailed = true
-	}
-	s.render(w, "portal", p)
+func toPay(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/pay", http.StatusSeeOther)
 }
 
 func (s *Server) portalWait(w http.ResponseWriter, r *http.Request) {
@@ -332,7 +54,7 @@ func (s *Server) portalWait(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/portal/success?order="+o.ID, http.StatusSeeOther)
 		return
 	}
-	s.render(w, "wait", map[string]any{"Brand": s.cfg.BrandName, "SiteName": s.siteName(o.SiteID), "Site": o.SiteID, "Order": o, "Test": o.Method == "test"})
+	s.render(w, "wait", map[string]any{"Brand": s.cfg.BrandName, "SiteName": s.siteName(o.SiteID), "Order": o, "Test": o.Method == "test"})
 }
 
 func (s *Server) apiOrder(w http.ResponseWriter, r *http.Request) {
@@ -364,19 +86,9 @@ func (s *Server) portalSuccess(w http.ResponseWriter, r *http.Request) {
 			support = sp
 		}
 	})
-	// The logged-in flag is set shortly after payment; re-check now so the page is right.
-	logged := o.LoggedIn
-	if !logged && o.IP != "" && strings.EqualFold(o.MAC, a.MAC) {
-		logged = s.svc.AutoLogin(r.Context(), a, o.IP)
-	}
-	var ipoe bool
-	s.st.View(func(d *store.Data) { ipoe = billing.IPoE(d.Sites[o.SiteID]) })
-	if ipoe { // paid on /pay: the router un-walls the flat by itself
-		logged = false
-	}
 	s.render(w, "success", map[string]any{
-		"Brand": s.cfg.BrandName, "SiteName": s.siteName(o.SiteID), "Site": o.SiteID, "Acct": a, "Pkg": pkg, "LoggedIn": logged, "Dst": o.Dst,
-		"Support": support, "IPoE": ipoe, "MAC": o.MAC, "IP": o.IP, "Expires": a.ExpiresAt,
+		"Brand": s.cfg.BrandName, "SiteName": s.siteName(o.SiteID), "Acct": a, "Pkg": pkg,
+		"Support": support, "Expires": a.ExpiresAt,
 	})
 }
 
@@ -384,8 +96,6 @@ func jsonStr(s string) string {
 	b, _ := jsonMarshal(s)
 	return string(b)
 }
-
-var _ = time.Second
 
 // siteName returns a building's name ("" if unknown).
 func (s *Server) siteName(id string) (name string) {

@@ -906,7 +906,7 @@ func TestAPIUnregistered(t *testing.T) {
 	if first["mac"] != "AA:BB:CC:00:80:AA" || first["online"] != true || first["site_name"] != "Alpha" || first["host_name"] != "Pixel-7" || first["vendor"] != "Google" {
 		t.Errorf("first item (online first): %v", first)
 	}
-	for _, k := range []string{"site_id", "site_name", "mac", "vendor", "host_name", "ip", "source", "online", "first_seen", "last_seen", "hits", "suggested_account", "router_user"} {
+	for _, k := range []string{"site_id", "site_name", "mac", "vendor", "host_name", "ip", "source", "online", "first_seen", "last_seen", "hits", "suggested_account"} {
 		if _, ok := first[k]; !ok {
 			t.Errorf("item lacks %s", k)
 		}

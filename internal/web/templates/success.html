@@ -1,13 +1,8 @@
 {{define "success"}}{{template "head" .}}
 {{template "brandbar" .Brand}}{{if .SiteName}}<p class="muted" style="margin:0 0 4px">{{.SiteName}}</p>{{end}}
-<div class="card"><b>{{if .LoggedIn}}Your flat is online. All devices in your flat are now connected.{{else if .IPoE}}Payment received. Your internet comes back within a minute. If it is still paused after 2 minutes, restart your router and call us.{{else}}Payment received. Connecting your flat...{{end}}</b>
+<div class="card"><b>Payment received. Your internet comes back within a minute. If it is still paused after 2 minutes, restart your router and call us.</b>
 <p class="flat" style="margin:10px 0 2px">{{.Acct.Flat}}</p>
 <p class="muted" style="margin:0 0 2px">Account number (use it as the Paybill account)</p><div class="code">{{.Acct.Code}}</div>
 <p>Package: <b>{{.Pkg.Name}}</b><br>Valid until: <b>{{eat .Expires}}</b></p></div>
-{{if .LoggedIn}}
-{{if .Dst}}<a class="btn" href="{{.Dst}}">Continue</a>{{else}}<a class="btn" href="http://neverssl.com">Continue</a>{{end}}
-{{else if not .IPoE}}
-<form method="post" action="/portal/connect"><input type="hidden" name="site" value="{{.Site}}"><input type="hidden" name="mac" value="{{.MAC}}"><input type="hidden" name="ip" value="{{.IP}}"><input type="hidden" name="dst" value="{{.Dst}}"><button type="submit">Connect now</button></form>
-{{end}}
 {{if .Support}}<p class="muted">Help: {{.Support}}</p>{{end}}
 {{template "foot"}}{{end}}

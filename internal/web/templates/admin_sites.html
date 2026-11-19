@@ -1,15 +1,15 @@
 {{define "sitefields"}}<div class="two"><label class="field">Router name<input name="name" value="{{.Name}}" required maxlength="60" placeholder="Riverside Apartments"></label>
 <label class="field">Support phone (shown to tenants)<input name="support" value="{{.SupportPhone}}" placeholder="optional"></label></div>
 <label class="field">Notes<input name="notes" value="{{.Notes}}" maxlength="300"></label>{{end}}
-{{define "sitelayout"}}<div class="two">
-<label class="field">WAN mode<select name="wanmode">{{range seq "dhcp" "static" "pppoe"}}<option{{if eq . $.WANMode}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+{{define "sitelayout"}}<div class="two" data-wan-form>
+<label class="field">How the router gets its internet (WAN mode)<select name="wanmode" data-wan-mode>{{range seq "dhcp" "static" "pppoe"}}<option{{if eq . $.WANMode}} selected{{end}}>{{.}}</option>{{end}}</select></label>
 <label class="field">WAN port<input name="wan" value="{{.WANInterface}}"></label>
-<label class="field">Static address (CIDR)<input name="wanaddr" value="{{.WANAddress}}" placeholder="198.51.100.5/24"></label>
-<label class="field">Static gateway<input name="wangw" value="{{.WANGateway}}"></label>
-<label class="field">Static DNS<input name="wandns" value="{{.WANDNS}}"></label>
-<label class="field">PPPoE user<input name="pppoeuser" value="{{.PPPoEUser}}" autocomplete="off"></label>
-<label class="field">PPPoE password (write-only)<input name="pppoepass" type="password" value="" autocomplete="new-password"></label>
-<label class="ck"><input type="checkbox" name="pppoeclear" value="1"> clear the stored PPPoE password</label>
+<label class="field" data-wan-only="static">Static address (CIDR)<input name="wanaddr" value="{{.WANAddress}}" placeholder="198.51.100.5/24"></label>
+<label class="field" data-wan-only="static">Static gateway<input name="wangw" value="{{.WANGateway}}"></label>
+<label class="field" data-wan-only="static">Static DNS<input name="wandns" value="{{.WANDNS}}"></label>
+<label class="field" data-wan-only="pppoe">PPPoE user<input name="pppoeuser" value="{{.PPPoEUser}}" autocomplete="off"></label>
+<label class="field" data-wan-only="pppoe">PPPoE password (write-only){{if .PPPoEPassEnc}} <span class="pill online" data-pppoe-set>set</span>{{end}}<input name="pppoepass" type="password" value="" autocomplete="new-password" placeholder="{{if .PPPoEPassEnc}}leave blank to keep it{{end}}"></label>
+{{if .PPPoEPassEnc}}<label class="ck" data-wan-only="pppoe"><input type="checkbox" name="pppoeclear" value="1"> clear the stored PPPoE password</label>{{end}}
 <label class="field">Admin LAN ports<input name="lanports" value="{{.LANPorts}}" placeholder="ether2"></label>
 <label class="field">Admin LAN subnet<input name="lansubnet" value="{{.LANSubnet}}" placeholder="192.168.88.0/24"></label>
 <label class="field">OLT port<input name="olt" value="{{.OLTInterface}}"></label>
@@ -30,7 +30,7 @@
 </div>
 <nav class="tabs" aria-label="Filter routers">{{range $t := (seq "all|All" "online|Online" "offline|Offline" "setting|Setting up")}}{{$k := index (split $t "|") 0}}{{$l := index (split $t "|") 1}}<a class="tab" href="/admin/routers?tab={{$k}}"{{if eq $k $d.Data.Tab}} aria-current="page"{{end}}>{{$l}}<span class="n">{{index $c $k}}</span></a>{{end}}</nav>
 {{if .Data.Rows}}<div class="tw"><table class="rs"><thead><tr><th>Router</th><th>State</th><th>Setup</th><th class="n">Flats</th><th class="n">Online</th><th>WAN</th><th>Tunnel</th><th>Seen</th><th></th></tr></thead><tbody>
-{{range .Data.Rows}}<tr><td class="who"><b><a href="/admin/routers/view?id={{.S.ID}}">{{.S.Name}}</a></b><span>{{.Mode}}{{if eq .S.Mode "env"}} &middot; legacy{{end}}</span></td>
+{{range .Data.Rows}}<tr><td class="who"><b><a href="/admin/routers/view?id={{.S.ID}}">{{.S.Name}}</a></b><span>{{.Detail}}</span></td>
 <td data-label="State"><span class="pill {{.State}}">{{.State}}</span></td><td data-label="Setup"><span class="pill {{.SetupTone}}">{{.Setup}}</span></td>
 <td class="n" data-label="Flats">{{.Flats}}</td><td class="n" data-label="Online">{{.Online}}</td>
 <td data-label="WAN">{{if .WAN}}{{.WAN}}{{if .WANPct}}<div class="meter" role="img" aria-label="{{f0 .WANPct}} percent of capacity"><i style="width:{{f0 .WANPct}}%"></i></div>{{end}}{{else}}<span class="muted">none yet</span>{{end}}</td>

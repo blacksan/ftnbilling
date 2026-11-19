@@ -40,20 +40,19 @@ func (s *Server) adminRouterDevices(w http.ResponseWriter, r *http.Request) {
 		out["error"] = err.Error()
 	}
 	type item struct {
-		MAC        string `json:"mac"`
-		Vendor     string `json:"vendor"`
-		HostName   string `json:"host_name"`
-		IP         string `json:"ip"`
-		Online     bool   `json:"online"`
-		Seen       string `json:"seen"`
-		RouterUser string `json:"router_user"`
+		MAC      string `json:"mac"`
+		Vendor   string `json:"vendor"`
+		HostName string `json:"host_name"`
+		IP       string `json:"ip"`
+		Online   bool   `json:"online"`
+		Seen     string `json:"seen"`
 	}
 	items := []item{}
 	for _, u := range s.svc.Unregistered(st.ID, false) {
 		if len(items) >= 40 {
 			break
 		}
-		items = append(items, item{MAC: u.MAC, Vendor: u.Vendor, HostName: u.HostName, IP: u.IP, Online: u.Online, Seen: shortAge(s.svc.Now().Sub(u.LastSeen)) + " ago", RouterUser: u.RouterUser})
+		items = append(items, item{MAC: u.MAC, Vendor: u.Vendor, HostName: u.HostName, IP: u.IP, Online: u.Online, Seen: shortAge(s.svc.Now().Sub(u.LastSeen)) + " ago"})
 	}
 	out["items"] = items
 	writeJSON(w, http.StatusOK, out)

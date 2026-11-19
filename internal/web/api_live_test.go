@@ -2,6 +2,7 @@ package web_test
 
 import (
 	"context"
+	"ispbill/internal/store"
 	"regexp"
 	"strings"
 	"testing"
@@ -83,7 +84,7 @@ func TestAPILiveAndInterfaces(t *testing.T) {
 			t.Errorf("first read must have null rates: %v", m)
 		}
 	}
-	if roles["ether1"] != "wan" || roles["sfp-sfpplus1"] != "olt" || roles["br-hotspot"] != "customer" || roles["wg-ftn"] != "tunnel" || roles["ether5"] != "other" {
+	if roles["ether1"] != "wan" || roles["sfp-sfpplus1"] != "olt" || roles["br-customers"] != "customer" || roles["wg-ftn"] != "tunnel" || roles["ether5"] != "other" {
 		t.Fatalf("%v", roles)
 	}
 }
@@ -101,21 +102,33 @@ func TestAPILiveResponsesCarryNoSecrets(t *testing.T) {
 			t.Fatalf("%s: %d", p, res.Status)
 		}
 		s := string(res.Raw)
-		if secretKey.MatchString(s) || strings.Contains(s, "PRIVKEY-123") || strings.Contains(s, "PW-HUNTER2") || strings.Contains(s, "hs_pass") {
+		if secretKey.MatchString(s) || strings.Contains(s, "PRIVKEY-123") || strings.Contains(s, "PW-HUNTER2") {
 			t.Errorf("%s leaks: %s", p, s)
 		}
 	}
-	// the account's hotspot password never shows either
-	res := r.call(r.owner.Access, "GET", "/routers/"+r.A.ID+"/clients", nil, nil)
-	if strings.Contains(string(res.Raw), "hspass") {
-		t.Fatal("hs pass")
+
+}
+
+// pinCode gives an account a fixed code (the codes are random).
+func (r *apiRig) pinCode(t *testing.T, a store.Account, code string) store.Account {
+	t.Helper()
+	if err := r.st.Update(func(d *store.Data) error {
+		x := d.Accounts[a.ID]
+		x.Code = code
+		d.Accounts[a.ID] = x
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
+	a.Code = code
+	return a
 }
 
 func TestAPIClientsSearchAndFilters(t *testing.T) {
 	r, mk := liveRig(t)
-	a1 := r.acct(t, r.A, "Flat 3B", "AA:BB:CC:DD:EE:01")
-	r.acct(t, r.A, "Flat 10A", "AA:BB:CC:DD:EE:02")
+	// Account codes are random: pin them, so no search term below can match one by chance.
+	a1 := r.pinCode(t, r.acct(t, r.A, "Flat 3B", "AA:BB:CC:DD:EE:01"), "QX7KP2")
+	r.pinCode(t, r.acct(t, r.A, "Flat 10A", "AA:BB:CC:DD:EE:02"), "ZW8NR4")
 	for _, q := range mk.Table("/queue/simple") { // the seeded queue belongs to the first flat
 		if q["name"] == "ftn-K7Q2MX" {
 			mk.SetRow(context.Background(), "/queue/simple", q[routeros.RowID], map[string]string{"name": "ftn-" + a1.Code})

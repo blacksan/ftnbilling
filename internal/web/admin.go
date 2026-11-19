@@ -54,7 +54,6 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	post("/admin/accounts/mac", s.adminAccountMAC)
 	post("/admin/accounts/suspend", s.adminAccountSuspend)
 	post("/admin/accounts/extend", s.adminAccountExtend)
-	post("/admin/accounts/kick", s.adminAccountKick)
 	post("/admin/accounts/package", s.adminAccountPackage)
 	post("/admin/accounts/endplan", s.adminAccountEndPlan)
 	post("/admin/accounts/delete", s.adminAccountDelete)
@@ -603,12 +602,6 @@ func (s *Server) adminAccountDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.back(w, r, "/admin/accounts", "Account deleted: "+a.Flat+" ("+a.Code+"). Its payments stay in the ledger.")
-}
-
-func (s *Server) adminAccountKick(w http.ResponseWriter, r *http.Request) {
-	id := r.PostFormValue("id")
-	a, _ := s.svc.GetAccount(id)
-	s.back(w, r, s.accountURL(id), msgOr(s.svc.Kick(r.Context(), a.SiteID, a.Code), "Session ended (the flat logs in again by itself if still active)"))
 }
 
 // ---- payments ledger ----------------------------------------------------------------

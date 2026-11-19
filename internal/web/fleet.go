@@ -127,8 +127,6 @@ func (s *Server) fleetTiles(sc scope) ([]fleetTile, fleetTotals) {
 			t.Notice = s.ops.Tenant != nil && s.ops.Alerts != nil && s.ops.Alerts.Settings().OutageNotice != "off"
 		}
 		switch {
-		case st.Mode == store.SiteModeEnv:
-			t.Handshake = "no tunnel (local router)"
 		case fs.HandshakeAge >= 0:
 			t.Handshake = ago(time.Duration(fs.HandshakeAge)*time.Second) + " ago"
 		case fs.WGKnown:
@@ -137,9 +135,7 @@ func (s *Server) fleetTiles(sc scope) ([]fleetTile, fleetTotals) {
 			t.Handshake = "unknown"
 		}
 		if ms, loss, ok := s.ops.Fleet.Recent(st.ID, 10*time.Minute, now); ok {
-			if st.Mode == store.SiteModeEnv {
-				t.Tunnel = "-"
-			} else if ms > 0 {
+			if ms > 0 {
 				t.Tunnel = fmt.Sprintf("%.0f ms", ms)
 				if loss > 0 {
 					t.Tunnel += fmt.Sprintf(", %.0f%% lost", loss)

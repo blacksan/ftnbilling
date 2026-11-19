@@ -57,7 +57,6 @@ func (m *multi) addSite(t *testing.T, name string) store.Site {
 		return nil
 	})
 	m.mgr.Reload(st.ID)
-	m.svc.SyncProfiles(context.Background(), st.ID)
 	return st
 }
 
@@ -86,7 +85,7 @@ func newMultiOps(t *testing.T, mut func(*config.Config), mkOps func(cfg config.C
 	m := &multi{mocks: map[string]*routeros.Mock{}, logs: logs}
 	var mu sync.Mutex
 	var svc *billing.Service
-	mgr := sites.New(sites.Options{Cfg: cfg, Store: st, Log: log,
+	mgr := sites.New(sites.Options{Cfg: cfg, Store: st, Log: log, DataKey: cfg.DataKey,
 		Dir: func(id string) metrics.Directory { return svc.Directory(id) },
 		NewClient: func(s store.Site) routeros.Client {
 			mu.Lock()
@@ -348,7 +347,7 @@ func TestBuildingPages(t *testing.T) {
 		t.Fatalf("create: %s", loc)
 	}
 	id := strings.TrimPrefix(strings.SplitN(loc, "&", 2)[0], "/admin/routers/view?id=")
-	if h := m.adminGet(t, "/admin/routers/view?id="+id+"&tab=setup"); !strings.Contains(h, "Delta Court") || !strings.Contains(h, "Make the join line") {
+	if h := m.adminGet(t, "/admin/routers/view?id="+id+"&tab=setup"); !strings.Contains(h, "Delta Court") || !strings.Contains(h, "Make the line") {
 		t.Fatal("view page")
 	}
 	if h := m.adminGet(t, "/admin/routers/status.json?id="+id); !strings.Contains(h, `"token":"none"`) {

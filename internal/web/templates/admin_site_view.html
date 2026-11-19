@@ -1,5 +1,5 @@
 {{define "admin_site_view"}}{{template "ahead" .}}{{$s := .Data.Site}}{{$d := .}}{{$tab := .Data.Tab}}{{$X := .Data.Stats}}
-<div class="rhead"><span class="pill {{.Data.State}}">{{.Data.State}}</span>{{if $s.Disabled}}<span class="pill suspended">paused</span>{{end}}<span class="muted">{{if .Data.Env}}legacy router{{else}}{{.Data.ModeLabel}}{{end}} &middot; {{.Data.Accounts}} flats</span>
+<div class="rhead"><span class="pill {{.Data.State}}">{{.Data.State}}</span>{{if $s.Disabled}}<span class="pill suspended">paused</span>{{end}}<span class="muted">{{.Data.Accounts}} flats</span>
 <a class="btn ghost sm" href="/admin/site/select?site={{$s.ID}}&amp;next=/admin/accounts">Open its flats</a></div>
 <nav class="tabs" aria-label="Router sections">{{range .Data.Tabs}}<a class="tab" href="/admin/routers/view?id={{$s.ID}}&amp;tab={{.Key}}"{{if eq .Key $tab}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}</nav>
 
@@ -16,8 +16,8 @@
 <div class="grid c2">
 <section class="panel"><h2>Connection</h2><dl class="kv">
 <dt>Router API</dt><dd>{{if .Data.Status.RESTOK}}<span class="ok">reachable</span>{{else}}<span class="bad">not reachable</span> <span class="muted">{{.Data.Status.RESTErr}}</span>{{end}}</dd>
-{{if not .Data.Env}}<dt>Tunnel</dt><dd>{{if .Data.Status.Handshake}}up, last handshake {{.Data.Status.HandshakeAge}} s ago{{else if .Data.Status.WGKnown}}no handshake{{else}}unknown{{end}}</dd>{{end}}
-<dt>Tenant portal</dt><dd class="mono" style="word-break:break-all">{{.Data.Portal}}</dd>
+<dt>Tunnel</dt><dd>{{if .Data.Status.Handshake}}up, last handshake {{.Data.Status.HandshakeAge}} s ago{{else if .Data.Status.WGKnown}}no handshake{{else}}unknown{{end}}</dd>
+<dt>Payment page</dt><dd class="mono" style="word-break:break-all">{{.Data.Portal}}</dd>
 {{if $X.Model}}<dt>Hardware</dt><dd>{{$X.Model}} <span class="muted">RouterOS {{$X.Version}}{{if $X.Temp}}, {{$X.Temp}}{{end}}</span></dd>{{end}}
 <dt>Equipment</dt><dd>{{$X.Equip}}</dd>
 {{if $X.UnregOnline}}<dt>Devices not registered</dt><dd><a href="/admin/routers/view?id={{$s.ID}}&amp;tab=clients">{{$X.UnregOnline}} online now</a></dd>{{end}}
@@ -33,27 +33,27 @@
 
 {{else if eq $tab "setup"}}
 <div data-setup="{{$s.ID}}" data-name="{{$s.Name}}"{{if eq .Role "owner"}} data-owner{{end}} class="stack-col">
-{{if not .Data.Env}}<section class="panel"><div class="panel-h"><h2>Join the router</h2></div>
-{{if .Data.Cmd}}<p>Paste this once in the router's terminal (WinBox, New Terminal). It works once, for {{.Data.TTL}} minutes.</p>
-<div class="cmdbox"><textarea id="joincmd" readonly rows="3" aria-label="Join line">{{.Data.Cmd}}</textarea><button type="button" class="btn" data-copy-from="#joincmd">Copy line</button></div>
-<details><summary>If the router's clock is wrong, or it has no certificate store</summary><p class="muted">This skips the certificate check. Use it only if the line above fails with a certificate error.</p>
-<div class="cmdbox"><textarea id="joincmd2" readonly rows="3" aria-label="Join line without certificate check">{{.Data.CmdNoCheck}}</textarea><button type="button" class="btn ghost" data-copy-from="#joincmd2">Copy line</button></div></details>
+{{with .Data.SetupView}}<section class="panel"><div class="panel-h"><h2>Set-up progress</h2><span class="pill {{if eq .State "ready"}}live{{else}}waiting{{end}}" data-setup-state>{{.State}}</span></div>
+<div data-setup-view aria-live="polite">{{template "setup_steps" .}}</div></section>{{end}}
+<section class="panel"><div class="panel-h"><h2>Set up the router</h2></div>
+{{if .Data.Cmd}}<p>Paste this one line in the router's terminal (WinBox, New Terminal). It works once, for {{.Data.TTL}} minutes. The router then builds itself; nothing else is typed on it.</p>
+<div class="cmdbox"><textarea id="joincmd" readonly rows="3" aria-label="Bootstrap line">{{.Data.Cmd}}</textarea><button type="button" class="btn" data-copy-from="#joincmd">Copy line</button></div>
+<details><summary>If the line fails with a certificate error</summary><p class="muted">The router's clock is probably wrong or it has no certificate store. Correct the clock first. If that is not possible, this line is the same without the certificate check.</p>
+<div class="cmdbox"><textarea id="joincmd2" readonly rows="3" aria-label="Bootstrap line without certificate check">{{.Data.CmdNoCheck}}</textarea><button type="button" class="btn ghost" data-copy-from="#joincmd2">Copy line</button></div></details>
 <p class="muted">Shown only now. Expires {{eat .Data.CmdExpires}}. Do not paste it into chat.</p>
-<p id="jst" class="muted" data-join-text>Status: {{.Data.Status.Token}}</p><span hidden data-join-poll="{{$s.ID}}"></span>
 <form method="post" action="/admin/routers/join/revoke"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button class="ghost sm">Cancel this line</button></form>
-{{else}}{{if and .Data.Insecure (not .Data.AllowInsecure)}}<p class="bad">PUBLIC_BASE_URL must start with https:// before a join line can be made.</p>{{end}}
-<p class="muted">The router runs RouterOS 7 with the right clock. Fetch must be allowed in device mode (the line asks for it and tells you to press the router button). The line makes the tunnel, the API user and the rest.</p>
-{{if .CanWrite}}<form method="post" action="/admin/routers/join"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button>{{if .Data.Status.Joined}}Make a new join line (rebuilds the tunnel){{else}}Make the join line{{end}}</button></form>{{end}}
-<p class="muted" data-join-text>Status: {{.Data.Status.Token}}</p>{{end}}</section>{{end}}
-<section class="panel"><div class="panel-h"><h2>Setup checklist</h2><button type="button" class="ghost sm" data-recheck>Check again</button></div>
+{{else}}{{if and .Data.Insecure (not .Data.AllowInsecure)}}<p class="bad">PUBLIC_BASE_URL must start with https:// before a line can be made.</p>{{end}}
+<p class="muted">The router must run RouterOS 7 with the right clock. The line erases the router and builds it again, so use it on a new router, or on one you mean to rebuild. If the router asks for its reset button to be pressed (fetch is off in device mode), press it and paste the same line again.</p>
+{{if .CanWrite}}<form method="post" action="/admin/routers/join"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button>{{if .Data.Status.Joined}}Make a new line (rebuilds the router){{else}}Make the line{{end}}</button></form>{{end}}{{end}}</section>
+<section class="panel"><div class="panel-h"><h2>Checks</h2><button type="button" class="ghost sm" data-recheck>Check again</button></div>
 <p class="muted" data-checks-sum aria-live="polite"></p><ul class="checks" data-checks><li class="ph">Reading the router.</li></ul></section>
-<section class="panel"><div class="panel-h"><h2>Set-up progress</h2></div>
-<div data-job aria-live="polite"><p class="muted">Reading the set-up state.</p></div>
-</section>
 {{with .Data.JoinReport}}<section class="panel"><div class="panel-h"><h2>Last join report</h2><span class="pill {{if .OK}}active{{else}}expired{{end}}">{{if .OK}}passed{{else}}needs a look{{end}}</span></div>
 <p class="muted">{{eat .At}}{{if .ROS}} &middot; RouterOS {{.ROS}}{{end}}</p><pre class="rep">{{range .Lines}}{{.}}
 {{end}}</pre></section>{{end}}
-
+{{if eq .Role "owner"}}<section class="panel danger"><div class="panel-h"><h2 class="bad">Reset router</h2></div>
+<p class="muted">Forgets this router's tunnel key, API password and join state on the server, and queues every flat again for when the router is set up. Accounts are kept. The router itself is not touched: pasting a new line erases and rebuilds it. Type the router name to confirm.</p>
+<form method="post" action="/admin/routers/setup/reset" class="row" data-reset-router><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
+<input name="confirm_name" placeholder="{{$s.Name}}" required autocomplete="off" aria-label="Type the router name to reset it"><button class="ghost">Reset router</button></form></section>{{end}}
 </div>
 
 {{else if eq $tab "clients"}}
@@ -80,8 +80,7 @@
 <section class="panel"><h2>Details</h2>
 <form method="post" action="/admin/routers/update" class="stack-col" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
 {{template "sitefields" $s}}
-{{if .Data.Env}}<p class="muted">The layout of this router comes from the server's environment variables.</p>
-{{else}}<details><summary>Router layout</summary><div class="stack-col" style="margin-top:10px">{{template "sitelayout" .Data.Eff}}<p class="muted">Changes apply to the next join line and to metrics. Run the join line again to rebuild the router side.</p></div></details>{{end}}
+<details><summary>Router layout</summary><div class="stack-col" style="margin-top:10px">{{template "sitelayout" .Data.Eff}}<p class="muted">Changes apply to the next line and to metrics. Paste a new line on the router to build it with the new layout.</p></div></details>
 <div><button>Save</button></div></form></section>
 {{with .Data.Rep}}<section class="panel"><h2>Location</h2>
 <form method="post" action="/admin/routers/profile" class="stack-col" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
@@ -101,7 +100,7 @@
 {{else}}
 <div class="grid c2">
 <section class="panel"><h2>Router actions</h2>
-<form method="post" action="/admin/routers/sync" class="row" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button class="ghost">{{if .Data.IPoE}}Reconcile now{{else}}Push speed profiles now{{end}}</button><span class="muted">normally automatic</span></form>
+<form method="post" action="/admin/routers/sync" class="row" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button class="ghost">Reconcile now</button><span class="muted">normally automatic</span></form>
 <form method="post" action="/admin/routers/disable" class="row" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="disable" value="{{if $s.Disabled}}0{{else}}1{{end}}"><button class="ghost">{{if $s.Disabled}}Resume this router{{else}}Pause this router{{end}}</button><span class="muted">paused: no collection, no router changes; tenants cannot buy</span></form>
 <form method="post" action="/admin/routers/reboot" class="row" style="margin-top:12px" data-reboot><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
 <input name="confirm_name" placeholder="{{$s.Name}}" required autocomplete="off" aria-label="Type the router name to reboot it"><button class="ghost">Reboot router</button></form>
@@ -120,7 +119,7 @@
 {{if not .Data.Reachable}}<p class="flash bad" role="status">The router could not be read just now. Rates and devices are the last ones the server kept.</p>{{end}}
 {{if .Data.Clients}}<div class="tw tall"><table class="rs"><thead><tr><th>Flat</th><th>State</th><th>IP</th><th>MAC</th><th>Port</th><th>Speed</th><th class="n">Down / Up</th><th class="n">Today / month</th><th>On router</th></tr></thead><tbody>
 {{range .Data.Clients}}<tr>{{if eq .Kind "flat"}}<td class="who"><b><a href="/admin/accounts/view?code={{.Code}}">{{.Flat}}</a></b><span>{{if .Online}}<span class="pill online">online</span> {{end}}{{.Tenant}}</span></td><td data-label="State"><span class="pill {{.State}}">{{.State}}</span></td>
-{{else}}<td class="who"><b>{{if .HostName}}{{.HostName}}{{else}}Not registered{{end}}</b><span>{{if .Online}}<span class="pill online">online</span> {{end}}{{.Vendor}}{{if .RouterUser}} <code>{{.RouterUser}}</code>{{end}}</span></td><td data-label="State">{{if $d.CanWrite}}<button type="button" class="sm" data-open="addcustomer" data-mac="{{.MAC}}" data-site="{{$d.Data.Site.ID}}">Create customer</button>{{end}}</td>
+{{else}}<td class="who"><b>{{if .HostName}}{{.HostName}}{{else}}Not registered{{end}}</b><span>{{if .Online}}<span class="pill online">online</span> {{end}}{{.Vendor}}</span></td><td data-label="State">{{if $d.CanWrite}}<button type="button" class="sm" data-open="addcustomer" data-mac="{{.MAC}}" data-site="{{$d.Data.Site.ID}}">Create customer</button>{{end}}</td>
 {{end}}<td class="mono" data-label="IP">{{.IP}}</td><td class="mono" data-label="MAC">{{.MAC}}</td><td data-label="Port">{{.Port}}</td><td data-label="Speed">{{.QueueLimit}}</td><td class="n" data-label="Down / Up">{{bps (f64 .DownBps)}} / {{bps (f64 .UpBps)}}</td><td class="n" data-label="Today / month">{{if eq .Kind "flat"}}{{bytes .UsageTodayBytes}} / {{bytes .UsageMonthBytes}}{{end}}</td>
 <td data-label="On router">{{if eq .Kind "flat"}}<span class="pill {{if .InSync}}synced{{else}}drift{{end}}">{{if .SuspendedOnRouter}}suspended{{else if .InSync}}in sync{{else}}{{.LeaseStatus}}{{end}}</span>{{end}}</td></tr>{{end}}</tbody></table></div>
 {{if .Data.Truncated}}<p class="muted">Showing the first 1000. Search to narrow the list.</p>{{end}}
@@ -129,3 +128,7 @@
 {{else}}{{template "empty" (dict "Title" "No flats on this router yet." "Text" "Add a customer and pick this router. Its ONT shows here once it connects." "Acts" (acts "Add customer|#modal:addcustomer"))}}{{end}}
 </div>
 {{end}}
+
+{{define "setup_steps"}}{{$tone := ""}}{{if eq .State "ready"}}{{$tone = "ok"}}{{else if .LastError}}{{$tone = "bad"}}{{end}}
+<div class="next-action{{if $tone}} {{$tone}}{{end}}" role="status" data-next-kind="{{.NextAction.Kind}}"><b>{{if eq .State "ready"}}Ready{{else}}{{.NextAction.Text}}{{end}}</b>{{if .LastError}}<span>{{.LastError}}</span>{{end}}</div>
+<ol class="steps">{{range .Steps}}<li class="{{if eq .Status "ok"}}done{{else if eq .Status "running"}}now{{else if eq .Status "failed"}}fail{{end}}" data-step-key="{{.Key}}"><span class="dot">{{if eq .Status "ok"}}&#10003;{{else if eq .Status "failed"}}&times;{{else}}{{.N}}{{end}}</span><div><b>{{.Title}}</b>{{if .Detail}}<span>{{.Detail}}</span>{{end}}</div></li>{{end}}</ol>{{end}}

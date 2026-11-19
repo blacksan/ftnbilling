@@ -106,7 +106,7 @@ func TestWireAddRouterMakesTheBootstrapLine(t *testing.T) {
 	}
 	id := j["id"].(string)
 	cmd := j["command"].(string)
-	if !strings.Contains(cmd, "/reset") || !strings.Contains(cmd, "/import ftn-reset.rsc") || strings.Contains(cmd, "hotspot") {
+	if !strings.Contains(cmd, "/reset") || !strings.Contains(cmd, "/import ftn-reset.rsc") {
 		t.Errorf("the line: %s", cmd)
 	}
 	var st store.Site
@@ -184,7 +184,7 @@ func TestWireClientsInterfacesAndOverviewTabs(t *testing.T) {
 		t.Errorf("empty search state")
 	}
 	ifs := view("interfaces", "")
-	for _, want := range []string{"ether1", "sfp-sfpplus1", "wg-ftn", "br-hotspot", ">wan<", ">olt<", ">tunnel<"} {
+	for _, want := range []string{"ether1", "sfp-sfpplus1", "wg-ftn", "br-customers", ">wan<", ">olt<", ">tunnel<"} {
 		if !strings.Contains(ifs, want) {
 			t.Errorf("interfaces tab lacks %q", want)
 		}

@@ -112,8 +112,6 @@ func (s *Server) siteRows() []siteRow {
 		switch {
 		case st.Disabled:
 			r.State, r.Detail = "paused", "paused"
-		case st.Mode == store.SiteModeEnv:
-			r.State, r.Detail = "joined", "connected by the server's settings"
 		case st.WGPublicKey == "":
 			r.State, r.Detail = "waiting", "not joined yet"
 		default:
@@ -232,13 +230,8 @@ func (s *Server) adminSiteSync(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	if billing.IPoE(st) {
-		_, err := s.svc.ReconcileSite(ctx, st.ID)
-		s.back(w, r, "/admin/routers/view?id="+st.ID, msgOr(err, "Router reconciled with the accounts"))
-		return
-	}
-	err := s.svc.SyncProfiles(ctx, st.ID)
-	s.back(w, r, "/admin/routers/view?id="+st.ID, msgOr(err, "Speed profiles pushed to the router"))
+	_, err := s.svc.ReconcileSite(ctx, st.ID)
+	s.back(w, r, "/admin/routers/view?id="+st.ID, msgOr(err, "Router reconciled with the accounts"))
 }
 
 func (s *Server) adminSiteDisable(w http.ResponseWriter, r *http.Request) {

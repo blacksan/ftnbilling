@@ -58,19 +58,15 @@ func newAppCfg(t *testing.T, testMode bool, mut func(*config.Config)) *app {
 	cfg.FlowEvery, cfg.PortEvery, cfg.PingEvery, cfg.DNSEvery, cfg.SaveEvery = time.Hour, time.Hour, time.Hour, time.Hour, time.Hour
 	st, _ := storetest.Open(t, dir)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	envID, err := sites.Bootstrap(cfg, st, log)
-	if err != nil {
-		t.Fatal(err)
-	}
+	envID := seedSite(t, st, "Block A")
 	var svc *billing.Service
-	mgr := sites.New(sites.Options{Cfg: cfg, Store: st, Log: log, Dir: func(id string) metrics.Directory { return svc.Directory(id) }})
+	mgr := sites.New(sites.Options{Cfg: cfg, Store: st, Log: log, DataKey: cfg.DataKey, Dir: func(id string) metrics.Directory { return svc.Directory(id) }})
 	svc = billing.NewService(st, mgr, log)
 	svc.SeedPackages()
 	ctx, cancel := context.WithCancel(context.Background())
 	mgr.Start(ctx)
 	t.Cleanup(func() { cancel(); mgr.Wait(); svc.Wait() })
 	rt := mgr.MockRouter()
-	svc.SyncProfiles(context.Background(), envID)
 	mp := payments.NewMpesa(payments.MpesaConfig{}, svc, st, log)
 	prov := map[string]payments.Provider{
 		"test":    &payments.Test{Enabled_: testMode, Delay: 30 * time.Millisecond, C: svc},
@@ -85,6 +81,22 @@ func newAppCfg(t *testing.T, testMode bool, mut func(*config.Config)) *app {
 	a.br = signIn(t, ts, srv, st, a.owner)
 	a.csrf = a.br.CSRF
 	return a
+}
+
+// seedSite stores a joined IPoE building (the mock router serves it) and gives
+// the shared mock the ftn-dhcp server the bootstrap script builds.
+func seedSite(t *testing.T, st *store.Store, name string) string {
+	t.Helper()
+	id := store.NewSiteID()
+	err := st.Update(func(d *store.Data) error {
+		d.Sites[id] = store.Site{ID: id, Name: name, Mode: store.SiteModeWG, WGPublicKey: "PUB" + id, TunnelIP: "10.99.0.2",
+			AccessMode: store.AccessIPoE, CreatedAt: time.Now()}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 
 func body(t *testing.T, r *http.Response) string {
@@ -226,54 +238,18 @@ func TestAdminAuthAndCSRF(t *testing.T) {
 	if post(a.csrf, true) != 303 {
 		t.Error("valid post")
 	}
-	// The push to the router runs in the background; wait for it.
-	var p routeros.Profile
-	var ok bool
-	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if p, ok = a.rt.GetProfile("ispbill-promo"); ok && p.RateLimit == "3M/3M" {
-			break
-		}
-	}
-	if !ok || p.RateLimit != "3M/3M" {
-		t.Errorf("profile not pushed: %+v", p)
-	}
 	resp, _ := c.PostForm(a.ts.URL+"/admin/packages/save", url.Values{"_csrf": {a.csrf}})
 	if resp.StatusCode != 303 {
 		t.Errorf("unauth post: %d", resp.StatusCode)
 	}
 }
 
-func TestUnknownMACRefusedAndListedAsUnregistered(t *testing.T) {
+func TestUnregisteredDeviceCanBecomeOrAttachToAnAccount(t *testing.T) {
 	a := newApp(t, true)
-	code, html := a.portal(t, "/portal?mac=AA:BB:CC:DD:EE:77&ip=10.5.50.9")
-	if code != 200 || !strings.Contains(html, "This connection isn't registered yet") || !strings.Contains(html, "0700 111 222") {
-		t.Fatalf("%d %s", code, html)
-	}
-	for _, bad := range []string{"Test payment", "Pay with M-Pesa", "Redeem voucher", "Already paid", "PIN", `name="package"`} {
-		if strings.Contains(html, bad) {
-			t.Errorf("unregistered page offers %q", bad)
-		}
-	}
-	// Payment attempts for an unknown MAC are refused.
-	r, _ := a.cl.PostForm(a.ts.URL+"/portal/pay", url.Values{"package": {a.pkgID("1 Hour")}, "method": {"test"}, "mac": {"AA:BB:CC:DD:EE:77"}, "ip": {"10.5.50.9"}})
-	if r.StatusCode != 403 {
-		t.Errorf("pay: %d", r.StatusCode)
-	}
-	r, _ = a.cl.PostForm(a.ts.URL+"/portal/voucher", url.Values{"voucher": {"ABCDEFGH"}, "mac": {"AA:BB:CC:DD:EE:77"}})
-	if r.StatusCode != 403 {
-		t.Errorf("voucher: %d", r.StatusCode)
-	}
-	if _, h := a.portal(t, "/portal"); !strings.Contains(h, "Open this page from the WiFi login") {
-		t.Error("no mac")
-	}
+	a.svc.NoteDevice(a.site, "AA:BB:CC:DD:EE:77", "10.5.50.9", "portal")
 	list := a.adminGet(t, "/admin/devices")
 	if !strings.Contains(list, "AA:BB:CC:DD:EE:77") || !strings.Contains(list, "10.5.50.9") || !strings.Contains(list, `data-open="addcustomer"`) || !strings.Contains(list, "Attach") {
 		t.Fatalf("unregistered list: %s", list)
-	}
-	// Hotspot hosts that are not authorised show up too.
-	a.rt.AddHost("AA:BB:CC:DD:EE:88", "10.5.50.31")
-	if l := a.adminGet(t, "/admin/devices"); !strings.Contains(l, "AA:BB:CC:DD:EE:88") || !strings.Contains(l, "hotspot-host") {
-		t.Error("hotspot host missing")
 	}
 	// One click: create an account for the MAC.
 	loc := a.adminPost(t, "/admin/devices/create", url.Values{"mac": {"AA:BB:CC:DD:EE:77"}, "flat": {"Flat 3B"}})
@@ -283,28 +259,15 @@ func TestUnknownMACRefusedAndListedAsUnregistered(t *testing.T) {
 	if l := a.adminGet(t, "/admin/devices"); strings.Contains(l, "AA:BB:CC:DD:EE:77") {
 		t.Error("device still listed after account creation")
 	}
-	_, html = a.portal(t, "/portal?mac=AA:BB:CC:DD:EE:77&ip=10.5.50.9")
 	acct := a.account(t, "Flat 3B")
-	if !strings.Contains(html, "Flat 3B · Account "+acct.Code) || !strings.Contains(html, "No package yet") {
-		t.Fatalf("known MAC page: %s", html)
+	if acct.MAC != "AA:BB:CC:DD:EE:77" {
+		t.Fatalf("mac %s", acct.MAC)
 	}
 	// Attach to an existing account.
+	a.svc.NoteDevice(a.site, "AA:BB:CC:DD:EE:88", "10.5.50.31", "portal")
 	a.adminPost(t, "/admin/devices/attach", url.Values{"mac": {"AA:BB:CC:DD:EE:88"}, "account": {acct.ID}})
 	if got := a.account(t, "Flat 3B"); got.MAC != "AA:BB:CC:DD:EE:88" {
 		t.Errorf("attach: %s", got.MAC)
-	}
-}
-
-func TestTestPaymentRefusedWhenNotTestMode(t *testing.T) {
-	a := newApp(t, false)
-	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"Flat 3B"}, "mac": {mac1}})
-	_, h := a.portal(t, "/portal?mac="+mac1)
-	if strings.Contains(h, "Test payment") {
-		t.Error("button must be hidden")
-	}
-	r, _ := a.cl.PostForm(a.ts.URL+"/portal/pay", url.Values{"package": {a.pkgID("1 Hour")}, "method": {"test"}, "mac": {mac1}})
-	if r.StatusCode != 400 {
-		t.Errorf("status %d", r.StatusCode)
 	}
 }
 
@@ -382,7 +345,7 @@ func TestNoTaxWordingAnywhere(t *testing.T) {
 			t.Errorf("%s contains %q", p, m)
 		}
 	}
-	for _, p := range []string{"/portal?mac=" + mac1 + "&ip=10.5.50.20", "/portal?mac=AA:BB:CC:DD:EE:55", "/portal"} {
+	for _, p := range []string{"/pay", "/portal/wait?order=x"} {
 		if _, h := a.portal(t, p); banned.MatchString(h) {
 			t.Errorf("%s: %q", p, banned.FindString(h))
 		}
@@ -407,39 +370,5 @@ func TestHealthz(t *testing.T) {
 	_, b := a.portal(t, "/healthz")
 	if !strings.Contains(b, `"router_ok":true`) || !strings.Contains(b, `"test_mode":true`) || !strings.Contains(b, `"mpesa_enabled":false`) {
 		t.Errorf("healthz %s", b)
-	}
-}
-
-func TestPortalDisablesSlowerPlansWhileActiveAndRejectsServerSide(t *testing.T) {
-	a := newApp(t, true)
-	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"Flat 3B"}, "mac": {mac1}})
-	acct := a.account(t, "Flat 3B")
-	if err := a.svc.ExtendAccount(context.Background(), acct.ID, a.pkgID("Monthly 40 Mbps"), "", false); err != nil {
-		t.Fatal(err)
-	}
-	_, html := a.portal(t, "/portal?mac="+mac1+"&ip=10.5.50.20")
-	if n := strings.Count(html, "Available when your current plan ends on"); n != 4 { // 1 Hour, 1 Day, 1 Week, Monthly 20
-		t.Errorf("disabled cards = %d", n)
-	}
-	if !strings.Contains(html, `class="pkg off"`) || !strings.Contains(html, "disabled") {
-		t.Error("lower cards not disabled")
-	}
-	// Monthly 40 stays selectable and is preselected.
-	if i := strings.Index(html, `value="`+a.pkgID("Monthly 40 Mbps")+`" checked`); i < 0 {
-		t.Error("an allowed package should be preselected")
-	}
-	r, _ := a.cl.PostForm(a.ts.URL+"/portal/pay", url.Values{"package": {a.pkgID("1 Hour")}, "method": {"test"}, "mac": {mac1}, "ip": {"10.5.50.20"}})
-	if r.StatusCode != 400 {
-		t.Errorf("server-side downgrade status %d", r.StatusCode)
-	}
-	r, _ = a.cl.PostForm(a.ts.URL+"/portal/pay", url.Values{"package": {a.pkgID("Monthly 80 Mbps")}, "method": {"test"}, "mac": {mac1}, "ip": {"10.5.50.20"}})
-	if r.StatusCode != 303 {
-		t.Errorf("upgrade status %d", r.StatusCode)
-	}
-	// Admin form: the force box applies a slower package.
-	out := a.adminPost(t, "/admin/accounts/extend", url.Values{"id": {acct.ID}, "package": {a.pkgID("1 Hour")}, "force": {"1"}})
-	_ = out
-	if cur := a.account(t, "Flat 3B"); cur.PackageID != a.pkgID("1 Hour") {
-		t.Errorf("forced package %s", cur.PackageID)
 	}
 }

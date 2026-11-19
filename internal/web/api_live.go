@@ -203,8 +203,7 @@ func (s *Server) buildClients(ctx context.Context, st store.Site, q, kind, onlin
 	for _, a := range s.siteAccounts(st.ID) {
 		fi := facts(a)
 		ca := sites.ClientAccount{ID: a.ID, Code: a.Code, Flat: a.Flat, Tenant: a.Tenant, State: pkgState(a), MAC: a.MAC, IP: a.IP,
-			LeaseStatus: fi.rs.LeaseStatus, LastSeen: fi.rs.LastSeen, SuspendedOnRouter: fi.rs.SuspendedOnRouter, InSync: fi.rs.InSync,
-			RouterUser: s.svc.RouterUser(st.ID, a.MAC)}
+			LeaseStatus: fi.rs.LeaseStatus, LastSeen: fi.rs.LastSeen, SuspendedOnRouter: fi.rs.SuspendedOnRouter, InSync: fi.rs.InSync}
 		if col != nil {
 			ca.UsageToday, ca.UsageMonth = col.FlatUsage(a.Code, now)
 		}
@@ -214,7 +213,7 @@ func (s *Server) buildClients(ctx context.Context, st store.Site, q, kind, onlin
 		in.Accounts = append(in.Accounts, ca)
 	}
 	for _, d := range s.svc.Unregistered(st.ID, false) {
-		in.Devices = append(in.Devices, sites.ClientDevice{MAC: d.MAC, IP: d.IP, HostName: "", Vendor: d.Vendor, RouterUser: d.RouterUser, Online: d.Online, LastSeen: d.LastSeen})
+		in.Devices = append(in.Devices, sites.ClientDevice{MAC: d.MAC, IP: d.IP, HostName: "", Vendor: d.Vendor, Online: d.Online, LastSeen: d.LastSeen})
 	}
 	all := sites.MergeClients(in)
 	items := sites.FilterClients(all, q, kind, online)

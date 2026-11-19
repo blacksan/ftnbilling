@@ -38,7 +38,7 @@ func (s *Server) siteStates(ctx context.Context, list []store.Site) map[string]s
 		switch {
 		case st.Disabled:
 			out[st.ID] = "paused"
-		case st.Mode != store.SiteModeEnv && st.WGPublicKey == "":
+		case st.WGPublicKey == "":
 			out[st.ID] = "waiting"
 		case !st.Runnable():
 			out[st.ID] = "waiting"
