@@ -244,7 +244,10 @@ private fun CheckCard(item: CheckItem, user: UserInfo, busy: Boolean, onFix: () 
             if (item.detail.isNotBlank()) {
                 Text(item.detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
             }
-            item.evidence.forEach {
+            item.auto?.text?.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            item.shownEvidence.forEach {
                 Text(
                     it,
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
@@ -260,10 +263,12 @@ private fun CheckCard(item: CheckItem, user: UserInfo, busy: Boolean, onFix: () 
 private fun FixArea(item: CheckItem, user: UserInfo, busy: Boolean, onFix: () -> Unit) {
     val fix = item.fix ?: return
     if (item.status == CheckStatus.OK || fix.kind == FixKind.NONE) return
+    // A safe fix the server applies by itself has no button; "Try now" shows only after a failed attempt.
+    if ((fix.kind == FixKind.AUTO || fix.kind == FixKind.CONFIRM) && !item.showsFixButton) return
     when (fix.kind) {
         FixKind.AUTO, FixKind.CONFIRM -> {
             Button(onClick = onFix, enabled = canRunFix(user, fix) && !busy, modifier = Modifier.fillMaxWidth()) {
-                Text(if (busy) "Working..." else fix.label.ifBlank { "Fix" })
+                Text(if (busy) "Working..." else if (fix.kind == FixKind.AUTO && fix.automatic) "Try now" else fix.label.ifBlank { "Fix" })
             }
             if (!canRunFix(user, fix)) {
                 Text(

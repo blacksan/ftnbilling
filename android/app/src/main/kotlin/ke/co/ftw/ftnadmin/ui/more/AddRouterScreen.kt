@@ -1,5 +1,6 @@
 package ke.co.ftw.ftnadmin.ui.more
 
+import ke.co.ftw.ftnadmin.domain.customerPortLine
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -116,7 +117,10 @@ fun EditRouterScreen(routerId: String, onBack: () -> Unit) {
                 Modifier.padding(inner).fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                RouterFormFields(form, ui.fieldErrors, vm::edit)
+                customerPortLine(ui.customerPort)?.let {
+                    Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                RouterFormFields(form, ui.fieldErrors, vm::edit, ports = ui.ports)
                 ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
                 Button(onClick = vm::save, enabled = ui.canSave, modifier = Modifier.fillMaxWidth()) {
                     Text(if (ui.busy) "Saving..." else "Save", maxLines = 1)

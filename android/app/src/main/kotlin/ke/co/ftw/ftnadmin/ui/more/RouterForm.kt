@@ -18,6 +18,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import ke.co.ftw.ftnadmin.core.network.ApiError
 import ke.co.ftw.ftnadmin.core.network.ErrorCode
+import ke.co.ftw.ftnadmin.data.routers.NetInterface
 import ke.co.ftw.ftnadmin.data.routers.RouterInput
 import ke.co.ftw.ftnadmin.data.routers.WanMode
 import ke.co.ftw.ftnadmin.domain.Site
@@ -45,6 +46,24 @@ object RouterField {
     const val WAN_CAP_MBPS = "wan_cap_mbps"
     const val SUPPORT_PHONE = "support_phone"
 }
+
+/** Labels and hints of the port fields (one place, so the form and its test agree). */
+object RouterFormCopy {
+    const val OLT_LABEL = "OLT uplink port"
+    const val OLT_HINT = "The port the OLT is plugged into: an SFP port (sfp-sfpplus1) or an Ethernet port (for example ether3)."
+    const val CUSTOMER_PORT_LABEL = "Customer port (extra)"
+    const val CUSTOMER_PORT_HINT = "A port where you can plug a customer device directly (for example ether5). The server sets it up."
+}
+
+/**
+ * The router's real Ethernet, SFP and combo ports for the pickers, from its interface list; typed entry stays
+ * possible. Bridges, VLANs and tunnels are left out.
+ */
+fun portChoices(interfaces: List<NetInterface>): List<String> =
+    interfaces.filter { i ->
+        i.type !in setOf("vlan", "bridge", "wg", "wireguard") &&
+            (i.type == "ether" || listOf("ether", "sfp", "qsfp", "combo").any { i.name.startsWith(it, ignoreCase = true) })
+    }.map { it.name }.distinct()
 
 /** Text state of the router form (create and edit). */
 data class RouterForm(
@@ -132,6 +151,8 @@ fun RouterFormFields(
     errors: Map<String, String>,
     onEdit: (String, (RouterForm) -> RouterForm) -> Unit,
     includeName: Boolean = true,
+    /** The router's real ports, when it is joined; empty means typed entry only. */
+    ports: List<String> = emptyList(),
 ) {
     @Composable
     fun field(
@@ -197,11 +218,24 @@ fun RouterFormFields(
     }
 
     SectionCard("Customers") {
-        field(RouterField.OLT_INTERFACE, "OLT port", form.oltInterface, hint = "Fibre port, default sfp-sfpplus1") { copy(oltInterface = it) }
+        field(RouterField.OLT_INTERFACE, RouterFormCopy.OLT_LABEL, form.oltInterface, hint = RouterFormCopy.OLT_HINT) { copy(oltInterface = it) }
+        PortPicker(ports, form.oltInterface) { p -> onEdit(RouterField.OLT_INTERFACE) { it.copy(oltInterface = p) } }
         field(RouterField.VLAN_ID, "VLAN (0 = untagged)", form.vlan, KeyboardType.Number) { copy(vlan = it.filter(Char::isDigit)) }
         field(RouterField.CUSTOMER_SUBNET, "Customer subnet", form.customerSubnet, hint = "Default 10.5.50.0/24") { copy(customerSubnet = it) }
-        field(RouterField.BENCH_PORT, "Bench port (optional)", form.benchPort) { copy(benchPort = it) }
+        field(RouterField.BENCH_PORT, RouterFormCopy.CUSTOMER_PORT_LABEL, form.benchPort, hint = RouterFormCopy.CUSTOMER_PORT_HINT) { copy(benchPort = it) }
+        PortPicker(ports, form.benchPort) { p -> onEdit(RouterField.BENCH_PORT) { it.copy(benchPort = if (it.benchPort == p) "" else p) } }
         field(RouterField.WAN_CAP_MBPS, "WAN capacity (Mbps)", form.wanCap, KeyboardType.Number) { copy(wanCap = it.filter(Char::isDigit)) }
+    }
+}
+
+/** Chips of the router's own ports under a port field; nothing when the router has not answered. */
+@Composable
+private fun PortPicker(ports: List<String>, selected: String, onPick: (String) -> Unit) {
+    if (ports.isEmpty()) return
+    ChipRow(horizontalPadding = 0.dp) {
+        ports.forEach { p ->
+            FilterChip(selected = selected == p, onClick = { onPick(p) }, label = { ChipLabel(p) })
+        }
     }
 }
 
