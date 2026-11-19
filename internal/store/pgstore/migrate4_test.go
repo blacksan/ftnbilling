@@ -264,3 +264,41 @@ func TestMigration0004CleanDatabase(t *testing.T) {
 		t.Fatalf("access_mode default %q", mode)
 	}
 }
+
+// Schema 7 moves the single bench port into the customer port list.
+func TestMigration0007MovesBenchPortIntoCustomerPorts(t *testing.T) {
+	url, schema := newTestSchema(t)
+	ctx := context.Background()
+	old, err := Open(ctx, url, Options{Schema: schema, maxVersion: 6})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO sites (id, name, mode, created_at, bench_port) VALUES ('s1','A','wg',now(),'ether5'), ('s2','B','wg',now(),'')`,
+	} {
+		if _, err := old.pool.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old.Close()
+	nb, err := Open(ctx, url, Options{Schema: schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nb.Close()
+	rows := map[string][2]string{}
+	r, err := nb.pool.Query(ctx, `SELECT id, customer_ports, bench_port FROM sites`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for r.Next() {
+		var id, cp, bp string
+		if err := r.Scan(&id, &cp, &bp); err != nil {
+			t.Fatal(err)
+		}
+		rows[id] = [2]string{cp, bp}
+	}
+	if rows["s1"] != [2]string{"ether5", ""} || rows["s2"] != [2]string{"", ""} {
+		t.Fatalf("after migration: %v", rows)
+	}
+}

@@ -413,3 +413,36 @@ func IsObsoleteSiteSetting(key string) bool {
 	}
 	return false
 }
+
+// SplitList splits a comma list, trimming blanks and dropping empty and repeated items.
+func SplitList(list string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range strings.Split(list, ",") {
+		if p = strings.TrimSpace(p); p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// migrateV7toV8 upgrades format 7 data in memory: the single bench port of a
+// router becomes the first of its customer ports.
+func (d *Data) migrateV7toV8() {
+	for id, s := range d.Sites {
+		if s.BenchPort != "" {
+			list := SplitList(s.CustomerPorts)
+			found := false
+			for _, p := range list {
+				found = found || p == s.BenchPort
+			}
+			if !found {
+				list = append([]string{s.BenchPort}, list...)
+			}
+			s.CustomerPorts = strings.Join(list, ",")
+			s.BenchPort = ""
+			d.Sites[id] = s
+		}
+	}
+}

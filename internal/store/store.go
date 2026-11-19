@@ -30,8 +30,9 @@ var ErrOldFormat = errors.New("ispbill.json is in an old or unknown data format"
 // Event.Actor and IP, admin users, admin sessions and API devices, and makes
 // an ONT MAC unique across all buildings; 7 = the bootstrap script: Site.WANMode
 // and the WAN, PPPoE and admin LAN fields, every router is IPoE, and the
-// settings of the old provisioning job are gone.
-const FormatVersion = 7
+// settings of the old provisioning job are gone; 8 = customer ports: Site.BenchPort
+// moves into Site.CustomerPorts, and Site.DisabledPorts is new.
+const FormatVersion = 8
 
 const (
 	OrderPending = "pending"
@@ -82,7 +83,14 @@ type Site struct {
 	WANCapMbps     float64 `json:"wan_cap_mbps,omitempty"`
 	OLTCapMbps     float64 `json:"olt_cap_mbps,omitempty"`
 	FUPTB          float64 `json:"fup_tb,omitempty"`
-	BenchPort      string  `json:"bench_port,omitempty"`
+	// BenchPort is the legacy single customer port. Format 8 moves it into
+	// CustomerPorts; it is always empty after load and is never written.
+	BenchPort string `json:"bench_port,omitempty"`
+	// CustomerPorts is the comma list of extra customer ports (members of
+	// br-customers). DisabledPorts is the comma list of physical ports the
+	// server switched off and keeps off (self-healed by the sweep).
+	CustomerPorts string `json:"customer_ports,omitempty"`
+	DisabledPorts string `json:"disabled_ports,omitempty"`
 
 	// Bootstrap script (format 7). WANMode is dhcp (the default, also when
 	// empty), static or pppoe. The static fields are used for static only. The
