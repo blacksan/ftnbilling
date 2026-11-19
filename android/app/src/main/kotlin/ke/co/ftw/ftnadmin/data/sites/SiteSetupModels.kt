@@ -49,7 +49,6 @@ data class CheckFix(
     val kind: String = FixKind.NONE,
     val label: String = "",
     @SerialName("confirm_text") val confirmText: String = "",
-    val command: String = "",
     val physical: Boolean = false,
     /** "operator" or "owner": the lowest role allowed to run the fix. */
     val role: String = "operator",

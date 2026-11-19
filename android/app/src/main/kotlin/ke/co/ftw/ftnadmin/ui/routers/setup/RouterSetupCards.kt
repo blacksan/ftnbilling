@@ -13,6 +13,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -107,14 +111,32 @@ fun BootstrapLineCard(ui: RouterSetupUiState, isOwner: Boolean, onGet: () -> Uni
     }
 }
 
-/** The one-time line with its expiry and a Copy button. Used by Add router and the router's Setup page. */
+/**
+ * The one-time line with its expiry and a Copy button. The no-certificate-check variant is secondary, collapsed under
+ * "Certificate error?". Used by Add router, the router's Setup page and the Reset result.
+ */
 @Composable
 fun BootstrapCommandBlock(cmd: JoinCommand) {
+    var showNoCheck by rememberSaveable { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         val expiry = expiryText(cmd.expiresAt)
         if (expiry.isNotBlank()) Text(expiry, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
         CommandBox(cmd.command)
         CopyButton("Copy", cmd.command)
+        if (cmd.commandNocheck.isNotBlank()) {
+            TextButton(onClick = { showNoCheck = !showNoCheck }) {
+                Text(if (showNoCheck) "Hide certificate options" else "Certificate error?", maxLines = 1)
+            }
+            if (showNoCheck) {
+                Text(
+                    "Use this only if the router reports a certificate or clock error.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                CommandBox(cmd.commandNocheck)
+                CopyButton("Copy without certificate check", cmd.commandNocheck)
+            }
+        }
     }
 }
 

@@ -275,10 +275,6 @@ private fun FixArea(item: CheckItem, user: UserInfo, busy: Boolean, onFix: () ->
         }
         FixKind.MANUAL -> {
             if (fix.label.isNotBlank()) Text(fix.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
-            if (fix.command.isNotBlank()) {
-                CommandBox(fix.command)
-                CopyButton("Copy command", fix.command)
-            }
         }
     }
     if (fix.physical) {
