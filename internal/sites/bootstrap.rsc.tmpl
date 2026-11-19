@@ -237,9 +237,10 @@
 {{if .NetflowPort}}
 :put "ftn 11/12: traffic reporting"
 {{secOpen 11 "traffic-flow" false}}
-  /ip/traffic-flow/target remove [find where comment="ftn: netflow"]
+  # Traffic-flow targets take no comment on RouterOS 7.25; the server's tunnel address marks ours.
+  /ip/traffic-flow/target remove [find where dst-address={{.ServerIP}}]
   /ip/traffic-flow set enabled=yes interfaces={{.CustBridge}}
-  /ip/traffic-flow/target add dst-address={{.ServerIP}} port={{.NetflowPort}} version=5 comment="ftn: netflow"
+  /ip/traffic-flow/target add dst-address={{.ServerIP}} port={{.NetflowPort}} version=5
 {{secClose 11 "traffic-flow" false}}
 {{else}}
 :put "ftn 11/12: traffic reporting is off on the server"

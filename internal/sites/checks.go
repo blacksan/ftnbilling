@@ -59,7 +59,6 @@ const (
 	CheckDHCP         = "dhcp.ftn"
 	CheckWAN          = "wan.internet"
 	CheckBootFile     = "bootstrap.file"
-	netflowComment    = "ftn: netflow"
 	checksCacheFor    = 60 * time.Second
 	checksBudget      = 45 * time.Second // the whole pass, all reads together
 	recheckMax        = 6                // ... this many times in a row
@@ -1519,19 +1518,21 @@ func flowProblems(sn *snapshot, w flowWant) (problems []string, targetID string)
 		problems = append(problems, fmt.Sprintf("it watches %q instead of %s", tf["interfaces"], w.iface))
 	}
 	var tgt routeros.Row
+	// RouterOS 7.25 traffic-flow targets have no comment, so ours is the one aimed at the
+	// server's tunnel address, which nothing else on the router uses.
 	for _, r := range sn.tbl("/ip/traffic-flow/target") {
-		if r["comment"] == netflowComment {
+		if r["dst-address"] == w.dst {
 			tgt = r
 			break
 		}
 	}
 	switch {
 	case tgt == nil:
-		problems = append(problems, "there is no \"ftn: netflow\" target")
+		problems = append(problems, "there is no traffic-flow target aimed at the server ("+w.dst+")")
 	default:
 		targetID = tgt[routeros.RowID]
 		if rowDisabled(tgt) || tgt["dst-address"] != w.dst || (tgt["port"] != "" && tgt["port"] != w.port) {
-			problems = append(problems, fmt.Sprintf("the \"ftn: netflow\" target is off or points to %s:%s instead of %s:%s", tgt["dst-address"], tgt["port"], w.dst, w.port))
+			problems = append(problems, fmt.Sprintf("the server's traffic-flow target is off or uses port %s instead of %s", tgt["port"], w.port))
 		}
 	}
 	return problems, targetID
