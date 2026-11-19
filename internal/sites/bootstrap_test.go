@@ -158,6 +158,23 @@ func TestBootstrapCommand(t *testing.T) {
 			t.Errorf("missing %q in %s", want, c)
 		}
 	}
+	// the fetches and the import are wrapped: a failure removes both files and says nothing was changed
+	wrap := strings.Index(c, ":do { /tool/fetch")
+	imp := strings.Index(c, "/import ftn-reset.rsc")
+	onErr := strings.Index(c, `on-error={ /file/remove [/file/find where name="ftn-setup.rsc"]; /file/remove [/file/find where name="ftn-reset.rsc"]; :put "ftn: setup failed, nothing was changed, files removed" }`)
+	if wrap < 0 || imp < wrap || onErr < imp || strings.Count(c, "/tool/fetch") != 2 || wrap > strings.Index(c, "/tool/fetch") {
+		t.Fatalf("fetch+fetch+import not wrapped in :do/on-error: %s", c)
+	}
+	if strings.Contains(c, "\n") || strings.Contains(c, "\r") {
+		t.Fatal("the line must be a single line")
+	}
+	if !strings.Contains(c, `:local o "^(true|yes)\$"`) || strings.Contains(c, `(true|yes)$"`) {
+		t.Fatalf("the dollar sign must stay escaped: %s", c)
+	}
+	// braces balance: the wrapper did not break the structure
+	if strings.Count(c, "{") != strings.Count(c, "}") {
+		t.Fatalf("unbalanced braces: %s", c)
+	}
 	n := BootstrapCommand("https://b.example", "TOK", false)
 	if !strings.Contains(n, "/j/TOK?nocheck=1") || !strings.Contains(n, "check-certificate=no") || strings.Contains(n, "\n") {
 		t.Fatal(n)
@@ -254,5 +271,186 @@ func TestBootstrapFirewallIsNeverOpenOnRerun(t *testing.T) {
 		if !strings.Contains(string(out), "in-interface-list=WAN") || !strings.Contains(string(out), "connection-state=new,invalid") {
 			t.Fatalf("%s: the hold must drop new input from the WAN", name)
 		}
+	}
+}
+
+// bootstrapVariants renders the three WAN modes.
+func bootstrapVariants(t *testing.T) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for name, mut := range map[string]func(*BootstrapInput){
+		"dhcp": func(*BootstrapInput) {},
+		"static": func(in *BootstrapInput) {
+			in.Site.WANMode, in.Site.WANAddress, in.Site.WANGateway = WANStatic, "198.51.100.5/24", "198.51.100.1"
+		},
+		"pppoe": func(in *BootstrapInput) {
+			in.Site.WANMode, in.Site.PPPoEUser, in.Site.PPPoEPassEnc = WANPPPoE, "user1", "sealed"
+			in.PPPoEPass = tPPP
+		},
+	} {
+		in := benchInput(benchSite())
+		mut(&in)
+		b, err := RenderBootstrap(in)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		out[name] = string(b)
+	}
+	return out
+}
+
+func lineIdx(lines []string, pred func(string) bool, last bool) int {
+	idx := -1
+	for i, l := range lines {
+		if pred(l) {
+			idx = i
+			if !last {
+				return i
+			}
+		}
+	}
+	return idx
+}
+
+// The router is never open: the hold goes in before any WAN client, the WAN clients are created switched off,
+// the WAN is switched on only after the last filter rule, and the hold is removed last of all.
+func TestBootstrapHoldComesBeforeTheWANAndGoesLast(t *testing.T) {
+	for name, script := range bootstrapVariants(t) {
+		lines := strings.Split(script, "\n")
+		has := func(sub string) func(string) bool { return func(l string) bool { return strings.Contains(l, sub) } }
+		holdAdd := lineIdx(lines, func(l string) bool {
+			return strings.Contains(l, "/ip/firewall/filter add") && strings.Contains(l, `comment="ftn: hold"`)
+		}, false)
+		wanLine := func(l string) bool {
+			t := strings.TrimSpace(l)
+			return strings.HasPrefix(t, "/ip/dhcp-client add") || strings.HasPrefix(t, "/interface/pppoe-client add") ||
+				strings.HasPrefix(t, "/ip/address add address=198.51.100.5") || strings.HasPrefix(t, "/ip/route add dst-address=0.0.0.0/0")
+		}
+		firstWAN := lineIdx(lines, wanLine, false)
+		if holdAdd < 0 || firstWAN < 0 || holdAdd > firstWAN {
+			t.Fatalf("%s: hold at line %d, first WAN client at %d", name, holdAdd, firstWAN)
+		}
+		for i, l := range lines {
+			if wanLine(l) && !strings.Contains(l, "disabled=yes") {
+				t.Errorf("%s: WAN client created switched on (line %d): %s", name, i, l)
+			}
+		}
+		// both directions are held
+		if !strings.Contains(script, `chain=input action=drop connection-state=new,invalid in-interface-list=WAN`) ||
+			!strings.Contains(script, `chain=forward action=drop connection-state=new,invalid in-interface-list=WAN`) {
+			t.Errorf("%s: the hold must cover input and forward", name)
+		}
+		lastRuleAdd := lineIdx(lines, func(l string) bool {
+			return strings.Contains(l, "/ip/firewall/filter add") && !strings.Contains(l, `"ftn: hold"`)
+		}, true)
+		lastNAT := lineIdx(lines, has("/ip/firewall/nat add"), true)
+		holdRemove := lineIdx(lines, has(`/ip/firewall/filter remove [find where comment="ftn: hold"]`), true)
+		enable := lineIdx(lines, func(l string) bool { return strings.Contains(l, " enable [find where comment=\"ftn: WAN") }, false)
+		if enable < lastRuleAdd || enable < lastNAT {
+			t.Errorf("%s: the WAN is switched on (line %d) before the last rule (%d / nat %d)", name, enable, lastRuleAdd, lastNAT)
+		}
+		if holdRemove < lastRuleAdd || holdRemove < enable {
+			t.Errorf("%s: the hold is removed at line %d, but the last rule is at %d and the WAN switch-on at %d", name, holdRemove, lastRuleAdd, enable)
+		}
+		// nothing after section 6 closes removes the hold again or adds filter rules
+		for _, l := range lines[holdRemove+1:] {
+			if strings.Contains(l, "/ip/firewall/filter add") {
+				t.Errorf("%s: a filter rule is added after the hold was removed: %s", name, l)
+			}
+		}
+		// the error path: the WAN is switched on behind the hold before the report is sent, and the hold is not removed there
+		stop := lineIdx(lines, has("the bootstrap script stopped early"), false)
+		rep := lineIdx(lines[stop:], has("/tool/fetch"), false) + stop
+		en2 := lineIdx(lines[stop:], func(l string) bool { return strings.Contains(l, " enable [find where comment=\"ftn: WAN") }, false) + stop
+		if stop < 0 || en2 <= stop || en2 > rep {
+			t.Errorf("%s: the error path must switch the WAN on before the report (stop %d enable %d report %d)", name, stop, en2, rep)
+		}
+		if lineIdx(lines[stop:], has(`"ftn: hold"`), false) >= 0 {
+			t.Errorf("%s: the error path must leave the hold in place", name)
+		}
+	}
+}
+
+// The script runs on a blank router only: ftn: objects of an earlier run are refused too, and the refusal says
+// how to rebuild. The old "place-before=0" is gone.
+func TestBootstrapRefusesToRunTwiceAndHasNoPlaceBeforeZero(t *testing.T) {
+	for name, script := range bootstrapVariants(t) {
+		if strings.Contains(script, "place-before=0") {
+			t.Errorf("%s: place-before=0", name)
+		}
+		if !strings.Contains(script, "place-before=[:pick $fst 0]") {
+			t.Errorf("%s: no guarded place-before", name)
+		}
+		refuse := strings.Index(script, "has already been set up by a Fast Tech Net script")
+		sec1 := strings.Index(script, `:put "ftn 1/12`)
+		if refuse < 0 || refuse > sec1 || !strings.Contains(script, `/interface/bridge/find where comment~"^ftn:"`) || !strings.Contains(script, "reset the router with the button in the billing admin and paste the new line") {
+			t.Errorf("%s: the script does not refuse a second run before it changes anything", name)
+		}
+		// nothing in the script tears down the admin LAN bridge any more
+		if strings.Contains(script, "/interface/bridge remove") {
+			t.Errorf("%s: the script still removes bridges", name)
+		}
+	}
+}
+
+func TestValidateRejectsControlCharactersAndOverlaps(t *testing.T) {
+	wg := netip.MustParsePrefix("10.99.0.0/24")
+	ok := ApplyDefaults(config.Config{}, benchSite())
+	ok.RESTUser = "ispbill"
+	if err := ValidateNet(ok, wg); err != nil {
+		t.Fatal(err)
+	}
+	for name, mut := range map[string]func(*store.Site){
+		"user LF":            func(s *store.Site) { s.WANMode, s.PPPoEUser, s.PPPoEPassEnc = WANPPPoE, "us\ner", "x" },
+		"user CR":            func(s *store.Site) { s.WANMode, s.PPPoEUser, s.PPPoEPassEnc = WANPPPoE, "us\rer", "x" },
+		"user TAB":           func(s *store.Site) { s.WANMode, s.PPPoEUser, s.PPPoEPassEnc = WANPPPoE, "us\ter", "x" },
+		"user DEL":           func(s *store.Site) { s.WANMode, s.PPPoEUser, s.PPPoEPassEnc = WANPPPoE, "us\x7fer", "x" },
+		"user 0x01":          func(s *store.Site) { s.WANMode, s.PPPoEUser, s.PPPoEPassEnc = WANPPPoE, "us\x01er", "x" },
+		"name LF":            func(s *store.Site) { s.Name = "Block\nA" },
+		"lan = customer":     func(s *store.Site) { s.LANSubnet = "10.5.50.0/24" },
+		"lan in tunnel":      func(s *store.Site) { s.LANSubnet = "10.99.0.0/25" },
+		"customer in tunnel": func(s *store.Site) { s.CustomerSubnet = "10.99.0.0/24" },
+		"static wan = lan": func(s *store.Site) {
+			s.WANMode, s.WANAddress, s.WANGateway = WANStatic, "192.168.88.20/24", "192.168.88.1"
+		},
+		"static wan = customer": func(s *store.Site) {
+			s.WANMode, s.WANAddress, s.WANGateway = WANStatic, "10.5.50.20/24", "10.5.50.1"
+		},
+		"static wan = tunnel": func(s *store.Site) {
+			s.WANMode, s.WANAddress, s.WANGateway = WANStatic, "10.99.0.20/24", "10.99.0.1"
+		},
+	} {
+		s := ok
+		mut(&s)
+		if err := ValidateNet(s, wg); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// a clean static WAN passes
+	s := ok
+	s.WANMode, s.WANAddress, s.WANGateway = WANStatic, "198.51.100.5/24", "198.51.100.1"
+	if err := ValidateNet(s, wg); err != nil {
+		t.Errorf("clean static WAN: %v", err)
+	}
+	// the control characters are also refused at the render and for the clear-text password
+	in := benchInput(benchSite())
+	in.Site.WANMode, in.Site.PPPoEUser, in.Site.PPPoEPassEnc = WANPPPoE, "u", "sealed"
+	in.PPPoEPass = "pw\nrm"
+	if _, err := RenderBootstrap(in); err == nil {
+		t.Error("a password with a line break was rendered")
+	}
+	f := newFixture(t, func(c *config.Config) { c.DataKey = []byte(strings.Repeat("k", 32)) })
+	if _, err := f.m.CreateRouter(SiteInput{Name: "P", WANMode: WANPPPoE, PPPoEUser: "u1", PPPoEPass: "a\tb"}); err == nil {
+		t.Error("a password with a tab was stored")
+	}
+}
+
+func TestSanitizeReportMasksThePPPoEPasswordToo(t *testing.T) {
+	out := sanitizeReport([]byte("2 WAN: login failed for user1 with pp-secret-9 and RESTPASSWORD0123456789abcdefghij"), tRest, tPPP)
+	if strings.Contains(out, tPPP) || strings.Contains(out, tRest) || !strings.Contains(out, "[hidden]") {
+		t.Fatal(out)
+	}
+	if out := sanitizeReport([]byte("pp-secret-9"), "", "ab"); !strings.Contains(out, "pp-secret-9") {
+		t.Fatal("a too short secret must not mangle the text")
 	}
 }

@@ -68,8 +68,8 @@ type Manager struct {
 	box  *secretbox.Box
 }
 
-// SetForeignIPs lets the billing service tell the cutover which addresses the
-// router's own static leases hold, so no flat is given one of them.
+// SetForeignIPs lets the billing service tell the sites package which addresses
+// the router's own static leases hold, so no flat is given one of them.
 func (m *Manager) SetForeignIPs(f func(siteID string) map[string]bool) { m.foreignIPs.Store(&f) }
 
 func (m *Manager) foreignIPsOf(siteID string) map[string]bool {
@@ -364,6 +364,9 @@ func (m *Manager) applyInput(s store.Site, in SiteInput) (store.Site, error) {
 		case in.PPPoEPassClear:
 			s.PPPoEPassEnc = ""
 		case in.PPPoEPass != "":
+			if HasControl(in.PPPoEPass) {
+				return s, errors.New("the PPPoE password has a control character (a line break or tab) that cannot be used")
+			}
 			if m.box == nil {
 				return s, ErrNoDataKey
 			}

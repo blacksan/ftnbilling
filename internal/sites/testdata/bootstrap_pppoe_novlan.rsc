@@ -4,8 +4,13 @@
 # user. Single use. It holds this router's WireGuard private key and API
 # password, so keep it private. It removes itself from the router when it
 # finishes, and also when it stops on an error (the whole body is wrapped).
-# Every object it creates has a comment that starts with "ftn:"; running it
-# again replaces them. It never prints a secret.
+# Every object it creates has a comment that starts with "ftn:". It runs only
+# on a blank router: if it finds "ftn:" objects of an earlier run, or anything
+# that is not ours, it refuses and changes nothing; a rebuild always goes
+# through the paste line, which resets the router first. It never prints a secret.
+# The router is never open: the firewall hold (section 2) is in place before the
+# WAN is up, the WAN client is created switched off and is switched on only
+# after the whole rule set is in (section 6).
 :local fails 0
 :local abort ""
 :local report ""
@@ -32,15 +37,25 @@
     :if (!$ready) do={ :delay 2s; :set waited ($waited + 2) }
   }
   :if (!$ready) do={ :error ("these ports do not exist on the router:" . $missing . ". Fix the port names in the billing admin") }
-  # Foreign settings: this script may only replace what it made itself. (After the reset of the paste line the
-  # router is empty and nothing is found.)
+  # The script runs on a blank router only. It never rebuilds in place: that would tear down the admin LAN under
+  # the operator's own session. A rebuild goes through the paste line, which resets the router first.
+  :local ours ""
+  :if ([:len [/interface/bridge/find where comment~"^ftn:"]] > 0) do={ :set ours ($ours . " bridge;") }
+  :if ([:len [/ip/address/find where comment~"^ftn:"]] > 0) do={ :set ours ($ours . " address;") }
+  :if ([:len [/ip/dhcp-server/find where comment~"^ftn:"]] > 0) do={ :set ours ($ours . " dhcp-server;") }
+  :if ([:len [/ip/dhcp-client/find where comment~"^ftn:"]] > 0) do={ :set ours ($ours . " dhcp-client;") }
+  :if ([:len [/ip/firewall/filter/find where comment~"^ftn:"]] > 0) do={ :set ours ($ours . " firewall rule;") }
+  :if ([:len [/ip/firewall/nat/find where comment~"^ftn:"]] > 0) do={ :set ours ($ours . " nat rule;") }
+  :if ([:len [/interface/wireguard/find where comment~"^ftn:"]] > 0) do={ :set ours ($ours . " wireguard;") }
+  :if ([:len $ours] > 0) do={ :error ("this router has already been set up by a Fast Tech Net script:" . $ours . " Nothing was changed. To rebuild it, reset the router with the button in the billing admin and paste the new line (running the script again on a built router is refused)") }
+  # Foreign settings: not ours either, nothing is replaced. (After the reset of the paste line the router is empty.)
   :local foreign ""
   :foreach i in=[/ip/address/find where dynamic=no] do={ :if (!([/ip/address/get $i comment] ~ "^ftn:")) do={ :set foreign ($foreign . " address " . [/ip/address/get $i address] . ";") } }
   :foreach i in=[/interface/bridge/find] do={ :if (!([/interface/bridge/get $i comment] ~ "^ftn:")) do={ :set foreign ($foreign . " bridge " . [/interface/bridge/get $i name] . ";") } }
   :foreach i in=[/ip/dhcp-server/find] do={ :if (!([/ip/dhcp-server/get $i comment] ~ "^ftn:")) do={ :set foreign ($foreign . " dhcp-server " . [/ip/dhcp-server/get $i name] . ";") } }
   :foreach i in=[/ip/firewall/filter/find where dynamic=no] do={ :if (!([/ip/firewall/filter/get $i comment] ~ "^ftn:")) do={ :set foreign ($foreign . " firewall rule;") } }
   :foreach i in=[/ip/firewall/nat/find where dynamic=no] do={ :if (!([/ip/firewall/nat/get $i comment] ~ "^ftn:")) do={ :set foreign ($foreign . " nat rule;") } }
-  :if ([:len $foreign] > 0) do={ :error ("this router already has settings that are not ours:" . $foreign . " Nothing was changed. Use the paste line from the billing admin (it erases the router first)") }
+  :if ([:len $foreign] > 0) do={ :error ("this router already has settings that are not ours:" . $foreign . " Nothing was changed. To rebuild, use the reset button in the billing admin and paste the new line (it erases the router first)") }
 } do={ :set report ($report . "0 wait and guard: " . $e . "\n"); :set abort ("ftn: section 0 wait and guard failed: " . $e); :error $abort }
 
 :put "ftn 1/12: name, clock, trust anchors"
@@ -51,21 +66,34 @@
   :do { /certificate/settings set builtin-trust-anchors=trusted } on-error={ :put "   (this RouterOS has no built-in trust anchors setting)" }
 } do={ :set report ($report . "1 system: " . $e . "\n"); :set fails ($fails + 1); :put ("ftn: section 1 system failed, continuing: " . $e) }
 
-:put "ftn 2/12: WAN ether1 (pppoe)"
+:put "ftn 2/12: firewall hold, then WAN ether1 (pppoe)"
 :onerror e in={
+  # First of all, before any WAN client exists: a hold that drops new and invalid traffic from the WAN, both to
+  # the router (input) and through it (forward). Established and related traffic is not touched, so the
+  # router's own outbound flows (the report, NTP) come back. The WAN client below is created switched off and
+  # is switched on only after section 6 has put the whole rule set in.
   :if ([:len [/interface/list/find where name="WAN"]] = 0) do={ /interface/list add name=WAN comment="ftn: WAN list" }
   :if ([:len [/interface/list/find where name="LAN"]] = 0) do={ /interface/list add name=LAN comment="ftn: LAN list" }
+  /interface/list/member remove [find where list="WAN" and interface="ether1"]
+  /interface/list/member remove [find where list="WAN" and interface="pppoe-wan"]
+  /interface/list/member add list=WAN interface=ether1 comment="ftn: WAN member"
+  /ip/firewall/filter remove [find where comment="ftn: hold"]
+  :local fst [/ip/firewall/filter/find]
+  :if ([:len $fst] > 0) do={
+    /ip/firewall/filter add chain=input action=drop connection-state=new,invalid in-interface-list=WAN place-before=[:pick $fst 0] comment="ftn: hold"
+    /ip/firewall/filter add chain=forward action=drop connection-state=new,invalid in-interface-list=WAN place-before=[:pick $fst 0] comment="ftn: hold"
+  } else={
+    /ip/firewall/filter add chain=input action=drop connection-state=new,invalid in-interface-list=WAN comment="ftn: hold"
+    /ip/firewall/filter add chain=forward action=drop connection-state=new,invalid in-interface-list=WAN comment="ftn: hold"
+  }
   /ip/dhcp-client remove [find where comment~"^ftn:"]
   /ip/dhcp-client remove [find where interface="ether1"]
   /interface/pppoe-client remove [find where comment~"^ftn:"]
   /ip/address remove [find where comment="ftn: WAN address"]
   /ip/route remove [find where comment="ftn: WAN default route"]
-  /interface/list/member remove [find where list="WAN" and interface="ether1"]
-  /interface/list/member remove [find where list="WAN" and interface="pppoe-wan"]
-  /interface/pppoe-client add name=pppoe-wan interface=ether1 user="user1" password="pp-secret-9" add-default-route=yes use-peer-dns=no disabled=no comment="ftn: WAN pppoe"
+  /interface/pppoe-client add name=pppoe-wan interface=ether1 user="user1" password="pp-secret-9" add-default-route=yes use-peer-dns=no disabled=yes comment="ftn: WAN pppoe"
   /interface/list/member add list=WAN interface=pppoe-wan comment="ftn: WAN member"
-  /interface/list/member add list=WAN interface=ether1 comment="ftn: WAN member"
-} do={ :set report ($report . "2 lists and WAN: " . $e . "\n"); :set abort ("ftn: section 2 lists and WAN failed: " . $e); :error $abort }
+} do={ :set report ($report . "2 hold and WAN: " . $e . "\n"); :set abort ("ftn: section 2 hold and WAN failed: " . $e); :error $abort }
 
 :put "ftn 3/12: admin LAN 192.168.88.0/24 on ether2"
 :onerror e in={
@@ -75,7 +103,6 @@
   /ip/address remove [find where comment="ftn: LAN gateway"]
   /interface/bridge/port remove [find where comment="ftn: LAN port"]
   /interface/list/member remove [find where list="LAN" and interface="br-lan"]
-  /interface/bridge remove [find where name="br-lan"]
   /interface/bridge add name=br-lan comment="ftn: admin LAN bridge"
   /interface/bridge/port remove [find where interface="ether2"]
   /interface/bridge/port add bridge=br-lan interface=ether2 comment="ftn: LAN port"
@@ -91,7 +118,6 @@
   /ip/dhcp-server remove [find where name="ftn-dhcp"]
   /ip/address remove [find where comment="ftn: customer gateway"]
   /interface/bridge/port remove [find where comment~"^ftn: (customer|bench) port"]
-  /interface/bridge remove [find where name="br-customers"]
   /interface/bridge/port remove [find where interface="sfp-sfpplus1"]
   /interface/bridge add name=br-customers arp=reply-only comment="ftn: customer bridge"
   /interface/bridge/port add bridge=br-customers interface=sfp-sfpplus1 horizon=1 comment="ftn: customer port"
@@ -109,18 +135,11 @@
   /ip/firewall/address-list add list=ftn-unreg address=10.5.50.10-10.5.50.59 comment="ftn: unregistered range"
 } do={ :set report ($report . "5 DHCP: " . $e . "\n"); :set abort ("ftn: section 5 DHCP failed: " . $e); :error $abort }
 
-:put "ftn 6/12: firewall (nothing is opened on the WAN)"
+:put "ftn 6/12: firewall (nothing is opened on the WAN), then the WAN is switched on"
 :onerror e in={
-  # The router is never unfiltered: a hold rule that drops new and invalid
-  # input from the WAN goes to the top first, the old rules are replaced
-  # behind it, and the hold is removed only after every new rule is in. If a
-  # rule fails the hold stays, so the router stays closed.
-  /ip/firewall/filter remove [find where comment="ftn: hold"]
-  :if ([:len [/ip/firewall/filter/find]] > 0) do={
-    /ip/firewall/filter add chain=input action=drop connection-state=new,invalid in-interface-list=WAN place-before=0 comment="ftn: hold"
-  } else={
-    /ip/firewall/filter add chain=input action=drop connection-state=new,invalid in-interface-list=WAN comment="ftn: hold"
-  }
+  # The hold of section 2 is already at the top of the filter. The full rule set goes in behind it; the WAN
+  # client is switched on after the last rule is in; the hold is removed last of all. If anything fails on the
+  # way the hold stays, so the router stays closed.
   /ip/firewall/filter remove [find where comment~"^ftn:" and comment!="ftn: hold"]
   /ip/firewall/nat remove [find where comment~"^ftn:"]
   /ip/firewall/filter add chain=forward action=accept protocol=tcp dst-port=80,443 dst-address=203.0.113.10 src-address-list=ftn-unreg comment="ftn: ipoe walled payment page ftn-unreg"
@@ -168,6 +187,8 @@
   /ip/firewall/nat add chain=dstnat action=redirect protocol=tcp dst-port=53 src-address-list=ftn-suspended to-ports=53 comment="ftn: ipoe walled dns redirect tcp ftn-suspended"
   /ip/firewall/nat add chain=dstnat action=dst-nat protocol=tcp dst-port=80 dst-address=!203.0.113.10 src-address-list=ftn-unreg to-addresses=203.0.113.10 to-ports=80 comment="ftn: ipoe walled http to the payment page ftn-unreg"
   /ip/firewall/nat add chain=dstnat action=dst-nat protocol=tcp dst-port=80 dst-address=!203.0.113.10 src-address-list=ftn-suspended to-addresses=203.0.113.10 to-ports=80 comment="ftn: ipoe walled http to the payment page ftn-suspended"
+
+  /interface/pppoe-client enable [find where comment="ftn: WAN pppoe"]
   /ip/firewall/filter remove [find where comment="ftn: hold"]
 } do={ :set report ($report . "6 firewall: " . $e . "\n"); :set abort ("ftn: section 6 firewall failed: " . $e); :error $abort }
 
@@ -230,6 +251,21 @@
 :local w 0
 :while ([:len [/ip/route/find where dst-address="0.0.0.0/0" and active=yes]] = 0 && $w < 30) do={ :delay 1s; :set w ($w + 1) }
 :if ([:len [/ip/route/find where dst-address="0.0.0.0/0" and active=yes]] = 0) do={ :set report ($report . "12 internet: the router has no default route (check the WAN settings)\n"); :set fails ($fails + 1); :put "   no default route yet" }
+
+# A WAN address that overlaps the admin LAN or the customer network would break routing. Report it (the router is
+# left as it is). BENCH-CHECK: "in" with an ip-prefix on 7.25.1; if it is not understood the check is skipped.
+:do {
+  :local wi [/ip/address/find where dynamic=yes and interface="pppoe-wan"]
+  :if ([:len $wi] > 0) do={
+    :local wa [/ip/address/get [:pick $wi 0] address]
+    :local wn [/ip/address/get [:pick $wi 0] network]
+    :if (($wn in 192.168.88.0/24) || (192.168.88.1 in $wa) || ($wn in 10.5.50.0/24) || (10.5.50.1 in $wa)) do={
+      :set report ($report . "12 WAN address overlap: the WAN address " . $wa . " overlaps the admin LAN 192.168.88.0/24 or the customer network 10.5.50.0/24. Change that subnet in the billing admin and rebuild the router\n")
+      :set fails ($fails + 1)
+      :put "   the WAN address overlaps a network of this router"
+    }
+  }
+} on-error={ :put "   (could not check the WAN address against the router networks)" }
 :local pr 0
 :do { :set pr [/ping 10.99.0.1 count=3] } on-error={}
 :if ($pr = 0) do={ :put "   no answer from the billing server yet; the tunnel can take a few seconds to come up" } else={ :put ("   billing server: " . $pr . " of 3 replies") }
@@ -240,6 +276,13 @@
 } on-error={
   :put "ftn: the bootstrap script stopped early, see below"
   :if ([:len $abort] > 0) do={ :put $abort }
+  # The hold is still in the filter (it is removed only at the very end of section 6). Switch the WAN on behind it so
+  # the failure report can reach the server: the hold lets the router's own traffic and its answers through.
+  :do {
+  /interface/pppoe-client enable [find where comment="ftn: WAN pppoe"]
+  } on-error={ :put "   could not switch the WAN on" }
+  :local hw 0
+  :while ([:len [/ip/route/find where dst-address="0.0.0.0/0" and active=yes]] = 0 && $hw < 30) do={ :delay 1s; :set hw ($hw + 1) }
   :if ([:len $report] > 1500) do={ :set report [:pick $report 0 1500] }; :do { /tool/fetch url="https://billing.example.co.ke/j/TOKEN0123456789TOKEN0123456789TOKEN01234/report" http-method=post http-header-field="Content-Type: text/plain" http-data=("result " . $result . " ros " . $ver . "\n" . $report) output=none check-certificate=yes } on-error={ :put "   could not send the join report to the server" }
   /file remove [find where name="ftn-setup.rsc"]
   /file remove [find where name="ftn-reset.rsc"]
