@@ -274,9 +274,79 @@ func (m *Manager) noteRefusedUA(token, ua string) {
 // MgmtWinbox reports whether the router was built with remote WinBox: its join
 // report says the script put in the management subnet, and that is the subnet
 // the server uses now (a router built for another MGMT_SUBNET does not accept
-// WinBox from it). A router that never reported, or was built before remote
-// WinBox, is false: it needs a reset and a new line.
+// WinBox from it), or the last read of the router found the rule. A router
+// that has neither, or was built before remote WinBox, is false: it needs a
+// reset and a new line.
 func (m *Manager) MgmtWinbox(siteID string) bool {
-	r, ok := m.JoinReport(siteID)
-	return ok && r.Mgmt != "" && r.Mgmt == m.mgmt.String()
+	if r, ok := m.JoinReport(siteID); ok && r.Mgmt != "" && r.Mgmt == m.mgmt.String() {
+		return true
+	}
+	// A lost report must not mislabel a router that has the rule: the checks read it from the router.
+	if c, _, hit := m.chk.peek(siteID); hit {
+		return c.MgmtWinbox
+	}
+	return false
+}
+
+// renderFails remembers, per router, why its set-up script could not be made when the router fetched it
+// (PUBLIC_IP unset, no DATA_KEY for a PPPoE password ...). The router only sees a failed fetch; the admin sees
+// this on the router page and in its activity.
+type renderFails struct {
+	mu sync.Mutex
+	m  map[string]renderFail
+}
+
+type renderFail struct {
+	At  time.Time
+	Msg string
+}
+
+func (r *renderFails) set(siteID, msg string, at time.Time) (changed bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.m == nil {
+		r.m = map[string]renderFail{}
+	}
+	changed = r.m[siteID].Msg != msg
+	r.m[siteID] = renderFail{At: at, Msg: msg}
+	return changed
+}
+
+func (r *renderFails) get(siteID string) (renderFail, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	v, ok := r.m[siteID]
+	return v, ok
+}
+
+func (r *renderFails) clear(siteID string) {
+	r.mu.Lock()
+	delete(r.m, siteID)
+	r.mu.Unlock()
+}
+
+// noteRenderFail records that the router with this token fetched its script and the server could not make it:
+// a log line, one activity event per distinct reason, and the reason on the router page (Setup last_error).
+func (m *Manager) noteRenderFail(token string, cause error) {
+	want := HashToken(token)
+	now := m.now()
+	var sid string
+	m.st.View(func(d *store.Data) {
+		for _, s := range d.Sites {
+			if s.Join.Hash != "" && subtle.ConstantTimeCompare([]byte(want), []byte(s.Join.Hash)) == 1 && !s.Removed {
+				sid = s.ID
+			}
+		}
+	})
+	if sid == "" {
+		return
+	}
+	msg := cause.Error()
+	m.log.Warn("the router fetched its set-up script but it cannot be made", "site", sid, "err", msg)
+	if m.renderFail.set(sid, msg, now) {
+		_ = m.st.Update(func(d *store.Data) error {
+			d.AddEvent(store.Event{Time: now, SiteID: sid, Kind: "audit", Msg: "set-up script could not be made: " + msg})
+			return nil
+		})
+	}
 }

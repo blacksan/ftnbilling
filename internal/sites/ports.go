@@ -484,7 +484,9 @@ func (m *Manager) ChangePort(ctx context.Context, siteID, port string, ch PortCh
 		return res, portErr(PortErrForbidden, "your role may not change the router")
 	}
 	e := m.cport.entry(siteID)
-	e.run.Lock() // the same per-router lock as the sweep; nothing is read before it is held
+	if err := e.run.LockCtx(ctx); err != nil { // the same per-router lock as the sweep; nothing is read before it is held
+		return res, portErr(PortErrConflict, "%s", ErrRouterBusy.Error())
+	}
 	defer e.run.Unlock()
 	var site store.Site
 	var found bool

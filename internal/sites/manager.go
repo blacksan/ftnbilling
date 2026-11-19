@@ -57,7 +57,8 @@ type Manager struct {
 
 	stray atomic.Uint64 // NetFlow datagrams from unknown sources
 
-	refused refusals // join fetches turned away for their User-Agent (joinreport.go)
+	renderFail renderFails // join fetches whose script could not be made (joinreport.go)
+	refused    refusals    // join fetches turned away for their User-Agent (joinreport.go)
 
 	foreignIPs atomic.Pointer[func(string) map[string]bool] // set by billing.NewService
 
@@ -144,6 +145,12 @@ func (m *Manager) Start(ctx context.Context) {
 		m.startLocked(s)
 	}
 	m.reloadMu.Unlock()
+	// peers.conf is written after the store commit of a join, a reset or a removal; a restart in that gap would leave
+	// wg0 without a new router (or with a removed one's key). Rewriting it at start (and so touching the apply stamp
+	// the path unit watches) makes the file follow the store again.
+	if err := m.ApplyPeers(); err != nil {
+		m.log.Error("could not write the WireGuard peers at start", "err", err)
+	}
 	if addr := m.cfg.NetflowAddr; addr != "" && !strings.EqualFold(addr, "off") && !m.cfg.RouterMock {
 		m.wg.Add(1)
 		go func() {
@@ -502,9 +509,18 @@ func (m *Manager) rebaseInput(cur store.Site, in SiteInput) (SiteInput, error) {
 // UpdateSite saves the editable fields and restarts the building's runtime. It takes the same per-router
 // lock as the port pass and ChangePort, so a form save and a Ports-tab change never interleave.
 func (m *Manager) UpdateSite(id string, in SiteInput) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return m.UpdateSiteCtx(ctx, id, in)
+}
+
+// UpdateSiteCtx is UpdateSite whose wait for the router's lock ends with ctx (ErrRouterBusy).
+func (m *Manager) UpdateSiteCtx(ctx context.Context, id string, in SiteInput) error {
 	var portsChanged bool
 	e := m.cport.entry(id)
-	e.run.Lock()
+	if err := e.run.LockCtx(ctx); err != nil {
+		return err
+	}
 	defer e.run.Unlock()
 	var cur0 store.Site
 	var found bool
@@ -718,6 +734,9 @@ func (m *Manager) Status(ctx context.Context, siteID string) (SiteStatus, bool) 
 	}
 	now := m.now()
 	st := SiteStatus{Token: TokenStateOf(s.Join, now), TokenExpires: s.Join.ExpiresAt, UsedFrom: s.Join.UsedFrom, Joined: !s.JoinedAt.IsZero()}
+	if rf, ok := m.renderFail.get(siteID); ok && st.Token == TokenPending {
+		st.RenderError = rf.Msg
+	}
 	if rf, ok := m.refused.get(siteID); ok && st.Token == TokenPending {
 		st.RefusedUA, st.RefusedAt = rf.UA, rf.At
 	}

@@ -80,6 +80,14 @@ func (m *Manager) SweepSite(ctx context.Context, siteID string) {
 		e.mu.Unlock()
 		return
 	}
+	// Look at the router before taking its writer lock: a router that does not answer must not make every
+	// save, fix and port change wait behind the sweep's reads (the cached look is reused by the passes below).
+	if c, err := m.Checks(ctx, siteID, false); err != nil || !c.Router.Reachable {
+		e.mu.Lock()
+		e.nextSweep = now.Add(sweepBusyEvery)
+		e.mu.Unlock()
+		return
+	}
 	_, busy := m.ensureCustomerPort(ctx, siteID, false)
 	out := m.AutoMaintain(ctx, siteID)
 	if len(out) > 0 {
@@ -163,23 +171,27 @@ func (m *Manager) SetAutoFixPause(siteID string, paused bool, until time.Time, a
 // reports what it did.
 func (m *Manager) AutoMaintain(ctx context.Context, siteID string) []AutoFixOutcome {
 	e := m.cport.entry(siteID)
-	e.run.Lock()
-	defer e.run.Unlock()
 	var site store.Site
 	var ok bool
 	m.st.View(func(d *store.Data) { site, ok = d.Sites[siteID] })
 	if !ok || !site.Runnable() || m.AutoFixPause(siteID).Paused {
 		return nil
 	}
-	// the cached checks (at most a minute old), not a fresh full read on every call
+	// The cached checks (at most a minute old), read BEFORE the writer lock is taken: a router that does not
+	// answer must not hold the lock for the length of the read.
 	c, err := m.Checks(ctx, siteID, false)
 	if err != nil || !c.Router.Reachable || c.Layout != LayoutV5 {
 		return nil
 	}
+	e.run.Lock()
+	defer e.run.Unlock()
 	var out []AutoFixOutcome
 	for _, it := range c.Items {
 		if it.Status != StatusWarn && it.Status != StatusFail {
 			continue
+		}
+		if m.AutoFixPause(siteID).Paused {
+			break // paused while this pass runs: no more fixes
 		}
 		if _, has := fixers[it.ID]; !has || it.Fix.Kind != FixAuto || it.Fix.Physical {
 			continue
