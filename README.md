@@ -16,7 +16,7 @@ It runs on a VPS; each router joins it over WireGuard. See
 
 ## What it does
 
-- **One account per flat.** The admin creates an account: flat label (e.g. "Flat 3B"), the ONT's WAN MAC (required, unique), optional tenant, phone and notes. The app generates a 6-character code (no 0/O/1/I/L) that never changes and is also the **Paybill account number**. The flat also gets a fixed address from the router's customer subnet.
+- **One account per flat.** The admin creates an account: the apartment (building) it is in, the unit (e.g. "Flat 3B"), the ONT's WAN MAC (required, unique across all routers and apartments: one MAC, one open account), optional tenant, phone and notes. The app generates a 6-character code (no 0/O/1/I/L) that never changes and is also the **Paybill account number**. The flat also gets a fixed address from the router's customer subnet.
 - **Every router is IPoE and set up by the server.** The router page gives one line to paste on a new router; the router erases itself and builds the whole layout (WAN, admin LAN, customer network, DHCP, firewall, tunnel, the server's API login). After that the server only changes the flats' leases, queues, address lists and ARP entries. It never writes users, services, the tunnel, routes or the WAN.
 - **Payment is by account number.** An unpaid or expired flat is walled by the router: it can reach only the payment page at `/pay`, where the tenant enters the account number (or the flat label when the visit comes from a known router), picks a package and pays by M-Pesa or enters a voucher. The server un-walls the flat within about a minute. Phone numbers are only the M-Pesa payer; they are not identities.
 - **Prices are plain KES.** No tax lines or tax wording anywhere.
@@ -95,13 +95,26 @@ Open http://127.0.0.1:8080/admin, sign in, add a router (the mock serves every r
 ## Many routers
 
 One server bills many routers. Account codes are global (they are the Paybill
-account numbers); ONT MACs and flat labels only have to be unique inside a
-router. Packages are shared, and each router can hide a plan or give it a
+account numbers) and so are ONT MACs: one MAC can have only one open account, on
+any router in any building. A unit label (flat) only has to be unique inside its
+apartment. Packages are shared, and each router can hide a plan or give it a
 different price (Admin, Routers, the router page). Prices must stay unique
 inside a router because Paybill payments are matched by amount. The admin has a
 router switcher in the top bar (`All routers` or one) and list pages gain a
 Router column when all are shown. An account can be moved to another router
 from its page.
+
+### Apartments
+
+An apartment is a building that one or more routers serve (and a router may serve
+several apartments). Each account belongs to an apartment and has a unit in it;
+the apartment page holds the caretaker and landlord contacts, its routers and its
+customers. Creating a customer needs the apartment; with one router it is chosen
+for you, with several you pick. A device seen on a router that does not serve its
+customer's apartment is not provisioned there (it stays walled and is listed under
+New devices, where you can move the customer). Rules, calls and error codes:
+[docs/api/v6-apartments.md](docs/api/v6-apartments.md).
+
 
 Routers join over WireGuard with a one-time line pasted on the router: see
 [deploy/README.md](deploy/README.md) for the server setup (PostgreSQL, Caddy,
