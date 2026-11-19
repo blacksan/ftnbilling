@@ -22,6 +22,11 @@ import ke.co.ftw.ftnadmin.data.routers.RouterLiveRepository
 import ke.co.ftw.ftnadmin.data.sites.NewDevicesRepository
 import ke.co.ftw.ftnadmin.data.sites.SiteSetupRepository
 import ke.co.ftw.ftnadmin.data.sites.SitesRepository
+import ke.co.ftw.ftnadmin.data.update.AndroidApkInspector
+import ke.co.ftw.ftnadmin.data.update.AndroidApkInstaller
+import ke.co.ftw.ftnadmin.data.update.UpdateManager
+import ke.co.ftw.ftnadmin.data.update.UpdateRepository
+import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,6 +62,23 @@ class AppContainer(app: Application) {
     val alerts = AlertsRepository(api)
     val routerLive = RouterLiveRepository(api)
     val routerContext = RouterContext(sites, settings, appScope)
+
+    /** In-app update check. Its HTTP client has no auth interceptors: the admin token never goes to GitHub. */
+    val updates = UpdateManager(
+        source = UpdateRepository(
+            http = ApiClient.plainHttpClient(),
+            currentVersionCode = BuildConfig.VERSION_CODE.toLong(),
+            currentVersionName = BuildConfig.VERSION_NAME,
+            packageName = app.packageName,
+            updatesDir = File(app.cacheDir, "updates"),
+            inspector = AndroidApkInspector(app),
+        ),
+        settings = settings,
+        installer = AndroidApkInstaller(app),
+        scope = appScope,
+        enabled = BuildConfig.UPDATES_ENABLED,
+        currentVersionCode = BuildConfig.VERSION_CODE.toLong(),
+    )
 
     init {
         appScope.launch(Dispatchers.IO) { sessions.restore() }

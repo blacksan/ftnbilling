@@ -134,7 +134,7 @@ fun MoreScreen(
             Heading("Manage")
             ActionCard("Routers", "All routers, status and Add router", Icons.Default.Place, s.primaryContainer, s.onPrimaryContainer, s.primary, s.onPrimary, onClick = onRouters)
             ActionCard("Alerts", "Open alerts and muted routers", Icons.Default.Notifications, x.warningContainer, x.onWarningContainer, x.warning, x.onWarning, onClick = onAlertList)
-            ActionCard("App settings", "Theme, app lock, devices and sign out", Icons.Default.Settings, s.secondaryContainer, s.onSecondaryContainer, s.secondary, s.onSecondary, onClick = onSettings)
+            ActionCard("App settings", "Theme, app lock, updates, devices and sign out", Icons.Default.Settings, s.secondaryContainer, s.onSecondaryContainer, s.secondary, s.onSecondary, onClick = onSettings)
         }
     }
 

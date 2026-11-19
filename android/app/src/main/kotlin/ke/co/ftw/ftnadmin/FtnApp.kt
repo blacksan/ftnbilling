@@ -12,6 +12,7 @@ class FtnApp : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        container.updates.onAppStart()
         ProcessLifecycleOwner.get().lifecycle.addObserver(
             object : DefaultLifecycleObserver {
                 override fun onStart(owner: LifecycleOwner) = container.onForeground()

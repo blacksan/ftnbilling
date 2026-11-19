@@ -142,17 +142,20 @@ class ApiClient(
     companion object {
         private val JSON = "application/json; charset=utf-8".toMediaType()
 
+        /** An OkHttp client with the app's timeouts and no auth: also used for the GitHub update check. */
+        fun plainHttpClient(): OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .build()
+
         /**
          * Builds the production client. [baseUrl] is the server root, e.g. `https://isp.ftw.co.ke`.
          * The refresh client is separate so refreshing never recurses into the authenticator.
          */
         fun create(baseUrl: String, sessions: SessionManager, json: Json = ApiJson): ApiClient {
             val base = baseUrl.toHttpUrl()
-            val plain = OkHttpClient.Builder()
-                .connectTimeout(15, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS)
-                .writeTimeout(30, TimeUnit.SECONDS)
-                .build()
+            val plain = plainHttpClient()
             val refreshUrl = base.newBuilder().addPathSegments("api/v1/auth/refresh").build()
             val http = plain.newBuilder()
                 .addInterceptor(BearerInterceptor(sessions))

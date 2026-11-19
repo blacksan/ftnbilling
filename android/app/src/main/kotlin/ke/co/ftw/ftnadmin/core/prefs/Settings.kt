@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import java.io.IOException
@@ -52,6 +53,14 @@ data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.System,
     /** Router chosen in the top-bar switcher; blank means "All routers". */
     val selectedRouterId: String = "",
+    /** Release builds look for a newer app version on start (at most every 6 hours). */
+    val updateCheckEnabled: Boolean = true,
+    /** Epoch millis of the last update check, 0 = never. */
+    val updateLastCheckAt: Long = 0L,
+    /** Plain-words result of the last check, shown in Settings. */
+    val updateLastResult: String = "",
+    /** JSON of the update found by the last check, so the banner survives a restart; blank = none. */
+    val updatePending: String = "",
 )
 
 private val Context.dataStore by preferencesDataStore(name = "ftn_settings")
@@ -79,6 +88,10 @@ class Settings(private val store: DataStore<Preferences>, scope: CoroutineScope)
             p[DYNAMIC_COLOR] = n.dynamicColor
             p[THEME_MODE] = n.themeMode.key
             p[SELECTED_ROUTER] = n.selectedRouterId
+            p[UPDATE_ENABLED] = n.updateCheckEnabled
+            p[UPDATE_LAST_AT] = n.updateLastCheckAt
+            p[UPDATE_LAST_RESULT] = n.updateLastResult
+            p[UPDATE_PENDING] = n.updatePending
         }
     }
 
@@ -99,6 +112,10 @@ class Settings(private val store: DataStore<Preferences>, scope: CoroutineScope)
             dynamicColor = this[DYNAMIC_COLOR] ?: d.dynamicColor,
             themeMode = ThemeMode.fromKey(this[THEME_MODE]),
             selectedRouterId = this[SELECTED_ROUTER] ?: d.selectedRouterId,
+            updateCheckEnabled = this[UPDATE_ENABLED] ?: d.updateCheckEnabled,
+            updateLastCheckAt = this[UPDATE_LAST_AT] ?: d.updateLastCheckAt,
+            updateLastResult = this[UPDATE_LAST_RESULT] ?: d.updateLastResult,
+            updatePending = this[UPDATE_PENDING] ?: d.updatePending,
         )
     }
 
@@ -113,5 +130,9 @@ class Settings(private val store: DataStore<Preferences>, scope: CoroutineScope)
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val SELECTED_ROUTER = stringPreferencesKey("selected_router")
+        val UPDATE_ENABLED = booleanPreferencesKey("update_check_enabled")
+        val UPDATE_LAST_AT = longPreferencesKey("update_last_check_at")
+        val UPDATE_LAST_RESULT = stringPreferencesKey("update_last_result")
+        val UPDATE_PENDING = stringPreferencesKey("update_pending")
     }
 }

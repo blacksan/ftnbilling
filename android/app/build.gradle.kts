@@ -21,6 +21,8 @@ android {
         versionName = providers.gradleProperty("versionName").getOrElse("0.1.0-dev")
 
         buildConfigField("String", "API_BASE", "\"https://isp.ftw.co.ke\"")
+        // The in-app update check is for signed release builds; the .debug app is installed by hand.
+        buildConfigField("boolean", "UPDATES_ENABLED", "true")
     }
 
     signingConfigs {
@@ -38,6 +40,7 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            buildConfigField("boolean", "UPDATES_ENABLED", "false")
             // Debug builds may point at a staging server: -PapiBase=https://staging.example (https only).
             val debugBase = providers.gradleProperty("apiBase").getOrElse("https://isp.ftw.co.ke")
             require(debugBase.startsWith("https://")) { "apiBase must be https" }

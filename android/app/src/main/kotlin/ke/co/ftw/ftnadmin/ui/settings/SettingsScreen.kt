@@ -20,6 +20,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -59,6 +60,7 @@ import ke.co.ftw.ftnadmin.ui.common.formatAge
 import ke.co.ftw.ftnadmin.ui.common.formatDateTime
 import ke.co.ftw.ftnadmin.ui.common.vmFactory
 import ke.co.ftw.ftnadmin.ui.theme.supportsDynamicTheming
+import ke.co.ftw.ftnadmin.ui.update.UpdateCard
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -160,6 +162,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                     }
                 }
             }
+            UpdatesSection(s)
             Header("About")
             Row2("Version", BuildConfig.VERSION_NAME)
         }
@@ -217,6 +220,57 @@ fun SettingsScreen(onBack: () -> Unit) {
         )
     }
 }
+
+/** Update check: toggle, "Check for updates", last result and the update card. */
+@Composable
+private fun UpdatesSection(s: AppSettings?) {
+    val container = LocalContainer.current
+    val updates = container.updates
+    val state by updates.state.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    Header("Updates")
+    Row2("Installed version", "${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})")
+    if (!state.enabled) {
+        Text(
+            "Update checks are switched off in debug builds. This is the separate .debug app: install the signed release build to get updates.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+        )
+        return
+    }
+    if (s != null) {
+        SwitchRow("Check for updates automatically", "When the app starts, at most every 6 hours", s.updateCheckEnabled) { on ->
+            scope.launch { container.settings.update { it.copy(updateCheckEnabled = on) } }
+        }
+        Row2("Last check", if (s.updateLastCheckAt > 0) formatCheckTime(s.updateLastCheckAt) else "Never")
+        if (s.updateLastResult.isNotBlank()) {
+            Text(
+                s.updateLastResult,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+            )
+        }
+    }
+    if (state.available == null) {
+        state.error?.let {
+            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        }
+    }
+    Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Button(onClick = updates::checkNow, enabled = !state.busy) { Text("Check for updates") }
+        if (state.checking) LoadingSpinner(Modifier.padding(start = 12.dp))
+    }
+    if (state.available != null) UpdateCard(state, updates, Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+}
+
+private fun formatCheckTime(epochMillis: Long): String =
+    android.text.format.DateUtils.getRelativeTimeSpanString(
+        epochMillis,
+        System.currentTimeMillis(),
+        android.text.format.DateUtils.MINUTE_IN_MILLIS,
+    ).toString()
 
 private fun Modifier.height2(): Modifier = this.fillMaxWidth().padding(vertical = 8.dp)
 

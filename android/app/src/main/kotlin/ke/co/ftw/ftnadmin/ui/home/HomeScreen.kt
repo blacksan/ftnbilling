@@ -66,6 +66,7 @@ import ke.co.ftw.ftnadmin.ui.common.formatPct
 import ke.co.ftw.ftnadmin.ui.common.formatUptime
 import ke.co.ftw.ftnadmin.ui.common.splitBps
 import ke.co.ftw.ftnadmin.ui.common.vmFactory
+import ke.co.ftw.ftnadmin.ui.update.UpdateCard
 import java.util.Locale
 
 private const val LARGE_FONT_SCALE = 1.3f
@@ -93,6 +94,7 @@ fun HomeScreen(
     val container = LocalContainer.current
     val vm: HomeViewModel = viewModel(factory = vmFactory { HomeViewModel(container.routerLive, container.routerContext.selection) })
     val ui by vm.state.collectAsStateWithLifecycle()
+    val update by container.updates.state.collectAsStateWithLifecycle()
     LifecycleResumeEffect(vm) {
         vm.startPolling()
         onPauseOrDispose { vm.stopPolling() }
@@ -108,6 +110,7 @@ fun HomeScreen(
                 is Loadable.Failed -> ErrorState(l.message, vm::retry, Modifier.padding(inner))
                 is Loadable.Ready -> PullToRefreshBox(ui.refreshing, vm::refresh, Modifier.padding(inner).fillMaxSize()) {
                     CardGrid(columns) {
+                        if (update.available != null) full { UpdateCard(update, container.updates) }
                         routerCards(l.value, ui, onAlerts, onExpiring, onSetup = { onSetup(id) })
                     }
                 }
@@ -119,6 +122,7 @@ fun HomeScreen(
                 is Loadable.Ready -> PullToRefreshBox(ui.refreshing, vm::refresh, Modifier.padding(inner).fillMaxSize()) {
                     val routers by container.routerContext.routers.collectAsStateWithLifecycle()
                     CardGrid(columns) {
+                        if (update.available != null) full { UpdateCard(update, container.updates) }
                         fleetCards(
                             o.value,
                             ui.staleError,
