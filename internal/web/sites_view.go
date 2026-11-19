@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"ispbill/internal/billing"
 	"ispbill/internal/metrics"
 	"ispbill/internal/routeros"
 	"ispbill/internal/sites"
@@ -297,6 +298,7 @@ func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site,
 	})
 	p.Data["Pkgs"], p.Data["Accounts"] = pkgs, accts
 	p.Data["CustPort"] = s.mgr.CustomerPortStatus(st.ID)
+	p.Data["Pause"] = s.mgr.AutoFixPause(st.ID)
 	if tab == "profile" && st.Runnable() {
 		// a picker of the router's real ports (typed entry stays possible)
 		pc, pcancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
@@ -353,6 +355,40 @@ func (s *Server) adminSiteChecks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
+}
+
+// adminSiteAutoFixes pauses or resumes the server's automatic fixes of a router (owner only).
+func (s *Server) adminSiteAutoFixes(w http.ResponseWriter, r *http.Request) {
+	st, ok := s.siteID(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	u, _ := userOf(r)
+	to := "/admin/routers/view?id=" + st.ID + "&tab=setup"
+	if u.Role != store.RoleOwner {
+		s.back(w, r, to, "Error: "+sites.ErrNeedsOwner.Error())
+		return
+	}
+	paused := r.PostFormValue("paused") == "1"
+	var until time.Time
+	if v := strings.TrimSpace(r.PostFormValue("until")); paused && v != "" {
+		t, err := time.ParseInLocation("2006-01-02T15:04", v, billing.EAT)
+		if err != nil {
+			s.back(w, r, to, "Error: use a date and time for the end of the pause")
+			return
+		}
+		until = t
+	}
+	err := s.mgr.SetAutoFixPause(st.ID, paused, until, u.Username)
+	if errors.Is(err, store.ErrNoChange) {
+		err = nil
+	}
+	msg := "Automatic fixes resumed"
+	if paused {
+		msg = "Automatic fixes paused"
+	}
+	s.back(w, r, to, msgOr(err, msg))
 }
 
 // adminSiteCustomerPort is the apply status of the router's extra customer port.

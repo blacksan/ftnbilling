@@ -266,12 +266,14 @@ func TestCustomerPortSweepReappliesDrift(t *testing.T) {
 	}
 	// the row is deleted on the router: the next sweep puts it back
 	m.RemoveRow(ctx, "/interface/bridge/port", portRow(m, "ether5")[".id"])
+	f.advance(sweepBusyEvery + time.Second)
 	f.m.SweepSite(ctx, s.ID)
 	if portRow(m, "ether5") == nil {
 		t.Fatal("drift not repaired")
 	}
 	// a row with the wrong horizon is repaired too, and the Rebuild-era comment is rewritten
 	m.SetRow(ctx, "/interface/bridge/port", portRow(m, "ether5")[".id"], R{"horizon": "", "comment": oldBenchComment})
+	f.advance(sweepBusyEvery + time.Second)
 	f.m.SweepSite(ctx, s.ID)
 	if r := portRow(m, "ether5"); r["horizon"] != "1" || r["comment"] != CustPortComment {
 		t.Fatalf("%v", r)
@@ -319,9 +321,11 @@ func TestCustomerPortNonV5RouterIsUntouched(t *testing.T) {
 	})
 	m := f.startedRouter(s.ID)
 	m.SeedRow("/interface/bridge", R{"name": "bridge"}) // an old layout: no v5 marker
-	m.SeedRow("/interface", R{"name": "ether5", "type": "ether"})
+	for _, n := range []string{"ether3", "ether5"} {
+		m.SeedRow("/interface", R{"name": n, "type": "ether"})
+	}
 	m.ResetWrites()
-	if err := f.saveInput(s.ID, func(in *SiteInput) { in.OLTInterface = "ether3" }); err != nil {
+	if err := f.saveInput(s.ID, func(in *SiteInput) { in.OLTInterface, in.Confirm = "ether3", true }); err != nil {
 		t.Fatal(err)
 	}
 	f.m.SweepSite(context.Background(), s.ID)
@@ -336,7 +340,7 @@ func TestOLTPortChangeIsAutoApplied(t *testing.T) {
 	f, s, m := cpRig(t, "ether5", 0)
 	ctx := context.Background()
 	f.m.EnsureCustomerPort(ctx, s.ID, true)
-	if err := f.saveInput(s.ID, func(in *SiteInput) { in.OLTInterface = "ether3" }); err != nil {
+	if err := f.saveInput(s.ID, func(in *SiteInput) { in.OLTInterface, in.Confirm = "ether3", true }); err != nil {
 		t.Fatal(err)
 	}
 	if portRow(m, "sfp-sfpplus1") != nil || portRow(m, "ether3") == nil || portRow(m, "ether5") == nil || portRow(m, "ether2")["bridge"] != LANBridge {
@@ -351,7 +355,7 @@ func TestOLTVLANMovesToTheNewPort(t *testing.T) {
 	f, s, m := cpRig(t, "ether5", 100)
 	ctx := context.Background()
 	f.m.EnsureCustomerPort(ctx, s.ID, true)
-	if err := f.saveInput(s.ID, func(in *SiteInput) { in.OLTInterface = "ether3" }); err != nil {
+	if err := f.saveInput(s.ID, func(in *SiteInput) { in.OLTInterface, in.Confirm = "ether3", true }); err != nil {
 		t.Fatal(err)
 	}
 	v := m.Table("/interface/vlan")
@@ -382,4 +386,306 @@ func TestOLTPortMbpsDefaults(t *testing.T) {
 	if s = ApplyDefaults(config.Config{}, store.Site{OLTInterface: "ether3", OLTCapMbps: 2500}); s.OLTCapMbps != 2500 {
 		t.Fatalf("an explicit value must be kept: %v", s.OLTCapMbps)
 	}
+}
+
+// ---- review fixes: customers keep service, confirm, leftovers, cadence, pause ---------------------
+
+func TestTypoOLTPortKeepsCustomersOnline(t *testing.T) {
+	for _, vlan := range []int{0, 100} {
+		f, s, m := cpRig(t, "ether5", vlan)
+		ctx := context.Background()
+		f.m.EnsureCustomerPort(ctx, s.ID, true)
+		before := fmt.Sprint(m.Table("/interface/bridge/port"), m.Table("/interface/vlan"))
+		// the form refuses a port the router does not have
+		err := f.saveInput(s.ID, func(in *SiteInput) { in.OLTInterface, in.Confirm = "ether33", true })
+		var fe *FieldError
+		if !errors.As(err, &fe) || fe.Field != "olt_interface" || !strings.Contains(fe.Msg, "no port called ether33") {
+			t.Fatalf("vlan %d: %v", vlan, err)
+		}
+		if err := f.saveInput(s.ID, func(in *SiteInput) { in.CustomerPorts = "ether55" }); !errors.As(err, &fe) || fe.Field != "customer_ports" {
+			t.Fatalf("customer port typo: %v", err)
+		}
+		// and even a typo that got into the record some other way removes nothing
+		f.st.Update(func(d *store.Data) error {
+			x := d.Sites[s.ID]
+			x.OLTInterface = "ether33"
+			d.Sites[s.ID] = x
+			return nil
+		})
+		m.ResetWrites()
+		st := f.m.EnsureCustomerPort(ctx, s.ID, true)
+		if st.OLTMessage == "" || !strings.Contains(st.OLTMessage, "no port called ether33") {
+			t.Fatalf("vlan %d: %+v", vlan, st)
+		}
+		if after := fmt.Sprint(m.Table("/interface/bridge/port"), m.Table("/interface/vlan")); after != before || m.Writes() != 0 {
+			t.Fatalf("vlan %d: the pass changed a working router:\n%s\n%s", vlan, before, after)
+		}
+	}
+}
+
+func TestNothingIsRemovedWhenTheReplacementCannotBeWritten(t *testing.T) {
+	f, s, m := cpRig(t, "", 0)
+	ctx := context.Background()
+	m.SeedRow("/interface", R{"name": "ether3", "type": "ether"})
+	f.st.Update(func(d *store.Data) error {
+		x := d.Sites[s.ID]
+		x.OLTInterface = "ether3"
+		d.Sites[s.ID] = x
+		return nil
+	})
+	m.SetWriteFail("/interface/bridge/port", &routeros.APIError{Status: 400, Message: "Bad Request", Detail: "failure: boom"})
+	st := f.m.EnsureCustomerPort(ctx, s.ID, true)
+	if st.State != PortError || portRow(m, "sfp-sfpplus1") == nil {
+		t.Fatalf("the old OLT membership went before the new one was written: %+v %v", st, m.Table("/interface/bridge/port"))
+	}
+	m.SetWriteFail("/interface/bridge/port", nil)
+	f.m.EnsureCustomerPort(ctx, s.ID, true)
+	if portRow(m, "ether3") == nil || portRow(m, "sfp-sfpplus1") != nil {
+		t.Fatalf("%v", m.Table("/interface/bridge/port"))
+	}
+}
+
+func TestOLTAndVLANChangesNeedConfirmOnASetUpRouter(t *testing.T) {
+	f, s, m := cpRig(t, "ether5", 100)
+	m.SeedRow("/interface", R{"name": "ether3", "type": "ether"})
+	for name, mut := range map[string]func(*SiteInput){
+		"olt port": func(in *SiteInput) { in.OLTInterface = "ether3" },
+		"vlan":     func(in *SiteInput) { in.VLANID = 200 },
+		"no vlan":  func(in *SiteInput) { in.VLANID = 0 },
+	} {
+		if err := f.saveInput(s.ID, mut); !errors.Is(err, ErrOLTConfirmRequired) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if site := f.site(s.ID); site.OLTInterface != "sfp-sfpplus1" || site.VLANID != 100 {
+		t.Fatalf("an unconfirmed save changed the router: %+v", site)
+	}
+	// a customer port, the name or a support phone need no confirm
+	if err := f.saveInput(s.ID, func(in *SiteInput) { in.CustomerPorts, in.SupportPhone = "ether4", "0700" }); err != nil {
+		t.Fatal(err)
+	}
+	// a router that is not set up yet is free to change
+	g := newFixture(t, nil)
+	n := g.create("New")
+	if err := g.m.UpdateSite(n.ID, SiteInput{Name: "New", OLTInterface: "ether3", VLANID: 7}); err != nil {
+		t.Fatalf("unjoined: %v", err)
+	}
+}
+
+func TestOldCustomerVLANIsRemovedOnlyAfterTheNewOneIsIn(t *testing.T) {
+	f, s, m := cpRig(t, "", 100)
+	ctx := context.Background()
+	if err := f.saveInput(s.ID, func(in *SiteInput) { in.VLANID, in.Confirm = 200, true }); err != nil {
+		t.Fatal(err)
+	}
+	v := m.Table("/interface/vlan")
+	if len(v) != 1 || v[0]["name"] != "vlan200-customers" || v[0]["interface"] != "sfp-sfpplus1" || v[0]["vlan-id"] != "200" {
+		t.Fatalf("%v", v)
+	}
+	if portRow(m, "vlan200-customers") == nil || portRow(m, "vlan100-customers") != nil {
+		t.Fatalf("%v", m.Table("/interface/bridge/port"))
+	}
+	// a VLAN the server did not make is never a leftover
+	m.SeedRow("/interface/vlan", R{"name": "vlan50-mgmt", "vlan-id": "50", "interface": "sfp-sfpplus1", "comment": "olt management"})
+	// VLAN set back to none: the OLT port joins the bridge first, then the server's VLAN goes
+	m.RemoveRow(ctx, "/interface/vlan", m.Table("/interface/vlan")[1][".id"])
+	if err := f.saveInput(s.ID, func(in *SiteInput) { in.VLANID, in.Confirm = 0, true }); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Table("/interface/vlan")) != 0 || portRow(m, "sfp-sfpplus1")["bridge"] != CustomerBridge || portRow(m, "vlan200-customers") != nil {
+		t.Fatalf("%v / %v", m.Table("/interface/vlan"), m.Table("/interface/bridge/port"))
+	}
+}
+
+func TestOLTPortRulesDoNotFlapAcrossSweeps(t *testing.T) {
+	for name, tc := range map[string]struct {
+		vlan  int
+		setup func(*routeros.Mock)
+	}{
+		"management VLAN of the OLT bridged into br-lan": {100, func(m *routeros.Mock) {
+			m.SeedRow("/interface/vlan", R{"name": "vlan50-olt", "vlan-id": "50", "interface": "sfp-sfpplus1", "comment": "olt management"})
+			m.SeedRow("/interface/bridge/port", R{"bridge": "br-lan", "interface": "vlan50-olt"})
+		}},
+		"a foreign VLAN on the OLT port with no customer VLAN": {0, func(m *routeros.Mock) {
+			m.SeedRow("/interface/vlan", R{"name": "vlan50-olt", "vlan-id": "50", "interface": "sfp-sfpplus1", "comment": "olt management"})
+		}},
+	} {
+		f, s, m := cpRig(t, "ether5", tc.vlan)
+		tc.setup(m)
+		ctx := context.Background()
+		f.m.SweepSite(ctx, s.ID) // settles whatever it can
+		f.advance(sweepBusyEvery + time.Second)
+		state := fmt.Sprint(m.Table("/interface/bridge/port"), m.Table("/interface/vlan"))
+		m.ResetWrites()
+		for i := 0; i < 6; i++ {
+			f.advance(sweepCleanEvery + time.Second)
+			f.m.SweepSite(ctx, s.ID)
+			if it := checkItem(t, f, s.ID, CheckOLT); it.Fix.Kind == FixAuto {
+				t.Fatalf("%s: the OLT item offers an automatic fix", name)
+			}
+		}
+		if m.Writes() != 0 || fmt.Sprint(m.Table("/interface/bridge/port"), m.Table("/interface/vlan")) != state {
+			t.Fatalf("%s: flapping, %d writes", name, m.Writes())
+		}
+		if portRow(m, "sfp-sfpplus1") == nil && tc.vlan == 0 {
+			t.Fatalf("%s: the OLT membership was removed", name)
+		}
+	}
+	// no VLAN: a foreign VLAN on the OLT port is said in words
+	f, s, m := cpRig(t, "", 0)
+	m.SeedRow("/interface/vlan", R{"name": "vlan50-olt", "vlan-id": "50", "interface": "sfp-sfpplus1", "comment": "olt management"})
+	f.m.EnsureCustomerPort(context.Background(), s.ID, true)
+	if msg := f.m.oltApplyError(s.ID); !strings.Contains(msg, "vlan50-olt") {
+		t.Fatalf("%q", msg)
+	}
+	if it := checkItem(t, f, s.ID, CheckOLT); it.Status != StatusWarn || !strings.Contains(it.Detail, "vlan50-olt") || it.Fix.Kind != FixNone {
+		t.Fatalf("%+v", it)
+	}
+}
+
+func TestManualAndAutomaticFixesNeverRunTogether(t *testing.T) {
+	f, s, m := checkRig(t)
+	disableDHCP(m)
+	e := f.m.cport.entry(s.ID)
+	e.run.Lock() // an automatic pass is running
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.m.ApplyFix(context.Background(), s.ID, CheckDHCP, false, store.RoleOperator)
+		done <- err
+	}()
+	select {
+	case <-done:
+		t.Fatal("a manual fix ran while a pass held the router")
+	case <-time.After(150 * time.Millisecond):
+	}
+	e.run.Unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the manual fix never ran")
+	}
+}
+
+func TestSweepCadenceCleanFiveMinutesBusyOneMinute(t *testing.T) {
+	f, s, m := cpRig(t, "ether5", 0)
+	ctx := context.Background()
+	f.m.SweepSite(ctx, s.ID) // applies: a change, so the next look is in a minute
+	if portRow(m, "ether5") == nil {
+		t.Fatal("not applied")
+	}
+	f.advance(sweepBusyEvery + time.Second)
+	f.m.SweepSite(ctx, s.ID) // clean: the next look is in five minutes
+	drift := func() { m.RemoveRow(ctx, "/interface/bridge/port", portRow(m, "ether5")[".id"]) }
+	drift()
+	f.advance(sweepCleanEvery - time.Minute)
+	f.m.SweepSite(ctx, s.ID)
+	if portRow(m, "ether5") != nil {
+		t.Fatal("looked again before the five minutes were over")
+	}
+	f.advance(time.Minute + time.Second)
+	f.m.SweepSite(ctx, s.ID)
+	if portRow(m, "ether5") == nil {
+		t.Fatal("did not look after five minutes")
+	}
+	// after a change the next look is a minute away
+	drift()
+	f.advance(sweepBusyEvery + time.Second)
+	f.m.SweepSite(ctx, s.ID)
+	if portRow(m, "ether5") == nil {
+		t.Fatal("after a change the next look must come within a minute")
+	}
+}
+
+func TestPausedRouterGetsNoAutomaticWork(t *testing.T) {
+	f, s, m := cpRig(t, "ether5", 0)
+	ctx := context.Background()
+	if err := f.m.SetAutoFixPause(s.ID, true, time.Time{}, "boss"); err != nil {
+		t.Fatal(err)
+	}
+	disableDHCP(m)
+	m.ResetWrites()
+	f.m.SweepSite(ctx, s.ID)
+	if out := f.m.AutoMaintain(ctx, s.ID); len(out) != 0 || m.Writes() != 0 || portRow(m, "ether5") != nil {
+		t.Fatalf("a paused router was written to: %+v, %d writes", out, m.Writes())
+	}
+	c, _ := f.m.Checks(ctx, s.ID, true)
+	it, _ := c.Item(CheckDHCP)
+	if c.AutoFixes == nil || !c.AutoFixes.Paused || it.Fix.Automatic || it.Auto == nil || it.Auto.State != "paused" || it.Fix.Kind != FixAuto {
+		t.Fatalf("%+v %+v", c.AutoFixes, it)
+	}
+	if !hasActorEvent(f, s.ID, "boss", "paused") {
+		t.Fatal("the pause is not in the router's activity")
+	}
+	// an explicit save still applies the port
+	if err := f.saveInput(s.ID, func(in *SiteInput) { in.CustomerPorts = "ether4" }); err != nil || portRow(m, "ether4") == nil {
+		t.Fatalf("%v %v", err, m.Table("/interface/bridge/port"))
+	}
+	// an end time lifts the pause by itself
+	if err := f.m.SetAutoFixPause(s.ID, true, f.now.Add(-time.Minute), "boss"); !errors.Is(err, ErrPauseInPast) {
+		t.Fatalf("%v", err)
+	}
+	if err := f.m.SetAutoFixPause(s.ID, true, f.now.Add(10*time.Minute), "boss"); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.m.AutoFixPause(s.ID); !p.Paused || p.Until == nil {
+		t.Fatalf("%+v", p)
+	}
+	f.advance(11 * time.Minute)
+	if f.m.AutoFixPause(s.ID).Paused {
+		t.Fatal("the pause did not end")
+	}
+	f.m.SweepSite(ctx, s.ID)
+	if it := checkItem(t, f, s.ID, CheckDHCP); it.Status != StatusOK {
+		t.Fatalf("not fixed after the pause: %+v", it)
+	}
+	if err := f.m.SetAutoFixPause(s.ID, false, time.Time{}, "boss"); err != nil && !errors.Is(err, store.ErrNoChange) {
+		t.Fatal(err)
+	}
+}
+
+func TestChecklistSaysTheServerKeepsDHCPDNSAndTrafficOn(t *testing.T) {
+	f, s, m := checkRig(t)
+	ctx := context.Background()
+	disableDHCP(m)
+	f.m.AutoMaintain(ctx, s.ID)
+	it := checkItem(t, f, s.ID, CheckDHCP)
+	if it.Auto == nil || !strings.Contains(it.Auto.Text, "The server keeps this on.") || !strings.Contains(it.Auto.Text, "Fixed by the server at") {
+		t.Fatalf("%+v", it)
+	}
+	if other := checkItem(t, f, s.ID, CheckWalled); other.Auto != nil && strings.Contains(other.Auto.Text, "keeps this on") {
+		t.Fatalf("the walled rules are not one of the kept-on items: %+v", other)
+	}
+}
+
+func TestFixWriterVLANRemovalIsOnlyForTheServersOldCustomerVLAN(t *testing.T) {
+	m := routeros.NewMock()
+	w := &fixWriter{rt: m, insp: m, oldVLANs: map[string]bool{"vlan100-customers": true}}
+	ctx := context.Background()
+	if err := w.removeRow(ctx, "/interface/vlan", R{".id": "*1", "name": "vlan100-customers", "comment": CustVLANComment}); err != nil {
+		t.Fatalf("the old customer VLAN: %v", err)
+	}
+	for name, row := range map[string]R{
+		"not the server's": {".id": "*2", "name": "vlan100-customers", "comment": "mine"},
+		"another VLAN":     {".id": "*3", "name": "vlan50-olt", "comment": CustVLANComment},
+		"the current VLAN": {".id": "*4", "name": "vlan200-customers", "comment": CustVLANComment},
+	} {
+		if err := w.removeRow(ctx, "/interface/vlan", row); !errors.Is(err, ErrFixNotAllowed) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+func hasActorEvent(f *fixture, siteID, actor, sub string) bool {
+	found := false
+	f.st.View(func(d *store.Data) {
+		for _, e := range d.Events {
+			if e.SiteID == siteID && e.Actor == actor && strings.Contains(e.Msg, sub) {
+				found = true
+			}
+		}
+	})
+	return found
 }

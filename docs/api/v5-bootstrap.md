@@ -55,13 +55,24 @@ Saving `bench_port`, `olt_interface` or `vlan_id` (web, app or `PATCH /routers/{
 - the OLT port: without a VLAN it is a member of `br-customers` the same way; with a VLAN the `vlan<N>-customers` interface (comment `ftn: customer VLAN`) is added or moved to the new port;
 - a port is refused, in words, when it is the WAN port or in the `WAN` list, an admin LAN port or in the `LAN` list, the OLT port, a port of any other bridge (the admin LAN bridge `br-lan` is named), or has its own address or DHCP. The server never moves a port out of another bridge.
 
-The sweep (every 60 s) repeats the work with a backoff of 5 s doubling to 5 min and records changes and errors in the router's activity (actor `system`).
+Order matters for customers: everything new is written first (the customer VLAN, then the memberships) and nothing old is removed until the replacement is in place;
+when anything is wrong (an unknown port, a port in another bridge) nothing is removed at all. A VLAN interface the server made (`ftn: customer VLAN`) that is no longer wanted
+(the VLAN id changed or was set to 0) is removed last. On a router that is set up, `olt_interface` and `vlan_id` changes need `{"confirm": true}` in the PATCH body, else 409
+`confirm_required` ("Customers on the OLT lose service until the OLT uses the new setting."); a customer port change needs none. When the router answers, a new `olt_interface` or
+`bench_port` that is not one of its ports is a 400 on that field.
+
+The sweep (every 5 minutes while the last pass was clean, every minute after a change or a failure) repeats the work with a backoff of 5 s doubling to 5 min and records changes and errors in the router's activity (actor `system`).
 
 Router JSON gains `wan_interface`, `olt_interface`, `vlan_id`, `customer_subnet`, `bench_port`, `wan_cap_mbps`, `olt_cap_mbps`, `support_phone` and
 `customer_port`: `{port, state: off|ok|applying|error|rebuild, text, message, olt_message, at}`; `text` is ready to show ("ether5: customer port ✓", "ether5: applying…", or the error in words).
 The web admin has `GET /admin/routers/customer-port.json?id=` for the same object.
 
 ## Automatic fixes
+
+`POST /routers/{id}/actions/pause-auto-fixes` `{paused: bool, until?: RFC 3339}` (owner) pauses or resumes them for one router; the answer and router JSON `auto_fixes` (and `auto_fixes` of the checks) are `{paused, until?}`.
+A pause with `until` lifts itself. While paused neither the sweep's fixes nor its customer-port self-heal run, and the checklist gives the buttons back (`auto.state: "paused"`); a save of the
+customer port still applies. Pausing and resuming are recorded in the router's activity with the actor. `fix.automatic` items for customer DNS, the customer DHCP server and traffic reporting
+say "The server keeps this on." (`auto.state: "keeps"` when nothing needed fixing). A manual fix, the post-join fixes and the sweep never run at the same time on one router.
 
 On every sweep the server runs, for each joined router with the v5 layout, every check fix of kind `auto` (never `confirm`, never one that needs hands on the router)
 through the same path and allowlist as the button, with the actor `system` in the router's activity. One attempt per item per interval; after a failure the wait doubles (1 min to 15 min).

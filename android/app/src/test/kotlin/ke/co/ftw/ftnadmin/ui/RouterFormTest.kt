@@ -154,6 +154,29 @@ class RouterFormTest {
         assertFalse(b.containsKey("pppoe_pass"))
     }
 
+    @Test fun changingTheOltPortOrVlanAsksFirstAndSendsConfirm() = runTest(main.dispatcher) {
+        routes["GET /api/v1/routers/r1"] = ok("""{"router_id":"r1","router_name":"Kilimani","olt_interface":"sfp-sfpplus1","vlan_id":100}""")
+        routes["PATCH /api/v1/routers/r1"] = ok("""{"router_id":"r1"}""")
+        val vm = EditRouterViewModel("r1", SitesRepository(api), RouterLiveRepository(api))
+        await(vm.state) { it.form != null }
+        // a customer port needs no confirm
+        vm.edit(RouterField.BENCH_PORT) { it.copy(benchPort = "ether5") }
+        assertFalse(vm.state.value.form!!.changesOlt(vm.state.value.original!!))
+        // the OLT port does: nothing is sent until the person confirms
+        vm.edit(RouterField.OLT_INTERFACE) { it.copy(oltInterface = "ether3") }
+        vm.save()
+        assertTrue(vm.state.value.confirmOlt)
+        assertTrue(synchronized(log) { log.none { it.method == "PATCH" } })
+        vm.cancelConfirm()
+        assertFalse(vm.state.value.confirmOlt)
+        vm.save()
+        vm.confirmSave()
+        await(vm.state) { it.saved }
+        val b = bodyOf("PATCH", "/api/v1/routers/r1")
+        assertEquals(true, b["confirm"]!!.jsonPrimitive.booleanOrNull)
+        assertEquals("ether3", b["olt_interface"]!!.jsonPrimitive.content)
+    }
+
     @Test fun switchingAwayFromStaticDropsStaticFields() {
         val i = RouterForm(name = "x", wanMode = "dhcp", wanAddress = "1.2.3.4/24", wanGateway = "1.2.3.1", pppoeUser = "u", pppoePass = "p").toInput()
         assertEquals("", i.wanAddress)

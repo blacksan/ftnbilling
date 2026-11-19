@@ -158,6 +158,8 @@ type Checks struct {
 	// "unknown" (the bridges could not be read).
 	Layout string      `json:"layout"`
 	Items  []CheckItem `json:"items"`
+	// AutoFixes says whether the server's automatic fixes of this router are paused.
+	AutoFixes *PauseState `json:"auto_fixes,omitempty"`
 	// Slow is true when some read of the router timed out: the server repeats the pass by itself.
 	Slow bool `json:"slow,omitempty"`
 }
@@ -1333,7 +1335,9 @@ func assessPort(sn *snapshot, site store.Site, iface string) portAssess {
 // (or the building says VLANID > 0).
 func assessOLT(sn *snapshot, site store.Site) portAssess {
 	a := assessPort(sn, site, site.OLTInterface)
-	a.conflict = len(a.rows) > 0 && (len(a.vlans) > 0 || site.VLANID > 0)
+	// Only a customer VLAN makes a bridged OLT port a conflict. With no VLAN set a VLAN interface on the
+	// OLT port is reported in words by the server's own pass (custport.go), not "fixed" here.
+	a.conflict = len(a.rows) > 0 && site.VLANID > 0
 	if a.conflict && len(a.vlans) == 0 {
 		a.unknown = append(a.unknown, "the building has a VLAN id but no VLAN interface exists on the port yet")
 	}
@@ -1385,7 +1389,10 @@ func evalOLT(e *evalCtx, it *CheckItem) {
 		it.Fix = CheckFix{Kind: FixConfirm, Label: "Take the port out of the bridge", Role: store.RoleOwner,
 			ConfirmText: fmt.Sprintf("%s. Taking it out of the bridge may cut them off. Do it?", strings.Join(why, "; "))}
 	default:
-		it.Fix = CheckFix{Kind: FixAuto, Label: "Take the port out of the bridge", Role: store.RoleOperator}
+		// Never automatic: the server's own pass owns the OLT port; taking it out of the bridge
+		// by hand is the operator's decision.
+		it.Fix = CheckFix{Kind: FixConfirm, Label: "Take the port out of the bridge", Role: store.RoleOwner,
+			ConfirmText: fmt.Sprintf("%s is a bridge port and the customer VLAN sits on it. Taking it out of the bridge may cut customers off. Do it?", a.iface)}
 	}
 }
 
