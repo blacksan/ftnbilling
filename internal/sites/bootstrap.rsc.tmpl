@@ -64,6 +64,8 @@
   /system/identity set name="{{rq .Identity}}"
   /system/clock set time-zone-name=Africa/Nairobi
   /system/ntp/client set enabled=yes servers=162.159.200.1,162.159.200.123
+  # Upstream DNS now, not in section 7: the failure report must be able to find the server whatever stops.
+  /ip/dns set servers={{.DNSServers}}
   :do { /certificate/settings set builtin-trust-anchors=trusted } on-error={ :put "   (this RouterOS has no built-in trust anchors setting)" }
 {{secClose 1 "system" false}}
 
@@ -164,6 +166,10 @@
   # The hold of section 2 is already at the top of the filter. The full rule set goes in behind it; the WAN
   # client is switched on after the last rule is in; the hold is removed last of all. If anything fails on the
   # way the hold stays, so the router stays closed.
+  # The tunnel interface exists before any rule names it (RouterOS refuses a rule for an unknown interface).
+  # Its address, peer and route are added in section 9.
+  /interface/wireguard remove [find where name="{{.WGIface}}"]
+  /interface/wireguard add name={{.WGIface}} private-key="{{.PrivateKey}}" mtu={{.MTU}} comment="ftn: tunnel to the billing server"
   /ip/firewall/filter remove [find where comment~"^ftn:" and comment!="ftn: hold"]
   /ip/firewall/nat remove [find where comment~"^ftn:"]
 {{- range .Filter}}
@@ -207,8 +213,7 @@
 
 :put "ftn 9/12: WireGuard tunnel to the billing server"
 {{secOpen 9 "WireGuard" true}}
-  /interface/wireguard remove [find where name="{{.WGIface}}"]
-  /interface/wireguard add name={{.WGIface}} private-key="{{.PrivateKey}}" mtu={{.MTU}} comment="ftn: tunnel to the billing server"
+  :if ([:len [/interface/wireguard/find where name="{{.WGIface}}"]] = 0) do={ :error "the tunnel interface from section 6 is missing" }
   /ip/address remove [find where comment="ftn: tunnel address"]
   /ip/address add address={{.TunnelIP}} network={{.ServerIP}} interface={{.WGIface}} comment="ftn: tunnel address"
   /interface/wireguard/peers remove [find where comment="ftn: billing server"]
@@ -242,6 +247,8 @@
 :put "ftn 12/12: checking the internet and the billing server"
 :local w 0
 :while ([:len [/ip/route/find where dst-address="0.0.0.0/0" and active=yes]] = 0 && $w < 30) do={ :delay 1s; :set w ($w + 1) }
+:local nt 0
+:do { :while (([/system/ntp/client/get status] != "synchronized") && $nt < 30) do={ :delay 1s; :set nt ($nt + 1) } } on-error={}
 :if ([:len [/ip/route/find where dst-address="0.0.0.0/0" and active=yes]] = 0) do={ :set report ($report . "12 internet: the router has no default route (check the WAN settings)\n"); :set fails ($fails + 1); :put "   no default route yet" }
 {{if or (eq .WANMode "dhcp") (eq .WANMode "pppoe")}}
 # A WAN address that overlaps the admin LAN or the customer network would break routing. Report it (the router is
@@ -276,6 +283,9 @@
   } on-error={ :put "   could not switch the WAN on" }
   :local hw 0
   :while ([:len [/ip/route/find where dst-address="0.0.0.0/0" and active=yes]] = 0 && $hw < 30) do={ :delay 1s; :set hw ($hw + 1) }
+  # A reset router's clock can be weeks off, and HTTPS fails until NTP corrects it.
+  :local nw 0
+  :do { :while (([/system/ntp/client/get status] != "synchronized") && $nw < 30) do={ :delay 1s; :set nw ($nw + 1) } } on-error={}
   {{.ReportPost}}
 {{- range .Files}}
   /file remove [find where name="{{.}}"]
