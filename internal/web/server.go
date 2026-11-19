@@ -68,6 +68,7 @@ type Server struct {
 	authn     *authn.Service
 	alertSink func(string) // tests: take security alerts instead of the outbox
 	idem      *idemStore
+	searchRL  *limiter    // search, by signed-in user (web and API)
 	refreshRL *limiter    // /api/v1/auth/refresh by client address
 	reboots   rebootGuard // one router reboot per 10 minutes per router (api_live.go)
 
@@ -96,6 +97,7 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 	a.SetAlert(s.securityAlert)
 	s.idem = newIdemStore()
 	s.refreshRL = newLimiter(30, time.Minute)
+	s.searchRL = newLimiter(searchPerMinute, time.Minute)
 	funcs := template.FuncMap{
 		"kes": func(n int) string { return "KES " + itoa(n) },
 		// brandParts splits "Fast Tech Net" into {"Fast Tech", "Net"} so the

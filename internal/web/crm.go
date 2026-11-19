@@ -77,7 +77,10 @@ func (s *Server) adminSearch(w http.ResponseWriter, r *http.Request) {
 		s.render(w, "admin_search", p)
 		return
 	}
-	res := s.svc.Search(q, sc.Has)
+	res, ok := s.runSearch(w, r, q, sc.Has)
+	if !ok {
+		return
+	}
 	if kind, id, ok := res.Single(); ok {
 		to := ""
 		switch kind {
@@ -121,6 +124,7 @@ func (s *Server) adminCustomers(w http.ResponseWriter, r *http.Request) {
 		state = "current"
 	}
 	q := r.URL.Query().Get("q")
+	p.Data["SeeID4"] = p.Role == store.RoleOwner
 	rows := s.svc.ListCustomers(q, state, sc.Has, sc.ID)
 	sort.Slice(rows, func(i, j int) bool { return strings.ToLower(rows[i].C.Name) < strings.ToLower(rows[j].C.Name) })
 	p.Data["Rows"], p.Data["Q"], p.Data["State"] = rows, q, state
@@ -158,6 +162,7 @@ func (s *Server) customerPage(w http.ResponseWriter, r *http.Request, revealed s
 	p.Data["P"], p.Data["Free"], p.Data["SiteOf"] = prof, free, siteOf
 	p.Data["NatID"], p.Data["Revealed"] = s.svc.NationalIDEnabled(), revealed
 	p.Data["Anon"] = !prof.Customer.AnonymizedAt.IsZero()
+	p.Data["SeeID4"] = p.Role == store.RoleOwner
 	p.Data["SiteNames"] = siteOf
 	s.render(w, "admin_customer", p)
 }

@@ -36,7 +36,12 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 		validationErr(w, map[string]string{"q": "type something to search for"})
 		return
 	}
-	res := s.svc.Search(q, func(string) bool { return true })
+	if !s.searchRL.allow("u:" + c.user.ID) {
+		rateLimited(w, time.Minute, false)
+		return
+	}
+	res := s.svc.Search(q, func(string) bool { return true }, c.user.Role == store.RoleOwner)
+	s.auditNationalIDHits(c.user, c.ip, res)
 	custs := []apiCustomer{}
 	for _, cu := range res.Customers {
 		custs = append(custs, apiCustomer{cu.ID, cu.Name, cu.Phone, cu.Email})

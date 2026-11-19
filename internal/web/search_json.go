@@ -33,7 +33,10 @@ func (s *Server) adminSearchJSON(w http.ResponseWriter, r *http.Request) {
 	sc := s.scopeOf(r)
 	out := []searchGroup{}
 	if len(q) >= 2 {
-		res := s.svc.Search(q, sc.Has)
+		res, ok := s.runSearch(w, r, q, sc.Has)
+		if !ok {
+			return
+		}
 		names := map[string]string{}
 		for _, st := range sc.Sites {
 			names[st.ID] = st.Name
@@ -78,6 +81,41 @@ func (s *Server) adminSearchJSON(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"q": q, "groups": out})
+}
+
+// searchPerMinute is the per-user cap on searches (web page, palette and API).
+// The palette searches as you type, so it is generous for people and useless for
+// a script that wants to try thousands of values.
+const searchPerMinute = 120
+
+// runSearch is the one place the web UI searches. The exact national-ID match is
+// an oracle (guess a number, see whether anyone owns it), so it runs for owners
+// only, who may reveal IDs anyway, and every ID it confirms is audited. Searches
+// are limited per signed-in user; when the limit is hit the reply is a 429.
+func (s *Server) runSearch(w http.ResponseWriter, r *http.Request, q string, in func(string) bool) (billing.SearchResult, bool) {
+	u, _ := userOf(r)
+	if !s.searchRL.allow("u:" + u.ID) {
+		w.Header().Set("Retry-After", "60")
+		if strings.HasSuffix(r.URL.Path, ".json") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "Too many searches. Wait a minute and try again.", "retry_after_s": 60})
+			return billing.SearchResult{}, false
+		}
+		http.Error(w, "Too many searches in a short time. Wait a minute and try again.", http.StatusTooManyRequests)
+		return billing.SearchResult{}, false
+	}
+	res := s.svc.Search(q, in, u.Role == store.RoleOwner)
+	s.auditNationalIDHits(u, realIP(r), res)
+	return res, true
+}
+
+// auditNationalIDHits writes one audit line for each customer whose ID a search
+// confirmed. The query itself (the ID) is never written.
+func (s *Server) auditNationalIDHits(u store.AdminUser, ip string, res billing.SearchResult) {
+	for _, id := range res.NationalIDHits {
+		s.authn.AuditNow(u.Username, ip, "national ID matched by search for customer "+id)
+	}
 }
 
 func joinNonEmpty(sep string, v ...string) string {
