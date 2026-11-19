@@ -20,6 +20,7 @@ import (
 const (
 	codePortLocked = "port_locked"
 	codeLastLAN    = "last_lan_port"
+	codeOLTOff     = "olt_disable_refused"
 	codeNoPort     = "no_such_port"
 )
 
@@ -120,6 +121,8 @@ func (s *Server) portFail(w http.ResponseWriter, err error) {
 			apiErr(w, http.StatusConflict, codePortLocked, pe.Msg, nil)
 		case sites.PortErrLastLAN:
 			apiErr(w, http.StatusConflict, codeLastLAN, pe.Msg, nil)
+		case sites.PortErrOLTOff:
+			apiErr(w, http.StatusConflict, codeOLTOff, pe.Msg, nil)
 		case sites.PortErrConfirm:
 			apiErr(w, http.StatusUnprocessableEntity, codeValidation, pe.Msg,
 				map[string]any{"fields": map[string]any{"confirm_name": pe.Msg}, "warning": pe.Warning})

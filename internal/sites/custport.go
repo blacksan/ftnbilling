@@ -415,7 +415,7 @@ func (m *Manager) cpPass(ctx context.Context, siteID string, eff store.Site) cpR
 		if err != nil {
 			return fail(err)
 		}
-		if added || plan.lanMember[p] {
+		if (added || plan.lanMember[p]) && ifaceUsable(sn, p) {
 			lanHave = true
 		}
 	}
@@ -673,7 +673,9 @@ func planCustomerPorts(sn *snapshot, site store.Site) customerPlan {
 	for _, r := range sn.tbl("/interface/bridge/port") {
 		if r["bridge"] == LANBridge && !rowDisabled(r) && containsStr(p.lanPorts, r["interface"]) {
 			p.lanMember[r["interface"]] = true
-			p.lanPresent = true
+			if ifaceUsable(sn, r["interface"]) { // a member that is off or has no cable is no safety net
+				p.lanPresent = true
+			}
 		}
 	}
 	if pr := portProblems(sn, site, site.OLTInterface, "olt"); len(pr) > 0 {
@@ -733,11 +735,26 @@ func planCustomerPorts(sn *snapshot, site store.Site) customerPlan {
 	}
 	off := SplitPorts(site.DisabledPorts)
 	for _, r := range sn.tbl("/interface") {
+		// only customer and unused ports are kept off: an admin LAN port or the OLT uplink that someone
+		// switched on again at the router stays on
+		if containsStr(p.lanPorts, r["name"]) || r["name"] == site.OLTInterface {
+			continue
+		}
 		if containsStr(off, r["name"]) && !rowDisabled(r) && r["name"] != site.WANInterface && physicalType(r["type"]) && !wanIfaces(sn, site)[r["name"]] {
 			p.disable = append(p.disable, r)
 		}
 	}
 	return p
+}
+
+// ifaceUsable: the interface is enabled and has a link, in the snapshot.
+func ifaceUsable(sn *snapshot, name string) bool {
+	for _, r := range sn.tbl("/interface") {
+		if r["name"] == name {
+			return !rowDisabled(r) && yes(r["running"])
+		}
+	}
+	return false
 }
 
 // physicalType: the interface types of real ports (an SFP or combo port is "ether").

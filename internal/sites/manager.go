@@ -322,6 +322,8 @@ type SiteInput struct {
 	// Confirm says the operator accepted the warning for a change of the OLT port or VLAN on a router
 	// that is set up (customers lose service until the OLT uses the new setting). Not stored.
 	Confirm bool
+	// ConfirmName is the typed router name that a change of the admin LAN ports of a set-up router needs. Not stored.
+	ConfirmName string
 }
 
 // SiteInputOf is the input that leaves a router as it is (a PATCH starts from it).
@@ -334,6 +336,9 @@ func SiteInputOf(st store.Site) SiteInput {
 
 // ErrOLTConfirmRequired: the OLT port or the VLAN of a set-up router cannot change without confirm.
 var ErrOLTConfirmRequired = errors.New("Customers on the OLT lose service until the OLT uses the new setting. Confirm to change the OLT port or the VLAN.")
+
+// ErrLANConfirmRequired: changing the admin LAN ports of a set-up router needs the typed router name.
+var ErrLANConfirmRequired = errors.New("Type the router name to confirm. " + WarnLAN)
 
 // ErrNoDataKey: a PPPoE password cannot be stored without DATA_KEY.
 var ErrNoDataKey = errors.New("the PPPoE password cannot be saved: DATA_KEY is not set on the server")
@@ -510,6 +515,9 @@ func (m *Manager) checkPortsExist(id string, in SiteInput) error {
 		return nil
 	}
 	was := m.Effective(cur)
+	if err := m.checkLANChange(cur, was, in); err != nil {
+		return err
+	}
 	newCust := addedPorts(SplitPorts(was.CustomerPorts), SplitPorts(in.CustomerPorts))
 	newLAN := addedPorts(SplitPorts(was.LANPorts), SplitPorts(in.LANPorts))
 	olt := m.Effective(store.Site{OLTInterface: strings.TrimSpace(in.OLTInterface)}).OLTInterface
@@ -656,3 +664,37 @@ func (m *Manager) Status(ctx context.Context, siteID string) (SiteStatus, bool) 
 }
 
 func nowFn() time.Time { return time.Now() }
+
+// checkLANChange guards the admin LAN ports of a set-up router: a change needs the typed router name, and when a
+// port leaves the list at least one port that stays must be switched on and have a link (it is read from the
+// router; a router that cannot be read refuses, because the old port's membership would go without proof).
+func (m *Manager) checkLANChange(cur store.Site, was store.Site, in SiteInput) error {
+	nowLAN := SplitPorts(m.Effective(store.Site{LANPorts: in.LANPorts}).LANPorts)
+	oldLAN := SplitPorts(was.LANPorts)
+	if sameList(oldLAN, nowLAN) {
+		return nil
+	}
+	if strings.TrimSpace(in.ConfirmName) != cur.Name {
+		return ErrLANConfirmRequired
+	}
+	if len(addedPorts(nowLAN, oldLAN)) == 0 {
+		return nil // only ports added: nothing leaves
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), routeros.DefaultTimeout)
+	defer cancel()
+	rt := m.Router(cur.ID)
+	ifaces, err := m.ifaceRows(ctx, rt)
+	if err != nil {
+		return fieldErr("lan_ports", "The router did not answer, so the server cannot check that an admin LAN port stays connected. Try again when it is reachable.")
+	}
+	keep := 0
+	for _, p := range nowLAN {
+		if portUsable(ifaces[p]) {
+			keep++
+		}
+	}
+	if keep == 0 {
+		return &PortRefusal{Kind: PortErrLastLAN, Msg: fmt.Sprintf("None of the admin LAN ports (%s) is switched on and connected, so the router would be cut off. Connect and enable one first.", strings.Join(nowLAN, ", "))}
+	}
+	return nil
+}

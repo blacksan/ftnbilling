@@ -99,13 +99,11 @@ func TestAPIPortChangeRules(t *testing.T) {
 	if res := patch(r.oper.Access, "sfp-sfpplus1", map[string]any{"disabled": true, "confirm_name": "Alpha"}); res.Status != 403 {
 		t.Fatalf("operator disables the OLT: %d %s", res.Status, res.Raw)
 	}
-	// owner: the typed name is required, then it works
-	res := patch(r.owner.Access, "sfp-sfpplus1", map[string]any{"disabled": true})
-	if res.Status != 422 || !strings.Contains(string(res.Raw), "All customers on the OLT go offline") || !strings.Contains(string(res.Raw), "confirm_name") {
-		t.Fatalf("confirm: %d %s", res.Status, res.Raw)
-	}
-	if res := patch(r.owner.Access, "sfp-sfpplus1", map[string]any{"disabled": true, "confirm_name": "Beta"}); res.Status != 422 {
-		t.Fatalf("wrong name: %d", res.Status)
+	// the OLT uplink is never switched off from here, with or without the name
+	for _, body := range []map[string]any{{"disabled": true}, {"disabled": true, "confirm_name": "Alpha"}} {
+		if res := patch(r.owner.Access, "sfp-sfpplus1", body); res.Status != 409 || code(res) != "olt_disable_refused" || !strings.Contains(string(res.Raw), "Move the OLT role to another port") {
+			t.Fatalf("OLT disable: %d %s", res.Status, res.Raw)
+		}
 	}
 	if res := patch(r.owner.Access, "ether4", map[string]any{"role": "lan"}); res.Status != 200 {
 		t.Fatalf("owner lan: %d %s", res.Status, res.Raw)
@@ -176,4 +174,48 @@ func jsonText(m map[string]any) string {
 	}
 	walk(m)
 	return b.String()
+}
+
+func TestAPIRouterJSONCarriesTheCustomerAndDisabledPortLists(t *testing.T) {
+	r, _, path := portsRig(t)
+	id := "/routers/" + r.A.ID
+	if res := r.call(r.oper.Access, "PATCH", path+"/ether4", map[string]any{"disabled": true}, nil); res.Status != 200 {
+		t.Fatalf("%d %s", res.Status, res.Raw)
+	}
+	res := r.call(r.view.Access, "GET", id, nil, nil)
+	j := res.JSON(t)
+	if r2, ok := j["router"].(map[string]any); ok {
+		j = r2
+	}
+	for _, k := range []string{"customer_ports", "disabled_ports", "bench_port"} {
+		if _, ok := j[k]; !ok {
+			t.Fatalf("no %s in %s", k, res.Raw)
+		}
+	}
+	if d, _ := j["disabled_ports"].([]any); len(d) != 1 || d[0] != "ether4" {
+		t.Fatalf("disabled_ports: %v", j["disabled_ports"])
+	}
+	if c, ok := j["customer_ports"].([]any); !ok || c == nil {
+		t.Fatalf("customer_ports must be an array: %v", j["customer_ports"])
+	}
+}
+
+func TestAPIRouterLANPortsChangeNeedsTheNameAndAConnectedPort(t *testing.T) {
+	r, mk, _ := portsRig(t)
+	id := "/routers/" + r.A.ID
+	// no typed name
+	res := r.call(r.owner.Access, "PATCH", id, map[string]any{"lan_ports": "ether5"}, nil)
+	if res.Status != 422 || !strings.Contains(string(res.Raw), "confirm_name") {
+		t.Fatalf("no name: %d %s", res.Status, res.Raw)
+	}
+	// the name, but no cable on the new port
+	for _, row := range mk.Table("/interface") {
+		if row["name"] == "ether5" {
+			_ = mk.SetRow(t.Context(), "/interface", row[".id"], map[string]string{"running": "false"})
+		}
+	}
+	res = r.call(r.owner.Access, "PATCH", id, map[string]any{"lan_ports": "ether5", "confirm_name": "Alpha"}, nil)
+	if res.Status != 409 || !strings.Contains(string(res.Raw), "last_lan_port") {
+		t.Fatalf("cable-less: %d %s", res.Status, res.Raw)
+	}
 }

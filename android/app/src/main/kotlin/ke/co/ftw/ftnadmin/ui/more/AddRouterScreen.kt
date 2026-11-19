@@ -125,6 +125,27 @@ fun EditRouterScreen(routerId: String, onBack: () -> Unit) {
                 Button(onClick = vm::save, enabled = ui.canSave, modifier = Modifier.fillMaxWidth()) {
                     Text(if (ui.busy) "Saving..." else "Save", maxLines = 1)
                 }
+                ui.fieldErrors[RouterField.CONFIRM_NAME]?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
+                if (ui.confirmLan) {
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = vm::cancelConfirm,
+                        title = { Text("Change the admin LAN ports?") },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(RouterFormCopy.LAN_CONFIRM + if (ui.autoFixesPaused) " " + RouterFormCopy.PAUSED_NOTE else "")
+                                Text("Type the router name (${ui.original?.name.orEmpty()}) to confirm.", style = MaterialTheme.typography.bodySmall)
+                                androidx.compose.material3.OutlinedTextField(
+                                    value = ui.typedName,
+                                    onValueChange = vm::setTypedName,
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        },
+                        confirmButton = { TextButton(onClick = vm::confirmLanSave, enabled = vm.canConfirmLan()) { Text("Change it") } },
+                        dismissButton = { TextButton(onClick = vm::cancelConfirm) { Text("Cancel") } },
+                    )
+                }
                 if (ui.confirmOlt) {
                     androidx.compose.material3.AlertDialog(
                         onDismissRequest = vm::cancelConfirm,

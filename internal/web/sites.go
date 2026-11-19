@@ -142,7 +142,7 @@ func siteInput(r *http.Request) sites.SiteInput {
 		WANMode: f("wanmode"), WANAddress: f("wanaddr"), WANGateway: f("wangw"), WANDNS: f("wandns"),
 		PPPoEUser: f("pppoeuser"), PPPoEPass: r.PostFormValue("pppoepass"), PPPoEPassClear: r.PostFormValue("pppoeclear") == "1",
 		LANPorts: f("lanports"), LANSubnet: f("lansubnet"),
-		Confirm: f("confirm") == "1",
+		Confirm: f("confirm") == "1", ConfirmName: f("confirmname"),
 	}
 }
 

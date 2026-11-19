@@ -95,7 +95,7 @@
 {{else if eq $tab "profile"}}
 <div class="grid c2">
 <section class="panel"><h2>Details</h2>
-<form method="post" action="/admin/routers/update" class="stack-col" style="margin-top:12px"{{if $s.WGPublicKey}} data-plumb{{if .Data.Pause.Paused}} data-paused{{end}} data-olt-default="sfp-sfpplus1" data-olt="{{.Data.Eff.OLTInterface}}" data-vlan="{{.Data.Eff.VLANID}}"{{end}}><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="confirm" value="">
+<form method="post" action="/admin/routers/update" class="stack-col" style="margin-top:12px"{{if $s.WGPublicKey}} data-plumb{{if .Data.Pause.Paused}} data-paused{{end}} data-olt-default="sfp-sfpplus1" data-olt="{{.Data.Eff.OLTInterface}}" data-vlan="{{.Data.Eff.VLANID}}" data-lanports="{{.Data.Eff.LANPorts}}" data-name="{{$s.Name}}"{{end}}><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="confirm" value=""><input type="hidden" name="confirmname" value="">
 {{template "sitefields" $s}}
 {{with .Data.CustPort}}{{if .Text}}<p class="cport {{.State}}" data-cport="{{.State}}" role="status">{{.Text}}</p>{{end}}{{if .OLTMessage}}<p class="cport error" role="status">OLT uplink: {{.OLTMessage}}</p>{{end}}{{end}}
 {{if .Data.Ports}}<datalist id="router-ports">{{range .Data.Ports}}<option value="{{.}}">{{end}}</datalist>{{end}}

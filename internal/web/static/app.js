@@ -134,7 +134,21 @@
     e.preventDefault();
     var paused = f.hasAttribute("data-paused") ? " Automatic fixes are paused; this change is still applied now." : "";
     ask("Change the OLT setting?", "Customers on the OLT lose service until the OLT uses the new setting. The server moves the port and the VLAN on the router by itself as soon as you confirm." + paused, "Change it").then(function (yes) {
-      if (!yes) return; ok.value = "1"; f.__plumbOK = true; f.submit();
+      if (!yes) return; ok.value = "1"; f.__plumbOK = true; if (f.requestSubmit) f.requestSubmit(); else f.submit();
+    });
+  }, true);
+
+  /* Changing the admin LAN ports of a router that is set up can cut off WinBox: type the router name first. */
+  doc.addEventListener("submit", function (e) {
+    var f = e.target;
+    if (!f.hasAttribute || !f.hasAttribute("data-plumb") || f.__lanOK) return;
+    var lan = $("input[name=lanports]", f), nm = $("input[name=confirmname]", f);
+    if (!lan || !nm) return;
+    var norm = function (v) { return String(v || "").replace(/\s+/g, "") || "ether2"; };
+    if (norm(lan.value) === norm(f.getAttribute("data-lanports"))) return;
+    e.preventDefault();
+    askName("Change the admin LAN ports?", "You may lose your WinBox session on this port. Type the router name to confirm. The server keeps the old port until the new one has a link.", "Change it", f.getAttribute("data-name")).then(function (typed) {
+      if (typed == null) return; nm.value = typed; f.__lanOK = true; f.submit();
     });
   }, true);
 
@@ -469,7 +483,9 @@
         if (p.locked) { act.appendChild(el("span", "muted", "locked: set in the router's network settings")); }
         else if (!p.can_change) { act.appendChild(el("span", "muted", p.needs_owner ? "owner only" : "")); }
         else {
-          var b = el("button", "ghost sm", p.disabled ? "Enable" : "Disable"); b.type = "button"; b.onclick = function () { toggle(p); }; act.appendChild(b);
+          /* the OLT uplink is not switched off here: move the OLT role or unplug it */
+          if (p.can_disable !== false) { var b = el("button", "ghost sm", p.disabled ? "Enable" : "Disable"); b.type = "button"; b.onclick = function () { toggle(p); }; act.appendChild(b); }
+          else { act.appendChild(el("span", "muted", "move the OLT role to switch it off")); }
           if (p.role_options && p.role_options.length) {
             var sel = el("select"); sel.setAttribute("aria-label", "Change the role of " + p.name);
             var o0 = el("option", "", "Change role…"); o0.value = ""; sel.appendChild(o0);

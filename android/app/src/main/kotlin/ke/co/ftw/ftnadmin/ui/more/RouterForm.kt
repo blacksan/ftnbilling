@@ -42,7 +42,8 @@ object RouterField {
     const val OLT_INTERFACE = "olt_interface"
     const val VLAN_ID = "vlan_id"
     const val CUSTOMER_SUBNET = "customer_subnet"
-    const val BENCH_PORT = "bench_port"
+    const val CUSTOMER_PORTS = "customer_ports"
+    const val CONFIRM_NAME = "confirm_name"
     const val WAN_CAP_MBPS = "wan_cap_mbps"
     const val SUPPORT_PHONE = "support_phone"
 }
@@ -55,8 +56,10 @@ object RouterFormCopy {
     const val DEFAULT_OLT = "sfp-sfpplus1"
     const val OLT_LABEL = "OLT uplink port"
     const val OLT_HINT = "The port the OLT is plugged into: an SFP port (sfp-sfpplus1) or an Ethernet port (for example ether3)."
-    const val CUSTOMER_PORT_LABEL = "Customer port (extra)"
-    const val CUSTOMER_PORT_HINT = "A port where you can plug a customer device directly (for example ether5). The server sets it up."
+    const val CUSTOMER_PORT_LABEL = "Customer ports (extra)"
+    const val CUSTOMER_PORT_HINT = "Ports where you can plug a customer device directly (for example ether4,ether5). The server sets them up."
+    const val LAN_CONFIRM = "You may lose your WinBox session on this port. The server keeps the old admin LAN port until the new one has a link."
+    const val DEFAULT_LAN = "ether2"
 }
 
 /**
@@ -68,6 +71,15 @@ fun portChoices(interfaces: List<NetInterface>): List<String> =
         i.type !in setOf("vlan", "bridge", "wg", "wireguard") &&
             (i.type == "ether" || listOf("ether", "sfp", "qsfp", "combo").any { i.name.startsWith(it, ignoreCase = true) })
     }.map { it.name }.distinct()
+
+/** A comma separated port list as a list: trimmed, no blanks, no repeats. */
+fun portList(text: String): List<String> = text.split(',').map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+
+/** [list] with [port] added, or removed when it is there already. */
+fun togglePort(list: String, port: String): String {
+    val l = portList(list)
+    return (if (port in l) l - port else l + port).joinToString(",")
+}
 
 /** Text state of the router form (create and edit). */
 data class RouterForm(
@@ -88,7 +100,8 @@ data class RouterForm(
     val oltInterface: String = "",
     val vlan: String = "",
     val customerSubnet: String = "",
-    val benchPort: String = "",
+    /** Comma separated customer ports (the server keeps a list; `bench_port` is only its first entry). */
+    val customerPorts: String = "",
     val wanCap: String = "",
     val supportPhone: String = "",
 ) {
@@ -96,7 +109,10 @@ data class RouterForm(
     fun changesOlt(original: RouterForm): Boolean =
         oltInterface.trim().ifEmpty { RouterFormCopy.DEFAULT_OLT } != original.oltInterface.trim().ifEmpty { RouterFormCopy.DEFAULT_OLT } || (vlan.toIntOrNull() ?: 0) != (original.vlan.toIntOrNull() ?: 0)
 
-    fun toInput(confirm: Boolean = false) = RouterInput(
+    /** True when the admin LAN ports differ from [original]: the server then needs the typed router name. */
+    fun changesLan(original: RouterForm): Boolean = portList(lanPorts.ifBlank { RouterFormCopy.DEFAULT_LAN }) != portList(original.lanPorts.ifBlank { RouterFormCopy.DEFAULT_LAN })
+
+    fun toInput(confirm: Boolean = false, confirmName: String = "") = RouterInput(
         name = name,
         wanInterface = wanInterface,
         wanMode = wanMode,
@@ -111,10 +127,11 @@ data class RouterForm(
         oltInterface = oltInterface,
         vlanId = vlan.toIntOrNull(),
         customerSubnet = customerSubnet,
-        benchPort = benchPort,
+        customerPorts = portList(customerPorts),
         wanCapMbps = wanCap.toIntOrNull(),
         supportPhone = supportPhone,
         confirm = confirm,
+        confirmName = confirmName,
     )
 
     companion object {
@@ -132,7 +149,7 @@ data class RouterForm(
             oltInterface = s.oltInterface,
             vlan = if (s.vlanId > 0) s.vlanId.toString() else "",
             customerSubnet = s.customerSubnet,
-            benchPort = s.benchPort,
+            customerPorts = s.customerPorts.ifEmpty { listOfNotNull(s.benchPort.ifBlank { null }) }.joinToString(","),
             wanCap = if (s.wanCapMbps > 0) s.wanCapMbps.toString() else "",
             supportPhone = s.supportPhone,
         )
@@ -228,22 +245,22 @@ fun RouterFormFields(
 
     SectionCard("Customers") {
         field(RouterField.OLT_INTERFACE, RouterFormCopy.OLT_LABEL, form.oltInterface, hint = RouterFormCopy.OLT_HINT) { copy(oltInterface = it) }
-        PortPicker(ports, form.oltInterface) { p -> onEdit(RouterField.OLT_INTERFACE) { it.copy(oltInterface = p) } }
+        PortPicker(ports, listOf(form.oltInterface)) { p -> onEdit(RouterField.OLT_INTERFACE) { it.copy(oltInterface = p) } }
         field(RouterField.VLAN_ID, "VLAN (0 = untagged)", form.vlan, KeyboardType.Number) { copy(vlan = it.filter(Char::isDigit)) }
         field(RouterField.CUSTOMER_SUBNET, "Customer subnet", form.customerSubnet, hint = "Default 10.5.50.0/24") { copy(customerSubnet = it) }
-        field(RouterField.BENCH_PORT, RouterFormCopy.CUSTOMER_PORT_LABEL, form.benchPort, hint = RouterFormCopy.CUSTOMER_PORT_HINT) { copy(benchPort = it) }
-        PortPicker(ports, form.benchPort) { p -> onEdit(RouterField.BENCH_PORT) { it.copy(benchPort = if (it.benchPort == p) "" else p) } }
+        field(RouterField.CUSTOMER_PORTS, RouterFormCopy.CUSTOMER_PORT_LABEL, form.customerPorts, hint = RouterFormCopy.CUSTOMER_PORT_HINT) { copy(customerPorts = it) }
+        PortPicker(ports.filter { it != form.wanInterface }, portList(form.customerPorts)) { p -> onEdit(RouterField.CUSTOMER_PORTS) { it.copy(customerPorts = togglePort(it.customerPorts, p)) } }
         field(RouterField.WAN_CAP_MBPS, "WAN capacity (Mbps)", form.wanCap, KeyboardType.Number) { copy(wanCap = it.filter(Char::isDigit)) }
     }
 }
 
 /** Chips of the router's own ports under a port field; nothing when the router has not answered. */
 @Composable
-private fun PortPicker(ports: List<String>, selected: String, onPick: (String) -> Unit) {
+private fun PortPicker(ports: List<String>, selected: List<String>, onPick: (String) -> Unit) {
     if (ports.isEmpty()) return
     ChipRow(horizontalPadding = 0.dp) {
         ports.forEach { p ->
-            FilterChip(selected = selected == p, onClick = { onPick(p) }, label = { ChipLabel(p) })
+            FilterChip(selected = p in selected, onClick = { onPick(p) }, label = { ChipLabel(p) })
         }
     }
 }

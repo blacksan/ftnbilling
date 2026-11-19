@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -92,7 +93,7 @@ func TestPortsListsEveryPhysicalPortWithItsRole(t *testing.T) {
 	if p := portByName(t, ov, "ether4"); strings.Join(p.RoleOptions, ",") != "lan,olt,customer" {
 		t.Fatalf("owner options on an unused port: %+v", p)
 	}
-	if p := portByName(t, ov, "sfp-sfpplus1"); len(p.RoleOptions) != 0 || p.RoleWarning != WarnOLT || !p.ConfirmDisable {
+	if p := portByName(t, ov, "sfp-sfpplus1"); len(p.RoleOptions) != 0 || p.RoleWarning != WarnOLT || p.ConfirmDisable || p.CanDisable {
 		t.Fatalf("%+v", p)
 	}
 }
@@ -189,7 +190,6 @@ func TestChangePortNeedsTheTypedRouterNameForCoreChanges(t *testing.T) {
 	}{
 		"leave the admin LAN":   {"ether2", PortChange{Role: sp("unused")}, WarnLAN},
 		"disable an admin LAN":  {"ether2", PortChange{Disabled: bp(true)}, WarnLAN},
-		"disable the OLT":       {"sfp-sfpplus1", PortChange{Disabled: bp(true)}, WarnOLT},
 		"move the OLT uplink":   {"ether5", PortChange{Role: sp("olt")}, WarnOLT},
 		"wrong name is refused": {"ether2", PortChange{Role: sp("unused"), ConfirmName: "Block B"}, WarnLAN},
 	} {
@@ -476,5 +476,203 @@ func TestWebFigCheckIsOKForTheAdminLANAndTheServer(t *testing.T) {
 	f.m.chk.drop(s.ID)
 	if it := checkItem(t, f, s.ID, CheckWWW); it.Status != StatusInfo || !strings.Contains(it.Detail, "new line") {
 		t.Fatalf("%+v", it)
+	}
+}
+
+// twoLANs makes ether2 and ether4 admin LAN ports, both members of br-lan, both with a link.
+func twoLANs(t *testing.T) (*fixture, store.Site, *routeros.Mock) {
+	f, s, m := portsRig(t)
+	if _, err := f.m.ChangePort(context.Background(), s.ID, "ether4", PortChange{Role: sp("lan")}, ownerWho); err != nil {
+		t.Fatal(err)
+	}
+	f.m.cport.wg.Wait()
+	if r := portRow(m, "ether4"); r == nil || r["bridge"] != "br-lan" {
+		t.Fatalf("second LAN not applied: %v", m.Table("/interface/bridge/port"))
+	}
+	m.ResetWrites()
+	return f, f.site(s.ID), m
+}
+
+func TestDisablingTheOnlyConnectedAdminLANIsRefused(t *testing.T) {
+	f, s, m := twoLANs(t)
+	setField(t, m, "/interface", "ether4", "running", "false") // unplugged
+	m.ResetWrites()
+	for _, ch := range []PortChange{{Disabled: bp(true), ConfirmName: "Block A"}, {Role: sp("unused"), ConfirmName: "Block A"}} {
+		if pe := portErrOf(t, f, s.ID, "ether2", ch, ownerWho); pe.Kind != PortErrLastLAN {
+			t.Errorf("%+v: %+v", ch, pe)
+		}
+	}
+	// the second port switched off is no safety net either
+	setField(t, m, "/interface", "ether4", "running", "true")
+	setField(t, m, "/interface", "ether4", "disabled", "true")
+	m.ResetWrites()
+	if pe := portErrOf(t, f, s.ID, "ether2", PortChange{Disabled: bp(true), ConfirmName: "Block A"}, ownerWho); pe.Kind != PortErrLastLAN {
+		t.Errorf("disabled neighbour: %+v", pe)
+	}
+	if m.Writes() != 0 || ifaceRow(m, "ether2")["disabled"] == "yes" || f.site(s.ID).LANPorts != "ether2,ether4" {
+		t.Fatalf("something was written: %d %v %q", m.Writes(), ifaceRow(m, "ether2"), f.site(s.ID).LANPorts)
+	}
+	// the neighbour back with a link: the change goes through, as a one-off (not kept off by the sweep)
+	setField(t, m, "/interface", "ether4", "disabled", "false")
+	if _, err := f.m.ChangePort(context.Background(), s.ID, "ether2", PortChange{Disabled: bp(true), ConfirmName: "Block A"}, ownerWho); err != nil {
+		t.Fatal(err)
+	}
+	if ifaceRow(m, "ether2")["disabled"] != "yes" || f.site(s.ID).DisabledPorts != "" {
+		t.Fatalf("%v %q", ifaceRow(m, "ether2"), f.site(s.ID).DisabledPorts)
+	}
+}
+
+func TestMovingAnAdminLANNeedsAnotherConnectedMember(t *testing.T) {
+	f, s, m := twoLANs(t)
+	setField(t, m, "/interface", "ether4", "running", "false")
+	if pe := portErrOf(t, f, s.ID, "ether2", PortChange{Role: sp("customer"), ConfirmName: "Block A"}, ownerWho); pe.Kind != PortErrLastLAN {
+		t.Fatalf("%+v", pe)
+	}
+	// a LAN port that is not a member of br-lan yet does not count either
+	setField(t, m, "/interface", "ether4", "running", "true")
+	m.RemoveRow(context.Background(), "/interface/bridge/port", portRow(m, "ether4")[".id"])
+	if pe := portErrOf(t, f, s.ID, "ether2", PortChange{Role: sp("unused"), ConfirmName: "Block A"}, ownerWho); pe.Kind != PortErrLastLAN {
+		t.Fatalf("not a member: %+v", pe)
+	}
+	if f.site(s.ID).LANPorts != "ether2,ether4" {
+		t.Fatalf("%q", f.site(s.ID).LANPorts)
+	}
+}
+
+func TestRouterFormLANChangeNeedsTheNameAndAConnectedPort(t *testing.T) {
+	f, s, m := portsRig(t)
+	setField(t, m, "/interface", "ether5", "running", "false") // a port with no cable
+	// no typed name
+	if err := f.saveInput(s.ID, func(in *SiteInput) { in.LANPorts = "ether5" }); !errors.Is(err, ErrLANConfirmRequired) {
+		t.Fatalf("no name: %v", err)
+	}
+	// the name, but the new port has no link
+	err := f.saveInput(s.ID, func(in *SiteInput) { in.LANPorts, in.ConfirmName = "ether5", "Block A" })
+	var pe *PortRefusal
+	if !errors.As(err, &pe) || pe.Kind != PortErrLastLAN {
+		t.Fatalf("cable-less port: %v", err)
+	}
+	if f.site(s.ID).LANPorts != "ether2" && f.site(s.ID).LANPorts != "" {
+		t.Fatalf("saved anyway: %q", f.site(s.ID).LANPorts)
+	}
+	// with a link it saves; the old member leaves only after the new one is in
+	setField(t, m, "/interface", "ether5", "running", "true")
+	if err := f.saveInput(s.ID, func(in *SiteInput) { in.LANPorts, in.ConfirmName = "ether5", "Block A" }); err != nil {
+		t.Fatal(err)
+	}
+	f.m.EnsureCustomerPort(context.Background(), s.ID, true)
+	if r := portRow(m, "ether5"); r == nil || r["bridge"] != "br-lan" || portRow(m, "ether2") != nil {
+		t.Fatalf("%v", m.Table("/interface/bridge/port"))
+	}
+}
+
+func TestPassKeepsTheOldLANMemberUntilTheNewOneHasALink(t *testing.T) {
+	f, s, m := portsRig(t)
+	ctx := context.Background()
+	setField(t, m, "/interface", "ether5", "running", "false")
+	f.st.Update(func(d *store.Data) error { x := d.Sites[s.ID]; x.LANPorts = "ether5"; d.Sites[s.ID] = x; return nil })
+	f.m.EnsureCustomerPort(ctx, s.ID, true)
+	if r := portRow(m, "ether2"); r == nil || r["bridge"] != "br-lan" {
+		t.Fatalf("the old member was removed with no link on the new one: %v", m.Table("/interface/bridge/port"))
+	}
+	setField(t, m, "/interface", "ether5", "running", "true")
+	f.m.EnsureCustomerPort(ctx, s.ID, true)
+	if portRow(m, "ether2") != nil || portRow(m, "ether5") == nil {
+		t.Fatalf("%v", m.Table("/interface/bridge/port"))
+	}
+}
+
+func TestConcurrentLANChangesCannotRemoveBothPorts(t *testing.T) {
+	f, s, m := twoLANs(t)
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i, port := range []string{"ether2", "ether4"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = f.m.ChangePort(ctx, s.ID, port, PortChange{Disabled: bp(true), ConfirmName: "Block A"}, ownerWho)
+		}()
+	}
+	wg.Wait()
+	ok := 0
+	for _, e := range errs {
+		var pe *PortRefusal
+		switch {
+		case e == nil:
+			ok++
+		case errors.As(e, &pe) && pe.Kind == PortErrLastLAN:
+		default:
+			t.Fatalf("%v", e)
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("%d of two concurrent disables went through: %v", ok, errs)
+	}
+	if ifaceRow(m, "ether2")["disabled"] == "yes" && ifaceRow(m, "ether4")["disabled"] == "yes" {
+		t.Fatal("both admin LAN ports were switched off")
+	}
+}
+
+func TestTheOLTUplinkIsNeverSwitchedOffFromHere(t *testing.T) {
+	f, s, m := portsRig(t)
+	for _, who := range []PortActor{ownerWho} {
+		if pe := portErrOf(t, f, s.ID, "sfp-sfpplus1", PortChange{Disabled: bp(true), ConfirmName: "Block A"}, who); pe.Kind != PortErrOLTOff ||
+			!strings.Contains(pe.Msg, "Move the OLT role to another port or unplug the OLT instead") {
+			t.Fatalf("%+v", pe)
+		}
+	}
+	if m.Writes() != 0 || ifaceRow(m, "sfp-sfpplus1")["disabled"] == "yes" {
+		t.Fatal("written")
+	}
+	v, _ := f.m.Ports(context.Background(), s.ID, store.RoleOwner)
+	if p := portByName(t, v, "sfp-sfpplus1"); p.CanDisable {
+		t.Fatalf("the list offers it: %+v", p)
+	}
+}
+
+func TestSweepDoesNotSwitchOffAnAdminLANOrOLTPortAgain(t *testing.T) {
+	f, s, m := twoLANs(t)
+	ctx := context.Background()
+	// a stored "off" for an admin LAN port and for the OLT (an old record) is not enforced
+	f.st.Update(func(d *store.Data) error {
+		x := d.Sites[s.ID]
+		x.DisabledPorts = "ether4,sfp-sfpplus1,ether5"
+		d.Sites[s.ID] = x
+		return nil
+	})
+	f.advance(10 * time.Minute)
+	f.m.SweepSite(ctx, s.ID)
+	if ifaceRow(m, "ether4")["disabled"] == "yes" || ifaceRow(m, "sfp-sfpplus1")["disabled"] == "yes" {
+		t.Fatalf("a core port was switched off by the sweep")
+	}
+	if ifaceRow(m, "ether5")["disabled"] != "yes" {
+		t.Fatalf("an unused port stays off: %v", ifaceRow(m, "ether5"))
+	}
+	// somebody enables a LAN port again at the router after a one-off disable: it stays on
+	if _, err := f.m.ChangePort(ctx, s.ID, "ether4", PortChange{Disabled: bp(true), ConfirmName: "Block A"}, ownerWho); err != nil {
+		t.Fatal(err)
+	}
+	setField(t, m, "/interface", "ether4", "disabled", "false")
+	f.advance(10 * time.Minute)
+	f.m.SweepSite(ctx, s.ID)
+	if ifaceRow(m, "ether4")["disabled"] == "yes" {
+		t.Fatal("the sweep undid the re-enable")
+	}
+}
+
+func TestMovingAPortToLANOrOLTForgetsItsStoredOff(t *testing.T) {
+	f, s, _ := portsRig(t)
+	if _, err := f.m.ChangePort(context.Background(), s.ID, "ether4", PortChange{Disabled: bp(true)}, operWho); err != nil {
+		t.Fatal(err)
+	}
+	if f.site(s.ID).DisabledPorts != "ether4" {
+		t.Fatalf("%q", f.site(s.ID).DisabledPorts)
+	}
+	if _, err := f.m.ChangePort(context.Background(), s.ID, "ether4", PortChange{Disabled: bp(false)}, operWho); err != nil {
+		t.Fatal(err)
+	}
+	if f.site(s.ID).DisabledPorts != "" {
+		t.Fatalf("%q", f.site(s.ID).DisabledPorts)
 	}
 }

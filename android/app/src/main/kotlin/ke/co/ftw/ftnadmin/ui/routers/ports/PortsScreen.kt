@@ -110,6 +110,9 @@ fun PortsScreen(routerId: String, routerName: String, onBack: () -> Unit) {
                             )
                         }
                     }
+                    ke.co.ftw.ftnadmin.domain.customerPortLine(p.value.customerPort)?.let { line ->
+                        item { Text(line, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    }
                     if (p.value.items.isEmpty()) item { EmptyState("No ports reported.") }
                     items(p.value.items, key = { it.name }) { row ->
                         PortCard(
@@ -183,7 +186,11 @@ private fun PortCard(p: PortRow, busy: Boolean, onToggle: () -> Unit, onRole: (S
             } else {
                 var menu by remember { mutableStateOf(false) }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = onToggle, enabled = !busy) { Text(if (p.disabled) "Enable" else "Disable") }
+                    if (p.canDisable) {
+                        OutlinedButton(onClick = onToggle, enabled = !busy) { Text(if (p.disabled) "Enable" else "Disable") }
+                    } else {
+                        Text("Move the OLT role to switch it off.", style = MaterialTheme.typography.bodySmall)
+                    }
                     Column {
                         OutlinedButton(onClick = { menu = true }, enabled = !busy) { Text("Role") }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {

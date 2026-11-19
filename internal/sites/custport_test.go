@@ -31,7 +31,7 @@ func cpRig(t *testing.T, bench string, vlan int) (*fixture, store.Site, *routero
 	m := f.startedRouter(s.ID)
 	seedHealthy(t, f, s, m)
 	for _, n := range []string{"ether1", "ether2", "ether3", "ether4", "ether5", "sfp-sfpplus1"} {
-		m.SeedRow("/interface", R{"name": n, "type": "ether"})
+		m.SeedRow("/interface", R{"name": n, "type": "ether", "running": "true"})
 	}
 	m.SeedRow("/interface/bridge", R{"name": "br-lan", "comment": "ftn: admin LAN bridge"})
 	m.SeedRow("/interface/bridge/port", R{"bridge": "br-lan", "interface": "ether2", "comment": "ftn: LAN port"})
@@ -322,7 +322,7 @@ func TestCustomerPortNonV5RouterIsUntouched(t *testing.T) {
 	m := f.startedRouter(s.ID)
 	m.SeedRow("/interface/bridge", R{"name": "bridge"}) // an old layout: no v5 marker
 	for _, n := range []string{"ether3", "ether5"} {
-		m.SeedRow("/interface", R{"name": n, "type": "ether"})
+		m.SeedRow("/interface", R{"name": n, "type": "ether", "running": "true"})
 	}
 	m.ResetWrites()
 	if err := f.saveInput(s.ID, func(in *SiteInput) { in.OLTInterface, in.Confirm = "ether3", true }); err != nil {

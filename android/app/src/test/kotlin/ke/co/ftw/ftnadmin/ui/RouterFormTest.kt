@@ -11,6 +11,7 @@ import ke.co.ftw.ftnadmin.ui.more.AddRouterViewModel
 import ke.co.ftw.ftnadmin.ui.more.EditRouterViewModel
 import ke.co.ftw.ftnadmin.ui.more.RouterField
 import ke.co.ftw.ftnadmin.ui.more.RouterForm
+import ke.co.ftw.ftnadmin.ui.more.togglePort
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.TestScope
@@ -19,6 +20,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.mockwebserver.Dispatcher
@@ -160,7 +162,7 @@ class RouterFormTest {
         val vm = EditRouterViewModel("r1", SitesRepository(api), RouterLiveRepository(api))
         await(vm.state) { it.form != null }
         // a customer port needs no confirm
-        vm.edit(RouterField.BENCH_PORT) { it.copy(benchPort = "ether5") }
+        vm.edit(RouterField.CUSTOMER_PORTS) { it.copy(customerPorts = "ether4,ether5") }
         assertFalse(vm.state.value.form!!.changesOlt(vm.state.value.original!!))
         // the OLT port does: nothing is sent until the person confirms
         vm.edit(RouterField.OLT_INTERFACE) { it.copy(oltInterface = "ether3") }
@@ -175,6 +177,43 @@ class RouterFormTest {
         val b = bodyOf("PATCH", "/api/v1/routers/r1")
         assertEquals(true, b["confirm"]!!.jsonPrimitive.booleanOrNull)
         assertEquals("ether3", b["olt_interface"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun customerPortsAreAListNotJustTheBenchAlias() = runTest(main.dispatcher) {
+        routes["GET /api/v1/routers/r1"] = ok("""{"router_id":"r1","router_name":"Kilimani","customer_ports":["ether4","ether5"],"bench_port":"ether4","disabled_ports":["ether6"]}""")
+        routes["PATCH /api/v1/routers/r1"] = ok("""{"router_id":"r1"}""")
+        val vm = EditRouterViewModel("r1", SitesRepository(api), RouterLiveRepository(api))
+        await(vm.state) { it.form != null }
+        assertEquals("ether4,ether5", vm.state.value.form!!.customerPorts)
+        vm.edit(RouterField.CUSTOMER_PORTS) { it.copy(customerPorts = togglePort(it.customerPorts, "ether4")) }
+        assertEquals("ether5", vm.state.value.form!!.customerPorts)
+        vm.save()
+        await(vm.state) { it.saved }
+        val b = bodyOf("PATCH", "/api/v1/routers/r1")
+        assertEquals(listOf("ether5"), b["customer_ports"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertFalse("the alias is not sent", b.containsKey("bench_port"))
+    }
+
+    @Test fun changingTheAdminLanAsksForTheRouterNameAndSendsIt() = runTest(main.dispatcher) {
+        routes["GET /api/v1/routers/r1"] = ok("""{"router_id":"r1","router_name":"Kilimani","lan_ports":"ether2"}""")
+        routes["PATCH /api/v1/routers/r1"] = ok("""{"router_id":"r1"}""")
+        val vm = EditRouterViewModel("r1", SitesRepository(api), RouterLiveRepository(api))
+        await(vm.state) { it.form != null }
+        vm.edit(RouterField.LAN_PORTS) { it.copy(lanPorts = "ether3") }
+        vm.save()
+        assertTrue(vm.state.value.confirmLan)
+        assertTrue(synchronized(log) { log.none { it.method == "PATCH" } })
+        vm.setTypedName("Nairobi")
+        assertFalse(vm.canConfirmLan())
+        vm.confirmLanSave()
+        assertTrue("a wrong name sends nothing", synchronized(log) { log.none { it.method == "PATCH" } })
+        vm.setTypedName("kilimani")
+        assertTrue(vm.canConfirmLan())
+        vm.confirmLanSave()
+        await(vm.state) { it.saved }
+        val b = bodyOf("PATCH", "/api/v1/routers/r1")
+        assertEquals("kilimani", b["confirm_name"]!!.jsonPrimitive.content)
+        assertEquals("ether3", b["lan_ports"]!!.jsonPrimitive.content)
     }
 
     @Test fun blankOltPortIsTheDefaultPortAndNoDialogWhenNothingChanges() = runTest(main.dispatcher) {

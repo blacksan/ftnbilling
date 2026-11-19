@@ -50,6 +50,8 @@ data class PortRow(
     val apply: PortApply? = null,
     val flats: Int? = null,
     @SerialName("can_change") val canChange: Boolean = false,
+    /** False for the OLT uplink: it is never switched off from here (move the OLT role or unplug it). */
+    @SerialName("can_disable") val canDisable: Boolean = true,
     @SerialName("needs_owner") val needsOwner: Boolean = false,
     @SerialName("role_options") val roleOptions: List<String> = emptyList(),
     @SerialName("disable_warning") val disableWarning: String = "",
@@ -62,6 +64,8 @@ data class PortsResponse(
     val items: List<PortRow> = emptyList(),
     val reachable: Boolean = true,
     @SerialName("generated_at") val generatedAt: String = "",
+    /** What the server did with the customer ports and the admin LAN (same object as on the router). */
+    @SerialName("customer_port") val customerPort: ke.co.ftw.ftnadmin.domain.CustomerPortStatus? = null,
 )
 
 @Serializable

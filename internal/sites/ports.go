@@ -53,13 +53,14 @@ const (
 
 // Kinds of port error (PortRefusal.Kind).
 const (
-	PortErrLocked    = "locked"    // the WAN uplink
-	PortErrLastLAN   = "last_lan"  // the last Admin LAN port
-	PortErrConfirm   = "confirm"   // the typed router name is missing or wrong
-	PortErrForbidden = "forbidden" // the role may not change this port
-	PortErrConflict  = "conflict"  // the change is not possible in this state
-	PortErrNoPort    = "no_port"   // the router has no such physical port
-	PortErrInvalid   = "invalid"   // a bad value
+	PortErrLocked    = "locked"      // the WAN uplink
+	PortErrLastLAN   = "last_lan"    // the last Admin LAN port
+	PortErrConfirm   = "confirm"     // the typed router name is missing or wrong
+	PortErrForbidden = "forbidden"   // the role may not change this port
+	PortErrConflict  = "conflict"    // the change is not possible in this state
+	PortErrNoPort    = "no_port"     // the router has no such physical port
+	PortErrInvalid   = "invalid"     // a bad value
+	PortErrOLTOff    = "olt_disable" // the OLT uplink is never switched off from here
 )
 
 // PortRefusal is a refused port change.
@@ -100,6 +101,8 @@ type PortInfo struct {
 	DisableWarning string `json:"disable_warning,omitempty"`
 	RoleWarning    string `json:"role_warning,omitempty"`
 	ConfirmDisable bool   `json:"confirm_disable,omitempty"`
+	// CanDisable is false for the OLT uplink: it is moved to another port or unplugged, never switched off here.
+	CanDisable bool `json:"can_disable"`
 }
 
 // PortsView is the answer of the Ports tab.
@@ -345,12 +348,13 @@ func (m *Manager) decoratePort(pi *PortInfo, site store.Site, viewerRole string)
 	default:
 		pi.CanChange = rank >= 1
 	}
-	pi.ConfirmDisable = pi.Role == PortRoleLAN || pi.Role == PortRoleOLT
+	pi.CanDisable = pi.CanChange && !(pi.Role == PortRoleOLT && !pi.Disabled)
+	pi.ConfirmDisable = pi.Role == PortRoleLAN
 	switch pi.Role {
 	case PortRoleLAN:
 		pi.DisableWarning, pi.RoleWarning = WarnLAN, WarnLAN
 	case PortRoleOLT:
-		pi.DisableWarning, pi.RoleWarning = WarnOLT, WarnOLT
+		pi.DisableWarning, pi.RoleWarning = "The OLT uplink is not switched off here. Move the OLT role to another port or unplug the OLT instead.", WarnOLT
 	case PortRoleCustomer:
 		if pi.Flats != nil && *pi.Flats > 0 {
 			pi.DisableWarning = fmt.Sprintf("%d flat(s) with leases are seen on this port and go offline.", *pi.Flats)
@@ -401,19 +405,55 @@ type PortResult struct {
 	Applied []string
 }
 
-// physicalRow reads the port's own row (one targeted read).
-func (m *Manager) physicalRow(ctx context.Context, rt routeros.Client, name string) (routeros.Row, error) {
-	rows, err := rt.RowsProps(ctx, "/interface", map[string]string{"name": name}, []string{"name", "type", "disabled", "running"})
+// ifaceRows reads the router's interfaces once (name, type, disabled, running), keyed by name.
+func (m *Manager) ifaceRows(ctx context.Context, rt routeros.Client) (map[string]routeros.Row, error) {
+	rows, err := rt.RowsProps(ctx, "/interface", nil, []string{"name", "type", "disabled", "running"})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrRouterUnreachable, shortErr(err))
 	}
+	out := map[string]routeros.Row{}
 	for _, r := range rows {
-		if r["name"] == name && physicalType(r["type"]) {
-			return r, nil
-		}
+		out[r["name"]] = r
+	}
+	return out, nil
+}
+
+// physicalRow is the port's own row out of ifaces.
+func physicalRow(ifaces map[string]routeros.Row, name string) (routeros.Row, error) {
+	if r, ok := ifaces[name]; ok && physicalType(r["type"]) {
+		return r, nil
 	}
 	return nil, portErr(PortErrNoPort, "the router has no physical port called %s", name)
 }
+
+// portUsable: enabled with a link (a cable that carries traffic).
+func portUsable(r routeros.Row) bool { return r != nil && !isYes(r["disabled"]) && isYes(r["running"]) }
+
+// lanSurvivor says whether at least one of remaining is an admin LAN port that is enabled, has a link and
+// (when needMember) is already a member of br-lan. Without one, a change to the admin LAN could cut the
+// server and WinBox off with no way back, so it is refused. A router that cannot be read refuses too.
+func (m *Manager) lanSurvivor(ctx context.Context, rt routeros.Client, ifaces map[string]routeros.Row, remaining []string, needMember bool) bool {
+	member := map[string]bool{}
+	if needMember {
+		rows, err := rt.RowsProps(ctx, "/interface/bridge/port", map[string]string{"bridge": LANBridge}, []string{"interface", "bridge", "disabled"})
+		if err != nil {
+			return false
+		}
+		for _, r := range rows {
+			if r["bridge"] == LANBridge && !isYes(r["disabled"]) {
+				member[r["interface"]] = true
+			}
+		}
+	}
+	for _, p := range remaining {
+		if portUsable(ifaces[p]) && (!needMember || member[p]) {
+			return true
+		}
+	}
+	return false
+}
+
+const lastLANMsg = "%s is the last Admin LAN port that is switched on, connected and in the admin bridge. Connect and enable another Admin LAN port first, so you do not lose the router."
 
 func nameConfirmed(site store.Site, typed string) bool {
 	return strings.TrimSpace(typed) == site.Name
@@ -443,6 +483,9 @@ func (m *Manager) ChangePort(ctx context.Context, siteID, port string, ch PortCh
 	if rank < 1 {
 		return res, portErr(PortErrForbidden, "your role may not change the router")
 	}
+	e := m.cport.entry(siteID)
+	e.run.Lock() // the same per-router lock as the sweep; nothing is read before it is held
+	defer e.run.Unlock()
 	var site store.Site
 	var found bool
 	m.st.View(func(d *store.Data) { site, found = d.Sites[siteID] })
@@ -469,7 +512,11 @@ func (m *Manager) ChangePort(ctx context.Context, siteID, port string, ch PortCh
 		return res, portErr(PortErrConflict, "the router is not set up yet")
 	}
 	rt := m.Router(siteID)
-	row, err := m.physicalRow(ctx, rt, port)
+	ifaces, err := m.ifaceRows(ctx, rt)
+	if err != nil {
+		return res, err
+	}
+	row, err := physicalRow(ifaces, port)
 	if err != nil {
 		return res, err
 	}
@@ -492,8 +539,20 @@ func (m *Manager) ChangePort(ctx context.Context, siteID, port string, ch PortCh
 			return res, portErr(PortErrConflict, "%s is the OLT uplink: give the OLT uplink role to another port instead", port)
 		case cur == PortRoleLAN && len(lans) <= 1:
 			return res, portErr(PortErrLastLAN, "%s is the last Admin LAN port. Make another port an Admin LAN port first.", port)
+		case cur == PortRoleLAN && !m.lanSurvivor(ctx, rt, ifaces, removeStr(lans, port), true):
+			return res, portErr(PortErrLastLAN, lastLANMsg, port)
 		case (target == PortRoleLAN || target == PortRoleOLT) && (isYes(row["disabled"]) || containsStr(SplitPorts(site.DisabledPorts), port)):
 			return res, portErr(PortErrConflict, "%s is switched off. Enable it first.", port)
+		}
+	}
+	if ch.Disabled != nil && *ch.Disabled {
+		switch cur {
+		case PortRoleOLT:
+			return res, portErr(PortErrOLTOff, "The OLT uplink is not switched off from here. Move the OLT role to another port or unplug the OLT instead.")
+		case PortRoleLAN:
+			if len(lans) <= 1 || !m.lanSurvivor(ctx, rt, ifaces, removeStr(lans, port), true) {
+				return res, portErr(PortErrLastLAN, lastLANMsg, port)
+			}
 		}
 	}
 	// the typed router name
@@ -505,16 +564,10 @@ func (m *Manager) ChangePort(ctx context.Context, siteID, port string, ch PortCh
 		confirmWhy = WarnOLT
 	case ch.Disabled != nil && *ch.Disabled && cur == PortRoleLAN:
 		confirmWhy = WarnLAN
-	case ch.Disabled != nil && *ch.Disabled && cur == PortRoleOLT:
-		confirmWhy = WarnOLT
 	}
 	if confirmWhy != "" && !nameConfirmed(site, ch.ConfirmName) {
 		return res, &PortRefusal{Kind: PortErrConfirm, Msg: "type the router name to confirm. " + confirmWhy, Warning: confirmWhy}
 	}
-
-	e := m.cport.entry(siteID)
-	e.run.Lock() // the same per-router lock as the sweep
-	defer e.run.Unlock()
 
 	if roleChange {
 		if err := m.setPortRole(siteID, port, cur, target, who); err != nil {
@@ -523,7 +576,13 @@ func (m *Manager) ChangePort(ctx context.Context, siteID, port string, ch PortCh
 		m.QueueCustomerPort(siteID)
 	}
 	if ch.Disabled != nil && (*ch.Disabled != isYes(row["disabled"]) || *ch.Disabled != containsStr(SplitPorts(site.DisabledPorts), port)) {
-		if err := m.setPortDisabled(ctx, rt, eff, row, port, *ch.Disabled, who, &res.Applied); err != nil {
+		// only customer and unused ports are kept off by the sweep; a LAN port switched off is a one-off
+		endRole := cur
+		if roleChange {
+			endRole = target
+		}
+		keep := endRole == PortRoleCustomer || endRole == PortRoleUnused
+		if err := m.setPortDisabled(ctx, rt, eff, row, port, *ch.Disabled, keep, who, &res.Applied); err != nil {
 			return res, err
 		}
 	}
@@ -559,6 +618,9 @@ func (m *Manager) setPortRole(siteID, port, cur, target string, who PortActor) e
 		}
 		s.LANPorts, s.CustomerPorts, s.OLTInterface = strings.Join(lans, ","), strings.Join(custs, ","), olt
 		s.BenchPort = ""
+		if target == PortRoleLAN || target == PortRoleOLT {
+			s.DisabledPorts = strings.Join(removeStr(SplitPorts(s.DisabledPorts), port), ",")
+		}
 		if err := ValidateNetMgmt(ApplyDefaults(m.cfg, s), m.pfx, m.mgmt); err != nil {
 			perr = err
 			return err
@@ -590,7 +652,7 @@ func (m *Manager) setPortRole(siteID, port, cur, target string, who PortActor) e
 }
 
 // setPortDisabled switches one port on the router (through the allowlist) and records it.
-func (m *Manager) setPortDisabled(ctx context.Context, rt routeros.Client, eff store.Site, row routeros.Row, port string, off bool, who PortActor, applied *[]string) error {
+func (m *Manager) setPortDisabled(ctx context.Context, rt routeros.Client, eff store.Site, row routeros.Row, port string, off, keep bool, who PortActor, applied *[]string) error {
 	w := m.newFixWriter(rt, eff)
 	w.offPorts[port] = true
 	val := "no"
@@ -612,7 +674,7 @@ func (m *Manager) setPortDisabled(ctx context.Context, rt routeros.Client, eff s
 	return m.st.Update(func(d *store.Data) error {
 		s := d.Sites[eff.ID]
 		l := removeStr(SplitPorts(s.DisabledPorts), port)
-		if off {
+		if off && keep {
 			l = append(l, port)
 		}
 		s.DisabledPorts = strings.Join(l, ",")

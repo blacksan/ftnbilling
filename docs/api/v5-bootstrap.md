@@ -214,8 +214,14 @@ One role per port; WAN, Admin LAN, OLT and customer ports can never overlap (che
 the negotiated speed and duplex (`/interface/ethernet`) and the bridge hosts (flats seen per customer port) are read at most every 60 s. Poll lightly (every 5 s) only
 while the page is open. A port: `name`, `kind` (`ethernet|sfp|combo|wlan`), `role`, `role_label`, `locked`, `running`, `link` ("1Gbps full duplex" where the router says), `speed`, `duplex`,
 `disabled`, `mac`, `rx_bps`, `tx_bps` (null until two readings exist), `comment`, `apply` (`{port, state: ok|applying|error, message}` for roles the server applies),
-`flats` (customer ports: flats whose ONT MAC is seen on the port, when known), and what the caller may do: `can_change`, `needs_owner`, `role_options` (roles the caller may give it),
+`flats` (customer ports: flats whose ONT MAC is seen on the port, when known), and what the caller may do: `can_change`, `can_disable`, `needs_owner`, `role_options` (roles the caller may give it),
 `disable_warning`, `role_warning`, `confirm_disable` (the router name must be typed to disable it). `customer_port` is the apply status (`items`, `olt_message`, `lan_message`).
+
+`customer_port` carries the apply status of the customer ports and the admin LAN; Android shows its `text`.
+
+Changing `lan_ports` with `PATCH /routers/{id}` (or the web router form) on a router that is set up needs `confirm_name` (the typed router name, 422 `validation_failed` with
+`details.fields.confirm_name` and `details.warning` without it) and at least one of the new ports switched on with a link (409 `last_lan_port`). The pass removes an old `br-lan` member only
+after a remaining member is in the bridge and has a link. The router JSON also has `customer_ports` (array), `disabled_ports` (array) and the deprecated `bench_port` (first customer port).
 
 ### PATCH /routers/{id}/ports/{name} (operator)
 
@@ -225,17 +231,19 @@ enable and disable are written at once (one read, one write).
 | Rule | Answer |
 |---|---|
 | WAN port, or `role: "wan"` | 409 `port_locked`, nothing written |
-| the last Admin LAN port leaves the admin LAN | 409 `last_lan_port` |
+| the last Admin LAN port leaves the admin LAN, or is switched off. Before any change to the admin LAN at least one Admin LAN port that stays must be switched on, have a link (`running`) and already be a member of `br-lan` (read from the router; an unreadable router refuses) | 409 `last_lan_port`, nothing written, even with the typed name |
+| the OLT uplink asked to be switched off (move the OLT role to another port or unplug the OLT instead) | 409 `olt_disable_refused`; the port list has `can_disable: false` |
 | the OLT uplink asked to become something else (give the role to another port instead) | 409 `bad_state` |
 | a switched-off port made Admin LAN or OLT | 409 `bad_state` (enable it first) |
 | operator touching Admin LAN or the OLT uplink (role or enable/disable, either direction) | 403 `forbidden_role`; only an owner |
-| moving or disabling an Admin LAN port ("You may lose your WinBox session on this port."), disabling the OLT uplink or moving it ("All customers on the OLT go offline.") without the router name | 422 `validation_failed`, `details.fields.confirm_name`, `details.warning` |
+| moving or disabling an Admin LAN port ("You may lose your WinBox session on this port."), or moving the OLT uplink ("All customers on the OLT go offline.") without the router name | 422 `validation_failed`, `details.fields.confirm_name`, `details.warning` |
 | no such physical port on the router | 404 `no_such_port` |
 | the router does not answer (enable/disable, or checking the port) | 503 `router_unreachable` |
 
 Disabling a customer port needs no typed name; `disable_warning` carries the number of flats seen on it, when known. An operator may enable, disable and change the role of customer and unused ports.
-Every change is in the router's activity with the actor (`port ether5: role Unused -> Customer port`, `port ether5 disabled`). A port the server switched off is remembered and kept off by the
-sweep (`switched off ether5`, actor `system`); enabling it forgets it. The sweep and the apply honour "Pause automatic fixes"; an explicit change from the page runs anyway.
+Every change is in the router's activity with the actor (`port ether5: role Unused -> Customer port`, `port ether5 disabled`). A customer or unused port the server switched off is remembered (`disabled_ports` on the router) and kept off by the
+sweep (`switched off ether5`, actor `system`); enabling it forgets it. An Admin LAN port that is switched off is a one-off: it is not remembered, so enabling it again at the router is not undone;
+the sweep never switches a LAN port or the OLT uplink off. The sweep and the apply honour "Pause automatic fixes"; an explicit change from the page runs anyway.
 
 Allowlist (`fixWriter`) additions: `disabled=yes|no` on `/interface` rows of non-WAN physical ports the pass named (nothing else on `/interface`); `br-lan` membership rows the server made
 (`ftn: LAN port`), new members first and an old one only when another wanted member is in; the existing `br-customers` and customer VLAN rows. The server still never writes `/user`, `/ip/service`,

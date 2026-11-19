@@ -124,6 +124,8 @@ type routerReq struct {
 	// Confirm accepts the warning for a change of the OLT port or the VLAN on a router that is set up
 	// ("Customers on the OLT lose service until the OLT uses the new setting").
 	Confirm *bool `json:"confirm"`
+	// ConfirmName is the typed router name that a change of lan_ports on a set-up router needs.
+	ConfirmName string `json:"confirm_name"`
 }
 
 // portList is a JSON array of port names, or a comma list in one string.
@@ -184,6 +186,7 @@ func applyRouterReq(in sites.SiteInput, q routerReq) sites.SiteInput {
 		in.PPPoEPassClear = *q.PPPoEPassClear
 	}
 	in.Confirm = q.Confirm != nil && *q.Confirm
+	in.ConfirmName = q.ConfirmName
 	if q.VLANID != nil {
 		in.VLANID = *q.VLANID
 	}
@@ -281,8 +284,14 @@ func (s *Server) apiRouterPatch(w http.ResponseWriter, r *http.Request, c *apiCt
 	}
 	in := sites.SiteInputOf(st)
 	if err := s.mgr.UpdateSite(st.ID, applyRouterReq(in, req)); err != nil {
+		var pe *sites.PortRefusal
 		if errors.Is(err, sites.ErrOLTConfirmRequired) {
 			apiErr(w, http.StatusConflict, codeConfirm, err.Error(), nil)
+		} else if errors.Is(err, sites.ErrLANConfirmRequired) {
+			apiErr(w, http.StatusUnprocessableEntity, codeValidation, err.Error(),
+				map[string]any{"fields": map[string]any{"confirm_name": err.Error()}, "warning": sites.WarnLAN})
+		} else if errors.As(err, &pe) {
+			s.portFail(w, err)
 		} else if !s.storeErr(w, err) {
 			routerFieldErr(w, err, req.BenchPort != nil && req.CustomerPorts == nil)
 		}
