@@ -2,6 +2,7 @@ package web_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -89,7 +90,7 @@ func seedSite(t *testing.T, st *store.Store, name string) string {
 	t.Helper()
 	id := store.NewSiteID()
 	err := st.Update(func(d *store.Data) error {
-		d.Sites[id] = store.Site{ID: id, Name: name, Mode: store.SiteModeWG, WGPublicKey: "PUB" + id, TunnelIP: "10.99.0.2",
+		d.Sites[id] = store.Site{ID: id, Name: name, Mode: store.SiteModeWG, WGPublicKey: "PUB" + id, TunnelIP: fmt.Sprintf("10.99.0.%d", len(d.Sites)+2),
 			AccessMode: store.AccessIPoE, CreatedAt: time.Now()}
 		return nil
 	})
