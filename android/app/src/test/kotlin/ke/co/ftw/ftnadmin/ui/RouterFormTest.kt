@@ -177,6 +177,19 @@ class RouterFormTest {
         assertEquals("ether3", b["olt_interface"]!!.jsonPrimitive.content)
     }
 
+    @Test fun blankOltPortIsTheDefaultPortAndNoDialogWhenNothingChanges() = runTest(main.dispatcher) {
+        routes["GET /api/v1/routers/r1"] = ok("""{"router_id":"r1","router_name":"Kilimani","olt_interface":"","vlan_id":0,"auto_fixes":{"paused":true}}""")
+        routes["PATCH /api/v1/routers/r1"] = ok("""{"router_id":"r1"}""")
+        val vm = EditRouterViewModel("r1", SitesRepository(api), RouterLiveRepository(api))
+        await(vm.state) { it.form != null }
+        assertTrue(vm.state.value.autoFixesPaused)
+        // typing the default port into a blank field is not a change
+        vm.edit(RouterField.OLT_INTERFACE) { it.copy(oltInterface = "sfp-sfpplus1") }
+        assertFalse(vm.state.value.form!!.changesOlt(vm.state.value.original!!))
+        vm.save()
+        assertFalse(vm.state.value.confirmOlt)
+    }
+
     @Test fun switchingAwayFromStaticDropsStaticFields() {
         val i = RouterForm(name = "x", wanMode = "dhcp", wanAddress = "1.2.3.4/24", wanGateway = "1.2.3.1", pppoeUser = "u", pppoePass = "p").toInput()
         assertEquals("", i.wanAddress)

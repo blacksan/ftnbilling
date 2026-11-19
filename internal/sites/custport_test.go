@@ -689,3 +689,93 @@ func hasActorEvent(f *fixture, siteID, actor, sub string) bool {
 	})
 	return found
 }
+
+// A problem that stays the same is not "busy": the sweep looks again at the slow cadence, not every minute.
+func TestUnchangedPortProblemKeepsTheFiveMinuteCadence(t *testing.T) {
+	f, s, m := cpRig(t, "ether5", 0)
+	ctx := context.Background()
+	m.SeedRow("/interface/bridge", R{"name": "br-other"})
+	m.SeedRow("/interface/bridge/port", R{"bridge": "br-other", "interface": "ether5"})
+	f.m.SweepSite(ctx, s.ID) // new trouble: busy, next look in a minute
+	if st := f.m.CustomerPortStatus(s.ID); st.State != PortError {
+		t.Fatalf("%+v", st)
+	}
+	f.advance(sweepBusyEvery + time.Second)
+	f.m.SweepSite(ctx, s.ID) // the same trouble: not busy, the next look is five minutes away
+	// the trouble goes away; a look one minute later must not happen
+	m.RemoveRow(ctx, "/interface/bridge/port", portRow(m, "ether5")[".id"])
+	f.advance(sweepBusyEvery + time.Second)
+	f.m.SweepSite(ctx, s.ID)
+	if portRow(m, "ether5") != nil {
+		t.Fatal("an unchanged problem was looked at again after a minute")
+	}
+	f.advance(sweepCleanEvery)
+	f.m.SweepSite(ctx, s.ID)
+	if r := portRow(m, "ether5"); r == nil || r["bridge"] != CustomerBridge {
+		t.Fatalf("not applied after five minutes: %v", m.Table("/interface/bridge/port"))
+	}
+}
+
+// The post-join automatic fixes respect the pause.
+func TestPostJoinAutoFixesRespectThePause(t *testing.T) {
+	f, s, m := cpRig(t, "", 0)
+	ctx := context.Background()
+	disableDHCP(m)
+	if err := f.m.SetAutoFixPause(s.ID, true, time.Time{}, "boss"); err != nil {
+		t.Fatal(err)
+	}
+	m.ResetWrites()
+	out, err := f.m.ApplyAutoFixes(ctx, s.ID)
+	if err != nil || len(out) != 0 || m.Writes() != 0 {
+		t.Fatalf("a paused router was fixed after the join: %+v %v, %d writes", out, err, m.Writes())
+	}
+	if err := f.m.SetAutoFixPause(s.ID, false, time.Time{}, "boss"); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := f.m.ApplyAutoFixes(ctx, s.ID); len(out) == 0 {
+		t.Fatal("nothing fixed once resumed")
+	}
+}
+
+// Bonding/LACP interfaces are valid uplinks; bridges, VLANs, WireGuard, PPPoE and the WAN are not.
+func TestPortChoicesAcceptBondsAndListPhysicalFirst(t *testing.T) {
+	f, s, m := cpRig(t, "", 0)
+	ctx := context.Background()
+	m.SeedRow("/interface", R{"name": "bond1", "type": "bond"})
+	m.SeedRow("/interface", R{"name": "ether3", "type": "ether"})
+	m.SeedRow("/interface", R{"name": "vlan9", "type": "vlan"})
+	m.SeedRow("/interface", R{"name": "pppoe-out1", "type": "pppoe-out"})
+	m.SeedRow("/interface", R{"name": "wg-ftn", "type": "wg"})
+	got := f.m.PortChoices(ctx, s.ID)
+	idx := map[string]int{}
+	for i, n := range got {
+		idx[n] = i
+	}
+	for _, bad := range []string{"vlan9", "pppoe-out1", "wg-ftn", CustomerBridge, "ether1"} {
+		if _, ok := idx[bad]; ok {
+			t.Errorf("%s offered: %v", bad, got)
+		}
+	}
+	if _, ok := idx["bond1"]; !ok || idx["bond1"] < idx["ether3"] {
+		t.Fatalf("bond1 missing or before the physical ports: %v", got)
+	}
+	// and the save accepts it
+	if err := f.saveInput(s.ID, func(in *SiteInput) { in.OLTInterface, in.Confirm = "bond1", true }); err != nil {
+		t.Fatalf("bonding uplink refused: %v", err)
+	}
+}
+
+// A router billing has paused is still a set-up router: the OLT change asks for a confirm.
+func TestBillingPausedRouterStillAsksForConfirm(t *testing.T) {
+	f, s, m := cpRig(t, "", 100)
+	m.SeedRow("/interface", R{"name": "ether3", "type": "ether"})
+	if err := f.m.SetDisabled(s.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.saveInput(s.ID, func(in *SiteInput) { in.OLTInterface = "ether3" }); !errors.Is(err, ErrOLTConfirmRequired) {
+		t.Fatalf("%v", err)
+	}
+	if err := f.saveInput(s.ID, func(in *SiteInput) { in.OLTInterface, in.Confirm = "ether3", true }); err != nil {
+		t.Fatal(err)
+	}
+}

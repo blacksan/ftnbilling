@@ -129,7 +129,7 @@ fun EditRouterScreen(routerId: String, onBack: () -> Unit) {
                     androidx.compose.material3.AlertDialog(
                         onDismissRequest = vm::cancelConfirm,
                         title = { Text("Change the OLT setting?") },
-                        text = { Text(RouterFormCopy.OLT_CONFIRM + " The server moves the port and the VLAN on the router by itself as soon as you confirm.") },
+                        text = { Text(RouterFormCopy.OLT_CONFIRM + " The server moves the port and the VLAN on the router by itself as soon as you confirm." + if (ui.autoFixesPaused) " " + RouterFormCopy.PAUSED_NOTE else "") },
                         confirmButton = { TextButton(onClick = vm::confirmSave) { Text("Change it") } },
                         dismissButton = { TextButton(onClick = vm::cancelConfirm) { Text("Cancel") } },
                     )

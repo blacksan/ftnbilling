@@ -293,6 +293,7 @@ func TestAPIOLTChangeNeedsConfirmOnASetUpRouterAndPauseIsOwnerOnly(t *testing.T)
 	r.st.Update(func(d *store.Data) error {
 		x := d.Sites[id]
 		x.WGPublicKey = "KEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEY0="
+		x.JoinedAt = time.Now()
 		d.Sites[id] = x
 		return nil
 	})

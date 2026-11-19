@@ -689,6 +689,9 @@ func (m *Manager) ApplyAutoFixes(ctx context.Context, siteID string) ([]AutoFixO
 	e := m.cport.entry(siteID)
 	e.run.Lock()
 	defer e.run.Unlock()
+	if m.AutoFixPause(siteID).Paused {
+		return nil, nil
+	}
 	c, err := m.Checks(ctx, siteID, true)
 	if err != nil {
 		return nil, err
