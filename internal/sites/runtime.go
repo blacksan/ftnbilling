@@ -91,6 +91,6 @@ func (m *Manager) autoFixAfterJoin(ctx context.Context, siteID string) {
 		for _, o := range out {
 			m.log.Info("post-join setup fix", "site", siteID, "check", o.ID, "applied", o.Applied, "err", o.Err)
 		}
-		m.afterJoin(siteID)
+		m.afterJoin(ctx, siteID)
 	}()
 }

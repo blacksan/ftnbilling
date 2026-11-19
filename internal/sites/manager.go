@@ -17,6 +17,7 @@ import (
 	"ispbill/internal/config"
 	"ispbill/internal/metrics"
 	"ispbill/internal/routeros"
+	"ispbill/internal/secretbox"
 	"ispbill/internal/store"
 	"ispbill/internal/wg"
 )
@@ -34,6 +35,9 @@ type Options struct {
 	// rebuilt: the router may be new, so its profiles must be pushed again.
 	OnJoined func(siteID string)
 	Now      func() time.Time
+	// DataKey seals the PPPoE password at rest (DATA_KEY, 32 bytes). Without it a
+	// PPPoE router cannot be saved.
+	DataKey []byte
 }
 
 // Manager owns the per-building runtimes.
@@ -62,8 +66,9 @@ type Manager struct {
 	chk          checksState   // cache of the setup checks (checks.go)
 	autoFixDelay time.Duration // wait after the first answer before the post-join fixes (runtime.go)
 
-	prov provMgr   // router provisioning job (provision_job.go)
-	live liveState // live router views and the provisioning job hook (live.go)
+	prov provMgr   // billing hooks and the reboot slot (provision.go)
+	live liveState // live router views (live.go)
+	box  *secretbox.Box
 }
 
 // SetForeignIPs lets the billing service tell the cutover which addresses the
@@ -94,6 +99,11 @@ func New(o Options) *Manager {
 		autoFixDelay: 20 * time.Second}
 	if o.Cfg.RouterMock {
 		m.mock = routeros.NewMock()
+	}
+	if len(o.DataKey) == 32 {
+		if b, err := secretbox.New(o.DataKey); err == nil {
+			m.box = b
+		}
 	}
 	return m
 }
@@ -127,9 +137,6 @@ func (m *Manager) Start(ctx context.Context) {
 		m.startLocked(s)
 	}
 	m.reloadMu.Unlock()
-	m.resumeProvisioning()
-	m.wg.Add(1)
-	go m.leaseSweeper(ctx)
 	if addr := m.cfg.NetflowAddr; addr != "" && !strings.EqualFold(addr, "off") && !m.cfg.RouterMock {
 		m.wg.Add(1)
 		go func() {
@@ -183,7 +190,7 @@ func (m *Manager) collectorConfig(s store.Site) metrics.Config {
 		}
 	}
 	if s.Mode == store.SiteModeWG {
-		c.PortAllow = []string{s.WANInterface, s.OLTInterface, HotspotBridge}
+		c.PortAllow = []string{s.WANInterface, s.OLTInterface, CustomerBridge}
 		if s.VLANID > 0 {
 			c.PortAllow = append(c.PortAllow, fmt.Sprintf("vlan%d-customers", s.VLANID))
 		}
@@ -344,16 +351,32 @@ func (m *Manager) PeerStatus(siteID string) (ps wg.PeerStatus, found, known bool
 
 // ---- site operations ------------------------------------------------------
 
-// SiteInput is the editable part of a building.
+// SiteInput is the editable part of a router.
 type SiteInput struct {
-	Name, Notes, SupportPhone          string
-	HotspotServer, WANInterface        string
-	WANList, OLTInterface, CustomerNet string
-	VLANID                             int
-	WANCapMbps, OLTCapMbps, FUPTB      float64
-	Provision, LegacyContainer         bool
-	BenchPort                          string
+	Name, Notes, SupportPhone     string
+	WANInterface, OLTInterface    string
+	CustomerNet                   string
+	VLANID                        int
+	WANCapMbps, OLTCapMbps, FUPTB float64
+	BenchPort                     string
+	// WAN, admin LAN. PPPoEPass is the clear text to seal; "" keeps the stored
+	// password unless PPPoEPassClear is set.
+	WANMode, WANAddress, WANGateway, WANDNS string
+	PPPoEUser, PPPoEPass                    string
+	PPPoEPassClear                          bool
+	LANPorts, LANSubnet                     string
 }
+
+// SiteInputOf is the input that leaves a router as it is (a PATCH starts from it).
+func SiteInputOf(st store.Site) SiteInput {
+	return SiteInput{Name: st.Name, Notes: st.Notes, SupportPhone: st.SupportPhone, WANInterface: st.WANInterface, OLTInterface: st.OLTInterface,
+		CustomerNet: st.CustomerSubnet, VLANID: st.VLANID, WANCapMbps: st.WANCapMbps, OLTCapMbps: st.OLTCapMbps, FUPTB: st.FUPTB, BenchPort: st.BenchPort,
+		WANMode: st.WANMode, WANAddress: st.WANAddress, WANGateway: st.WANGateway, WANDNS: st.WANDNS, PPPoEUser: st.PPPoEUser,
+		LANPorts: st.LANPorts, LANSubnet: st.LANSubnet}
+}
+
+// ErrNoDataKey: a PPPoE password cannot be stored without DATA_KEY.
+var ErrNoDataKey = errors.New("the PPPoE password cannot be saved: DATA_KEY is not set on the server")
 
 func clean(s string, max int) string {
 	s = strings.Join(strings.Fields(s), " ")
@@ -363,17 +386,56 @@ func clean(s string, max int) string {
 	return s
 }
 
-func applyInput(s store.Site, in SiteInput) store.Site {
+func pppoeAAD(siteID string) []byte { return []byte("pppoe:" + siteID) }
+
+// OpenPPPoEPass returns the router's PPPoE password in clear.
+func (m *Manager) OpenPPPoEPass(s store.Site) (string, error) {
+	if s.PPPoEPassEnc == "" {
+		return "", nil
+	}
+	if m.box == nil {
+		return "", ErrNoDataKey
+	}
+	return m.box.OpenAAD(s.PPPoEPassEnc, pppoeAAD(s.ID))
+}
+
+// applyInput copies the input over the site. id is the site's ID (the sealed
+// password is bound to it).
+func (m *Manager) applyInput(s store.Site, in SiteInput) (store.Site, error) {
 	s.Name, s.Notes, s.SupportPhone = clean(in.Name, 60), clean(in.Notes, 300), clean(in.SupportPhone, 30)
 	if s.Mode == store.SiteModeEnv { // the layout of an env building comes from the environment
-		return s
+		return s, nil
 	}
-	s.HotspotServer, s.WANInterface = strings.TrimSpace(in.HotspotServer), strings.TrimSpace(in.WANInterface)
-	s.WANList, s.OLTInterface = strings.TrimSpace(in.WANList), strings.TrimSpace(in.OLTInterface)
+	s.WANInterface, s.OLTInterface = strings.TrimSpace(in.WANInterface), strings.TrimSpace(in.OLTInterface)
 	s.CustomerSubnet, s.VLANID = strings.TrimSpace(in.CustomerNet), in.VLANID
 	s.WANCapMbps, s.OLTCapMbps, s.FUPTB = in.WANCapMbps, in.OLTCapMbps, in.FUPTB
-	s.Provision, s.LegacyContainer, s.BenchPort = in.Provision, in.LegacyContainer, strings.TrimSpace(in.BenchPort)
-	return s
+	s.BenchPort = strings.TrimSpace(in.BenchPort)
+	s.WANMode = strings.ToLower(strings.TrimSpace(in.WANMode))
+	s.LANPorts, s.LANSubnet = strings.Join(SplitPorts(in.LANPorts), ","), strings.TrimSpace(in.LANSubnet)
+	if s.WANMode == WANStatic {
+		s.WANAddress, s.WANGateway, s.WANDNS = strings.TrimSpace(in.WANAddress), strings.TrimSpace(in.WANGateway), strings.Join(SplitPorts(in.WANDNS), ",")
+	} else {
+		s.WANAddress, s.WANGateway, s.WANDNS = "", "", ""
+	}
+	if s.WANMode == WANPPPoE {
+		s.PPPoEUser = strings.TrimSpace(in.PPPoEUser)
+		switch {
+		case in.PPPoEPassClear:
+			s.PPPoEPassEnc = ""
+		case in.PPPoEPass != "":
+			if m.box == nil {
+				return s, ErrNoDataKey
+			}
+			enc, err := m.box.SealAAD(in.PPPoEPass, pppoeAAD(s.ID))
+			if err != nil {
+				return s, err
+			}
+			s.PPPoEPassEnc = enc
+		}
+	} else {
+		s.PPPoEUser, s.PPPoEPassEnc = "", ""
+	}
+	return s, nil
 }
 
 func nameTaken(d *store.Data, name, exceptID string) bool {
@@ -389,21 +451,25 @@ func nameTaken(d *store.Data, name, exceptID string) bool {
 func (m *Manager) CreateSite(in SiteInput) (store.Site, error) {
 	var out store.Site
 	err := m.st.Update(func(d *store.Data) error {
-		s := applyInput(store.Site{Mode: store.SiteModeWG}, in)
+		id := store.NewSiteID()
+		for {
+			if _, clash := d.Sites[id]; !clash {
+				break
+			}
+			id = store.NewSiteID()
+		}
+		s, err := m.applyInput(store.Site{ID: id, Mode: store.SiteModeWG, AccessMode: store.AccessIPoE}, in)
+		if err != nil {
+			return err
+		}
 		s = ApplyDefaults(m.cfg, s)
-		if err := Validate(s); err != nil {
+		if err := ValidateNet(s, m.pfx); err != nil {
 			return err
 		}
 		if nameTaken(d, s.Name, "") {
 			return fmt.Errorf("there is already a router called %q", s.Name)
 		}
-		s.ID, s.CreatedAt = store.NewSiteID(), m.now()
-		for {
-			if _, clash := d.Sites[s.ID]; !clash {
-				break
-			}
-			s.ID = store.NewSiteID()
-		}
+		s.CreatedAt = m.now()
 		d.Sites[s.ID] = s
 		out = s
 		return nil
@@ -424,11 +490,14 @@ func (m *Manager) UpdateSite(id string, in SiteInput) error {
 		if !ok || cur.Removed {
 			return billing.ErrNoSite
 		}
-		s := applyInput(cur, in)
+		s, err := m.applyInput(cur, in)
+		if err != nil {
+			return err
+		}
 		if s.Mode == store.SiteModeWG {
 			s = ApplyDefaults(m.cfg, s)
 		}
-		if err := Validate(ApplyDefaults(m.cfg, s)); err != nil {
+		if err := ValidateNet(ApplyDefaults(m.cfg, s), m.pfx); err != nil {
 			return err
 		}
 		if nameTaken(d, s.Name, id) {
@@ -486,6 +555,7 @@ func (m *Manager) RemoveSite(id, confirm string) error {
 		}
 		s.Removed, s.Disabled = true, false
 		s.TunnelIP, s.WGPublicKey, s.RESTPass, s.Join = "", "", "", store.JoinToken{}
+		s.PPPoEPassEnc = ""
 		d.Sites[id] = s
 		for k, t := range d.Tasks {
 			if t.SiteID == id {

@@ -58,47 +58,15 @@ func (m *Manager) liveReadTimeout() time.Duration {
 const defaultLiveTimeout = 8 * time.Second
 
 const (
-	liveTTL = 5 * time.Second
+	liveTTL = 10 * time.Second
 
-	liveStaleMax = 60 * time.Second
+	liveStaleMax = 120 * time.Second
 	liveMaxRows  = 5000
 	liveSeries   = 36 // five-minute buckets of the throughput series (3 hours)
 
 	// ClientOnlineWindow is how recent a sign of life must be for a flat to be online.
 	ClientOnlineWindow = 3 * time.Minute
 )
-
-// ProvisionJobs is the hook W5c's provisioning job implements and installs with
-// Manager.SetJobs. Until then no job exists (nil = no job ever runs).
-type ProvisionJobs interface {
-	// Running is true while a provisioning job (fresh or migrate) is working
-	// on the router: reboot is refused during it.
-	Running(siteID string) bool
-	// State is the job's state name ("live", "needs_action", ...), "" if none.
-	State(siteID string) string
-}
-
-type noJobs struct{}
-
-func (noJobs) Running(string) bool { return false }
-func (noJobs) State(string) string { return "" }
-
-// SetJobs installs the provisioning job hook (nil restores "no job").
-func (m *Manager) SetJobs(j ProvisionJobs) {
-	m.live.mu.Lock()
-	m.live.jobs = j
-	m.live.mu.Unlock()
-}
-
-// Jobs returns the provisioning job hook; never nil.
-func (m *Manager) Jobs() ProvisionJobs {
-	m.live.mu.Lock()
-	defer m.live.mu.Unlock()
-	if m.live.jobs == nil {
-		return m.ProvJobsView() // the server's own provisioning jobs
-	}
-	return m.live.jobs
-}
 
 // ---- types (the API shapes, docs/api-v1.md addendum L) ------------------------------------------------
 
@@ -273,7 +241,6 @@ type liveState struct {
 	mu   sync.Mutex
 	ent  map[string]*liveEntry
 	prev map[string]map[string]ifSample // site -> interface -> last counters
-	jobs ProvisionJobs
 }
 
 type ifSample struct {
@@ -594,7 +561,7 @@ func (m *Manager) readInterfaces(ctx context.Context, site store.Site, rt router
 		}
 	}
 	if customer == "" {
-		customer = HotspotBridge
+		customer = CustomerBridge
 	}
 
 	m.live.mu.Lock()

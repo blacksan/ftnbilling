@@ -43,33 +43,25 @@ const (
 const (
 	CheckVersion      = "router.version"
 	CheckAPIPolicy    = "api_user.policy"
-	CheckDMScheduler  = "device_mode.scheduler"
 	CheckDMFetch      = "device_mode.fetch"
-	CheckDMHotspot    = "device_mode.hotspot"
-	CheckKit          = "kit.installed"
 	CheckDNS          = "dns.remote_requests"
 	CheckCustDNS      = "customer.dns_input"
 	CheckHooks        = "router.script_hooks"
 	CheckCustomerIf   = "customer.interface"
 	CheckOLT          = "olt.bridge_conflict"
 	CheckBench        = "bench.port"
-	CheckOrphans      = "hotspot.orphan_users"
 	CheckTrafficFlow  = "traffic_flow"
 	CheckWWW          = "service.www"
-	CheckContainers   = "containers"
-	CheckUnmanaged    = "unmanaged.devices"
-	CheckUnseen       = "flats.unseen"
 	CheckIPv6         = "ipv6"
 	CheckPublicIP     = "server.public_ip"
-	kitStamp          = "ftn: kit v1"
-	kitTimerName      = "ftn-kit-timer"
-	kitTickName       = "ftn-kit-tick"
-	kitRollbackName   = "ftn-kit-rollback"
+	CheckWalled       = "walled.rules"
+	CheckDHCP         = "dhcp.ftn"
+	CheckWAN          = "wan.internet"
+	CheckBootFile     = "bootstrap.file"
 	netflowComment    = "ftn: netflow"
-	checksCacheFor    = 15 * time.Second
-	extraReadTimeout  = 12 * time.Second
+	checksCacheFor    = 60 * time.Second
+	checksBudget      = 45 * time.Second // the whole pass, all reads together
 	recheckMax        = 6                // ... this many times in a row
-	kitAdvanceAfter   = 45 * time.Second // the kit timer ticks every 30 s
 	requiredAPIPolicy = "read,write,test,sensitive,api,rest-api,reboot"
 	custDNSComment    = "ftn: customer dns"
 )
@@ -194,22 +186,15 @@ var ErrRouterUnreachable = errors.New("the router does not answer: check the tun
 
 // ---- state -------------------------------------------------------------------
 
-type kitSample struct {
-	count int
-	at    time.Time
-}
-
 type cachedChecks struct {
 	at time.Time
 	c  Checks
 }
 
-// checksState is the Manager's cache of the last pass of each building and
-// the last kit run-count seen (to tell a dead timer from a live one).
+// checksState is the Manager's cache of the last pass of each building.
 type checksState struct {
 	mu      sync.Mutex
 	cache   map[string]cachedChecks
-	kit     map[string]kitSample
 	pending map[string]bool // automatic re-checks waiting
 }
 
@@ -237,24 +222,6 @@ func (cs *checksState) drop(siteID string) {
 	delete(cs.cache, siteID)
 }
 
-// kitMoving records the kit timer's run-count and says whether it is known
-// to be stuck: the same count at least kitAdvanceAfter after the last sample.
-func (cs *checksState) kitMoving(siteID string, count int, now time.Time) (stuck bool, sample kitSample, had bool) {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	if cs.kit == nil {
-		cs.kit = map[string]kitSample{}
-	}
-	prev, had := cs.kit[siteID]
-	switch {
-	case !had || count != prev.count:
-		cs.kit[siteID] = kitSample{count, now}
-	case now.Sub(prev.at) >= kitAdvanceAfter:
-		stuck = true
-	}
-	return stuck, prev, had
-}
-
 // ---- reading -----------------------------------------------------------------
 
 // The singleton paths of the pass (everything else is a table).
@@ -262,12 +229,10 @@ var checkSingles = []string{"/system/resource", "/system/device-mode", "/ip/dns"
 
 var checkTables = []string{
 	"/ip/address", "/interface", "/interface/bridge", "/interface/bridge/port", "/interface/bridge/host", "/interface/vlan",
-	"/interface/list/member", "/ip/hotspot", "/ip/hotspot/user", "/ip/hotspot/ip-binding", "/ip/dhcp-server",
-	"/ip/dhcp-server/lease", "/ip/dhcp-client", "/ip/arp", "/ip/pool", "/ip/traffic-flow/target", "/ip/service",
-	"/container", "/user/group", "/system/scheduler", "/system/script", "/file", "/ip/firewall/filter",
-	"/ipv6/firewall/filter", "/ip/route", "/interface/pppoe-client", "/ip/firewall/raw",
+	"/interface/list/member", "/ip/dhcp-server", "/ip/dhcp-client", "/ip/traffic-flow/target", "/ip/service",
+	"/user/group", "/file", "/ip/firewall/filter", "/ip/firewall/nat", "/ip/route",
 	// read-only, for router.script_hooks
-	"/ppp/profile", "/ip/hotspot/user/profile", "/tool/netwatch",
+	"/ppp/profile", "/tool/netwatch",
 }
 
 // rowReader is all a read pass needs from the router client (singletons come
@@ -468,7 +433,6 @@ type custInfo struct {
 	iface    string
 	addr     string
 	found    bool
-	hotspots []string
 	dhcps    []string
 	isBridge bool
 }
@@ -483,9 +447,6 @@ type evalCtx struct {
 	cust    custInfo
 	ix      acctIndex
 	now     time.Time
-
-	unmanaged, unseen       []string
-	unmanagedErr, unseenErr error
 }
 
 func detectCustomer(sn *snapshot, plan netplan.Plan) custInfo {
@@ -501,15 +462,6 @@ func detectCustomer(sn *snapshot, plan netplan.Plan) custInfo {
 	}
 	if !c.found {
 		return c
-	}
-	for _, r := range sn.tbl("/ip/hotspot") {
-		if r["interface"] == c.iface {
-			n := r["name"]
-			if rowDisabled(r) {
-				n += " (disabled)"
-			}
-			c.hotspots = append(c.hotspots, n)
-		}
 	}
 	for _, r := range sn.tbl("/ip/dhcp-server") {
 		if r["interface"] == c.iface {
@@ -528,27 +480,24 @@ func detectCustomer(sn *snapshot, plan netplan.Plan) custInfo {
 	return c
 }
 
-func (e *evalCtx) hotspotMode() bool { return !billing.IPoE(e.site) }
-
 // readPaths each check needs; a failed read makes the item unknown.
 var needs = map[string][]string{
 	CheckVersion:     {"/system/resource"},
 	CheckAPIPolicy:   {"/user/group"},
-	CheckDMScheduler: {"/system/device-mode"},
 	CheckDMFetch:     {"/system/device-mode"},
-	CheckDMHotspot:   {"/system/device-mode"},
-	CheckKit:         {"/system/script", "/system/scheduler"},
 	CheckDNS:         {"/ip/dns"},
-	CheckCustDNS:     {"/ip/firewall/filter", "/ip/address", "/ip/hotspot", "/ip/dhcp-server"},
-	CheckHooks:       {"/ip/dhcp-server", "/ip/dhcp-client", "/ppp/profile", "/ip/hotspot/user/profile", "/tool/netwatch"},
-	CheckCustomerIf:  {"/ip/address", "/ip/hotspot", "/ip/dhcp-server"},
+	CheckCustDNS:     {"/ip/firewall/filter", "/ip/address", "/ip/dhcp-server"},
+	CheckHooks:       {"/ip/dhcp-server", "/ip/dhcp-client", "/ppp/profile", "/tool/netwatch"},
+	CheckCustomerIf:  {"/ip/address", "/ip/dhcp-server"},
 	CheckOLT:         {"/interface/bridge/port", "/interface/vlan"},
-	CheckBench:       {"/interface/bridge/port", "/interface", "/ip/address", "/ip/hotspot", "/ip/dhcp-server"},
-	CheckOrphans:     {"/ip/hotspot/user", "/ip/hotspot/ip-binding"},
-	CheckTrafficFlow: {"/ip/traffic-flow", "/ip/traffic-flow/target", "/ip/address", "/ip/hotspot", "/ip/dhcp-server"},
+	CheckBench:       {"/interface/bridge/port", "/interface", "/ip/address", "/ip/dhcp-server"},
+	CheckTrafficFlow: {"/ip/traffic-flow", "/ip/traffic-flow/target", "/ip/address", "/ip/dhcp-server"},
 	CheckWWW:         {"/ip/service"},
-	CheckContainers:  {"/container"},
 	CheckIPv6:        {"/ipv6/settings"},
+	CheckWalled:      {"/ip/firewall/filter", "/ip/firewall/nat"},
+	CheckDHCP:        {"/ip/dhcp-server"},
+	CheckWAN:         {"/ip/route"},
+	CheckBootFile:    {"/file"},
 }
 
 type checkDef struct {
@@ -562,22 +511,19 @@ type checkDef struct {
 var checkDefs = []checkDef{
 	{CheckVersion, "router", "Router software version", false, "", evalVersion},
 	{CheckAPIPolicy, "router", "Server login has the rights it needs", false, "", evalAPIPolicy},
-	{CheckDMScheduler, "router", "Router allows scheduled scripts", true, "", evalDMScheduler},
 	{CheckDMFetch, "router", "Router allows file downloads", false, "", evalDMFetch},
-	{CheckDMHotspot, "router", "Router allows the hotspot", false, "", evalDMHotspot},
-	{CheckKit, "router", "Safety kit is installed on the router", true, "", evalKit},
 	{CheckDNS, "services", "Customers can use the router for DNS", true, "", evalDNS},
 	{CheckCustDNS, "services", "Router accepts DNS from the customer network", true, "", evalCustDNS},
 	{CheckHooks, "router", "Scripts that run by themselves on the router", false, "", evalHooks},
 	{CheckCustomerIf, "network", "Customer network is on one interface", true, "", evalCustomerIf},
+	{CheckDHCP, "network", "Customer DHCP server is on", true, "", evalDHCP},
+	{CheckWalled, "network", "Unpaid and unregistered flats are walled", true, "", evalWalled},
+	{CheckWAN, "network", "Router has a way to the internet", false, "", evalWAN},
 	{CheckOLT, "network", "Fibre (OLT) port is not stuck in the bridge", true, "", evalOLT},
 	{CheckBench, "network", "Bench test port", false, "", evalBench},
-	{CheckOrphans, "devices", "Leftover hotspot logins", false, "", evalOrphans},
 	{CheckTrafficFlow, "network", "Traffic reporting to the server", false, "", evalTrafficFlow},
 	{CheckWWW, "services", "Router web page (WebFig)", false, "", evalWWW},
-	{CheckContainers, "services", "Containers on the router", false, "", evalContainers},
-	{CheckUnmanaged, "devices", "Devices the server does not know", true, "keep_unknown", evalUnmanaged},
-	{CheckUnseen, "devices", "Paid flats not seen on the router", true, "force", evalUnseen},
+	{CheckBootFile, "router", "No set-up script left on the router", false, "", evalBootFile},
 	{CheckIPv6, "network", "IPv6", false, "", evalIPv6},
 	{CheckPublicIP, "services", "Server public address is set", true, "", evalPublicIP},
 }
@@ -723,26 +669,6 @@ func dmField(e *evalCtx, it *CheckItem, key string) (string, bool) {
 
 const physicalNote = " This needs the router's button (or a power cut) within 5 minutes of the command, and the router restarts."
 
-func evalDMScheduler(e *evalCtx, it *CheckItem) {
-	v, ok := dmField(e, it, "scheduler")
-	if !ok {
-		return
-	}
-	flagged := yes(e.sn.single("/system/device-mode")["flagged"])
-	switch {
-	case flagged:
-		it.Status = StatusFail
-		it.Detail = "The router flagged its device-mode (it was changed without confirmation). The scheduler may not run until it is confirmed." + physicalNote
-		it.Fix = CheckFix{Kind: FixManual, Label: "Allow the scheduler", Command: "/system/device-mode/update scheduler=yes", Physical: true, Role: store.RoleOperator}
-	case !yes(v):
-		it.Status = StatusFail
-		it.Detail = "The router does not allow scheduled scripts, so the cutover safety timer cannot run." + physicalNote
-		it.Fix = CheckFix{Kind: FixManual, Label: "Allow the scheduler", Command: "/system/device-mode/update scheduler=yes", Physical: true, Role: store.RoleOperator}
-	default:
-		okItem(it, "The router allows scheduled scripts.")
-	}
-}
-
 func evalDMFetch(e *evalCtx, it *CheckItem) {
 	v, ok := dmField(e, it, "fetch")
 	if !ok {
@@ -757,128 +683,6 @@ func evalDMFetch(e *evalCtx, it *CheckItem) {
 	okItem(it, "The router allows file downloads.")
 }
 
-func evalDMHotspot(e *evalCtx, it *CheckItem) {
-	v, ok := dmField(e, it, "hotspot")
-	if !ok {
-		return
-	}
-	switch {
-	case yes(v):
-		okItem(it, "The router allows the hotspot.")
-	case e.hotspotMode():
-		it.Status = StatusFail
-		it.Detail = "This building runs in hotspot mode but the router does not allow the hotspot." + physicalNote
-		it.Fix = CheckFix{Kind: FixManual, Label: "Allow the hotspot", Command: "/system/device-mode/update hotspot=yes", Physical: true, Role: store.RoleOperator}
-	default:
-		it.Status = StatusInfo
-		it.Detail = "The hotspot is not allowed on this router. That is fine: this building is in IPoE mode and does not use it."
-	}
-}
-
-func evalKit(e *evalCtx, it *CheckItem) {
-	fix := CheckFix{Kind: FixManual, Label: "Paste the join command again", Command: "", Role: store.RoleOwner}
-	byName := func(rows []routeros.Row, n string) routeros.Row {
-		for _, r := range rows {
-			if r["name"] == n {
-				return r
-			}
-		}
-		return nil
-	}
-	scripts, sched := e.sn.tbl("/system/script"), e.sn.tbl("/system/scheduler")
-	var miss []string
-	for _, n := range []string{kitTickName, kitRollbackName} {
-		if byName(scripts, n) == nil {
-			miss = append(miss, "script "+n)
-		}
-	}
-	timer := byName(sched, kitTimerName)
-	if timer == nil {
-		miss = append(miss, "scheduler "+kitTimerName)
-	}
-	if len(miss) > 0 {
-		it.Status = StatusFail
-		it.Detail = "The safety kit is not on the router (missing " + strings.Join(miss, ", ") + "). Paste the building's join command again to install it."
-		it.Fix = fix
-		return
-	}
-	it.Evidence = append(it.Evidence, "scheduler "+kitTimerName+" found", fmt.Sprintf("run-count: %s", timer["run-count"]))
-	// The kit runs with the join admin's rights for ever: any drift from the
-	// text the server ships (source, policy, owner, the timer's target) means
-	// somebody changed what runs with those rights.
-	if drift := kitDrift(e, byName(scripts, kitTickName), byName(scripts, kitRollbackName), timer); len(drift) > 0 {
-		it.Status = StatusFail
-		it.Evidence = append(it.Evidence, drift...)
-		it.Detail = "The safety kit on the router is not what the server installed (" + strings.Join(drift, "; ") + "). It runs with full rights, so paste the join command again to put the right one back."
-		it.Fix = fix
-		return
-	}
-	if rowDisabled(timer) {
-		it.Status = StatusFail
-		it.Detail = "The safety kit's timer is switched off on the router. Paste the join command again to repair it."
-		it.Fix = fix
-		return
-	}
-	if !strings.Contains(timer["comment"], kitStamp) {
-		it.Status = StatusFail
-		it.Detail = fmt.Sprintf("The safety kit on the router is an old or unknown version (expected %q). Paste the join command again to update it.", kitStamp)
-		it.Evidence = append(it.Evidence, "comment: "+timer["comment"])
-		it.Fix = fix
-		return
-	}
-	if n, err := strconv.Atoi(strings.TrimSpace(timer["run-count"])); err == nil {
-		stuck, prev, had := e.m.chk.kitMoving(e.site.ID, n, e.now)
-		if stuck {
-			it.Status = StatusFail
-			it.Detail = fmt.Sprintf("The safety kit timer has not run for %d seconds, so the router would not roll back by itself. Paste the join command again.", int(e.now.Sub(prev.at).Seconds()))
-			it.Fix = fix
-			return
-		}
-		if !had {
-			okItem(it, "The safety kit is installed (its timer will be checked again on the next look).")
-			return
-		}
-	}
-	okItem(it, "The safety kit is installed and its timer is running.")
-}
-
-// normSource makes two copies of a script comparable (line ends, trailing space).
-func normSource(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	lines := strings.Split(s, "\n")
-	for i := range lines {
-		lines[i] = strings.TrimRight(lines[i], " \t")
-	}
-	return strings.TrimSpace(strings.Join(lines, "\n"))
-}
-
-// kitDrift lists how the installed kit differs from the one the server ships.
-func kitDrift(e *evalCtx, tick, roll, timer routeros.Row) []string {
-	var out []string
-	api := e.site.RESTUser
-	if api == "" {
-		api = DefaultUser
-	}
-	chk := func(what string, r routeros.Row, wantSrc, wantPolicy string) {
-		if wantSrc != "" && normSource(r["source"]) != normSource(wantSrc) {
-			out = append(out, what+" source was changed")
-		}
-		if !sameSet(splitList(r["policy"]), splitList(wantPolicy)) {
-			out = append(out, fmt.Sprintf("%s policy is %q, expected %q", what, r["policy"], wantPolicy))
-		}
-		if o := r["owner"]; o != "" && o == api {
-			out = append(out, what+" is owned by the server's API user")
-		}
-	}
-	chk("script "+kitTickName, tick, kitTickSource(), kitTickPolicy)
-	chk("script "+kitRollbackName, roll, kitRollbackSource(e.site.HotspotServer), kitScriptPolic)
-	chk("scheduler "+kitTimerName, timer, "", kitTickPolicy)
-	if timer["on-event"] != kitTickName {
-		out = append(out, fmt.Sprintf("the timer runs %q instead of %s", timer["on-event"], kitTickName))
-	}
-	return out
-}
-
 // ---- scripts that run by themselves ---------------------------------------------------
 
 // hookTables are the places a RouterOS script can be hung so that it runs
@@ -890,7 +694,6 @@ var hookTables = []struct {
 	{"/ip/dhcp-server", "DHCP server", []string{"lease-script"}},
 	{"/ip/dhcp-client", "DHCP client", []string{"script"}},
 	{"/ppp/profile", "PPP profile", []string{"on-up", "on-down"}},
-	{"/ip/hotspot/user/profile", "hotspot user profile", []string{"on-login", "on-logout"}},
 	{"/tool/netwatch", "netwatch entry", []string{"up-script", "down-script"}},
 }
 
@@ -908,7 +711,7 @@ func evalHooks(e *evalCtx, it *CheckItem) {
 		}
 	}
 	if len(it.Evidence) == 0 {
-		okItem(it, "No scripts are hung on DHCP, PPP, hotspot or netwatch events.")
+		okItem(it, "No scripts are hung on DHCP, PPP or netwatch events.")
 		return
 	}
 	it.Status = StatusWarn
@@ -1271,7 +1074,7 @@ func evalDNS(e *evalCtx, it *CheckItem) {
 		return
 	}
 	it.Status = StatusFail
-	it.Detail = "The router does not answer DNS for customers (allow-remote-requests is off), so customers would have no working names after the cutover."
+	it.Detail = "The router does not answer DNS for customers (allow-remote-requests is off), so customers would have no working names."
 	safe, why := dnsSafe(e.sn, e.site, e.cust.safeSet())
 	if safe {
 		it.Fix = CheckFix{Kind: FixAuto, Label: "Turn on DNS for customers", Role: store.RoleOperator}
@@ -1377,14 +1180,11 @@ func evalCustomerIf(e *evalCtx, it *CheckItem) {
 		return
 	}
 	it.Evidence = append(it.Evidence, fmt.Sprintf("%s is on %s", c.addr, c.iface))
-	if len(c.hotspots) == 0 && len(c.dhcps) == 0 {
+	if len(c.dhcps) == 0 {
 		it.Status = StatusFail
-		it.Detail = fmt.Sprintf("%s has the gateway address but no hotspot or DHCP server runs on it, so customers get no address.", c.iface)
+		it.Detail = fmt.Sprintf("%s has the gateway address but no DHCP server runs on it, so customers get no address.", c.iface)
 		it.Fix = manual
 		return
-	}
-	if len(c.hotspots) > 0 {
-		it.Evidence = append(it.Evidence, "hotspot: "+strings.Join(c.hotspots, ", "))
 	}
 	if len(c.dhcps) > 0 {
 		it.Evidence = append(it.Evidence, "DHCP server: "+strings.Join(c.dhcps, ", "))
@@ -1463,7 +1263,6 @@ func assessPort(sn *snapshot, site store.Site, iface string) portAssess {
 		{"/ip/address", "interface", "an IP address"},
 		{"/ip/dhcp-server", "interface", "a DHCP server"},
 		{"/ip/dhcp-client", "interface", "a DHCP client"},
-		{"/ip/hotspot", "interface", "a hotspot"},
 	} {
 		if _, err := sn.failed(c.path); err != nil {
 			a.unknown = append(a.unknown, c.path+" could not be read")
@@ -1668,100 +1467,6 @@ func evalBench(e *evalCtx, it *CheckItem) {
 
 // ---- hotspot orphans ------------------------------------------------------------------
 
-// orphan is a hotspot user or IP binding that holds a MAC no account has.
-type orphan struct {
-	path, id, name, mac string
-	serverMade          bool
-}
-
-func (o orphan) String() string {
-	k := "hotspot user"
-	if o.path == "/ip/hotspot/ip-binding" {
-		k = "IP binding"
-	}
-	s := fmt.Sprintf("%s %s", k, o.name)
-	if o.mac != "" {
-		s += " (" + o.mac + ")"
-	}
-	if o.serverMade {
-		s += " made by the server"
-	}
-	return s
-}
-
-// findOrphans lists the leftovers. A hotspot user the server made (comment
-// "ispbill:...") is an orphan when no account has its code; any other user or
-// binding is one when it holds a MAC that no account has. Rows holding no MAC
-// that are not ours are never judged.
-func findOrphans(sn *snapshot, ix acctIndex) []orphan {
-	var out []orphan
-	for _, path := range []string{"/ip/hotspot/user", "/ip/hotspot/ip-binding"} {
-		for _, r := range sn.tbl(path) {
-			if o, ok := orphanOf(path, r, ix); ok {
-				out = append(out, o)
-			}
-		}
-	}
-	return out
-}
-
-// orphanOf judges one hotspot user or IP binding row (see findOrphans).
-func orphanOf(path string, r routeros.Row, ix acctIndex) (orphan, bool) {
-	mac, hasMAC := store.CanonMAC(r["mac-address"])
-	switch path {
-	case "/ip/hotspot/user":
-		name := r["name"]
-		if strings.HasPrefix(r["comment"], "ispbill:") {
-			if !ix.codes[name] {
-				return orphan{path: path, id: r[routeros.RowID], name: name, mac: macIf(hasMAC, mac), serverMade: true}, true
-			}
-			return orphan{}, false
-		}
-		if hasMAC && !ix.macs[mac] {
-			return orphan{path: path, id: r[routeros.RowID], name: name, mac: mac}, true
-		}
-	case "/ip/hotspot/ip-binding":
-		if strings.HasPrefix(r["comment"], "ftn:") {
-			return orphan{}, false // the server's own rows
-		}
-		if hasMAC && !ix.macs[mac] {
-			name := firstOf(r["comment"], r["type"], r["mac-address"])
-			return orphan{path: path, id: r[routeros.RowID], name: name, mac: mac}, true
-		}
-	}
-	return orphan{}, false
-}
-
-func macIf(ok bool, m string) string {
-	if ok {
-		return m
-	}
-	return ""
-}
-
-func evalOrphans(e *evalCtx, it *CheckItem) {
-	orphans := findOrphans(e.sn, e.ix)
-	if len(orphans) == 0 {
-		okItem(it, "No leftover hotspot logins on the router.")
-		return
-	}
-	foreign := 0
-	for _, o := range orphans {
-		it.Evidence = append(it.Evidence, o.String())
-		if !o.serverMade {
-			foreign++
-		}
-	}
-	it.Status = StatusWarn
-	it.Detail = fmt.Sprintf("%d hotspot login(s) on the router belong to no flat here. They let those devices online without the server knowing, and the server lists them as new devices (with the login name).", len(orphans))
-	if foreign == 0 {
-		it.Fix = CheckFix{Kind: FixAuto, Label: "Remove the leftovers", Role: store.RoleOperator}
-		return
-	}
-	it.Fix = CheckFix{Kind: FixConfirm, Label: "Remove the leftovers", Role: store.RoleOperator,
-		ConfirmText: fmt.Sprintf("Remove %d hotspot login(s) from the router? %d of them were not made by the server (for example a test login); those devices lose free access.", len(orphans), foreign)}
-}
-
 // ---- traffic flow -------------------------------------------------------------------------
 
 // flowWant is what traffic-flow should look like.
@@ -1856,30 +1561,6 @@ func evalWWW(e *evalCtx, it *CheckItem) {
 	}
 }
 
-func evalContainers(e *evalCtx, it *CheckItem) {
-	rows := e.sn.tbl("/container")
-	var legacyRunning []string
-	for _, r := range rows {
-		name := firstOf(r["name"], r["hostname"], r["comment"], r["remote-image"])
-		status := firstOf(r["status"], map[bool]string{true: "running", false: "stopped"}[yes(r["running"])])
-		it.Evidence = append(it.Evidence, name+": "+status)
-		if strings.Contains(strings.ToLower(name+" "+r["remote-image"]), "ispbill") && (status == "running" || yes(r["running"])) {
-			legacyRunning = append(legacyRunning, name)
-		}
-	}
-	switch {
-	case e.site.LegacyContainer && len(legacyRunning) > 0:
-		it.Status = StatusWarn
-		it.Detail = "The old ispbill container is still running on the router (" + strings.Join(legacyRunning, ", ") + "). It should be stopped now that the server runs the building."
-	case len(rows) == 0:
-		it.Status = StatusInfo
-		it.Detail = "No containers on the router."
-	default:
-		it.Status = StatusInfo
-		it.Detail = fmt.Sprintf("%d container(s) on the router.", len(rows))
-	}
-}
-
 func firstOf(s ...string) string {
 	for _, v := range s {
 		if v != "" {
@@ -1897,7 +1578,7 @@ func evalIPv6(e *evalCtx, it *CheckItem) {
 		return
 	}
 	it.Status = StatusInfo
-	it.Detail = "IPv6 is on. At the IPoE cutover the flats' IPv6 forwarding is dropped, so flats keep IPv4 only."
+	it.Detail = "IPv6 is on. The flats' IPv6 forwarding is dropped, so flats keep IPv4 only."
 }
 
 func evalPublicIP(e *evalCtx, it *CheckItem) {
@@ -1908,46 +1589,6 @@ func evalPublicIP(e *evalCtx, it *CheckItem) {
 		return
 	}
 	okItem(it, "The server's public address is "+e.m.cfg.PublicIP+".")
-}
-
-func evalUnmanaged(e *evalCtx, it *CheckItem) {
-	switch {
-	case billing.IPoE(e.site) && e.site.AccessMode == store.AccessIPoE:
-		it.Status = StatusInfo
-		it.Detail = "This building already runs in IPoE mode."
-	case e.unmanagedErr != nil:
-		it.Status = StatusUnknown
-		it.Detail = unreadDetail("list the devices on the customer network", e.unmanagedErr)
-		it.Fix = CheckFix{Kind: FixNone}
-		e.slow = true
-	case len(e.unmanaged) == 0:
-		okItem(it, "No devices on the customer network that the server does not know.")
-	default:
-		it.Status = StatusFail
-		it.Evidence = append(it.Evidence, e.unmanaged...)
-		it.Detail = fmt.Sprintf("%d device(s) on the customer network are not flats the server knows (an access point or the OLT's management address, for instance). The cutover would cut them off unless you choose to keep them.", len(e.unmanaged))
-		it.Fix = CheckFix{Kind: FixNone, Label: "Keep them at cutover"}
-	}
-}
-
-func evalUnseen(e *evalCtx, it *CheckItem) {
-	switch {
-	case billing.IPoE(e.site) && e.site.AccessMode == store.AccessIPoE:
-		it.Status = StatusInfo
-		it.Detail = "This building already runs in IPoE mode."
-	case e.unseenErr != nil:
-		it.Status = StatusUnknown
-		it.Detail = unreadDetail("compare the flats with the router's devices", e.unseenErr)
-		it.Fix = CheckFix{Kind: FixNone}
-		e.slow = true
-	case len(e.unseen) == 0:
-		okItem(it, "Every flat with paid time was seen on the router.")
-	default:
-		it.Status = StatusFail
-		it.Evidence = append(it.Evidence, e.unseen...)
-		it.Detail = fmt.Sprintf("%d flat(s) with paid time were not seen on the router, so they would have no service after the cutover. Fix the MAC under Unregistered devices, or go on anyway.", len(e.unseen))
-		it.Fix = CheckFix{Kind: FixNone}
-	}
 }
 
 // ---- the pass -----------------------------------------------------------------------------------
@@ -2059,30 +1700,12 @@ func (m *Manager) runChecks(ctx context.Context, site store.Site) Checks {
 	rt := m.Router(site.ID)
 	e := &evalCtx{m: m, site: eff, ix: m.accountIndex(), now: now}
 	tables := append([]string(nil), checkTables...)
+	ctx, cancelBudget := context.WithTimeout(ctx, checksBudget)
+	defer cancelBudget()
 	e.sn = readSnapshot(ctx, rt, checkSingles, tables)
 	e.plan, e.planErr = PlanSubnet(eff.CustomerSubnet)
 	if e.planErr == nil {
 		e.cust = detectCustomer(e.sn, e.plan)
-	}
-	// The two cutover guards read the router themselves (own timeouts).
-	if e.sn.errs["/system/resource"] == nil {
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			c, cancel := context.WithTimeout(ctx, extraReadTimeout)
-			defer cancel()
-			e.unmanaged, e.unmanagedErr = m.UnmanagedDevices(c, site.ID)
-		}()
-		go func() {
-			defer wg.Done()
-			c, cancel := context.WithTimeout(ctx, extraReadTimeout)
-			defer cancel()
-			e.unseen, e.unseenErr = m.UnseenEntitled(c, site.ID)
-		}()
-		wg.Wait()
-	} else {
-		e.unmanagedErr, e.unseenErr = e.sn.errs["/system/resource"], e.sn.errs["/system/resource"]
 	}
 	items := e.buildChecks()
 	res := e.sn.single("/system/resource")
@@ -2090,6 +1713,6 @@ func (m *Manager) runChecks(ctx context.Context, site store.Site) Checks {
 		Router: RouterInfo{Reachable: e.sn.errs["/system/resource"] == nil, Version: res["version"], Board: res["board-name"]}}
 	out.Slow = e.slow
 	out.Summary = summarize(items)
-	out.Summary.CutoverReady = out.Router.Reachable && len(out.Blockers(false, false)) == 0
+	out.Summary.CutoverReady = out.Router.Reachable && len(out.Blockers(false, false)) == 0 // "ready": no failing check
 	return out
 }

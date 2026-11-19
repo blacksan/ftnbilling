@@ -196,7 +196,7 @@ func TestLiveCacheStaleAndSingleFlight(t *testing.T) {
 		t.Fatalf("%+v", a)
 	}
 	// within 5 s: no new read
-	f.advance(4 * time.Second)
+	f.advance(9 * time.Second)
 	f.m.LiveRouter(ctx, s.ID)
 	if n := r.count("/system/resource"); n != 1 {
 		t.Fatalf("read again inside the cache window: %d", n)
@@ -213,10 +213,10 @@ func TestLiveCacheStaleAndSingleFlight(t *testing.T) {
 	if err != nil || b.Reachable || b.System.Model != "RB5009UG+S+IN" {
 		t.Fatalf("stale: %+v %v", b, err)
 	}
-	f.advance(61 * time.Second)
+	f.advance(121 * time.Second)
 	c, _ := f.m.LiveRouter(ctx, s.ID)
 	if c.Reachable || c.System.Model != "" {
-		t.Fatalf("after 60 s nothing may be served: %+v", c)
+		t.Fatalf("after 120 s nothing may be served: %+v", c)
 	}
 	// back again
 	m.SetFail(nil)
