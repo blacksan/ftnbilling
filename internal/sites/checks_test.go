@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -452,16 +453,16 @@ func TestChecksPublicIPAndInfoItems(t *testing.T) {
 	}
 }
 
-func TestChecksFailedReadIsUnknownWithThePrintCommand(t *testing.T) {
+func TestChecksFailedReadIsUnknownWithNoCommandForTheOperator(t *testing.T) {
 	f, s, m := checkSite(t, nil)
 	m.SetPathFail("/ip/dns", errors.New("boom"))
 	m.SetPathFail("/system/script", &routeros.APIError{Status: 403, Message: "Forbidden"})
 	c := get(t, f, s.ID, true)
 	dns := item(t, c, CheckDNS)
-	if dns.Status != StatusUnknown || dns.Fix.Kind != FixManual || dns.Fix.Command != "/ip/dns/print" || !strings.Contains(dns.Detail, "boom") || !dns.BlocksCutover {
+	if dns.Status != StatusUnknown || dns.Fix.Kind != FixNone || dns.Fix.Command != "" || !strings.Contains(dns.Detail, "boom") || !dns.BlocksCutover {
 		t.Fatalf("%+v", dns)
 	}
-	if kit := item(t, c, CheckKit); kit.Status != StatusUnknown || kit.Fix.Command != "/system/script/print" {
+	if kit := item(t, c, CheckKit); kit.Status != StatusUnknown || kit.Fix.Command != "" {
 		t.Fatalf("%+v", kit)
 	}
 	if c.Summary.Unknown < 2 || c.Summary.CutoverReady || !c.Router.Reachable {
@@ -522,4 +523,91 @@ func TestChecksJoinReport(t *testing.T) {
 	if jr == nil || jr.OK || len(jr.Lines) != 1 || !jr.At.Equal(f.now.UTC().Truncate(time.Second)) || jr.ROS != "7.25.1" {
 		t.Fatalf("%+v", jr)
 	}
+}
+
+func TestChecksTimedOutReadIsSaidSlowAndRecheckedByTheServer(t *testing.T) {
+	oldT, oldR := readTimeout, recheckAfter
+	readTimeout, recheckAfter = 100*time.Millisecond, 50*time.Millisecond
+	defer func() { readTimeout, recheckAfter = oldT, oldR }()
+	f, s, m := checkSite(t, nil)
+	f.m.mu.Lock()
+	f.m.ctx = context.Background()
+	f.m.mu.Unlock()
+	m.SetPathFail("/ip/hotspot/user", context.DeadlineExceeded)
+	c := get(t, f, s.ID, true)
+	it := item(t, c, CheckOrphans)
+	if it.Status != StatusUnknown || it.Fix.Kind != FixNone || it.Fix.Command != "" ||
+		it.Detail != "The router was slow to answer; checking again automatically." || !c.Slow {
+		t.Fatalf("%+v slow=%v", it, c.Slow)
+	}
+	// the router recovers: the server's own pass (nobody asked) puts a good answer in the cache
+	m.SetPathFail("/ip/hotspot/user", nil)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if cc, hit := f.m.chk.get(s.ID, f.m.now()); hit && !cc.Slow && item(t, cc, CheckOrphans).Status != StatusUnknown {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the server did not check again by itself")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestReadSnapshotLimitsConcurrency(t *testing.T) {
+	oldC := readConcurrency
+	readConcurrency = 4
+	defer func() { readConcurrency = oldC }()
+	var cur, peak atomic.Int32
+	rd := rowFunc(func(ctx context.Context, p string) ([]routeros.Row, error) {
+		n := cur.Add(1)
+		for {
+			o := peak.Load()
+			if n <= o || peak.CompareAndSwap(o, n) {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+		cur.Add(-1)
+		return nil, nil
+	})
+	readSnapshot(context.Background(), rd, nil, checkTables)
+	if peak.Load() > 4 || peak.Load() < 2 {
+		t.Fatalf("peak %d", peak.Load())
+	}
+}
+
+func TestReadSnapshotRetriesATimedOutReadOnce(t *testing.T) {
+	oldT := readTimeout
+	readTimeout = 50 * time.Millisecond
+	defer func() { readTimeout = oldT }()
+	var calls atomic.Int32
+	rd := rowFunc(func(ctx context.Context, p string) ([]routeros.Row, error) {
+		if calls.Add(1) == 1 {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return []routeros.Row{{"name": "x"}}, nil
+	})
+	sn := readSnapshot(context.Background(), rd, nil, []string{"/ip/hotspot"})
+	if sn.errs["/ip/hotspot"] != nil || len(sn.tbl("/ip/hotspot")) != 1 || calls.Load() != 2 {
+		t.Fatalf("%v calls=%d", sn.errs, calls.Load())
+	}
+	calls.Store(-10) // always times out: one retry, then slow
+	rd2 := rowFunc(func(ctx context.Context, p string) ([]routeros.Row, error) {
+		calls.Add(1)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	calls.Store(0)
+	sn = readSnapshot(context.Background(), rd2, nil, []string{"/ip/hotspot"})
+	if !sn.slow["/ip/hotspot"] || calls.Load() != 2 {
+		t.Fatalf("%v calls=%d", sn.slow, calls.Load())
+	}
+}
+
+type rowFunc func(ctx context.Context, p string) ([]routeros.Row, error)
+
+func (f rowFunc) Rows(ctx context.Context, p string, _ map[string]string) ([]routeros.Row, error) {
+	return f(ctx, p)
 }
