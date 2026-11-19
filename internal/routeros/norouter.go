@@ -47,3 +47,6 @@ func (noRouter) AddRow(context.Context, string, map[string]string) (string, erro
 }
 func (noRouter) SetRow(context.Context, string, string, map[string]string) error { return ErrNoRouter }
 func (noRouter) RemoveRow(context.Context, string, string) error                 { return ErrNoRouter }
+func (noRouter) RowsProps(context.Context, string, map[string]string, []string) ([]Row, error) {
+	return nil, ErrNoRouter
+}

@@ -149,12 +149,12 @@ func (m *Manager) newClient(s store.Site) routeros.Client {
 		return m.opt.NewClient(s)
 	}
 	if s.Mode == store.SiteModeWG {
-		return routeros.NewREST(fmt.Sprintf("http://%s:%d", s.TunnelIP, s.RESTPort), s.RESTUser, s.RESTPass)
+		return routeros.NewREST(fmt.Sprintf("http://%s:%d", s.TunnelIP, s.RESTPort), s.RESTUser, s.RESTPass).WithTimeout(m.cfg.RouterReadTimeout)
 	}
 	if m.cfg.RouterMock {
 		return m.mock
 	}
-	return routeros.NewREST(m.cfg.RouterURL, m.cfg.RouterUser, m.cfg.RouterPass)
+	return routeros.NewREST(m.cfg.RouterURL, m.cfg.RouterUser, m.cfg.RouterPass).WithTimeout(m.cfg.RouterReadTimeout)
 }
 
 // Effective returns the site as the runtime sees it: defaults filled in, and
@@ -533,7 +533,7 @@ func (m *Manager) Status(ctx context.Context, siteID string) (SiteStatus, bool) 
 			}
 		}
 	}
-	pc, cancel := context.WithTimeout(ctx, 3*time.Second)
+	pc, cancel := context.WithTimeout(ctx, routeros.DefaultTimeout)
 	defer cancel()
 	if err := m.Router(siteID).Ping(pc); err != nil {
 		st.RESTErr = err.Error()

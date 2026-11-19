@@ -11,6 +11,7 @@ import (
 
 	"ispbill/internal/billing"
 	"ispbill/internal/metrics"
+	"ispbill/internal/routeros"
 	"ispbill/internal/sites"
 	"ispbill/internal/store"
 )
@@ -171,7 +172,7 @@ func shortAge(d time.Duration) string {
 func (s *Server) adminSites(w http.ResponseWriter, r *http.Request) {
 	p := s.page(r, "sites")
 	sc := scope{All: true, Sites: s.scopeOf(r).Sites} // the router list always shows every router
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 	defer cancel()
 	all := s.routerRows(ctx, sc)
 	tab := r.URL.Query().Get("tab")
@@ -296,7 +297,7 @@ func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site,
 		tab = "setup"
 	}
 	eff := s.mgr.Effective(st)
-	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 	defer cancel()
 	status, _ := s.mgr.Status(ctx, st.ID)
 	p.Data["Site"], p.Data["Eff"], p.Data["Status"] = st, eff, status

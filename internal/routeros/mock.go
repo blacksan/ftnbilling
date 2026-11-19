@@ -271,6 +271,11 @@ func copyRow(r Row) Row {
 	return c
 }
 
+// RowsProps is Rows; the mock returns every property.
+func (m *Mock) RowsProps(ctx context.Context, path string, query map[string]string, _ []string) ([]Row, error) {
+	return m.Rows(ctx, path, query)
+}
+
 // Rows returns copies of the rows of path that match query.
 func (m *Mock) Rows(_ context.Context, path string, query map[string]string) ([]Row, error) {
 	m.mu.Lock()

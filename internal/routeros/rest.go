@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,30 +41,152 @@ func (e *APIError) Error() string {
 }
 
 // REST implements Client over RouterOS v7 /rest with basic auth.
+//
+// Budget for a slow tunnel: one transport and one set of slots per router base
+// URL (shared by every REST value built for it): 2 reads and 1 write in
+// flight, at most 3 connections, keep-alive. The per-call deadline starts only
+// once a slot is held, so queueing does not eat the router's time.
 type REST struct {
 	base, user, pass string
-	hc               *http.Client
+	ep               *endpoint
+	timeout          time.Duration
+}
+
+// DefaultTimeout is the per-call deadline (after the slot is taken).
+const DefaultTimeout = 10 * time.Second
+
+const (
+	readSlots  = 2
+	writeSlots = 1
+	retryDelay = 300 * time.Millisecond
+)
+
+// endpoint is the shared state of one router: its transport and slots.
+type endpoint struct {
+	hc     *http.Client
+	reads  chan struct{}
+	writes chan struct{}
+}
+
+var (
+	endpointsMu sync.Mutex
+	endpoints   = map[string]*endpoint{}
+)
+
+func endpointFor(base string) *endpoint {
+	endpointsMu.Lock()
+	defer endpointsMu.Unlock()
+	if e, ok := endpoints[base]; ok {
+		return e
+	}
+	tr := &http.Transport{
+		Proxy:                 nil,
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		MaxConnsPerHost:       readSlots + writeSlots,
+		MaxIdleConnsPerHost:   readSlots + writeSlots,
+		IdleConnTimeout:       90 * time.Second,
+		ResponseHeaderTimeout: 0, // the per-call deadline bounds it
+	}
+	e := &endpoint{
+		hc:     &http.Client{Transport: tr},
+		reads:  make(chan struct{}, readSlots),
+		writes: make(chan struct{}, writeSlots),
+	}
+	endpoints[base] = e
+	return e
 }
 
 func NewREST(baseURL, user, pass string) *REST {
-	return &REST{
-		base: strings.TrimRight(baseURL, "/"),
-		user: user,
-		pass: pass,
-		hc:   &http.Client{}, // per-call deadlines come from do()
-	}
+	base := strings.TrimRight(baseURL, "/")
+	return &REST{base: base, user: user, pass: pass, ep: endpointFor(base), timeout: DefaultTimeout}
 }
 
-const defaultTimeout = 8 * time.Second
+// WithTimeout sets the per-call deadline (ROUTER_READ_TIMEOUT); d <= 0 keeps the default.
+func (c *REST) WithTimeout(d time.Duration) *REST {
+	if d > 0 {
+		c.timeout = d
+	}
+	return c
+}
+
+// NotSent reports that the request never left: the connection was never made
+// (dial failure, refused, no route, DNS). A timeout while connecting is the
+// same; only a timeout after the request was written means the router may
+// have acted on it.
+func NotSent(err error) bool {
+	if err == nil {
+		return false
+	}
+	var oe *net.OpError
+	if errors.As(err, &oe) && oe.Op == "dial" {
+		return true
+	}
+	m := err.Error()
+	return strings.Contains(m, "dial tcp") || strings.Contains(m, "connection refused") || strings.Contains(m, "no route to host") ||
+		strings.Contains(m, "network is unreachable") || strings.Contains(m, "no such host")
+}
 
 func (c *REST) do(ctx context.Context, method, path string, q url.Values, body, out any) error {
-	return c.doT(ctx, defaultTimeout, method, path, q, body, out)
+	return c.doT(ctx, c.timeout, method, path, q, body, out)
 }
 
-// doT is do() with an explicit deadline (the ping call needs longer).
+// transient: a read worth one more try (timeout or reset, request may or may not have arrived).
+func transient(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ae *APIError
+	if errors.As(err, &ae) {
+		return false
+	}
+	if NotSent(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	return strings.Contains(err.Error(), "connection reset")
+}
+
+// doT is do() with an explicit per-call deadline (the ping call needs longer).
+// It takes a read or write slot (GET is a read, anything else a write), then
+// starts the deadline. Reads are retried once after 300 ms on timeout or
+// reset; writes only when the request was never sent.
 func (c *REST) doT(ctx context.Context, timeout time.Duration, method, path string, q url.Values, body, out any) error {
+	read := method == http.MethodGet
+	err := c.once(ctx, read, timeout, method, path, q, body, out)
+	if err == nil || ctx.Err() != nil {
+		return err
+	}
+	if (read && transient(err)) || (!read && NotSent(err)) {
+		select {
+		case <-time.After(retryDelay):
+		case <-ctx.Done():
+			return err
+		}
+		return c.once(ctx, read, timeout, method, path, q, body, out)
+	}
+	return err
+}
+
+func (c *REST) once(ctx context.Context, read bool, timeout time.Duration, method, path string, q url.Values, body, out any) error {
+	slots := c.ep.writes
+	if read {
+		slots = c.ep.reads
+	}
+	select {
+	case slots <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-slots }()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	return c.send(ctx, method, path, q, body, out)
+}
+
+func (c *REST) send(ctx context.Context, method, path string, q url.Values, body, out any) error {
 	u := c.base + "/rest" + path
 	if len(q) > 0 {
 		u += "?" + q.Encode()
@@ -82,7 +207,7 @@ func (c *REST) doT(ctx context.Context, timeout time.Duration, method, path stri
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := c.hc.Do(req)
+	resp, err := c.ep.hc.Do(req)
 	if err != nil {
 		return err
 	}
