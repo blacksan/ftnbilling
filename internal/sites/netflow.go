@@ -42,9 +42,7 @@ func (m *Manager) ListenNetflow(ctx context.Context, addr string, ready chan<- n
 // HandleNetflowPacket routes one datagram by its source address. Every router
 // peer is allowed only its own /32 tunnel address, so the source address
 // identifies (and authenticates) the building. A source that is no building's
-// tunnel address goes to the env-mode building if there is one (a router that
-// exports over the public internet, as before); otherwise it is counted as
-// stray and dropped. It returns the building that took it ("" if dropped).
+// tunnel address is counted as stray and dropped. It returns the building that took it ("" if dropped).
 func (m *Manager) HandleNetflowPacket(now time.Time, pkt []byte, from string) string {
 	var ip string
 	if ap, err := netip.ParseAddrPort(from); err == nil {
@@ -55,8 +53,6 @@ func (m *Manager) HandleNetflowPacket(now time.Time, pkt []byte, from string) st
 	var siteID string
 	m.st.View(func(d *store.Data) {
 		if s, ok := d.SiteByTunnelIP(ip); ok {
-			siteID = s.ID
-		} else if s, ok := d.EnvSite(); ok {
 			siteID = s.ID
 		}
 	})

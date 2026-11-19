@@ -288,7 +288,7 @@ func TestLiveInterfaceRatesFromCounterDeltas(t *testing.T) {
 	if o := byName["sfp-sfpplus1"]; o.Role != RoleOLT || o.RxBps == nil || *o.RxBps != 0 {
 		t.Fatalf("%+v", o)
 	}
-	if byName["br-hotspot"].Role != RoleCustomer || len(byName["br-hotspot"].Addresses) != 1 || byName["wg-ftn"].Role != RoleTunnel {
+	if byName["br-customers"].Role != RoleCustomer || len(byName["br-customers"].Addresses) != 1 || byName["wg-ftn"].Role != RoleTunnel {
 		t.Fatalf("%+v", byName)
 	}
 	// a counter that went back (reboot) gives null, not a huge number

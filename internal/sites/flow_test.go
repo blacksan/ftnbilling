@@ -322,7 +322,7 @@ func TestFixWriterIsAnAllowlist(t *testing.T) {
 	ctx := context.Background()
 	for _, p := range []string{"/user", "/user/group", "/ip/service", "/system/scheduler", "/system/script", "/system/identity",
 		"/interface/wireguard", "/interface/wireguard/peers", "/ip/route", "/ip/address", "/ip/firewall/address-list",
-		"/interface/list/member", "/ip/hotspot", "/system/reset-configuration"} {
+		"/interface/list/member", "/ip/dhcp-server", "/system/reset-configuration"} {
 		if err := w.addRow(ctx, p, R{"name": "x", "comment": "ftn: netflow"}); !errors.Is(err, ErrFixNotAllowed) {
 			t.Errorf("addRow %s: %v", p, err)
 		}

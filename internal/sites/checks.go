@@ -35,7 +35,7 @@ const (
 const (
 	FixAuto    = "auto"    // one button, safe, the server re-checks before writing
 	FixConfirm = "confirm" // needs confirm=true (and an owner where Role says so)
-	FixManual  = "manual"  // somebody must run Command on the router
+	FixManual  = "manual"  // the server cannot change it; the item's Detail says in words what to do
 	FixNone    = "none"
 )
 
@@ -106,7 +106,6 @@ type CheckFix struct {
 	Kind        string `json:"kind"`
 	Label       string `json:"label,omitempty"`
 	ConfirmText string `json:"confirm_text,omitempty"`
-	Command     string `json:"command,omitempty"`
 	Physical    bool   `json:"physical,omitempty"`
 	Role        string `json:"role,omitempty"` // operator | owner
 }
@@ -594,11 +593,11 @@ func evalVersion(e *evalCtx, it *CheckItem) {
 	case !ok:
 		it.Status = StatusUnknown
 		it.Detail = "The router did not say which RouterOS version it runs."
-		it.Fix = CheckFix{Kind: FixManual, Label: "Look at the version", Command: "/system/resource/print"}
+		it.Detail += " Paste a new line on the router: the server reads the version from the router it builds."
 	case major < 7 || (major == 7 && minor < 13):
 		it.Status = StatusFail
 		it.Detail = fmt.Sprintf("The router runs RouterOS %s. Version 7.13 or newer is needed.", v)
-		it.Fix = CheckFix{Kind: FixManual, Label: "Upgrade RouterOS", Command: "/system/package/update/check-for-updates"}
+		it.Detail += " Upgrade RouterOS on the router (System, Packages), then check again."
 	default:
 		okItem(it, fmt.Sprintf("RouterOS %s is new enough (7.13 or newer is needed).", v))
 	}
@@ -615,11 +614,10 @@ func evalAPIPolicy(e *evalCtx, it *CheckItem) {
 			grp = r
 		}
 	}
-	cmd := "/user/group/set " + name + " policy=" + requiredAPIPolicy
 	if grp == nil {
 		it.Status = StatusFail
 		it.Detail = fmt.Sprintf("The router has no user group called %s, so the server's login may be missing rights.", name)
-		it.Fix = CheckFix{Kind: FixManual, Label: "Create the group", Command: cmd}
+		it.Detail += " Paste a new line on the router: the line builds the group with exactly the rights the server needs."
 		return
 	}
 	pol := grp["policy"]
@@ -633,7 +631,7 @@ func evalAPIPolicy(e *evalCtx, it *CheckItem) {
 	if len(missing) > 0 {
 		it.Status = StatusFail
 		it.Detail = fmt.Sprintf("The server's group %s lacks: %s. Some checks and fixes will not work.", name, strings.Join(missing, ", "))
-		it.Fix = CheckFix{Kind: FixManual, Label: "Give the group its rights", Command: cmd}
+		it.Detail += " Paste a new line on the router: the line rebuilds the group with the right rights."
 		return
 	}
 	var extra []string
@@ -645,7 +643,7 @@ func evalAPIPolicy(e *evalCtx, it *CheckItem) {
 	if len(extra) > 0 {
 		it.Status = StatusWarn
 		it.Detail = fmt.Sprintf("The server's group %s has more rights than it needs (%s). If the server were broken into, those rights would reach the router itself.", name, strings.Join(extra, ", "))
-		it.Fix = CheckFix{Kind: FixManual, Label: "Take the extra rights away", Command: cmd}
+		it.Detail += " Paste a new line on the router: the line rebuilds the group with only the rights the server needs."
 		return
 	}
 	okItem(it, fmt.Sprintf("Group %s has exactly the rights the server needs.", name))
@@ -660,7 +658,7 @@ func dmField(e *evalCtx, it *CheckItem, key string) (string, bool) {
 	if !ok {
 		it.Status = StatusUnknown
 		it.Detail = "The router's device-mode answer has no " + key + " setting."
-		it.Fix = CheckFix{Kind: FixManual, Label: "Look at device-mode", Command: "/system/device-mode/print"}
+		it.Detail += " Open System, Device-mode on the router, then check again."
 		return "", false
 	}
 	it.Evidence = append(it.Evidence, fmt.Sprintf("device-mode %s: %s", key, v))
@@ -676,8 +674,8 @@ func evalDMFetch(e *evalCtx, it *CheckItem) {
 	}
 	if !yes(v) {
 		it.Status = StatusWarn
-		it.Detail = "The router does not allow file downloads, so the join command cannot fetch its script." + physicalNote
-		it.Fix = CheckFix{Kind: FixManual, Label: "Allow downloads", Command: "/system/device-mode/update fetch=yes", Physical: true, Role: store.RoleOperator}
+		it.Detail = "The router does not allow file downloads, so the line cannot fetch its script. Paste the line on the router: it turns downloads on when asked and tells you to press the router's button." + physicalNote
+		it.Fix = CheckFix{Kind: FixManual, Label: "Allow downloads", Physical: true, Role: store.RoleOperator}
 		return
 	}
 	okItem(it, "The router allows file downloads.")
@@ -1054,11 +1052,6 @@ func dnsSafe(sn *snapshot, site store.Site, safe map[string]bool) (bool, string)
 	return true, ""
 }
 
-const dnsFixCommand = `/ip/firewall/filter/add chain=input action=drop protocol=udp dst-port=53 in-interface-list=WAN place-before=0 comment="ftn: no WAN DNS"
-/ip/firewall/filter/add chain=input action=drop protocol=tcp dst-port=53 in-interface-list=WAN place-before=0 comment="ftn: no WAN DNS"
-/ipv6/settings/set disable-ipv6=yes
-/ip/dns/set allow-remote-requests=yes`
-
 func (c custInfo) safeSet() map[string]bool {
 	if c.found {
 		return map[string]bool{c.iface: true}
@@ -1082,7 +1075,8 @@ func evalDNS(e *evalCtx, it *CheckItem) {
 		return
 	}
 	it.Detail += " It is not turned on for you because the router might then answer the whole internet (" + why + ")."
-	it.Fix = CheckFix{Kind: FixManual, Label: "Block DNS from the WAN, then turn it on", Command: dnsFixCommand, Role: store.RoleOwner}
+	it.Detail += " Paste a new line on the router: the line builds a firewall that drops DNS from the WAN, and turns DNS on."
+	it.Fix = CheckFix{Kind: FixManual, Label: "Block DNS from the WAN, then turn it on", Role: store.RoleOwner}
 }
 
 // custDNSProblems lists the protocols (udp, tcp) whose DNS from the customer
@@ -1133,11 +1127,6 @@ func firstStaticInput(rows []routeros.Row) (string, bool) {
 	return "", false
 }
 
-func custDNSCommand(iface string) string {
-	return fmt.Sprintf(`/ip/firewall/filter/add chain=input in-interface=%[1]s protocol=udp dst-port=53 action=accept place-before=0 comment=%[2]q
-/ip/firewall/filter/add chain=input in-interface=%[1]s protocol=tcp dst-port=53 action=accept place-before=0 comment=%[2]q`, iface, custDNSComment)
-}
-
 func evalCustDNS(e *evalCtx, it *CheckItem) {
 	if !e.cust.found {
 		it.Status = StatusUnknown
@@ -1154,8 +1143,8 @@ func evalCustDNS(e *evalCtx, it *CheckItem) {
 	it.Detail = fmt.Sprintf("The router's firewall would drop DNS questions from the customer network %s (%s), so customers could ping the internet but not open any website.", e.cust.iface, why)
 	for _, r := range e.sn.tbl("/ip/firewall/filter") {
 		if r["comment"] == custDNSComment {
-			it.Detail += " A rule \"" + custDNSComment + "\" exists but does not take effect: move it above the drop by hand."
-			it.Fix = CheckFix{Kind: FixManual, Label: "Put the DNS accept rules first", Command: custDNSCommand(e.cust.iface), Role: store.RoleOwner}
+			it.Detail += " A rule \"" + custDNSComment + "\" exists but does not take effect: it is below a drop. Paste a new line on the router to rebuild its firewall in the right order."
+			it.Fix = CheckFix{Kind: FixManual, Label: "Put the DNS accept rules first", Role: store.RoleOwner}
 			return
 		}
 	}
@@ -1226,7 +1215,7 @@ func wanIfaces(sn *snapshot, site store.Site) map[string]bool {
 }
 
 // assessPort looks at an interface for the OLT and bench rules: is it a WAN
-// port, does it carry an address, DHCP or hotspot itself, which hosts are
+// port, does it carry an address or DHCP itself, which hosts are
 // learned on it, which VLANs sit on it.
 func assessPort(sn *snapshot, site store.Site, iface string) portAssess {
 	a := portAssess{iface: iface}
@@ -1307,10 +1296,6 @@ func assessOLT(sn *snapshot, site store.Site) portAssess {
 	return a
 }
 
-func oltCommand(site store.Site) string {
-	return fmt.Sprintf("/interface/bridge/port/remove [find interface=%s]", site.OLTInterface)
-}
-
 func evalOLT(e *evalCtx, it *CheckItem) {
 	if e.site.OLTInterface == "" {
 		it.Status = StatusInfo
@@ -1329,12 +1314,12 @@ func evalOLT(e *evalCtx, it *CheckItem) {
 	switch {
 	case len(a.hard) > 0:
 		it.Evidence = append(it.Evidence, a.hard...)
-		it.Detail += " The server will not change it itself: " + strings.Join(a.hard, "; ") + "."
-		it.Fix = CheckFix{Kind: FixManual, Label: "Take the port out of the bridge", Command: oltCommand(e.site), Role: store.RoleOwner}
+		it.Detail += " The server will not change it itself: " + strings.Join(a.hard, "; ") + ". Paste a new line on the router: it builds the VLAN on the OLT port outside the bridge."
+		it.Fix = CheckFix{Kind: FixManual, Label: "Take the port out of the bridge", Role: store.RoleOwner}
 	case len(a.unknown) > 0:
 		it.Evidence = append(it.Evidence, a.unknown...)
-		it.Detail += " The server could not prove it is safe to change (" + strings.Join(a.unknown, "; ") + ")."
-		it.Fix = CheckFix{Kind: FixManual, Label: "Take the port out of the bridge", Command: oltCommand(e.site), Role: store.RoleOwner}
+		it.Detail += " The server could not prove it is safe to change (" + strings.Join(a.unknown, "; ") + "). Paste a new line on the router: it builds the VLAN on the OLT port outside the bridge."
+		it.Fix = CheckFix{Kind: FixManual, Label: "Take the port out of the bridge", Role: store.RoleOwner}
 	case len(a.learned) > 0 || len(otherBridges(a, e.cust)) > 0:
 		var why []string
 		if ob := otherBridges(a, e.cust); len(ob) > 0 {
@@ -1447,15 +1432,15 @@ func evalBench(e *evalCtx, it *CheckItem) {
 		it.Evidence = append(it.Evidence, "bench port is a port of "+b.inOther)
 	}
 	it.Detail = fmt.Sprintf("The bench port %s is %s, not on the customer bridge %s, so a laptop there cannot be tested as a customer.", e.site.BenchPort, where, e.cust.iface)
-	cmd := fmt.Sprintf("/interface/bridge/port/add bridge=%s interface=%s comment=\"ftn: bench port\"", e.cust.iface, e.site.BenchPort)
 	switch {
 	case len(b.hard) > 0:
 		it.Evidence = append(it.Evidence, b.hard...)
-		it.Detail += " The server will not move it: " + strings.Join(b.hard, "; ") + "."
-		it.Fix = CheckFix{Kind: FixManual, Label: "Put the bench port on the bridge", Command: cmd}
+		it.Detail += " The server will not move it: " + strings.Join(b.hard, "; ") + ". Paste a new line on the router: it puts the bench port on the customer bridge."
+		it.Fix = CheckFix{Kind: FixManual, Label: "Put the bench port on the bridge"}
 	case len(b.unknown) > 0:
 		it.Evidence = append(it.Evidence, b.unknown...)
-		it.Fix = CheckFix{Kind: FixManual, Label: "Put the bench port on the bridge", Command: cmd}
+		it.Detail += " Paste a new line on the router: it puts the bench port on the customer bridge."
+		it.Fix = CheckFix{Kind: FixManual, Label: "Put the bench port on the bridge"}
 	case len(b.learned) > 0:
 		it.Evidence = append(it.Evidence, "devices learned on the port: "+strings.Join(b.learned, ", "))
 		it.Fix = CheckFix{Kind: FixConfirm, Label: "Move the bench port", Role: store.RoleOwner,
@@ -1464,8 +1449,6 @@ func evalBench(e *evalCtx, it *CheckItem) {
 		it.Fix = CheckFix{Kind: FixAuto, Label: "Put the bench port on the bridge", Role: store.RoleOperator}
 	}
 }
-
-// ---- hotspot orphans ------------------------------------------------------------------
 
 // ---- traffic flow -------------------------------------------------------------------------
 

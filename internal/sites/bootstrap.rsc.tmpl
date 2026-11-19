@@ -130,7 +130,17 @@
 
 :put "ftn 6/12: firewall (nothing is opened on the WAN)"
 {{secOpen 6 "firewall" true}}
-  /ip/firewall/filter remove [find where comment~"^ftn:"]
+  # The router is never unfiltered: a hold rule that drops new and invalid
+  # input from the WAN goes to the top first, the old rules are replaced
+  # behind it, and the hold is removed only after every new rule is in. If a
+  # rule fails the hold stays, so the router stays closed.
+  /ip/firewall/filter remove [find where comment="ftn: hold"]
+  :if ([:len [/ip/firewall/filter/find]] > 0) do={
+    /ip/firewall/filter add chain=input action=drop connection-state=new,invalid in-interface-list=WAN place-before=0 comment="ftn: hold"
+  } else={
+    /ip/firewall/filter add chain=input action=drop connection-state=new,invalid in-interface-list=WAN comment="ftn: hold"
+  }
+  /ip/firewall/filter remove [find where comment~"^ftn:" and comment!="ftn: hold"]
   /ip/firewall/nat remove [find where comment~"^ftn:"]
 {{- range .Filter}}
 {{.}}
@@ -138,6 +148,7 @@
 {{- range .NAT}}
 {{.}}
 {{- end}}
+  /ip/firewall/filter remove [find where comment="ftn: hold"]
 {{secClose 6 "firewall" true}}
 
 :put "ftn 7/12: DNS and IPv6"

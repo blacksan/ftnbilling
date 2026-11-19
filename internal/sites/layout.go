@@ -46,19 +46,9 @@ type SubnetPlan = netplan.Plan
 // the unregistered pool is .10-.59 and the flats' static range starts at .60.
 func PlanSubnet(cidr string) (SubnetPlan, error) { return netplan.PlanSubnet(cidr) }
 
-// ApplyDefaults fills the blank layout fields of a site. For an env-mode site
-// the router layout comes from the environment (the legacy settings), not from
-// the stored record, and the result is for display and the collector only.
+// ApplyDefaults fills the blank layout fields of a site (the result is for the
+// script, the collector and display; the stored record keeps its blanks).
 func ApplyDefaults(cfg config.Config, s store.Site) store.Site {
-	if s.Mode == store.SiteModeEnv {
-		s.HotspotServer = nonEmpty(cfg.HotspotServer, "hotspot1")
-		s.WANInterface = nonEmpty(cfg.WANInterface, "ether1")
-		s.OLTInterface = nonEmpty(cfg.OLTInterface, "sfp-sfpplus1")
-		s.CustomerSubnet = nonEmpty(cfg.CustomerSubnet, "10.5.50.0/24")
-		s.WANCapMbps, s.OLTCapMbps, s.FUPTB = cfg.WANCapacityMbps, cfg.OLTCapacityMbps, cfg.FUPTB
-		s.RESTUser = cfg.RouterUser
-	}
-	s.HotspotServer = nonEmpty(s.HotspotServer, "hotspot1")
 	s.WANInterface = nonEmpty(s.WANInterface, "ether1")
 	s.WANList = "WAN" // the script's list names are fixed
 	s.WANMode = nonEmpty(s.WANMode, WANDHCP)

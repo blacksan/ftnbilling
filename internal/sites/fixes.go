@@ -562,9 +562,6 @@ func (m *Manager) applyFix(ctx context.Context, siteID, checkID string, confirm 
 	switch item.Fix.Kind {
 	case FixAuto, FixConfirm:
 	default:
-		if item.Fix.Command != "" {
-			return res, fmt.Errorf("%w: run this on the router: %s", ErrNoFix, item.Fix.Command)
-		}
 		return res, ErrNoFix
 	}
 	if !hasFixer {

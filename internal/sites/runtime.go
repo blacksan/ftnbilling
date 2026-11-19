@@ -15,7 +15,6 @@ type Runtime struct {
 	Site   store.Site // with defaults applied; secrets included, never log it
 	Client routeros.Client
 	Col    *metrics.Collector
-	Guard  *HostGuard
 
 	cancel func()
 	done   chan struct{}

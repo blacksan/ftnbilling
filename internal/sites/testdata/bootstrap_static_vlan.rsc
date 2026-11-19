@@ -114,7 +114,17 @@
 
 :put "ftn 6/12: firewall (nothing is opened on the WAN)"
 :onerror e in={
-  /ip/firewall/filter remove [find where comment~"^ftn:"]
+  # The router is never unfiltered: a hold rule that drops new and invalid
+  # input from the WAN goes to the top first, the old rules are replaced
+  # behind it, and the hold is removed only after every new rule is in. If a
+  # rule fails the hold stays, so the router stays closed.
+  /ip/firewall/filter remove [find where comment="ftn: hold"]
+  :if ([:len [/ip/firewall/filter/find]] > 0) do={
+    /ip/firewall/filter add chain=input action=drop connection-state=new,invalid in-interface-list=WAN place-before=0 comment="ftn: hold"
+  } else={
+    /ip/firewall/filter add chain=input action=drop connection-state=new,invalid in-interface-list=WAN comment="ftn: hold"
+  }
+  /ip/firewall/filter remove [find where comment~"^ftn:" and comment!="ftn: hold"]
   /ip/firewall/nat remove [find where comment~"^ftn:"]
   /ip/firewall/filter add chain=forward action=accept protocol=tcp dst-port=80,443 dst-address=203.0.113.10 src-address-list=ftn-unreg comment="ftn: ipoe walled payment page ftn-unreg"
   /ip/firewall/filter add chain=forward action=accept protocol=tcp dst-port=80,443 dst-address=203.0.113.10 src-address-list=ftn-suspended comment="ftn: ipoe walled payment page ftn-suspended"
@@ -161,6 +171,7 @@
   /ip/firewall/nat add chain=dstnat action=redirect protocol=tcp dst-port=53 src-address-list=ftn-suspended to-ports=53 comment="ftn: ipoe walled dns redirect tcp ftn-suspended"
   /ip/firewall/nat add chain=dstnat action=dst-nat protocol=tcp dst-port=80 dst-address=!203.0.113.10 src-address-list=ftn-unreg to-addresses=203.0.113.10 to-ports=80 comment="ftn: ipoe walled http to the payment page ftn-unreg"
   /ip/firewall/nat add chain=dstnat action=dst-nat protocol=tcp dst-port=80 dst-address=!203.0.113.10 src-address-list=ftn-suspended to-addresses=203.0.113.10 to-ports=80 comment="ftn: ipoe walled http to the payment page ftn-suspended"
+  /ip/firewall/filter remove [find where comment="ftn: hold"]
 } do={ :set report ($report . "6 firewall: " . $e . "\n"); :set abort ("ftn: section 6 firewall failed: " . $e); :error $abort }
 
 :put "ftn 7/12: DNS and IPv6"
