@@ -204,3 +204,26 @@ func TestMgmtSubnet(t *testing.T) {
 		}
 	}
 }
+
+func TestMpesaConfirmDefaultsOnOnlyWithInitiatorSettings(t *testing.T) {
+	c := Config{MpesaConfirmReceipts: "auto"}
+	if on, why := c.MpesaConfirm(); on || !strings.Contains(why, "MPESA_INITIATOR_NAME") {
+		t.Errorf("auto without initiator settings: %v %q", on, why)
+	}
+	c.MpesaInitiator, c.MpesaSecurityCredential = "apiop", "cred"
+	if on, _ := c.MpesaConfirm(); !on {
+		t.Error("auto with initiator settings must be on")
+	}
+	c.MpesaConfirmReceipts = ""
+	if on, _ := c.MpesaConfirm(); !on {
+		t.Error("unset behaves as auto")
+	}
+	c.MpesaConfirmReceipts = "off"
+	if on, why := c.MpesaConfirm(); on || !strings.Contains(why, "=off") {
+		t.Errorf("off: %v %q", on, why)
+	}
+	c = Config{MpesaConfirmReceipts: "on"}
+	if on, _ := c.MpesaConfirm(); on {
+		t.Error("on without credentials cannot work and is reported off")
+	}
+}

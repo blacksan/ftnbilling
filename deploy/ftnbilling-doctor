@@ -219,6 +219,11 @@ if [ -n "$DBURL" ] && [ -x "$BIN" ] && [ -r "$ENVF" ]; then
       ne=$(printf '%s\n' "$sc" | awk -v s="[$sec]" '$0==s{f=1;next} /^\[/{f=0} f && $2=="env"' | wc -l)
       pass "settings: $sec" "$nd saved in the admin, $ne from the settings file"
     done
+    if printf '%s\n' "$sc" | grep -q '^receipt confirmation: on'; then
+      pass "M-Pesa receipt check" "each receipt is confirmed with Daraja before it is credited"
+    elif printf '%s\n' "$sc" | grep -q '^receipt confirmation: OFF'; then
+      warn "M-Pesa receipt check" "OFF: $(printf '%s\n' "$sc" | sed -n 's/^receipt confirmation: OFF: //p' | head -1). Set MPESA_INITIATOR_NAME and MPESA_SECURITY_CREDENTIAL (Settings > M-Pesa)"
+    fi
     if [ "$rc" != 0 ]; then fail "saved settings readable" "$(printf '%s\n' "$sc" | sed -n '/ignored/,$p' | tail -n +2 | head -3 | tr -s ' \n' ' ')"; fi
     if [ -z "$(envval DATA_KEY)" ] && printf '%s\n' "$sc" | grep -q 'database (secret, set)'; then
       warn "DATA_KEY missing" "saved secrets exist but DATA_KEY is empty: they cannot be read"

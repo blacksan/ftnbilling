@@ -97,6 +97,8 @@ func run(log *slog.Logger) error {
 	mp := payments.NewMpesa(mpesaConf(setm.Effective()), svc, st, log)
 	// Callbacks the database could not take are kept on disk and replayed.
 	mp.SetSpool(payments.NewSpool(filepath.Join(cfg.DataDir, "spool")))
+	mp.SetLegacyQueryUntil(payments.LegacyQueryDeadline(cfg.DataDir, time.Now()))
+	defer mp.Close()
 	wg.Add(1)
 	go func() {
 		defer wg.Done()

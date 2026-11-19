@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -26,10 +27,12 @@ type fakeDaraja struct {
 	stkBody  map[string]any
 	stkAuth  string
 	respCode string
-	regBody  map[string]string // last RegisterURL body
-	regCode  string            // ResponseCode to answer RegisterURL with
-	queryRes string            // ResultCode to answer STK queries with ("" = still processing)
-	queryRaw string            // when set, the exact body of the STK query answer
+	regBody  map[string]string   // last RegisterURL body
+	regCode  string              // ResponseCode to answer RegisterURL with
+	queryRes string              // ResultCode to answer STK queries with ("" = still processing)
+	queryRaw string              // when set, the exact body of the STK query answer
+	txBodies []map[string]string // Transaction Status requests received
+	txReject string              // when set, the Transaction Status API refuses with this message
 }
 
 func (f *fakeDaraja) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -62,6 +65,18 @@ func (f *fakeDaraja) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Write([]byte(`{"ResponseCode":"0","ResponseDescription":"Success"}`))
+	case "/mpesa/transactionstatus/v1/query":
+		b, _ := io.ReadAll(r.Body)
+		var req map[string]string
+		json.Unmarshal(b, &req)
+		f.txBodies = append(f.txBodies, req)
+		if f.txReject != "" {
+			w.WriteHeader(400)
+			w.Write([]byte(`{"errorCode":"400.002.02","errorMessage":"` + f.txReject + `"}`))
+			return
+		}
+		n := len(f.txBodies)
+		fmt.Fprintf(w, `{"OriginatorConversationID":"OR-%d","ConversationID":"AG_%d","ResponseCode":"0","ResponseDescription":"Accept the service request successfully."}`, n, n)
 	case "/mpesa/stkpushquery/v1/query":
 		if f.queryRaw != "" {
 			w.Write([]byte(f.queryRaw))
@@ -88,7 +103,13 @@ type rig struct {
 	fd   *fakeDaraja
 	now  time.Time
 	acct store.Account
+	cmu  sync.Mutex // guards now when a test moves the clock while background work runs
 }
+
+func (r *rig) clock() time.Time { r.cmu.Lock(); defer r.cmu.Unlock(); return r.now }
+
+// advance moves the clock forward (safe next to the receipt-check goroutines).
+func (r *rig) advance(d time.Duration) { r.cmu.Lock(); r.now = r.now.Add(d); r.cmu.Unlock() }
 
 const ontMAC = "AA:BB:CC:DD:EE:01"
 
@@ -108,7 +129,7 @@ func newRig(t *testing.T) *rig {
 	})
 	svc := billing.NewService(st, billing.MockRouters{site: rt}, log)
 	r := &rig{svc: svc, st: st, h: h, site: site, rt: rt, fd: fd, now: time.Date(2026, 11, 17, 21, 30, 5, 0, time.UTC)}
-	svc.SetClock(func() time.Time { return r.now })
+	svc.SetClock(r.clock)
 	svc.SeedPackages()
 	a, err := svc.CreateAccount(billing.AccountInput{SiteID: site, Flat: "Flat 3B", MAC: ontMAC})
 	if err != nil {
@@ -119,7 +140,7 @@ func newRig(t *testing.T) *rig {
 		BaseURL: srv.URL, Key: "key", Secret: "secret", Shortcode: "174379", Passkey: "PASSKEY",
 		PublicBaseURL: "https://example.org", Enabled: true,
 	}, svc, st, log)
-	r.mp.SetClock(func() time.Time { return r.now })
+	r.mp.SetClock(r.clock)
 	return r
 }
 

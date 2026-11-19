@@ -43,9 +43,18 @@ type Config struct {
 	MpesaUnknownRef string
 	MpesaPasskey    string
 	// MpesaCallbackToken is required once M-Pesa is configured (see Validate).
-	// Daraja callback URLs carry ?t=<token> and callbacks without it are
+	// Daraja callback URLs carry the token (/pay/cb/t/<token>/...) and callbacks without it are
 	// refused (Daraja callbacks are unsigned, so this stops forged "payments").
 	MpesaCallbackToken string
+	// MpesaInitiator and MpesaSecurityCredential are the Daraja API operator
+	// (initiator) name and its password encrypted with Safaricom's certificate
+	// (base64). With them the server asks Daraja's Transaction Status API
+	// whether a receipt is real before it credits it (MpesaConfirmReceipts).
+	MpesaInitiator          string
+	MpesaSecurityCredential string
+	// MpesaConfirmReceipts: "auto" (default: on when the initiator settings are
+	// present), "on", or "off" (credit as soon as a callback arrives).
+	MpesaConfirmReceipts string
 	// MpesaCallbackTokenPrev is the token this one replaced. It keeps working
 	// until MpesaCallbackTokenPrevUntil, so payments Safaricom still sends to
 	// the registered URLs are not lost. Set by the settings manager only.
@@ -135,6 +144,10 @@ func Load(getenv func(string) string) (Config, error) {
 		MpesaC2BShortcode:  get("MPESA_C2B_SHORTCODE", ""),
 		MpesaUnknownRef:    strings.ToLower(get("MPESA_UNKNOWN_REF", "reject")),
 		MpesaCallbackToken: get("MPESA_CALLBACK_TOKEN", ""),
+
+		MpesaInitiator:          get("MPESA_INITIATOR_NAME", ""),
+		MpesaSecurityCredential: get("MPESA_SECURITY_CREDENTIAL", ""),
+		MpesaConfirmReceipts:    strings.ToLower(get("MPESA_CONFIRM_RECEIPTS", "auto")),
 	}
 	var errs []error
 	num := func(k string, def float64) float64 {
@@ -288,13 +301,18 @@ func (c Config) Validate() error {
 	if c.MpesaUnknownRef != "reject" && c.MpesaUnknownRef != "accept" {
 		errs = append(errs, fmt.Errorf("MPESA_UNKNOWN_REF must be reject or accept, got %q", c.MpesaUnknownRef))
 	}
+	switch c.MpesaConfirmReceipts {
+	case "auto", "on", "off":
+	default:
+		errs = append(errs, fmt.Errorf("MPESA_CONFIRM_RECEIPTS must be auto, on or off, got %q", c.MpesaConfirmReceipts))
+	}
 	if c.MpesaEnv != "sandbox" && c.MpesaEnv != "production" {
 		errs = append(errs, fmt.Errorf("MPESA_ENV must be sandbox or production, got %q", c.MpesaEnv))
 	}
 	if c.MpesaKey != "" && c.MpesaSecret != "" && c.MpesaShortcode != "" && c.MpesaCallbackToken == "" {
 		errs = append(errs, errors.New("MPESA_CALLBACK_TOKEN must be set when M-Pesa is configured: Daraja callbacks are unsigned, "+
 			"so without a secret in the callback URL anyone could post a fake payment. "+
-			"Generate one (for example: openssl rand -hex 24), put it in the env file, and register the three callback URLs with ?t=<token> appended"))
+			"Generate one (for example: openssl rand -hex 24), put it in the env file, and register the three callback URLs as <PUBLIC_BASE_URL>/pay/cb/t/<token>/stk, /c2b/validate and /c2b/confirm"))
 	}
 	return errors.Join(errs...)
 }
@@ -314,6 +332,25 @@ func (c Config) CheckAdminPass() error {
 func (c Config) MpesaEnabled() bool {
 	return c.MpesaKey != "" && c.MpesaSecret != "" && c.MpesaShortcode != "" &&
 		c.MpesaPasskey != "" && c.PublicBaseURL != ""
+}
+
+// MpesaConfirm tells whether M-Pesa receipts are confirmed with Daraja's
+// Transaction Status API before they are credited, and why not when they are
+// not. MPESA_CONFIRM_RECEIPTS=auto turns it on exactly when the initiator name
+// and security credential are set; "on" without them cannot work, so it is
+// reported as off.
+func (c Config) MpesaConfirm() (on bool, why string) {
+	mode := c.MpesaConfirmReceipts
+	if mode == "" {
+		mode = "auto"
+	}
+	switch {
+	case mode == "off":
+		return false, "MPESA_CONFIRM_RECEIPTS=off: payments are credited as soon as a callback arrives, so a leaked callback token can credit a fake payment"
+	case c.MpesaInitiator == "" || c.MpesaSecurityCredential == "":
+		return false, "the Daraja initiator name (MPESA_INITIATOR_NAME) and security credential (MPESA_SECURITY_CREDENTIAL) are not set, so receipts cannot be confirmed with Daraja; callbacks are credited unchecked"
+	}
+	return true, ""
 }
 
 // MpesaBaseURL returns the Daraja API root for the selected environment.

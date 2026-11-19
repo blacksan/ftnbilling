@@ -28,6 +28,10 @@ type Spool struct {
 // NewSpool uses dir (created on first use).
 func NewSpool(dir string) *Spool { return &Spool{dir: dir} }
 
+// ErrKeep is what a Replay handler returns for a file that is not finished yet
+// and must stay in the spool, without blocking the files behind it.
+var ErrKeep = errors.New("spool: not finished yet")
+
 // IsPersistError tells whether err means "the database did not take it".
 func IsPersistError(err error) bool {
 	return errors.Is(err, store.ErrPersist) || errors.Is(err, store.ErrUnavailable)
@@ -127,6 +131,9 @@ func (s *Spool) Replay(handle func(kind string, body []byte) error) (int, error)
 			return done, err
 		}
 		if err := handle(f.kind, body); err != nil {
+			if errors.Is(err, ErrKeep) {
+				continue // not finished (a receipt still being confirmed): look again next time
+			}
 			if IsPersistError(err) {
 				return done, err
 			}

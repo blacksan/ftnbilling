@@ -15,6 +15,8 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,6 +52,12 @@ type MpesaConfig struct {
 	// "accept" takes it into the Unmatched queue.
 	UnknownRef string
 	Enabled    bool
+	// Initiator and SecurityCredential (base64, already encrypted with
+	// Safaricom's certificate) let the server call the Transaction Status API.
+	// ConfirmReceipts turns the receipt check on (the caller decides, see
+	// config.MpesaConfirm); it also needs a callback token and a spool.
+	Initiator, SecurityCredential string
+	ConfirmReceipts               bool
 }
 
 // FTNTestRef is the reserved account reference of the Settings > M-Pesa test
@@ -79,10 +87,21 @@ type Mpesa struct {
 	tokX  time.Time
 	spool *Spool
 	tests map[string]*TestState // checkout id -> test payment, in memory only
+
+	vmu    sync.Mutex
+	verify map[string]*verifyState // "kind:receipt" -> receipt check in progress (mpesa_confirm.go)
+	convs  map[string]string       // Daraja conversation id -> "kind:receipt"
+
+	bgMu   sync.Mutex
+	bg     sync.WaitGroup
+	closed bool
+	stop   chan struct{}
+
+	legacyQueryUntil time.Time // the old STK callback form (?t=) is accepted until then
 }
 
 func NewMpesa(cfg MpesaConfig, c Completer, st *store.Store, log *slog.Logger) *Mpesa {
-	return &Mpesa{cfg: cfg, c: c, st: st, log: log, now: time.Now, hc: &http.Client{Timeout: 20 * time.Second}}
+	return &Mpesa{cfg: cfg, c: c, st: st, log: log, now: time.Now, hc: &http.Client{Timeout: 20 * time.Second}, stop: make(chan struct{})}
 }
 
 // SetClock overrides the clock (tests).
@@ -147,6 +166,29 @@ func (m *Mpesa) CallbackPathURL(rest string) string {
 	}
 	return c.PublicBaseURL + "/pay/cb/t/" + url.PathEscape(c.CallbackToken) + "/" + strings.TrimPrefix(rest, "/")
 }
+
+// SetLegacyQueryUntil sets when the old STK callback form (token in the query
+// string) stops being accepted.
+func (m *Mpesa) SetLegacyQueryUntil(t time.Time) {
+	m.mu.Lock()
+	m.legacyQueryUntil = t
+	m.mu.Unlock()
+}
+
+// LegacyQueryOK reports whether an STK callback that carries its token in the
+// query string is still accepted. Without SetLegacyQueryUntil it is not.
+func (m *Mpesa) LegacyQueryOK() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.now().Before(m.legacyQueryUntil)
+}
+
+// LegacyQueryWindow is how long the old STK callback form keeps working after
+// the version that moved the token into the path first runs.
+const LegacyQueryWindow = 30 * 24 * time.Hour
 
 // scrub removes every credential from a message that may be shown or logged.
 func (m *Mpesa) scrub(s string) string {
@@ -270,7 +312,7 @@ func (m *Mpesa) stkPush(ctx context.Context, phone string, amount int, accountRe
 		"PartyA":            phone,
 		"PartyB":            c.Shortcode,
 		"PhoneNumber":       phone,
-		"CallBackURL":       m.CallbackURL("/pay/cb/stk"),
+		"CallBackURL":       m.CallbackPathURL("stk"), // the secret in the path: a query string ends up in logs and screenshots
 		"AccountReference":  accountRef,
 		"TransactionDesc":   "Internet",
 	}
@@ -568,6 +610,8 @@ func (m *Mpesa) Replay(ctx context.Context) (int, error) {
 		case "c2b":
 			_, err := m.c2b(ctx, body)
 			return err
+		case "verify":
+			return m.processVerify(ctx, body)
 		}
 		return fmt.Errorf("unknown spool kind %q", kind)
 	})
@@ -630,6 +674,9 @@ func (m *Mpesa) stk(ctx context.Context, body []byte) error {
 	}
 	if receipt == "" {
 		return errors.New("stk callback without receipt number")
+	}
+	if !verifiedCtx(ctx) && m.confirmOn() {
+		return m.queueVerify(ctx, "stk", receipt, int(math.Floor(amount)), body)
 	}
 	if amount < float64(order.AmountKES) {
 		m.log.Warn("stk amount below order amount", "order", order.ID, "paid", amount, "expected", order.AmountKES)
@@ -770,6 +817,14 @@ func (m *Mpesa) c2b(ctx context.Context, body []byte) (C2BResponse, error) {
 		return C2BAccept, nil
 	}
 	amount := int(math.Floor(amt))
+	if !verifiedCtx(ctx) && p.BillRefNumber != FTNTestRef && m.confirmOn() {
+		var already bool
+		m.st.View(func(d *store.Data) { _, already = d.Payments[strings.ToUpper(strings.TrimSpace(p.TransID))] })
+		if already {
+			return C2BAccept, nil // a repeated delivery of a receipt that is already in the ledger
+		}
+		return C2BAccept, m.queueVerify(ctx, "c2b", p.TransID, amount, body)
+	}
 	name := strings.TrimSpace(p.FirstName + " " + p.LastName)
 	unmatched := func(accountID, note string) error {
 		if _, err := m.c.RecordUnmatched(billing.UnmatchedInput{Key: p.TransID, Method: "mpesa-c2b", AmountKES: amount,
@@ -814,4 +869,20 @@ func (m *Mpesa) c2b(ctx context.Context, body []byte) (C2BResponse, error) {
 		return C2BAccept, unmatched("", "unknown account number")
 	}
 	return C2BAccept, nil
+}
+
+// LegacyQueryDeadline returns when the old STK callback form stops working. The
+// first run of this version writes now+LegacyQueryWindow to dir/stk-query-until
+// and later runs read it back, so a restart does not extend the window.
+func LegacyQueryDeadline(dir string, now time.Time) time.Time {
+	path := filepath.Join(dir, "stk-query-until")
+	if b, err := os.ReadFile(path); err == nil {
+		if t, err := time.Parse(time.RFC3339, strings.TrimSpace(string(b))); err == nil {
+			return t
+		}
+	}
+	t := now.Add(LegacyQueryWindow)
+	_ = os.MkdirAll(dir, 0o700)
+	_ = store.WriteFileAtomic(path, []byte(t.UTC().Format(time.RFC3339)+"\n"))
+	return t
 }
