@@ -18,15 +18,17 @@ type SearchResult struct {
 	Equipment []store.Equipment
 	Payments  []store.Payment
 	Buildings []store.Site
+	// Apartments found by name, address, or caretaker/landlord name or phone.
+	Apartments []store.Apartment
 }
 
 // Total is the number of hits over all groups.
 func (r SearchResult) Total() int {
-	return len(r.Customers) + len(r.Accounts) + len(r.Equipment) + len(r.Payments) + len(r.Buildings)
+	return len(r.Customers) + len(r.Accounts) + len(r.Equipment) + len(r.Payments) + len(r.Buildings) + len(r.Apartments)
 }
 
 // Single returns what to open when the search found exactly one thing:
-// kind is customer, account, equipment, payment or building.
+// kind is customer, account, equipment, payment, apartment or building.
 func (r SearchResult) Single() (kind, id string, ok bool) {
 	if r.Total() != 1 {
 		return "", "", false
@@ -40,6 +42,9 @@ func (r SearchResult) Single() (kind, id string, ok bool) {
 		return "equipment", r.Equipment[0].ID, true
 	case len(r.Payments) == 1:
 		return "payment", r.Payments[0].Key, true
+	}
+	if len(r.Apartments) == 1 {
+		return "apartment", r.Apartments[0].ID, true
 	}
 	return "building", r.Buildings[0].ID, true
 }
@@ -81,6 +86,13 @@ func hexOnly(q string) string {
 
 func macDigits(m string) string {
 	return strings.NewReplacer(":", "", "-", "", ".", "").Replace(strings.ToUpper(m))
+}
+
+// PhoneMatches reports whether a stored phone number (+254... or 254...)
+// matches what someone typed in any common form.
+func PhoneMatches(stored, q string) bool {
+	full, digits := phoneForms(q)
+	return phoneMatch(strings.TrimPrefix(stored, "+"), full, digits)
 }
 
 func phoneMatch(stored, full, digits string) bool {
@@ -157,6 +169,22 @@ func (s *Service) Search(q string, in func(siteID string) bool) SearchResult {
 				res.Buildings = append(res.Buildings, st)
 			}
 		}
+		for _, a := range d.ApartmentList() {
+			visible := len(d.ApartmentSiteIDs(a.ID)) == 0
+			for _, id := range d.ApartmentSiteIDs(a.ID) {
+				visible = visible || in(id)
+			}
+			if !visible {
+				continue
+			}
+			hit := store.ContainsFold(a.Name, q) || (len(q) >= 3 && store.ContainsFold(a.Address, q))
+			for _, c := range []store.ApartmentContact{a.Caretaker, a.Landlord} {
+				hit = hit || (len(q) >= 2 && store.ContainsFold(c.Name, q)) || phoneMatch(strings.TrimPrefix(c.Phone, "+"), full, digits) || phoneMatch(strings.TrimPrefix(c.Phone2, "+"), full, digits)
+			}
+			if hit {
+				res.Apartments = append(res.Apartments, a)
+			}
+		}
 	})
 	sort.SliceStable(res.Customers, func(i, j int) bool {
 		a, b := res.Customers[i], res.Customers[j]
@@ -183,6 +211,7 @@ func (s *Service) Search(q string, in func(siteID string) bool) SearchResult {
 	res.Customers, res.Accounts = res.Customers[:cut(len(res.Customers))], res.Accounts[:cut(len(res.Accounts))]
 	res.Equipment, res.Payments = res.Equipment[:cut(len(res.Equipment))], res.Payments[:cut(len(res.Payments))]
 	res.Buildings = res.Buildings[:cut(len(res.Buildings))]
+	res.Apartments = res.Apartments[:cut(len(res.Apartments))]
 	return res
 }
 

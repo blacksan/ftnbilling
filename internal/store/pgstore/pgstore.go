@@ -218,7 +218,9 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	do(err)
 	ten, err := queryAll(ctx, tx, tenanciesC, "")
 	do(err)
-	con, err := queryAll(ctx, tx, contactsC, "")
+	apts, err := queryAll(ctx, tx, apartmentsC, "")
+	do(err)
+	aptSites, err := queryAll(ctx, tx, apartmentSitesC, "")
 	do(err)
 	var ord []store.Order
 	if all {
@@ -260,7 +262,8 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 		return nil, loadErr
 	}
 	d.Sites, d.Packages, d.Customers, d.Equipment = map[string]store.Site{}, map[string]store.Package{}, map[string]store.Customer{}, map[string]store.Equipment{}
-	d.Accounts, d.ClosedAccounts, d.Tenancies, d.Contacts = map[string]store.Account{}, map[string]store.Account{}, map[string]store.Tenancy{}, map[string]store.Contact{}
+	d.Accounts, d.ClosedAccounts, d.Tenancies = map[string]store.Account{}, map[string]store.Account{}, map[string]store.Tenancy{}
+	d.Apartments, d.ApartmentSites = map[string]store.Apartment{}, map[string]store.ApartmentSite{}
 	d.Orders, d.Vouchers, d.Payments, d.Devices = map[string]store.Order{}, map[string]store.Voucher{}, map[string]store.Payment{}, map[string]store.Device{}
 	d.Tasks, d.EquipmentEvents, d.Notes = map[string]store.Task{}, map[string]store.EquipmentEvent{}, map[string]store.Note{}
 	d.Settings = map[string]store.Setting{}
@@ -277,7 +280,8 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 		}
 	}
 	fill(d.Tenancies, ten, tenanciesC)
-	fill(d.Contacts, con, contactsC)
+	fill(d.Apartments, apts, apartmentsC)
+	fill(d.ApartmentSites, aptSites, apartmentSitesC)
 	fill(d.Orders, ord, ordersC)
 	fill(d.Vouchers, vou, vouchersC)
 	fill(d.Payments, pay, paymentsC)
@@ -315,7 +319,8 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	equipmentC.queueDeletes(batch, cs.Equipment.Delete)
 	accountsC.queueDeletes(batch, cs.Accounts.Delete)
 	tenanciesC.queueDeletes(batch, cs.Tenancies.Delete)
-	contactsC.queueDeletes(batch, cs.Contacts.Delete)
+	apartmentSitesC.queueDeletes(batch, cs.ApartmentSites.Delete)
+	apartmentsC.queueDeletes(batch, cs.Apartments.Delete)
 	ordersC.queueDeletes(batch, cs.Orders.Delete)
 	vouchersC.queueDeletes(batch, cs.Vouchers.Delete)
 	devicesC.queueDeletes(batch, cs.Devices.Delete)
@@ -329,6 +334,10 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	mark("delete")
 	sitesC.queueUpserts(batch, cs.Sites)
 	mark("sites")
+	apartmentsC.queueUpserts(batch, cs.Apartments)
+	mark("apartments")
+	apartmentSitesC.queueUpserts(batch, cs.ApartmentSites)
+	mark("apartment_sites")
 	packagesC.queueUpserts(batch, cs.Packages)
 	mark("packages")
 	customersC.queueUpserts(batch, cs.Customers)
@@ -341,8 +350,6 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	mark("accounts")
 	tenanciesC.queueUpserts(batch, cs.Tenancies)
 	mark("tenancies")
-	contactsC.queueUpserts(batch, cs.Contacts)
-	mark("site_contacts")
 	ordersC.queueUpserts(batch, cs.Orders)
 	mark("orders")
 	vouchersC.queueUpserts(batch, cs.Vouchers)
@@ -424,6 +431,12 @@ func integrityErr(err error) error {
 		specific = store.ErrDuplicateUsername
 	case "api_devices_access", "api_devices_refresh":
 		specific = store.ErrDuplicateToken
+	case "accounts_apartment_unit_open":
+		specific = store.ErrDuplicateUnit
+	case "apartments_name_lower":
+		specific = store.ErrDuplicateApartment
+	case "apartment_sites_apartment_id_fkey", "apartment_sites_site_id_fkey":
+		specific = store.ErrBadApartmentLink
 	case "sites_access_mode_check":
 		specific = store.ErrBadAccessMode
 	}
@@ -460,7 +473,8 @@ func queueAccountPrepare(b *pgx.Batch, d store.Delta[store.Account]) {
 		if !ok {
 			continue
 		}
-		if old.Code != cur.Code || !strings.EqualFold(old.MAC, cur.MAC) || old.SiteID != cur.SiteID || old.ClosedAt.IsZero() != cur.ClosedAt.IsZero() ||
+		if old.Code != cur.Code || !strings.EqualFold(old.MAC, cur.MAC) || old.SiteID != cur.SiteID ||
+			old.ApartmentID != cur.ApartmentID || old.Unit != cur.Unit || old.ClosedAt.IsZero() != cur.ClosedAt.IsZero() ||
 			old.IP != cur.IP || old.MACConflict != cur.MACConflict {
 			ids = append(ids, cur.ID)
 		}
@@ -469,7 +483,7 @@ func queueAccountPrepare(b *pgx.Batch, d store.Delta[store.Account]) {
 		return
 	}
 	sort.Strings(ids)
-	b.Queue("UPDATE accounts SET code = '', mac = '', ip = '' WHERE id = ANY($1)", ids)
+	b.Queue("UPDATE accounts SET code = '', mac = '', ip = '', unit = '' WHERE id = ANY($1)", ids)
 }
 
 // Events reads the full event history, newest first.

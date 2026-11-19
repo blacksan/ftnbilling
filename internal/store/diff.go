@@ -41,6 +41,10 @@ func (x Equipment) norm() Equipment {
 func (x Account) norm() Account {
 	x.ExpiresAt, x.RemindedFor, x.ExpiredFor = nt(x.ExpiresAt), nt(x.RemindedFor), nt(x.ExpiredFor)
 	x.CreatedAt, x.ClosedAt = nt(x.CreatedAt), nt(x.ClosedAt)
+	if x.Unit == "" {
+		x.Unit = x.Flat
+	}
+	x.Flat = x.Unit
 	if m, ok := CanonMAC(x.MAC); ok {
 		x.MAC = m
 	}
@@ -49,8 +53,12 @@ func (x Account) norm() Account {
 	}
 	return x
 }
-func (x Tenancy) norm() Tenancy { x.MoveIn, x.MoveOut = nt(x.MoveIn), nt(x.MoveOut); return x }
-func (x Contact) norm() Contact { x.CreatedAt = nt(x.CreatedAt); return x }
+func (x Tenancy) norm() Tenancy     { x.MoveIn, x.MoveOut = nt(x.MoveIn), nt(x.MoveOut); return x }
+func (x Apartment) norm() Apartment { x.CreatedAt = nt(x.CreatedAt); return x }
+func (x ApartmentSite) norm() ApartmentSite {
+	x.CreatedAt = nt(x.CreatedAt)
+	return x
+}
 func (x Order) norm() Order     { x.CreatedAt, x.PaidAt = nt(x.CreatedAt), nt(x.PaidAt); return x }
 func (x Voucher) norm() Voucher { x.UsedAt, x.CreatedAt = nt(x.UsedAt), nt(x.CreatedAt); return x }
 func (x Payment) norm() Payment {
@@ -102,7 +110,8 @@ func (x Customer) Norm() Customer             { return x.norm() }
 func (x Equipment) Norm() Equipment           { return x.norm() }
 func (x Account) Norm() Account               { return x.norm() }
 func (x Tenancy) Norm() Tenancy               { return x.norm() }
-func (x Contact) Norm() Contact               { return x.norm() }
+func (x Apartment) Norm() Apartment           { return x.norm() }
+func (x ApartmentSite) Norm() ApartmentSite   { return x.norm() }
 func (x Order) Norm() Order                   { return x.norm() }
 func (x Voucher) Norm() Voucher               { return x.norm() }
 func (x Payment) Norm() Payment               { return x.norm() }
@@ -244,8 +253,10 @@ var tables = []table{
 		eqc[Equipment], Equipment.norm, func(v Equipment) string { return v.ID }, nil},
 	tbl[Tenancy]{func(d *Data) *map[string]Tenancy { return &d.Tenancies }, func(c *ChangeSet) *Delta[Tenancy] { return &c.Tenancies },
 		eqc[Tenancy], Tenancy.norm, func(v Tenancy) string { return v.ID }, nil},
-	tbl[Contact]{func(d *Data) *map[string]Contact { return &d.Contacts }, func(c *ChangeSet) *Delta[Contact] { return &c.Contacts },
-		eqc[Contact], Contact.norm, func(v Contact) string { return v.ID }, nil},
+	tbl[Apartment]{func(d *Data) *map[string]Apartment { return &d.Apartments }, func(c *ChangeSet) *Delta[Apartment] { return &c.Apartments },
+		eqc[Apartment], Apartment.norm, func(v Apartment) string { return v.ID }, nil},
+	tbl[ApartmentSite]{func(d *Data) *map[string]ApartmentSite { return &d.ApartmentSites }, func(c *ChangeSet) *Delta[ApartmentSite] { return &c.ApartmentSites },
+		eqc[ApartmentSite], ApartmentSite.norm, func(v ApartmentSite) string { return ApartmentSiteKey(v.ApartmentID, v.SiteID) }, nil},
 	tbl[Order]{func(d *Data) *map[string]Order { return &d.Orders }, func(c *ChangeSet) *Delta[Order] { return &c.Orders },
 		eqc[Order], Order.norm, func(v Order) string { return v.ID }, nil},
 	tbl[Voucher]{func(d *Data) *map[string]Voucher { return &d.Vouchers }, func(c *ChangeSet) *Delta[Voucher] { return &c.Vouchers },
@@ -447,7 +458,7 @@ func cloneData(d *Data) Data {
 		Sites: cloneMap(d.Sites, cloneSite), Packages: cloneMap(d.Packages, nil), Accounts: cloneMap(d.Accounts, nil),
 		ClosedAccounts: cloneMap(d.ClosedAccounts, nil), Orders: cloneMap(d.Orders, nil), Vouchers: cloneMap(d.Vouchers, nil),
 		Payments: cloneMap(d.Payments, nil), Devices: cloneMap(d.Devices, nil), Tasks: cloneMap(d.Tasks, nil),
-		Customers: cloneMap(d.Customers, nil), Tenancies: cloneMap(d.Tenancies, nil), Contacts: cloneMap(d.Contacts, nil),
+		Customers: cloneMap(d.Customers, nil), Tenancies: cloneMap(d.Tenancies, nil), Apartments: cloneMap(d.Apartments, nil), ApartmentSites: cloneMap(d.ApartmentSites, nil),
 		Equipment: cloneMap(d.Equipment, nil), EquipmentEvents: cloneMap(d.EquipmentEvents, nil), Notes: cloneMap(d.Notes, nil), Settings: cloneMap(d.Settings, nil),
 		AdminUsers: cloneMap(d.AdminUsers, cloneAdminUser), AdminSessions: cloneMap(d.AdminSessions, nil), APIDevices: cloneMap(d.APIDevices, cloneAPIDevice),
 		Events: append([]Event(nil), d.Events...),

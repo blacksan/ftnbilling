@@ -15,7 +15,7 @@ import (
 )
 
 // Tables lists every data table in report order.
-var Tables = []string{"sites", "packages", "customers", "equipment", "accounts", "tenancies", "site_contacts", "orders", "vouchers",
+var Tables = []string{"sites", "apartments", "apartment_sites", "packages", "customers", "equipment", "accounts", "tenancies", "orders", "vouchers",
 	"payments", "devices", "tasks", "equipment_events", "notes", "settings", "events", "admin_users", "admin_sessions", "api_devices"}
 
 // Counts are row counts per table plus the sum of applied payments.
@@ -35,7 +35,7 @@ type Counts struct {
 func CountsOf(d *store.Data) Counts {
 	c := Counts{Rows: map[string]int{
 		"sites": len(d.Sites), "packages": len(d.Packages), "customers": len(d.Customers), "equipment": len(d.Equipment),
-		"accounts": len(d.Accounts) + len(d.ClosedAccounts), "tenancies": len(d.Tenancies), "site_contacts": len(d.Contacts),
+		"accounts": len(d.Accounts) + len(d.ClosedAccounts), "tenancies": len(d.Tenancies), "apartments": len(d.Apartments), "apartment_sites": len(d.ApartmentSites),
 		"orders": len(d.Orders), "vouchers": len(d.Vouchers), "payments": len(d.Payments), "devices": len(d.Devices), "tasks": len(d.Tasks),
 		"equipment_events": len(d.EquipmentEvents), "notes": len(d.Notes), "settings": len(d.Settings), "events": len(d.Events),
 		"admin_users": len(d.AdminUsers), "admin_sessions": len(d.AdminSessions), "api_devices": len(d.APIDevices),
@@ -214,6 +214,12 @@ func (b *Backend) Import(ctx context.Context, d *store.Data, opt ImportOptions) 
 	if err := copyRows(ctx, tx, sitesC, mapVals(d.Sites)); err != nil {
 		return want, err
 	}
+	if err := copyRows(ctx, tx, apartmentsC, mapVals(d.Apartments)); err != nil {
+		return want, err
+	}
+	if err := copyRows(ctx, tx, apartmentSitesC, mapVals(d.ApartmentSites)); err != nil {
+		return want, err
+	}
 	if err := copyRows(ctx, tx, packagesC, mapVals(d.Packages)); err != nil {
 		return want, err
 	}
@@ -227,9 +233,6 @@ func (b *Backend) Import(ctx context.Context, d *store.Data, opt ImportOptions) 
 		return want, err
 	}
 	if err := copyRows(ctx, tx, tenanciesC, mapVals(d.Tenancies)); err != nil {
-		return want, err
-	}
-	if err := copyRows(ctx, tx, contactsC, mapVals(d.Contacts)); err != nil {
 		return want, err
 	}
 	if err := copyRows(ctx, tx, ordersC, mapVals(d.Orders)); err != nil {

@@ -38,13 +38,20 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 		d.Equipment["e3"] = store.Equipment{ID: "e3", Kind: store.KindRouter, Serial: "sn1", Status: store.EqInstalled, SiteID: "s111111", CreatedAt: at}
 		d.Accounts["a1"] = store.Account{ID: "a1", SiteID: "s111111", Code: "ABC234", Flat: "Flat 1", Floor: "2", MAC: "AA:BB:CC:DD:EE:01", Tenant: "Alice",
 			Phone: "254711000001", Notes: "n", WhatsApp: "254711000003", WAOptOut: true, PackageID: "p1", ExpiresAt: at, Suspended: true,
-			RemindedFor: at, ExpiredFor: at, CustomerID: "c1", ODB: "ODB-1", SplitterID: "e2", SplitterPort: 4, IP: "10.20.0.60", CreatedAt: at}
+			RemindedFor: at, ExpiredFor: at, CustomerID: "c1", ODB: "ODB-1", SplitterID: "e2", SplitterPort: 4, IP: "10.20.0.60", CreatedAt: at,
+			ApartmentID: "ap1", Unit: "Flat 1"}
 		// Flagged by a migration: same MAC as a1, kept, not provisioned.
 		d.Accounts["a3"] = store.Account{ID: "a3", SiteID: "s222222", Code: "DUP234", Flat: "Flat 3", MAC: "AA:BB:CC:DD:EE:01", MACConflict: true, CreatedAt: at}
-		d.ClosedAccounts["a2"] = store.Account{ID: "a2", SiteID: "s111111", Code: "XYZ234", Flat: "Flat 2", CreatedAt: at, ClosedAt: at}
+		d.ClosedAccounts["a2"] = store.Account{ID: "a2", SiteID: "s111111", Code: "XYZ234", Flat: "Flat 2", CreatedAt: at, ClosedAt: at, ApartmentID: "ap1", Unit: "Flat 2"}
 		d.Tenancies["t1"] = store.Tenancy{ID: "t1", CustomerID: "c1", AccountID: "a1", Note: "n", MoveIn: at}
 		d.Tenancies["t2"] = store.Tenancy{ID: "t2", CustomerID: "c1", AccountID: "a2", MoveIn: at, MoveOut: at.Add(time.Hour)}
-		d.Contacts["k1"] = store.Contact{ID: "k1", SiteID: "s111111", Role: store.RoleCaretaker, Name: "Joe", Phone: "254722000000", Email: "j@example.com", Notes: "n", CreatedAt: at}
+		d.Apartments["ap1"] = store.Apartment{ID: "ap1", Name: "MG One Central", Address: "Kilimani Rd", Notes: "gate code on the wall",
+			Caretaker: store.ApartmentContact{Name: "Joe", Phone: "+254722000000", Phone2: "+254722000001", Email: "j@example.com", Notes: "n"},
+			Landlord:  store.ApartmentContact{Name: "Mama Wanjiru", Phone: "+254733000000", Phone2: "+254733000001", Email: "w@example.com", Notes: "agent"},
+			CreatedAt: at}
+		d.Apartments["ap2"] = store.Apartment{ID: "ap2", Name: "Second", CreatedAt: at}
+		d.ApartmentSites[store.ApartmentSiteKey("ap1", "s111111")] = store.ApartmentSite{ApartmentID: "ap1", SiteID: "s111111", CreatedAt: at}
+		d.ApartmentSites[store.ApartmentSiteKey("ap1", "s222222")] = store.ApartmentSite{ApartmentID: "ap1", SiteID: "s222222", CreatedAt: at}
 		d.Orders["o1"] = store.Order{ID: "o1", SiteID: "s111111", AccountID: "a1", PackageID: "p1", Phone: "254711000001", Method: "mpesa", AmountKES: 50,
 			Status: store.OrderPaid, Reason: "r", CheckoutRequestID: "ws_CO_1", Receipt: "ABCDEFGHIJ", VoucherCode: "V1", CreatedAt: at, PaidAt: at}
 		d.Vouchers["V1"] = store.Voucher{Code: "V1", SiteID: "s111111", PackageID: "p1", Batch: "b", Used: true, UsedAt: at, UsedBy: "o1", CreatedAt: at}
@@ -523,15 +530,16 @@ func Run(t *testing.T) {
 			delete(d.Devices, store.DeviceKey("s111111", "AA:BB:CC:DD:EE:09"))
 			delete(d.Tasks, "task1")
 			delete(d.Vouchers, "V2")
-			delete(d.Contacts, "k1")
+			delete(d.ApartmentSites, store.ApartmentSiteKey("ap1", "s222222"))
+			delete(d.Apartments, "ap2")
 			delete(d.Notes, "n1")
 			return nil
 		}); err != nil {
 			t.Fatal(err)
 		}
 		s := h.Reopen().Snapshot()
-		if len(s.Devices) != 0 || len(s.Tasks) != 0 || len(s.Vouchers) != 1 || len(s.Contacts) != 0 || len(s.Notes) != 0 {
-			t.Fatalf("deletes not persisted: %d %d %d %d %d", len(s.Devices), len(s.Tasks), len(s.Vouchers), len(s.Contacts), len(s.Notes))
+		if len(s.Devices) != 0 || len(s.Tasks) != 0 || len(s.Vouchers) != 1 || len(s.ApartmentSites) != 1 || len(s.Apartments) != 1 || len(s.Notes) != 0 {
+			t.Fatalf("deletes not persisted: %d %d %d %d %d %d", len(s.Devices), len(s.Tasks), len(s.Vouchers), len(s.ApartmentSites), len(s.Apartments), len(s.Notes))
 		}
 	})
 

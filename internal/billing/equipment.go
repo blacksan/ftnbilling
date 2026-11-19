@@ -117,7 +117,7 @@ func (s *Service) changeMACLocked(d *store.Data, id, mac string) error {
 		return ErrNotFound
 	}
 	if other, ok := d.AccountByMAC(mac); ok && other.ID != id {
-		return duplicateMAC(d, other)
+		return duplicateMAC(d, other, a.ApartmentID)
 	}
 	if strings.EqualFold(a.MAC, mac) && !a.MACConflict {
 		return nil

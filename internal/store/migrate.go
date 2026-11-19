@@ -1,6 +1,7 @@
 package store
 
 import (
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"regexp"
@@ -412,4 +413,190 @@ func IsObsoleteSiteSetting(key string) bool {
 		}
 	}
 	return false
+}
+
+// MigratedApartmentID is the id of the apartment that migration 0007 (and
+// migrateV7toV8) creates for a router: "a" + the first 6 hex digits of
+// md5("apt|" + router id). Postgres computes the same value in SQL, so the two
+// backends give the same ids.
+func MigratedApartmentID(siteID string) string {
+	h := md5.Sum([]byte("apt|" + siteID))
+	return "a" + hex.EncodeToString(h[:])[:6]
+}
+
+var legacyPhoneStrip = strings.NewReplacer(" ", "", "-", "", "(", "", ")", "", ".", "")
+var legacyPhoneRe = regexp.MustCompile(`^254[17][0-9]{8}$`)
+
+// legacyPhone writes a Kenyan mobile number as +254XXXXXXXXX. Text that is not
+// one is kept as it was typed (migration 0007 does the same in SQL).
+func legacyPhone(raw string) string {
+	s := legacyPhoneStrip.Replace(strings.TrimSpace(raw))
+	s = strings.TrimPrefix(s, "+")
+	switch {
+	case len(s) == 10 && s[0] == '0':
+		s = "254" + s[1:]
+	case len(s) == 9 && (s[0] == '7' || s[0] == '1'):
+		s = "254" + s
+	}
+	if legacyPhoneRe.MatchString(s) {
+		return "+" + s
+	}
+	return strings.TrimSpace(raw)
+}
+
+var spaceRun = regexp.MustCompile(`\s+`)
+
+func tidy(s string) string { return strings.TrimSpace(spaceRun.ReplaceAllString(s, " ")) }
+
+// migrateV7toV8 upgrades format 7 data in memory (migration 0007 in Postgres):
+//   - every router gets one apartment named after it (the router's name, with
+//     " (<router id>)" added when another apartment already has that name),
+//     linked to the router;
+//   - every account, open and closed, takes the apartment of its router and
+//     keeps its flat label as its unit (a second open account of the same
+//     apartment with the same label gets " (<code>)" added and an audit event);
+//   - each router's contacts move onto its apartment: landlord and agent into
+//     the landlord section, caretaker, security and other into the caretaker
+//     section. The first contact of a section fills it; the others are listed
+//     in its notes. A role that is not caretaker or landlord is written in the
+//     notes, a Kenyan phone is written +254....
+//
+// The old contacts are then gone. It is deterministic and safe to run twice.
+func (d *Data) migrateV7toV8(now time.Time) {
+	sites := make([]Site, 0, len(d.Sites))
+	for _, s := range d.Sites {
+		sites = append(sites, s)
+	}
+	sort.Slice(sites, func(i, j int) bool {
+		if !sites[i].CreatedAt.Equal(sites[j].CreatedAt) {
+			return sites[i].CreatedAt.Before(sites[j].CreatedAt)
+		}
+		return sites[i].ID < sites[j].ID
+	})
+	seen := map[string]bool{}
+	aptOf := map[string]string{}
+	for _, s := range sites {
+		id := MigratedApartmentID(s.ID)
+		aptOf[s.ID] = id
+		if _, ok := d.Apartments[id]; ok {
+			seen[apartmentNameKey(d.Apartments[id].Name)] = true
+			continue // already migrated
+		}
+		name := tidy(s.Name)
+		if name == "" {
+			name = s.ID
+		}
+		if seen[apartmentNameKey(name)] {
+			name += " (" + s.ID + ")"
+		}
+		seen[apartmentNameKey(name)] = true
+		d.Apartments[id] = Apartment{ID: id, Name: name, Address: s.Address, CreatedAt: s.CreatedAt}
+		d.ApartmentSites[ApartmentSiteKey(id, s.ID)] = ApartmentSite{ApartmentID: id, SiteID: s.ID, CreatedAt: s.CreatedAt}
+	}
+	// accounts
+	var open []Account
+	for _, a := range d.Accounts {
+		open = append(open, a)
+	}
+	sort.Slice(open, func(i, j int) bool {
+		if !open[i].CreatedAt.Equal(open[j].CreatedAt) {
+			return open[i].CreatedAt.Before(open[j].CreatedAt)
+		}
+		return open[i].ID < open[j].ID
+	})
+	units := map[string]bool{}
+	for _, a := range open {
+		if a.ApartmentID == "" {
+			a.ApartmentID = aptOf[a.SiteID]
+		}
+		if a.Unit == "" {
+			a.Unit = a.Flat
+		}
+		if a.ApartmentID != "" && a.Unit != "" {
+			k := a.ApartmentID + "|" + UnitKey(a.Unit)
+			if units[k] {
+				was := a.Unit
+				ref := a.Code
+				if ref == "" {
+					ref = a.ID
+				}
+				a.Unit += " (" + ref + ")"
+				k = a.ApartmentID + "|" + UnitKey(a.Unit)
+				d.AddEvent(Event{Time: now, SiteID: a.SiteID, Kind: "audit", AccountID: a.ID,
+					Msg: "Unit conflict found by migration 0007: flat " + was + " (" + a.Code + ") shares its label with another open account of the same apartment. Its unit is now " + a.Unit + "."})
+			}
+			units[k] = true
+		}
+		a.Flat = a.Unit
+		d.Accounts[a.ID] = a
+	}
+	for k, a := range d.ClosedAccounts {
+		if a.ApartmentID == "" {
+			a.ApartmentID = aptOf[a.SiteID]
+		}
+		if a.Unit == "" {
+			a.Unit = a.Flat
+		}
+		d.ClosedAccounts[k] = a
+	}
+	// contacts
+	cs := make([]legacyContact, 0, len(d.LegacyContacts))
+	for _, c := range d.LegacyContacts {
+		cs = append(cs, c)
+	}
+	sort.Slice(cs, func(i, j int) bool {
+		if !cs[i].CreatedAt.Equal(cs[j].CreatedAt) {
+			return cs[i].CreatedAt.Before(cs[j].CreatedAt)
+		}
+		return cs[i].ID < cs[j].ID
+	})
+	type slotKey struct{ apt, slot string }
+	filled := map[slotKey]bool{}
+	for _, c := range cs {
+		apt, ok := d.Apartments[aptOf[c.SiteID]]
+		if !ok {
+			continue
+		}
+		slot := "caretaker"
+		if c.Role == "landlord" || c.Role == "agent" {
+			slot = "landlord"
+		}
+		cur := &apt.Caretaker
+		if slot == "landlord" {
+			cur = &apt.Landlord
+		}
+		roleNote := ""
+		if c.Role != "caretaker" && c.Role != "landlord" {
+			roleNote = "Role: " + c.Role
+		}
+		k := slotKey{apt.ID, slot}
+		if !filled[k] {
+			filled[k] = true
+			cur.Name, cur.Phone, cur.Email = c.Name, legacyPhone(c.Phone), c.Email
+			var parts []string
+			for _, p := range []string{roleNote, c.Notes} {
+				if p != "" {
+					parts = append(parts, p)
+				}
+			}
+			cur.Notes = strings.Join(parts, " | ")
+		} else {
+			x := "Also " + c.Role + ": " + c.Name
+			if c.Phone != "" {
+				x += ", " + c.Phone
+			}
+			if c.Email != "" {
+				x += ", " + c.Email
+			}
+			if c.Notes != "" {
+				x += " - " + c.Notes
+			}
+			if cur.Notes != "" {
+				cur.Notes += " | "
+			}
+			cur.Notes += x
+		}
+		d.Apartments[apt.ID] = apt
+	}
+	d.LegacyContacts = nil
 }

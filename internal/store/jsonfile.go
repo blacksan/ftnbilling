@@ -78,7 +78,7 @@ func (j *jsonBackend) write(d *Data) error {
 
 func (j *jsonBackend) Commit(_ context.Context, d *Data, _ *ChangeSet) error { return j.write(d) }
 
-// ReadJSON reads a JSON database file of format 2 to 7 and returns it in
+// ReadJSON reads a JSON database file of format 2 to 8 and returns it in
 // the current format, in memory only: nothing is written or backed up. from is
 // the format the file had.
 func ReadJSON(path string) (d *Data, from int, err error) {
@@ -95,7 +95,7 @@ func ReadJSON(path string) (d *Data, from int, err error) {
 	return d, from, nil
 }
 
-// WriteJSON writes d as a format 7 JSON database file (export-json).
+// WriteJSON writes d as a format 8 JSON database file (export-json).
 func WriteJSON(path string, d *Data) error {
 	d.Format = FormatVersion
 	b, err := json.MarshalIndent(d, "", " ")
@@ -115,7 +115,7 @@ func decodeJSON(raw []byte, path string) (*Data, int, error) {
 	}
 	d := &Data{}
 	switch probe.Format {
-	case FormatVersion, 6, 5, 4, 3, 2:
+	case FormatVersion, 7, 6, 5, 4, 3, 2:
 		if err := json.Unmarshal(raw, d); err != nil {
 			return nil, 0, fmt.Errorf("corrupt %s: %w", path, err)
 		}
@@ -137,6 +137,10 @@ func decodeJSON(raw []byte, path string) (*Data, int, error) {
 	if probe.Format < 7 {
 		d.migrateV6toV7()
 	}
+	if probe.Format < 8 {
+		d.migrateV7toV8(timeNow())
+	}
+	d.LegacyContacts = nil
 	d.Format = FormatVersion
 	return d, probe.Format, nil
 }

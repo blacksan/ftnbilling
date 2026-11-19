@@ -397,7 +397,7 @@ func TestPaymentFiltersAndTotals(t *testing.T) {
 	}
 }
 
-func TestBuildingProfileAndContacts(t *testing.T) {
+func TestBuildingProfile(t *testing.T) {
 	e := newEnv(t)
 	if err := e.svc.SaveSiteProfile(SiteProfileInput{SiteID: e.site, Address: "Kilimani Rd", Lat: -1.29, Lng: 36.82, GoLive: e.now}); err != nil {
 		t.Fatal(err)
@@ -408,22 +408,9 @@ func TestBuildingProfileAndContacts(t *testing.T) {
 	if err := e.svc.SaveSiteProfile(SiteProfileInput{SiteID: e.site, Lat: 5}); err == nil {
 		t.Fatal("both or neither")
 	}
-	c, err := e.svc.SaveContact(ContactInput{SiteID: e.site, Role: "caretaker", Name: "Joe", Phone: "0722000000"})
-	if err != nil || c.Phone != "254722000000" {
-		t.Fatalf("%+v %v", c, err)
-	}
-	if _, err := e.svc.SaveContact(ContactInput{SiteID: e.site, Role: "wizard", Name: "x"}); err == nil {
-		t.Fatal("role")
-	}
 	rep, _ := e.svc.Building(e.site)
-	if rep.Site.Address != "Kilimani Rd" || len(rep.Contacts) != 1 {
+	if rep.Site.Address != "Kilimani Rd" {
 		t.Fatalf("%+v", rep)
-	}
-	if err := e.svc.DeleteContact("other", c.ID); err == nil {
-		t.Fatal("contact of another building")
-	}
-	if err := e.svc.DeleteContact(e.site, c.ID); err != nil {
-		t.Fatal(err)
 	}
 }
 

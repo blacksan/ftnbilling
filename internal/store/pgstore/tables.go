@@ -317,16 +317,16 @@ var accountsC = (&codec[store.Account]{
 	name: "accounts", pk: []string{"id"}, key: func(v store.Account) string { return v.ID },
 	cols: []string{"id", "site_id", "code", "flat", "floor", "mac", "tenant", "phone", "notes", "whatsapp", "wa_opt_out", "customer_id", "package_id",
 		"expires_at", "suspended", "reminded_for", "expired_for", "odb", "splitter_id", "splitter_port", "created_at", "closed_at",
-		"mac_conflict", "ip"},
+		"mac_conflict", "ip", "apartment_id", "unit"},
 	args: func(v store.Account) []any {
 		return []any{v.ID, v.SiteID, v.Code, v.Flat, v.Floor, v.MAC, v.Tenant, v.Phone, v.Notes, v.WhatsApp, v.WAOptOut, fk(v.CustomerID), fk(v.PackageID),
 			nt(v.ExpiresAt), v.Suspended, nt(v.RemindedFor), nt(v.ExpiredFor), v.ODB, fk(v.SplitterID), v.SplitterPort, tm(v.CreatedAt), nt(v.ClosedAt),
-			v.MACConflict, v.IP}
+			v.MACConflict, v.IP, fk(v.ApartmentID), v.Unit}
 	},
 	dst: func(v *store.Account) []any {
 		return []any{&v.ID, &v.SiteID, &v.Code, &v.Flat, &v.Floor, &v.MAC, &v.Tenant, &v.Phone, &v.Notes, &v.WhatsApp, &v.WAOptOut, s_(&v.CustomerID), s_(&v.PackageID),
 			t_(&v.ExpiresAt), &v.Suspended, t_(&v.RemindedFor), t_(&v.ExpiredFor), &v.ODB, s_(&v.SplitterID), &v.SplitterPort, t_(&v.CreatedAt), t_(&v.ClosedAt),
-			&v.MACConflict, &v.IP}
+			&v.MACConflict, &v.IP, s_(&v.ApartmentID), &v.Unit}
 	},
 }).build()
 
@@ -341,15 +341,29 @@ var tenanciesC = (&codec[store.Tenancy]{
 	},
 }).build()
 
-var contactsC = (&codec[store.Contact]{
-	name: "site_contacts", pk: []string{"id"}, key: func(v store.Contact) string { return v.ID },
-	cols: []string{"id", "site_id", "role", "name", "phone", "email", "notes", "created_at"},
-	args: func(v store.Contact) []any {
-		return []any{v.ID, v.SiteID, v.Role, v.Name, v.Phone, v.Email, v.Notes, tm(v.CreatedAt)}
+var apartmentsC = (&codec[store.Apartment]{
+	name: "apartments", pk: []string{"id"}, key: func(v store.Apartment) string { return v.ID },
+	cols: []string{"id", "name", "address", "notes",
+		"caretaker_name", "caretaker_phone", "caretaker_phone2", "caretaker_email", "caretaker_notes",
+		"landlord_name", "landlord_phone", "landlord_phone2", "landlord_email", "landlord_notes", "created_at"},
+	args: func(v store.Apartment) []any {
+		return []any{v.ID, v.Name, v.Address, v.Notes,
+			v.Caretaker.Name, v.Caretaker.Phone, v.Caretaker.Phone2, v.Caretaker.Email, v.Caretaker.Notes,
+			v.Landlord.Name, v.Landlord.Phone, v.Landlord.Phone2, v.Landlord.Email, v.Landlord.Notes, tm(v.CreatedAt)}
 	},
-	dst: func(v *store.Contact) []any {
-		return []any{&v.ID, &v.SiteID, &v.Role, &v.Name, &v.Phone, &v.Email, &v.Notes, t_(&v.CreatedAt)}
+	dst: func(v *store.Apartment) []any {
+		return []any{&v.ID, &v.Name, &v.Address, &v.Notes,
+			&v.Caretaker.Name, &v.Caretaker.Phone, &v.Caretaker.Phone2, &v.Caretaker.Email, &v.Caretaker.Notes,
+			&v.Landlord.Name, &v.Landlord.Phone, &v.Landlord.Phone2, &v.Landlord.Email, &v.Landlord.Notes, t_(&v.CreatedAt)}
 	},
+}).build()
+
+var apartmentSitesC = (&codec[store.ApartmentSite]{
+	name: "apartment_sites", pk: []string{"apartment_id", "site_id"}, del: "apartment_id || '|' || site_id",
+	key:  func(v store.ApartmentSite) string { return store.ApartmentSiteKey(v.ApartmentID, v.SiteID) },
+	cols: []string{"apartment_id", "site_id", "created_at"},
+	args: func(v store.ApartmentSite) []any { return []any{v.ApartmentID, v.SiteID, tm(v.CreatedAt)} },
+	dst:  func(v *store.ApartmentSite) []any { return []any{&v.ApartmentID, &v.SiteID, t_(&v.CreatedAt)} },
 }).build()
 
 var ordersC = (&codec[store.Order]{

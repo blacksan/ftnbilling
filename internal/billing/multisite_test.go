@@ -70,8 +70,8 @@ func TestSameFlatInTwoSitesButMACIsGlobal(t *testing.T) {
 	if _, err := e.svc.CreateAccount(AccountInput{SiteID: "nope", Flat: "Flat 2", MAC: "AA:BB:CC:DD:EE:0A"}); !errors.Is(err, ErrNoSite) {
 		t.Fatalf("unknown site: %v", err)
 	}
-	if _, err := e.svc.CreateAccount(AccountInput{Flat: "Flat 2", MAC: "AA:BB:CC:DD:EE:0A"}); !errors.Is(err, ErrNoSite) {
-		t.Fatalf("missing site: %v", err)
+	if _, err := e.svc.CreateAccount(AccountInput{Flat: "Flat 2", MAC: "AA:BB:CC:DD:EE:0A"}); !errors.Is(err, ErrNoApartment) {
+		t.Fatalf("missing apartment: %v", err)
 	}
 	// Unknown-device lists are per building too.
 	e.svc.NoteDevice(b, "AA:BB:CC:DD:EE:77", "10.5.50.9", "portal")

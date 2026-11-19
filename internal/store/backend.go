@@ -87,7 +87,8 @@ type ChangeSet struct {
 	Equipment       Delta[Equipment]
 	Accounts        Delta[Account]
 	Tenancies       Delta[Tenancy]
-	Contacts        Delta[Contact]
+	Apartments      Delta[Apartment]
+	ApartmentSites  Delta[ApartmentSite]
 	Orders          Delta[Order]
 	Vouchers        Delta[Voucher]
 	Payments        Delta[Payment]
@@ -105,7 +106,7 @@ type ChangeSet struct {
 // Empty reports whether nothing changed.
 func (c *ChangeSet) Empty() bool {
 	return c.Sites.Empty() && c.Packages.Empty() && c.Customers.Empty() && c.Equipment.Empty() &&
-		c.Accounts.Empty() && c.Tenancies.Empty() && c.Contacts.Empty() && c.Orders.Empty() &&
+		c.Accounts.Empty() && c.Tenancies.Empty() && c.Apartments.Empty() && c.ApartmentSites.Empty() && c.Orders.Empty() &&
 		c.Vouchers.Empty() && c.Payments.Empty() && c.Devices.Empty() && c.Tasks.Empty() &&
 		c.EquipmentEvents.Empty() && c.Notes.Empty() && c.Settings.Empty() &&
 		c.AdminUsers.Empty() && c.AdminSessions.Empty() && c.APIDevices.Empty() && len(c.NewEvents) == 0
@@ -122,7 +123,7 @@ func (c *ChangeSet) Summary() string {
 	s := n("sites", len(c.Sites.Upsert), len(c.Sites.Delete)) + n("packages", len(c.Packages.Upsert), len(c.Packages.Delete)) +
 		n("customers", len(c.Customers.Upsert), len(c.Customers.Delete)) + n("equipment", len(c.Equipment.Upsert), len(c.Equipment.Delete)) +
 		n("accounts", len(c.Accounts.Upsert), len(c.Accounts.Delete)) + n("tenancies", len(c.Tenancies.Upsert), len(c.Tenancies.Delete)) +
-		n("contacts", len(c.Contacts.Upsert), len(c.Contacts.Delete)) + n("orders", len(c.Orders.Upsert), len(c.Orders.Delete)) +
+		n("apartments", len(c.Apartments.Upsert), len(c.Apartments.Delete)) + n("apartment_sites", len(c.ApartmentSites.Upsert), len(c.ApartmentSites.Delete)) + n("orders", len(c.Orders.Upsert), len(c.Orders.Delete)) +
 		n("vouchers", len(c.Vouchers.Upsert), len(c.Vouchers.Delete)) + n("payments", len(c.Payments.Upsert), len(c.Payments.Delete)) +
 		n("devices", len(c.Devices.Upsert), len(c.Devices.Delete)) + n("tasks", len(c.Tasks.Upsert), len(c.Tasks.Delete)) +
 		n("equipment_events", len(c.EquipmentEvents.Upsert), len(c.EquipmentEvents.Delete)) + n("notes", len(c.Notes.Upsert), len(c.Notes.Delete)) +

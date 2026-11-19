@@ -112,11 +112,17 @@ func TestFlaggedMACIsNotAnUnregisteredDevice(t *testing.T) {
 	e.flat(t, "Flat 1", mac1)
 	flagged := e.flatAt(t, b, "Flat 1", macB)
 	e.flag(t, flagged.ID, mac1)
-	// A MAC held by a flagged account is not an unregistered device.
-	e.svc.NoteDevice(b, mac1, "10.0.0.9", "portal")
+	// A MAC held by an account of this router is not an unregistered device.
+	e.svc.NoteDevice(e.site, mac1, "10.0.0.9", "portal")
 	e.st.View(func(d *store.Data) {
 		if len(d.Devices) != 0 {
 			t.Fatalf("%v", d.Devices)
 		}
 	})
+	// Seen on another router, it is listed there as belonging to Flat 1, never as a free device.
+	e.svc.NoteDevice(b, mac1, "10.0.0.9", "portal")
+	list := e.svc.Unregistered(b, false)
+	if len(list) != 1 || list[0].BelongsTo == nil || list[0].BelongsTo.Unit != "Flat 1" || list[0].Suggested != nil {
+		t.Fatalf("%+v", list)
+	}
 }
