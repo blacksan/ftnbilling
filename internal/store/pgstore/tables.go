@@ -200,7 +200,7 @@ func (c *codec[V]) scan(rows pgx.Rows) ([]V, error) {
 	return out, rows.Err()
 }
 
-// accessMode writes the empty mode as the default, "hotspot" (the Store
+// accessMode writes the empty mode as the default, "ipoe" (the Store
 // normalises it the same way; this keeps the database constraint satisfied for
 // callers that bypass the Store).
 func accessMode(m string) string {
@@ -257,21 +257,21 @@ func overridesArg(m map[string]store.PkgOverride) any {
 var sitesC = (&codec[store.Site]{
 	name: "sites", pk: []string{"id"}, key: func(v store.Site) string { return v.ID },
 	cols: []string{"id", "name", "mode", "notes", "support_phone", "disabled", "removed", "tunnel_ip", "wg_pub", "rest_user", "rest_pass", "rest_port",
-		"join_hash", "join_expires_at", "join_created_at", "join_used_at", "join_used_from", "joined_at", "hotspot_server", "wan_interface", "wan_list",
-		"olt_interface", "vlan_id", "customer_subnet", "wan_cap_mbps", "olt_cap_mbps", "fup_tb", "provision", "bench_port", "legacy_container",
+		"join_hash", "join_expires_at", "join_created_at", "join_used_at", "join_used_from", "joined_at", "wan_interface", "wan_list",
+		"olt_interface", "vlan_id", "customer_subnet", "wan_cap_mbps", "olt_cap_mbps", "fup_tb", "bench_port",
 		"pkg_overrides", "address", "lat", "lng", "go_live", "access_mode", "created_at",
 		"wan_mode", "wan_address", "wan_gateway", "wan_dns", "pppoe_user", "pppoe_pass_enc", "lan_ports", "lan_subnet"},
 	args: func(v store.Site) []any {
 		return []any{v.ID, v.Name, v.Mode, v.Notes, v.SupportPhone, v.Disabled, v.Removed, v.TunnelIP, v.WGPublicKey, v.RESTUser, v.RESTPass, v.RESTPort,
-			v.Join.Hash, nt(v.Join.ExpiresAt), nt(v.Join.CreatedAt), nt(v.Join.UsedAt), v.Join.UsedFrom, nt(v.JoinedAt), v.HotspotServer, v.WANInterface, v.WANList,
-			v.OLTInterface, v.VLANID, v.CustomerSubnet, v.WANCapMbps, v.OLTCapMbps, v.FUPTB, v.Provision, v.BenchPort, v.LegacyContainer,
+			v.Join.Hash, nt(v.Join.ExpiresAt), nt(v.Join.CreatedAt), nt(v.Join.UsedAt), v.Join.UsedFrom, nt(v.JoinedAt), v.WANInterface, v.WANList,
+			v.OLTInterface, v.VLANID, v.CustomerSubnet, v.WANCapMbps, v.OLTCapMbps, v.FUPTB, v.BenchPort,
 			overridesArg(v.PkgOverrides), v.Address, v.Lat, v.Lng, nt(v.GoLive), accessMode(v.AccessMode), tm(v.CreatedAt),
 			v.WANMode, v.WANAddress, v.WANGateway, v.WANDNS, v.PPPoEUser, v.PPPoEPassEnc, v.LANPorts, v.LANSubnet}
 	},
 	dst: func(v *store.Site) []any {
 		return []any{&v.ID, &v.Name, &v.Mode, &v.Notes, &v.SupportPhone, &v.Disabled, &v.Removed, &v.TunnelIP, &v.WGPublicKey, &v.RESTUser, &v.RESTPass, &v.RESTPort,
-			&v.Join.Hash, t_(&v.Join.ExpiresAt), t_(&v.Join.CreatedAt), t_(&v.Join.UsedAt), &v.Join.UsedFrom, t_(&v.JoinedAt), &v.HotspotServer, &v.WANInterface, &v.WANList,
-			&v.OLTInterface, &v.VLANID, &v.CustomerSubnet, &v.WANCapMbps, &v.OLTCapMbps, &v.FUPTB, &v.Provision, &v.BenchPort, &v.LegacyContainer,
+			&v.Join.Hash, t_(&v.Join.ExpiresAt), t_(&v.Join.CreatedAt), t_(&v.Join.UsedAt), &v.Join.UsedFrom, t_(&v.JoinedAt), &v.WANInterface, &v.WANList,
+			&v.OLTInterface, &v.VLANID, &v.CustomerSubnet, &v.WANCapMbps, &v.OLTCapMbps, &v.FUPTB, &v.BenchPort,
 			overridesDst{&v.PkgOverrides}, &v.Address, &v.Lat, &v.Lng, t_(&v.GoLive), &v.AccessMode, t_(&v.CreatedAt),
 			&v.WANMode, &v.WANAddress, &v.WANGateway, &v.WANDNS, &v.PPPoEUser, &v.PPPoEPassEnc, &v.LANPorts, &v.LANSubnet}
 	},
@@ -316,16 +316,16 @@ var equipmentC = (&codec[store.Equipment]{
 var accountsC = (&codec[store.Account]{
 	name: "accounts", pk: []string{"id"}, key: func(v store.Account) string { return v.ID },
 	cols: []string{"id", "site_id", "code", "flat", "floor", "mac", "tenant", "phone", "notes", "whatsapp", "wa_opt_out", "customer_id", "package_id",
-		"expires_at", "suspended", "hs_pass", "router_active", "reminded_for", "expired_for", "odb", "splitter_id", "splitter_port", "created_at", "closed_at",
+		"expires_at", "suspended", "reminded_for", "expired_for", "odb", "splitter_id", "splitter_port", "created_at", "closed_at",
 		"mac_conflict", "ip"},
 	args: func(v store.Account) []any {
 		return []any{v.ID, v.SiteID, v.Code, v.Flat, v.Floor, v.MAC, v.Tenant, v.Phone, v.Notes, v.WhatsApp, v.WAOptOut, fk(v.CustomerID), fk(v.PackageID),
-			nt(v.ExpiresAt), v.Suspended, v.HSPass, v.RouterActive, nt(v.RemindedFor), nt(v.ExpiredFor), v.ODB, fk(v.SplitterID), v.SplitterPort, tm(v.CreatedAt), nt(v.ClosedAt),
+			nt(v.ExpiresAt), v.Suspended, nt(v.RemindedFor), nt(v.ExpiredFor), v.ODB, fk(v.SplitterID), v.SplitterPort, tm(v.CreatedAt), nt(v.ClosedAt),
 			v.MACConflict, v.IP}
 	},
 	dst: func(v *store.Account) []any {
 		return []any{&v.ID, &v.SiteID, &v.Code, &v.Flat, &v.Floor, &v.MAC, &v.Tenant, &v.Phone, &v.Notes, &v.WhatsApp, &v.WAOptOut, s_(&v.CustomerID), s_(&v.PackageID),
-			t_(&v.ExpiresAt), &v.Suspended, &v.HSPass, &v.RouterActive, t_(&v.RemindedFor), t_(&v.ExpiredFor), &v.ODB, s_(&v.SplitterID), &v.SplitterPort, t_(&v.CreatedAt), t_(&v.ClosedAt),
+			t_(&v.ExpiresAt), &v.Suspended, t_(&v.RemindedFor), t_(&v.ExpiredFor), &v.ODB, s_(&v.SplitterID), &v.SplitterPort, t_(&v.CreatedAt), t_(&v.ClosedAt),
 			&v.MACConflict, &v.IP}
 	},
 }).build()
@@ -355,14 +355,14 @@ var contactsC = (&codec[store.Contact]{
 var ordersC = (&codec[store.Order]{
 	name: "orders", pk: []string{"id"}, key: func(v store.Order) string { return v.ID },
 	cols: []string{"id", "site_id", "account_id", "package_id", "phone", "method", "amount_kes", "status", "reason", "checkout_request_id", "receipt",
-		"voucher_code", "logged_in", "mac", "ip", "dst", "created_at", "paid_at"},
+		"voucher_code", "created_at", "paid_at"},
 	args: func(v store.Order) []any {
 		return []any{v.ID, fk(v.SiteID), fk(v.AccountID), fk(v.PackageID), v.Phone, v.Method, v.AmountKES, v.Status, v.Reason, v.CheckoutRequestID, v.Receipt,
-			v.VoucherCode, v.LoggedIn, v.MAC, v.IP, v.Dst, tm(v.CreatedAt), nt(v.PaidAt)}
+			v.VoucherCode, tm(v.CreatedAt), nt(v.PaidAt)}
 	},
 	dst: func(v *store.Order) []any {
 		return []any{&v.ID, s_(&v.SiteID), s_(&v.AccountID), s_(&v.PackageID), &v.Phone, &v.Method, &v.AmountKES, &v.Status, &v.Reason, &v.CheckoutRequestID, &v.Receipt,
-			&v.VoucherCode, &v.LoggedIn, &v.MAC, &v.IP, &v.Dst, t_(&v.CreatedAt), t_(&v.PaidAt)}
+			&v.VoucherCode, t_(&v.CreatedAt), t_(&v.PaidAt)}
 	},
 }).build()
 
@@ -404,12 +404,12 @@ var devicesC = (&codec[store.Device]{
 
 var tasksC = (&codec[store.Task]{
 	name: "tasks", pk: []string{"id"}, key: func(v store.Task) string { return v.ID },
-	cols: []string{"id", "site_id", "account_id", "code", "kick", "rev", "reason", "attempts", "next_try", "last_err", "created_at"},
+	cols: []string{"id", "site_id", "account_id", "code", "rev", "reason", "attempts", "next_try", "last_err", "created_at"},
 	args: func(v store.Task) []any {
-		return []any{v.ID, v.SiteID, v.AccountID, v.Code, v.Kick, v.Rev, v.Reason, v.Attempts, nt(v.NextTry), v.LastErr, tm(v.CreatedAt)}
+		return []any{v.ID, v.SiteID, v.AccountID, v.Code, v.Rev, v.Reason, v.Attempts, nt(v.NextTry), v.LastErr, tm(v.CreatedAt)}
 	},
 	dst: func(v *store.Task) []any {
-		return []any{&v.ID, &v.SiteID, &v.AccountID, &v.Code, &v.Kick, &v.Rev, &v.Reason, &v.Attempts, t_(&v.NextTry), &v.LastErr, t_(&v.CreatedAt)}
+		return []any{&v.ID, &v.SiteID, &v.AccountID, &v.Code, &v.Rev, &v.Reason, &v.Attempts, t_(&v.NextTry), &v.LastErr, t_(&v.CreatedAt)}
 	},
 }).build()
 

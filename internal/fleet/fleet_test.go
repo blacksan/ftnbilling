@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"ispbill/internal/metrics"
-	"ispbill/internal/routeros"
 	"ispbill/internal/store"
 	"ispbill/internal/store/storetest"
 	"ispbill/internal/wg"
@@ -24,13 +23,11 @@ func (c *clock) Now() time.Time      { return c.t }
 func (c *clock) Add(d time.Duration) { c.t = c.t.Add(d) }
 
 type fakeNet struct {
-	mu     sync.Mutex
-	hs     map[string]time.Time // siteID -> last handshake
-	known  bool
-	pingOK bool
+	mu    sync.Mutex
+	hs    map[string]time.Time // siteID -> last handshake
+	known bool
 }
 
-func (f *fakeNet) Router(string) routeros.Client { return pinger{routeros.NoRouter(), f} }
 func (f *fakeNet) PeerStatus(id string) (wg.PeerStatus, bool, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -39,18 +36,6 @@ func (f *fakeNet) PeerStatus(id string) (wg.PeerStatus, bool, bool) {
 	}
 	h, ok := f.hs[id]
 	return wg.PeerStatus{LastHandshake: h}, ok, true
-}
-
-type pinger struct {
-	routeros.Client
-	f *fakeNet
-}
-
-func (p pinger) Ping(context.Context) error {
-	if p.f.pingOK {
-		return nil
-	}
-	return errors.New("no answer")
 }
 
 type rig struct {
@@ -184,27 +169,6 @@ func TestCauseUnknownWithoutDump(t *testing.T) {
 	}
 	if o, ok := r.p.OpenOutage("sb"); !ok || o.Cause != CauseUnknown {
 		t.Fatalf("%+v", o)
-	}
-}
-
-func TestEnvSiteProbedWithPing(t *testing.T) {
-	r := newRig(t)
-	r.st.Update(func(d *store.Data) error {
-		d.Sites["env"] = store.Site{ID: "env", Name: "Main", Mode: store.SiteModeEnv}
-		return nil
-	})
-	r.net.pingOK = true
-	r.tick()
-	r.tick()
-	if r.p.State("env").Status != Up {
-		t.Fatal("env site up via Ping")
-	}
-	r.net.pingOK = false
-	for i := 0; i < 3; i++ {
-		r.tick()
-	}
-	if r.p.State("env").Status != Down {
-		t.Fatal("env site down when Ping fails")
 	}
 }
 

@@ -24,8 +24,7 @@ func (d *Data) migrateRows(now time.Time) {
 		d.Devices = map[string]Device{}
 		return
 	}
-	site := Site{ID: NewSiteID(), Name: "Main building", Mode: SiteModeEnv, HotspotServer: "hotspot1",
-		LegacyContainer: true, CreatedAt: now}
+	site := Site{ID: NewSiteID(), Name: "Main building", Mode: SiteModeEnv, CreatedAt: now}
 	d.Sites[site.ID] = site
 	for k, a := range d.Accounts {
 		a.SiteID = site.ID

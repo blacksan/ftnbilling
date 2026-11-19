@@ -21,12 +21,12 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 	err := s.Update(func(d *store.Data) error {
 		d.Sites["s111111"] = store.Site{ID: "s111111", Name: "Block A", Mode: store.SiteModeWG, Notes: "n", SupportPhone: "254700000001",
 			Disabled: true, TunnelIP: "10.99.0.2", WGPublicKey: "pub", RESTUser: "ftn-api", RESTPass: "pw", RESTPort: 8081,
-			Join:          store.JoinToken{Hash: "h", ExpiresAt: at, CreatedAt: at, UsedAt: at, UsedFrom: "1.2.3.4"},
-			JoinedAt:      at,
-			HotspotServer: "hotspot1", WANInterface: "ether1", WANList: "WAN", OLTInterface: "sfp1", VLANID: 20, CustomerSubnet: "10.20.0.0/24",
-			WANCapMbps: 100.5, OLTCapMbps: 1000, FUPTB: 2.5, Provision: true, BenchPort: "ether5", LegacyContainer: true,
+			Join:         store.JoinToken{Hash: "h", ExpiresAt: at, CreatedAt: at, UsedAt: at, UsedFrom: "1.2.3.4"},
+			JoinedAt:     at,
+			WANInterface: "ether1", WANList: "WAN", OLTInterface: "sfp1", VLANID: 20, CustomerSubnet: "10.20.0.0/24",
+			WANCapMbps: 100.5, OLTCapMbps: 1000, FUPTB: 2.5, BenchPort: "ether5",
 			PkgOverrides: map[string]store.PkgOverride{"p1": {Hidden: true, PriceKES: 70}},
-			Address:      "Kilimani Rd", Lat: -1.2921, Lng: 36.8219, GoLive: at, AccessMode: store.AccessIPoEObserve, CreatedAt: at}
+			Address:      "Kilimani Rd", Lat: -1.2921, Lng: 36.8219, GoLive: at, AccessMode: store.AccessIPoE, CreatedAt: at}
 		d.Sites["s222222"] = store.Site{ID: "s222222", Name: "Env", Mode: store.SiteModeEnv, CreatedAt: at}
 		d.Packages["p1"] = store.Package{ID: "p1", Name: "1 Day", Slug: "1-day", DurationMin: 1440, SpeedMbps: 10, PriceKES: 50, Sort: 1}
 		d.Packages["p2"] = store.Package{ID: "p2", Name: "Old", Slug: "old", DurationMin: 60, SpeedMbps: 5, PriceKES: 10, Disabled: true, Deleted: true, Sort: 2}
@@ -37,8 +37,8 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 		d.Equipment["e2"] = store.Equipment{ID: "e2", Kind: store.KindSplitter, Status: store.EqInStock, CreatedAt: at}
 		d.Equipment["e3"] = store.Equipment{ID: "e3", Kind: store.KindRouter, Serial: "sn1", Status: store.EqInstalled, SiteID: "s111111", CreatedAt: at}
 		d.Accounts["a1"] = store.Account{ID: "a1", SiteID: "s111111", Code: "ABC234", Flat: "Flat 1", Floor: "2", MAC: "AA:BB:CC:DD:EE:01", Tenant: "Alice",
-			Phone: "254711000001", Notes: "n", WhatsApp: "254711000003", WAOptOut: true, PackageID: "p1", ExpiresAt: at, Suspended: true, HSPass: "x",
-			RouterActive: true, RemindedFor: at, ExpiredFor: at, CustomerID: "c1", ODB: "ODB-1", SplitterID: "e2", SplitterPort: 4, IP: "10.20.0.60", CreatedAt: at}
+			Phone: "254711000001", Notes: "n", WhatsApp: "254711000003", WAOptOut: true, PackageID: "p1", ExpiresAt: at, Suspended: true,
+			RemindedFor: at, ExpiredFor: at, CustomerID: "c1", ODB: "ODB-1", SplitterID: "e2", SplitterPort: 4, IP: "10.20.0.60", CreatedAt: at}
 		// Flagged by a migration: same MAC as a1, kept, not provisioned.
 		d.Accounts["a3"] = store.Account{ID: "a3", SiteID: "s222222", Code: "DUP234", Flat: "Flat 3", MAC: "AA:BB:CC:DD:EE:01", MACConflict: true, CreatedAt: at}
 		d.ClosedAccounts["a2"] = store.Account{ID: "a2", SiteID: "s111111", Code: "XYZ234", Flat: "Flat 2", CreatedAt: at, ClosedAt: at}
@@ -46,8 +46,7 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 		d.Tenancies["t2"] = store.Tenancy{ID: "t2", CustomerID: "c1", AccountID: "a2", MoveIn: at, MoveOut: at.Add(time.Hour)}
 		d.Contacts["k1"] = store.Contact{ID: "k1", SiteID: "s111111", Role: store.RoleCaretaker, Name: "Joe", Phone: "254722000000", Email: "j@example.com", Notes: "n", CreatedAt: at}
 		d.Orders["o1"] = store.Order{ID: "o1", SiteID: "s111111", AccountID: "a1", PackageID: "p1", Phone: "254711000001", Method: "mpesa", AmountKES: 50,
-			Status: store.OrderPaid, Reason: "r", CheckoutRequestID: "ws_CO_1", Receipt: "ABCDEFGHIJ", VoucherCode: "V1", LoggedIn: true, MAC: "AA:BB:CC:DD:EE:01",
-			IP: "10.20.0.5", Dst: "http://x", CreatedAt: at, PaidAt: at}
+			Status: store.OrderPaid, Reason: "r", CheckoutRequestID: "ws_CO_1", Receipt: "ABCDEFGHIJ", VoucherCode: "V1", CreatedAt: at, PaidAt: at}
 		d.Vouchers["V1"] = store.Voucher{Code: "V1", SiteID: "s111111", PackageID: "p1", Batch: "b", Used: true, UsedAt: at, UsedBy: "o1", CreatedAt: at}
 		d.Vouchers["V2"] = store.Voucher{Code: "V2", PackageID: "p1", Batch: "b", CreatedAt: at}
 		d.Payments["ABCDEFGHIJ"] = store.Payment{Key: "ABCDEFGHIJ", SiteID: "s111111", Method: "mpesa-c2b", Status: store.PayApplied, AmountKES: 50, Phone: "254711000001",
@@ -55,7 +54,7 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 		d.Payments["UNMATCHED1"] = store.Payment{Key: "UNMATCHED1", Method: "mpesa-c2b", Status: store.PayUnmatched, AmountKES: 75, PaidAt: at, CreatedAt: at}
 		d.Devices[store.DeviceKey("s111111", "AA:BB:CC:DD:EE:09")] = store.Device{SiteID: "s111111", MAC: "AA:BB:CC:DD:EE:09", IP: "10.20.0.9", Source: "portal",
 			FirstSeen: at, LastSeen: at, Hits: 3, Vendor: "Huawei", HostName: "HUAWEI-ONT", Online: true}
-		d.Tasks["task1"] = store.Task{ID: "task1", SiteID: "s111111", AccountID: "a1", Code: "ABC234", Kick: true, Rev: 2, Reason: "r", Attempts: 1, NextTry: at,
+		d.Tasks["task1"] = store.Task{ID: "task1", SiteID: "s111111", AccountID: "a1", Code: "ABC234", Rev: 2, Reason: "r", Attempts: 1, NextTry: at,
 			LastErr: "e", CreatedAt: at}
 		d.EquipmentEvents["ee1"] = store.EquipmentEvent{ID: "ee1", EquipmentID: "e1", Kind: store.EqEvAssigned, FromStatus: "in_stock", ToStatus: "installed",
 			SiteID: "s111111", AccountID: "a1", CustomerID: "c1", Note: "n", Time: at}

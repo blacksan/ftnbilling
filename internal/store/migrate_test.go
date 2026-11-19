@@ -39,7 +39,7 @@ func TestMigrateV2ToV3(t *testing.T) {
 		}
 		for id, st := range d.Sites {
 			siteID = id
-			if st.Name != "Main building" || st.Mode != SiteModeEnv || st.HotspotServer != "hotspot1" || !st.LegacyContainer || len(id) != 7 || id[0] != 's' {
+			if st.Name != "Main building" || st.Mode != SiteModeEnv || len(id) != 7 || id[0] != 's' {
 				t.Fatalf("bad site %+v", st)
 			}
 		}

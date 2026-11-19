@@ -83,7 +83,7 @@ func checkAccountInvariants(d *Data, cs *ChangeSet) error {
 func checkOtherInvariants(d *Data, cs *ChangeSet) error {
 	for _, st := range cs.Sites.Upsert {
 		switch st.AccessMode {
-		case AccessHotspot, AccessIPoEObserve, AccessIPoE:
+		case AccessIPoE:
 		default:
 			return fmt.Errorf("%w: %q", ErrBadAccessMode, st.AccessMode)
 		}
