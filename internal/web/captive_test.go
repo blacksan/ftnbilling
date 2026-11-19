@@ -147,7 +147,28 @@ func newCaptive(t *testing.T, mpesaOn bool) *captive {
 	}
 	c.advance(90 * time.Minute) // the hour is over
 	c.reconcile(t)
+	c.bindLease(t)
 	return c
+}
+
+func (c *captive) setLease(t *testing.T, id, status string) {
+	t.Helper()
+	if err := c.rt.SetRow(t.Context(), "/ip/dhcp-server/lease", id, map[string]string{"status": status}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// bindLease is the flat's device taking its fixed address from the router's DHCP server.
+func (c *captive) bindLease(t *testing.T) {
+	t.Helper()
+	a := c.mustAcct(t)
+	for _, r := range c.rt.Table("/ip/dhcp-server/lease") {
+		if strings.EqualFold(r["mac-address"], a.MAC) {
+			c.setLease(t, r[routeros.RowID], "bound")
+			return
+		}
+	}
+	t.Fatal("no lease row for the flat")
 }
 
 func (c *captive) pkg(name string) string { return c.pkgID(name) }
@@ -300,7 +321,7 @@ func TestCaptiveExpiredFlatPaysWithMpesaAndComesBack(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("find: %d %s", code, html)
 	}
-	for _, want := range []string{"Flat 4B", "Your plan ended at", "Choose a package", `value="0712345678"`, "Pay with M-Pesa", "Mbps", "Have a voucher?"} {
+	for _, want := range []string{"Flat 4B", "Your plan ended at", "Choose a package", "Use the number on file", "07•• ••• 678", "Pay with M-Pesa", "Mbps", "Have a voucher?"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("package step lacks %q", want)
 		}
@@ -310,14 +331,19 @@ func TestCaptiveExpiredFlatPaysWithMpesaAndComesBack(t *testing.T) {
 			t.Errorf("package %q is not offered", name)
 		}
 	}
+	for _, full := range []string{"0712345678", "712345678", "254712345678", "0712 345 678"} {
+		if strings.Contains(html, full) {
+			t.Errorf("the package page carries the full number %q", full)
+		}
+	}
 	// The flat label alone shows a package list but no state and no phone number: a neighbour could type it.
 	_, byFlat, _ := c.pay(t, "/pay/find", url.Values{"code": {"Flat 4B"}})
-	if !strings.Contains(byFlat, "Choose a package") || strings.Contains(byFlat, `value="0712`) || strings.Contains(byFlat, "Your plan ended") {
+	if !strings.Contains(byFlat, "Choose a package") || strings.Contains(byFlat, `07•• ••• 678`) || strings.Contains(byFlat, "Your plan ended") {
 		t.Errorf("by flat label must show packages only:\n%s", byFlat)
 	}
 	// Pay a day with a different (editable) phone number, typed in local format.
 	day := c.pkg("1 Day")
-	st, _, resp := c.pay(t, "/pay/start", url.Values{"code": {c.acct.Code}, "package": {day}, "method": {"mpesa"}, "phone": {"0799 111 222"}})
+	st, _, resp := c.pay(t, "/pay/start", url.Values{"code": {c.acct.Code}, "package": {day}, "method": {"mpesa"}, "phone_src": {"other"}, "phone": {"0799 111 222"}})
 	if st != 303 || !strings.HasPrefix(resp.Header.Get("Location"), "/portal/wait?order=") {
 		t.Fatalf("start: %d %s", st, resp.Header.Get("Location"))
 	}
@@ -474,5 +500,96 @@ func TestCaptivePaidWhileRouterDownComesBackLater(t *testing.T) {
 	}
 	if s, online := c.orderStatus(t, orderID); s != "paid" || !online {
 		t.Fatalf("router back: %s online=%v", s, online)
+	}
+}
+
+// "Use the number on file" (the default): the page holds only the masked number; the server fills in the real one.
+func TestCaptiveUseNumberOnFile(t *testing.T) {
+	c := newCaptive(t, true)
+	st, _, resp := c.pay(t, "/pay/start", url.Values{"code": {c.acct.Code}, "package": {c.pkg("1 Day")}, "method": {"mpesa"}, "phone_src": {"file"}})
+	if st != 303 {
+		t.Fatalf("start: %d", st)
+	}
+	if stk := c.daraja.lastSTK(); stk["PhoneNumber"] != "254712345678" {
+		t.Fatalf("the number on file was not used: %v", stk)
+	}
+	_ = resp
+	// Through the token step too (the page after "Continue" carries a token, not the code).
+	_, html, _ := c.pay(t, "/pay/find", url.Values{"code": {c.acct.Code}})
+	i := strings.Index(html, `name="tok" value="`)
+	tok := html[i+len(`name="tok" value="`):]
+	tok = tok[:strings.Index(tok, `"`)]
+	c.advance(time.Minute)
+	if st, _, _ := c.pay(t, "/pay/start", url.Values{"tok": {tok}, "package": {c.pkg("1 Week")}, "method": {"mpesa"}, "phone_src": {"file"}}); st != 303 {
+		t.Fatalf("token start: %d", st)
+	}
+	if stk := c.daraja.lastSTK(); stk["PhoneNumber"] != "254712345678" {
+		t.Fatalf("token flow: %v", stk)
+	}
+	// A flat label never gets the number on file, even if the form asks for it.
+	_, byFlat, _ := c.pay(t, "/pay/find", url.Values{"code": {"Flat 4B"}})
+	j := strings.Index(byFlat, `name="tok" value="`)
+	ftok := byFlat[j+len(`name="tok" value="`):]
+	ftok = ftok[:strings.Index(ftok, `"`)]
+	st, html, _ = c.pay(t, "/pay/start", url.Values{"tok": {ftok}, "package": {c.pkg("1 Day")}, "method": {"mpesa"}, "phone_src": {"file"}})
+	if st != 400 {
+		t.Errorf("a flat label used the number on file: %d", st)
+	}
+}
+
+// "You're back online" is only said when the flat can really be online: not for an account the reconciler skips, and
+// not while its device has no bound lease on this router.
+func TestCaptiveOnlineNeedsAProvisionedBoundFlat(t *testing.T) {
+	cases := []struct {
+		name   string
+		online bool
+		break_ func(c *captive, t *testing.T)
+	}{
+		{"healthy flat", true, func(*captive, *testing.T) {}},
+		{"no MAC", false, func(c *captive, t *testing.T) {
+			c.st.Update(func(d *store.Data) error { a := d.Accounts[c.acct.ID]; a.MAC = ""; d.Accounts[a.ID] = a; return nil })
+		}},
+		{"flagged duplicate MAC", false, func(c *captive, t *testing.T) {
+			c.st.Update(func(d *store.Data) error {
+				a := d.Accounts[c.acct.ID]
+				a.MACConflict = true
+				d.Accounts[a.ID] = a
+				return nil
+			})
+		}},
+		{"router does not serve the apartment", false, func(c *captive, t *testing.T) {
+			c.st.Update(func(d *store.Data) error {
+				for k, v := range d.ApartmentSites {
+					if v.SiteID == c.site.ID {
+						delete(d.ApartmentSites, k)
+					}
+				}
+				return nil
+			})
+		}},
+		{"ONT behind another router (lease not bound here)", false, func(c *captive, t *testing.T) {
+			for _, r := range c.rt.Table("/ip/dhcp-server/lease") {
+				c.setLease(t, r[routeros.RowID], "waiting")
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newCaptive(t, true)
+			_, vs, err := c.svc.GenerateVouchers(c.pkg("1 Day"), c.site.ID, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, resp := c.pay(t, "/pay/voucher", url.Values{"code": {c.acct.Code}, "voucher": {vs[0].Code}})
+			orderID := strings.TrimPrefix(resp.Header.Get("Location"), "/portal/success?order=")
+			tc.break_(c, t)
+			c.advance(time.Second)
+			if _, err := c.svc.ReconcileSite(t.Context(), c.site.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, online := c.orderStatus(t, orderID); online != tc.online {
+				t.Fatalf("online = %v, want %v", online, tc.online)
+			}
+		})
 	}
 }

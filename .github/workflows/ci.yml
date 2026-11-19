@@ -55,6 +55,12 @@ jobs:
           # udp/51821 and 10.98.0.0/24 are wg-mgmt's (remote WinBox) defaults now; the retired admin VPN is still not allowed.
           if grep -Ei 'wg-admin|admin-peer' /tmp/dry.txt; then echo "the installer must not create the admin VPN"; exit 1; fi
           grep -q 'wg-mgmt' /tmp/dry.txt
+      - name: Caddyfile validates with a real Caddy
+        run: |
+          v=2.8.4
+          curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${v}/caddy_${v}_linux_amd64.tar.gz" | tar -xz -C "$RUNNER_TEMP" caddy
+          "$RUNNER_TEMP/caddy" version
+          CADDY_BIN="$RUNNER_TEMP/caddy" go test -count=1 -run 'TestInstallCaddyfile' -v ./deploy
       - name: systemd calendar expressions
         run: |
           for f in deploy/*.timer; do grep -H '^OnCalendar' "$f"; done

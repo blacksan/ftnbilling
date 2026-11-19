@@ -943,6 +943,56 @@ $CF_CATCHALL
 EOF
 }
 
+# Sets CF_SITE, CF_CB and CF_CATCHALL (the pieces render_caddyfile needs) from DOMAIN and CADDY_MPESA_IPS.
+caddy_vars() {
+  local site="${DOMAIN:-:80}" cbips="" cbblock=$'\t# /pay/cb/* is not limited by source address (set CADDY_MPESA_IPS to limit it).'
+  if [ -n "${CADDY_MPESA_IPS:-}" ]; then
+    cbips=$(printf '%s' "$CADDY_MPESA_IPS" | tr ',' ' ' | xargs)
+    # Only addresses reach the Caddyfile: refuse anything else instead of writing it in.
+    case "$cbips" in
+      ""|*[!0-9a-fA-F:./\ ]*) die "CADDY_MPESA_IPS must be IPs or CIDRs separated by spaces or commas, got: $CADDY_MPESA_IPS" ;;
+    esac
+    cbblock=$(printf '\t# M-Pesa callbacks only from the addresses in CADDY_MPESA_IPS (confirm them with Safaricom).\n\t@mpesa_cb_other {\n\t\tpath /pay/cb/*\n\t\tnot remote_ip %s\n\t}\n\trespond @mpesa_cb_other "Forbidden" 403\n' "$cbips")
+  fi
+  local catchall=""
+  if [ -n "${DOMAIN:-}" ]; then
+    # Customers suspended on their router have their plain-HTTP
+    # requests redirected to this server's public IP, whatever site they asked
+    # for. Send them to the payment page. (Caddy already redirects http to https
+    # for $DOMAIN itself; this only catches every other host name.)
+    # The domain itself keeps its http->https redirect (308 keeps the method); this block spells it out and puts it
+    # first, in a route (which keeps the written order), so the catch-all can never swallow it. The @own matcher is
+    # defined at site level. ACME HTTP challenges are answered by Caddy before any route. 302, never 204 or "Success":
+    # the device must see a portal.
+    catchall=$(printf '\n# Any other plain-HTTP host (customers suspended on the router, a captive-portal probe): to the payment page.\nhttp:// {\n\t@own host %s\n\troute {\n\t\tredir @own https://%s{uri} 308\n\t\tredir https://%s/pay 302\n\t}\n}\n' "$DOMAIN" "$DOMAIN" "$DOMAIN")
+  fi
+  CF_SITE=$site; CF_CB=$cbblock; CF_CATCHALL=$catchall
+}
+
+# Renders the Caddyfile to a temporary file, has caddy check that file, and only then puts it in place (the old one is
+# kept as Caddyfile.bak). A file caddy refuses never replaces the working one: the old file stays untouched and the
+# installer stops with caddy's own message.
+install_caddyfile() {
+  local dest=${CADDYFILE:-/etc/caddy/Caddyfile} tmp out
+  if [ "$DRY" = 1 ]; then
+    render_caddyfile >/dev/null
+    printf '    [dry-run] write %s (rendered to a temporary file and checked with caddy validate --adapter caddyfile first; the old file is kept as %s.bak)\n' "$dest" "$dest"
+    return 0
+  fi
+  mkdir -p "$(dirname "$dest")"
+  tmp=$(mktemp "$dest.new.XXXXXX")
+  render_caddyfile >"$tmp"
+  if ! out=$(caddy validate --adapter caddyfile --config "$tmp" 2>&1); then
+    rm -f "$tmp"
+    die "the new Caddyfile is not valid; $dest was left untouched. caddy said: $out"
+  fi
+  chmod 644 "$tmp"
+  if [ "$(id -u)" = 0 ]; then chown root:root "$tmp"; fi
+  if [ -f "$dest" ] && cmp -s "$tmp" "$dest"; then rm -f "$tmp"; return 0; fi
+  if [ -f "$dest" ]; then cp -p "$dest" "$dest.bak"; fi
+  mv -f "$tmp" "$dest"
+}
+
 # ---------------------------------------------------------------------------
 app_and_caddy() {
   step "app service and Caddy"
@@ -976,31 +1026,8 @@ CapabilityBoundingSet=CAP_NET_RAW
 [Install]
 WantedBy=multi-user.target
 EOF
-  local site="${DOMAIN:-:80}" cbips="" cbblock=$'\t# /pay/cb/* is not limited by source address (set CADDY_MPESA_IPS to limit it).'
-  if [ -n "${CADDY_MPESA_IPS:-}" ]; then
-    cbips=$(printf '%s' "$CADDY_MPESA_IPS" | tr ',' ' ' | xargs)
-    # Only addresses reach the Caddyfile: refuse anything else instead of writing it in.
-    case "$cbips" in
-      ""|*[!0-9a-fA-F:./\ ]*) die "CADDY_MPESA_IPS must be IPs or CIDRs separated by spaces or commas, got: $CADDY_MPESA_IPS" ;;
-    esac
-    cbblock=$(printf '\t# M-Pesa callbacks only from the addresses in CADDY_MPESA_IPS (confirm them with Safaricom).\n\t@mpesa_cb_other {\n\t\tpath /pay/cb/*\n\t\tnot remote_ip %s\n\t}\n\trespond @mpesa_cb_other "Forbidden" 403\n' "$cbips")
-  fi
-  local catchall=""
-  if [ -n "${DOMAIN:-}" ]; then
-    # Customers suspended on their router have their plain-HTTP
-    # requests redirected to this server's public IP, whatever site they asked
-    # for. Send them to the payment page. (Caddy already redirects http to https
-    # for $DOMAIN itself; this only catches every other host name.)
-    # The domain itself keeps its permanent http->https redirect; this block spells it out (and puts it first, inside
-    # route, which keeps the written order) so the catch-all can never swallow it. ACME HTTP challenges are answered by
-    # Caddy before any route, so they are untouched. 302, never 204 or "Success": the device must see a portal.
-    catchall=$(printf '\n# Any other plain-HTTP host (customers suspended on the router, a captive-portal probe): to the payment page.\nhttp:// {\n\troute {\n\t\t@own host %s\n\t\tredir @own https://%s{uri} permanent\n\t\tredir https://%s/pay 302\n\t}\n}\n' "$DOMAIN" "$DOMAIN" "$DOMAIN")
-  fi
-  CF_SITE=$site; CF_CB=$cbblock; CF_CATCHALL=$catchall
-  render_caddyfile | writef 644 root:root /etc/caddy/Caddyfile
-  if [ "$DRY" != 1 ]; then
-    caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1 || die "the new Caddyfile is not valid (check: caddy validate --config /etc/caddy/Caddyfile)"
-  fi
+  caddy_vars
+  install_caddyfile
   runq systemctl enable caddy
   if [ "$DRY" = 1 ]; then printf '    [dry-run] systemctl reload caddy\n'; else systemctl reload caddy 2>/dev/null || systemctl restart caddy; fi
 }

@@ -137,7 +137,7 @@ func TestInstallCaddyfile(t *testing.T) {
 		}
 		return string(out)
 	}
-	withDomain := render("billing.example.co.ke", "''", "http:// {\n\troute {\n\t\t@own host billing.example.co.ke\n\t\tredir @own https://billing.example.co.ke{uri} permanent\n\t\tredir https://billing.example.co.ke/pay 302\n\t}\n}")
+	withDomain := render("billing.example.co.ke", "''", "http:// {\n\t@own host billing.example.co.ke\n\troute {\n\t\tredir @own https://billing.example.co.ke{uri} 308\n\t\tredir https://billing.example.co.ke/pay 302\n\t}\n}")
 	for _, want := range []string{"billing.example.co.ke {", "reverse_proxy 127.0.0.1:8080", "http:// {", "redir https://billing.example.co.ke/pay 302", "X-Forwarded-For"} {
 		if !strings.Contains(withDomain, want) {
 			t.Errorf("Caddyfile lacks %q:\n%s", want, withDomain)
@@ -151,7 +151,7 @@ func TestInstallCaddyfile(t *testing.T) {
 	// The catch-all as install.sh writes it: any other plain-HTTP host (a walled flat's dst-nat'd request keeps its own
 	// Host) gets a 302 to the payment page, after the domain's own permanent redirect, inside route so the order holds.
 	src, _ := os.ReadFile("install.sh")
-	for _, want := range []string{"http:// {\\n\\troute {", "@own host %s", "redir @own https://%s{uri} permanent", "redir https://%s/pay 302"} {
+	for _, want := range []string{"http:// {\\n\\t@own host %s\\n\\troute {", "redir @own https://%s{uri} 308", "redir https://%s/pay 302"} {
 		if !strings.Contains(string(src), want) {
 			t.Errorf("install.sh catch-all lacks %q", want)
 		}
@@ -516,5 +516,77 @@ func TestInstallShipsWipeTool(t *testing.T) {
 	}
 	if st, err := os.Stat("ftnbilling-wipe"); err != nil || st.Mode().Perm()&0o111 == 0 {
 		t.Errorf("deploy/ftnbilling-wipe must exist and be executable: %v", err)
+	}
+}
+
+// install_caddyfile: the file caddy accepts replaces the old one (kept as .bak); the file caddy refuses never does.
+func TestInstallCaddyfileValidatesBeforeReplacing(t *testing.T) {
+	bashOrSkip(t)
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	os.MkdirAll(bin, 0o755)
+	dest := filepath.Join(dir, "etc", "Caddyfile")
+	os.MkdirAll(filepath.Dir(dest), 0o755)
+	// A fake caddy: refuses a Caddyfile that contains BAD, and records how it was called.
+	fake := "#!/bin/bash\necho \"$@\" >> " + filepath.Join(dir, "calls") + "\nif grep -q BADSITE \"${@: -1}\"; then echo 'Error: adapting config: unrecognized directive' >&2; exit 1; fi\nexit 0\n"
+	os.WriteFile(filepath.Join(bin, "caddy"), []byte(fake), 0o755)
+	run := func(site string) (string, error) {
+		script := "set -e\ndie() { echo \"DIE: $*\" >&2; exit 1; }\n" + fnSrc(t, "render_caddyfile") + "\n" + fnSrc(t, "install_caddyfile") +
+			"\nDRY=0; CF_SITE=" + site + "; CF_CB=''; CF_CATCHALL=''; install_caddyfile\n"
+		cmd := exec.Command("bash", "-c", script)
+		cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "CADDYFILE="+dest)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	os.WriteFile(dest, []byte("OLD CADDYFILE\n"), 0o644)
+	// Refused: the old file is untouched, nothing is left behind, the installer stops with caddy's message.
+	out, err := run("BADSITE")
+	if err == nil || !strings.Contains(out, "unrecognized directive") || !strings.Contains(out, "untouched") {
+		t.Fatalf("a refused Caddyfile must stop the installer with caddy's message: %v %s", err, out)
+	}
+	if b, _ := os.ReadFile(dest); string(b) != "OLD CADDYFILE\n" {
+		t.Fatalf("the old Caddyfile was replaced: %s", b)
+	}
+	if m, _ := filepath.Glob(dest + ".*"); len(m) != 0 {
+		t.Fatalf("leftovers after a refused file: %v", m)
+	}
+	calls, _ := os.ReadFile(filepath.Join(dir, "calls"))
+	if !strings.Contains(string(calls), "validate --adapter caddyfile --config") {
+		t.Fatalf("caddy was called as %q", calls)
+	}
+	// Accepted: the new file is in place and the old one is kept as .bak.
+	if out, err := run("billing.example.co.ke"); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	if b, _ := os.ReadFile(dest); !strings.Contains(string(b), "billing.example.co.ke {") {
+		t.Fatalf("new Caddyfile not in place: %s", b)
+	}
+	if b, _ := os.ReadFile(dest + ".bak"); string(b) != "OLD CADDYFILE\n" {
+		t.Fatalf(".bak: %q", b)
+	}
+	if m, _ := filepath.Glob(dest + ".new.*"); len(m) != 0 {
+		t.Fatalf("temporary file left: %v", m)
+	}
+}
+
+// With CADDY_BIN set (CI installs the real Caddy), the Caddyfile install.sh renders for a domain, with and without
+// the M-Pesa source filter, must pass `caddy validate`.
+func TestInstallCaddyfileValidatesWithRealCaddy(t *testing.T) {
+	bashOrSkip(t)
+	bin := os.Getenv("CADDY_BIN")
+	if bin == "" {
+		t.Skip("set CADDY_BIN to a caddy binary to validate the rendered Caddyfile")
+	}
+	for name, env := range map[string]string{"domain": "DOMAIN=billing.example.co.ke", "domain+filter": "DOMAIN=billing.example.co.ke CADDY_MPESA_IPS='196.201.214.200 196.201.214.0/24'", "no domain": "DOMAIN="} {
+		script := "set -e\ndie() { echo \"$*\" >&2; exit 1; }\n" + fnSrc(t, "render_caddyfile") + "\n" + fnSrc(t, "caddy_vars") + "\n" + env + "\nexport DOMAIN\ncaddy_vars; render_caddyfile\n"
+		out, err := exec.Command("bash", "-c", script).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v %s", name, err, out)
+		}
+		f := filepath.Join(t.TempDir(), "Caddyfile")
+		os.WriteFile(f, out, 0o644)
+		if v, err := exec.Command(bin, "validate", "--adapter", "caddyfile", "--config", f).CombinedOutput(); err != nil {
+			t.Errorf("%s: caddy refused the Caddyfile: %v\n%s\n%s", name, err, v, out)
+		}
 	}
 }
