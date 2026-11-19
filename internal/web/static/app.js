@@ -121,6 +121,20 @@
     if (m && !window.confirm(m)) e.preventDefault();
   }, true);
 
+  /* Changing the OLT port or the VLAN of a router that is set up cuts the customers off until the OLT uses
+     the new setting: ask before the form is sent, and send confirm=1. */
+  doc.addEventListener("submit", function (e) {
+    var f = e.target;
+    if (!f.hasAttribute || !f.hasAttribute("data-plumb") || f.__plumbOK) return;
+    var olt = $("input[name=olt]", f), vlan = $("input[name=vlan]", f), ok = $("input[name=confirm]", f);
+    if (!olt || !vlan || !ok) return;
+    if (olt.value.trim() === f.getAttribute("data-olt") && String(parseInt(vlan.value || "0", 10) || 0) === f.getAttribute("data-vlan")) return;
+    e.preventDefault();
+    ask("Change the OLT setting?", "Customers on the OLT lose service until the OLT uses the new setting. The server moves the port and the VLAN on the router by itself as soon as you confirm.", "Change it").then(function (yes) {
+      if (!yes) return; ok.value = "1"; f.__plumbOK = true; f.submit();
+    });
+  }, true);
+
   /* A dialog that shows what a fix will do and asks for a yes. */
   function ask(title, text, yes) {
     return new Promise(function (resolve) {

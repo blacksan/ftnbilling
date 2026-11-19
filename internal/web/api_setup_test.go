@@ -278,3 +278,53 @@ func TestAPIPortFieldsAreValidatedAndReportedPerField(t *testing.T) {
 		t.Fatalf("a refused save changed the router: %+v", st)
 	}
 }
+
+func TestAPIOLTChangeNeedsConfirmOnASetUpRouterAndPauseIsOwnerOnly(t *testing.T) {
+	r := newAPIRig(t)
+	c := r.call(r.owner.Access, "POST", "/routers", map[string]any{"name": "Plumb", "olt_interface": "sfp-sfpplus1"}, nil)
+	if c.Status != 201 {
+		t.Fatalf("%d %s", c.Status, c.Raw)
+	}
+	id := str(c.JSON(t)["router"].(map[string]any), "id")
+	// not set up yet: free to change
+	if p := r.call(r.owner.Access, "PATCH", "/routers/"+id, map[string]any{"olt_interface": "ether3"}, nil); p.Status != 200 {
+		t.Fatalf("unjoined: %d %s", p.Status, p.Raw)
+	}
+	r.st.Update(func(d *store.Data) error {
+		x := d.Sites[id]
+		x.WGPublicKey = "KEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEYKEY0="
+		d.Sites[id] = x
+		return nil
+	})
+	p := r.call(r.owner.Access, "PATCH", "/routers/"+id, map[string]any{"olt_interface": "ether4"}, nil)
+	if p.Status != 409 || p.JSON(t)["error"].(map[string]any)["code"] != "confirm_required" {
+		t.Fatalf("%d %s", p.Status, p.Raw)
+	}
+	if p := r.call(r.owner.Access, "PATCH", "/routers/"+id, map[string]any{"vlan_id": 300}, nil); p.Status != 409 {
+		t.Fatalf("vlan: %d %s", p.Status, p.Raw)
+	}
+	if p := r.call(r.owner.Access, "PATCH", "/routers/"+id, map[string]any{"bench_port": "ether5", "support_phone": "0700"}, nil); p.Status != 200 {
+		t.Fatalf("a customer port needs no confirm: %d %s", p.Status, p.Raw)
+	}
+	if p := r.call(r.owner.Access, "PATCH", "/routers/"+id, map[string]any{"olt_interface": "ether4", "confirm": true}, nil); p.Status != 200 {
+		t.Fatalf("confirmed: %d %s", p.Status, p.Raw)
+	}
+	// pausing the automatic fixes: owner only, recorded, shown on the router
+	if x := r.call(r.oper.Access, "POST", "/routers/"+id+"/actions/pause-auto-fixes", map[string]any{"paused": true}, nil); x.Status != 403 {
+		t.Fatalf("operator: %d", x.Status)
+	}
+	x := r.call(r.owner.Access, "POST", "/routers/"+id+"/actions/pause-auto-fixes", map[string]any{"paused": true}, nil)
+	if x.Status != 200 || x.JSON(t)["paused"] != true {
+		t.Fatalf("%d %s", x.Status, x.Raw)
+	}
+	g := r.call(r.owner.Access, "GET", "/routers/"+id, nil, nil)
+	if af, _ := g.JSON(t)["auto_fixes"].(map[string]any); af["paused"] != true {
+		t.Fatalf("%s", g.Raw)
+	}
+	if x := r.call(r.owner.Access, "POST", "/routers/"+id+"/actions/pause-auto-fixes", map[string]any{"paused": true, "until": "2020-01-01T00:00:00Z"}, nil); x.Status != 400 && x.Status != 422 {
+		t.Fatalf("past: %d %s", x.Status, x.Raw)
+	}
+	if x := r.call(r.owner.Access, "POST", "/routers/"+id+"/actions/pause-auto-fixes", map[string]any{"paused": false}, nil); x.Status != 200 || x.JSON(t)["paused"] == true {
+		t.Fatalf("%d %s", x.Status, x.Raw)
+	}
+}
