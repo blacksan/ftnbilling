@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -63,7 +64,7 @@ func (c *REST) SetRow(ctx context.Context, path, id string, diff map[string]stri
 		return nil
 	}
 	p := rowsPath(path)
-	err := c.do(ctx, http.MethodPatch, p+"/"+url.PathEscape(id), nil, diff, nil)
+	err := c.do(ctx, http.MethodPatch, p+"/"+idPath(id), nil, diff, nil)
 	if err == nil {
 		return nil
 	}
@@ -95,11 +96,41 @@ func SameValue(key, cur, want string) bool {
 }
 
 // RemoveRow deletes one row (DELETE); a row that is already gone is fine.
+// If RouterOS refuses the DELETE for any reason other than "gone", the
+// console-style POST <path>/remove is tried once, as SetRow does with /set.
 func (c *REST) RemoveRow(ctx context.Context, path, id string) error {
-	err := c.do(ctx, http.MethodDelete, rowsPath(path)+"/"+url.PathEscape(id), nil, nil, nil)
+	p := rowsPath(path)
+	err := c.do(ctx, http.MethodDelete, p+"/"+idPath(id), nil, nil, nil)
+	if err == nil {
+		return nil
+	}
 	var ae *APIError
 	if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
 		return nil
 	}
-	return err
+	if !errors.As(err, &ae) {
+		return err // the request may not have reached the router; the caller retries
+	}
+	err2 := c.do(ctx, http.MethodPost, p+"/remove", nil, map[string]string{RowID: id}, nil)
+	if err2 == nil {
+		return nil
+	}
+	if errors.As(err2, &ae) && ae.Status == http.StatusNotFound {
+		return nil
+	}
+	return fmt.Errorf("%v; fallback remove: %w", err, err2)
+}
+
+// rowIDRe is a RouterOS internal item id: "*" followed by hex digits.
+var rowIDRe = regexp.MustCompile(`^\*[0-9A-Fa-f]+$`)
+
+// idPath is a row id as a URL path segment. RouterOS 7.25 does not decode
+// "%2A", so "*2" escaped by url.PathEscape is answered with "missing or
+// invalid resource identifier". A real id ("*" and hex) is safe as it is;
+// anything else is escaped.
+func idPath(id string) string {
+	if rowIDRe.MatchString(id) {
+		return id
+	}
+	return url.PathEscape(id)
 }

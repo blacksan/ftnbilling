@@ -38,6 +38,7 @@ func TestRESTAuthAndErrors(t *testing.T) {
 	}
 }
 
+// RouterOS 7.25 rejects "%2A1A" (it does not decode %2A), so an item id goes on the wire as is.
 func TestEscapedID(t *testing.T) {
 	var raw string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +48,7 @@ func TestEscapedID(t *testing.T) {
 	if err := NewREST(srv.URL, "u", "p").RemoveRow(context.Background(), "/ip/dhcp-server/lease", "*1A"); err != nil {
 		t.Fatal(err)
 	}
-	if raw != "/rest/ip/dhcp-server/lease/%2A1A" {
+	if raw != "/rest/ip/dhcp-server/lease/*1A" {
 		t.Fatalf("path %q", raw)
 	}
 }
