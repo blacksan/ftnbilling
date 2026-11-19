@@ -281,6 +281,31 @@ if have caddy && [ -r /etc/caddy/Caddyfile ]; then
   if caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then pass "Caddyfile valid" ""; else fail "Caddyfile valid" "caddy validate failed"; fi
 fi
 
+# ------------------------------------------------------------------ remote WebFig
+WFDOM=$(envval WEBFIG_DOMAIN)
+if [ -n "$WFDOM" ]; then
+  section "Remote WebFig"
+  WFLISTEN=$(envval WEBFIG_LISTEN); WFLISTEN=${WFLISTEN:-127.0.0.1:8082}
+  WFPORT=${WFLISTEN##*:}
+  if listening tcp "$WFPORT"; then pass "WebFig listener" "$WFLISTEN"; else fail "WebFig listener" "nothing listens on $WFLISTEN (journalctl -u $APP -n 30; restart $APP)"; fi
+  case "$WFLISTEN" in 127.*|"[::1]"*|localhost:*) ;; *) fail "WebFig listener address" "$WFLISTEN is not loopback: only Caddy may reach it" ;; esac
+  if [ -r /etc/caddy/Caddyfile ] && grep -q "^$WFDOM {" /etc/caddy/Caddyfile; then pass "WebFig Caddy site" "$WFDOM"; else fail "WebFig Caddy site" "no site block for $WFDOM in /etc/caddy/Caddyfile (re-run the installer with WEBFIG_DOMAIN=$WFDOM)"; fi
+  wfip=$(getent ahostsv4 "$WFDOM" 2>/dev/null | awk 'NR==1{print $1}')
+  pubip=$(envval PUBLIC_IP)
+  if [ -z "$wfip" ]; then fail "WebFig DNS" "$WFDOM does not resolve: add an A record for it to ${pubip:-this server}"
+  elif [ -n "$pubip" ] && [ "$wfip" != "$pubip" ]; then warn "WebFig DNS" "$WFDOM points to $wfip, this server is $pubip"
+  else pass "WebFig DNS" "$WFDOM -> $wfip"; fi
+  if have curl; then
+    wurl=${FTN_WEBFIG_URL:-https://$WFDOM/_ftn/open}
+    code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$wurl" 2>/dev/null || true)
+    case "$code" in
+      403) pass "WebFig over https" "$wurl answers (no ticket: 403, as expected)" ;;
+      ""|000) fail "WebFig over https" "no answer from $wurl (DNS, certificate or Caddy?)" ;;
+      *) fail "WebFig over https" "$wurl answers HTTP $code, expected 403" ;;
+    esac
+  fi
+fi
+
 # ------------------------------------------------------------------ wireguard
 section "WireGuard"
 if have wg; then
@@ -320,6 +345,9 @@ if have ufw; then
       printf '%s' "$st" | grep -Eq "^$r +ALLOW" && pass "ufw allow $r" "" || fail "ufw allow $r" "rule missing"
     done
     if printf '%s' "$st" | grep -Eq '^8080(/tcp)? +ALLOW +Anywhere'; then fail "ufw :8080 public" "port 8080 is open to everyone"; else pass "ufw :8080 public" "not open to the internet"; fi
+    if [ -n "$(envval WEBFIG_DOMAIN)" ]; then
+      if printf '%s' "$st" | grep -Eq '^8082(/tcp)? +ALLOW +Anywhere'; then fail "ufw :8082 public" "port 8082 (WebFig) is open to everyone"; else pass "ufw :8082 public" "not open to the internet"; fi
+    fi
     if [ -f "$MGMT_CONF" ]; then
       printf '%s' "$st" | grep -Eq "^$MGMT_PORT/udp +ALLOW" && pass "ufw allow $MGMT_PORT/udp" "remote WinBox" || fail "ufw allow $MGMT_PORT/udp" "rule missing: devices cannot connect (re-run the installer)"
     fi

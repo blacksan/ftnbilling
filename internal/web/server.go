@@ -71,6 +71,8 @@ type Server struct {
 	refreshRL *limiter    // /api/v1/auth/refresh by client address
 	reboots   rebootGuard // one router reboot per 10 minutes per router (api_live.go)
 
+	wf webfigState
+
 	onlineMu sync.Mutex
 	online   map[string]onlineEntry
 }
@@ -87,6 +89,7 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 	if p, err := netip.ParsePrefix(cfg.WGSubnet); err == nil {
 		s.wgNet = p.Masked()
 	}
+	s.initWebFig()
 	a, err := authn.New(st, cfg.DataKey, cfg.BrandName)
 	if err != nil {
 		log.Error("sign-in: DATA_KEY unusable, two-factor sign-in cannot be set up", "err", err)

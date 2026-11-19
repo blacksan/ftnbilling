@@ -213,6 +213,11 @@ data class Site(
     @SerialName("tunnel_address") val tunnelAddress: String = "",
     /** True only when the router reported being built with remote WinBox for the current management subnet. */
     @SerialName("mgmt_winbox") val mgmtWinbox: Boolean = false,
+    /**
+     * The admin's own page for opening this router's WebFig through the server (owners only; the page asks for
+     * the password and authenticator code again). Empty when remote WebFig is off on the server or the router has no tunnel.
+     */
+    @SerialName("webfig_url") val webfigUrl: String = "",
     @SerialName("olt_interface") val oltInterface: String = "",
     @SerialName("vlan_id") val vlanId: Int = 0,
     @SerialName("customer_subnet") val customerSubnet: String = "",

@@ -505,3 +505,116 @@ func TestInstallShipsWipeTool(t *testing.T) {
 		t.Errorf("deploy/ftnbilling-wipe must exist and be executable: %v", err)
 	}
 }
+
+// webfigRun runs webfig_settings (and what it prints) with the given environment lines.
+func webfigRun(t *testing.T, envfile string, env []string, tail string) (string, error) {
+	t.Helper()
+	script := "set -e\nDRY=0; ENVF=\"$1\"\nWEBFIG_PORT=8082\ndie() { echo \"DIE: $*\"; exit 1; }\n" +
+		"eval \"$(sed -n '/^envget()/p' install.sh)\"\n" + fnSrc(t, "webfig_settings") + "\n" + fnSrc(t, "render_webfig_block") + "\n" +
+		"webfig_settings\n" + tail + "\n"
+	cmd := exec.Command("bash", "-c", script, "bash", envfile)
+	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH")}, env...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func TestInstallWebFigSetting(t *testing.T) {
+	bashOrSkip(t)
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "none.env")
+	// off by default: no block, nothing written for it
+	out, err := webfigRun(t, missing, []string{"DOMAIN=isp.ftw.co.ke"}, `echo "dom=[$WEBFIG_DOMAIN] off=$WEBFIG_OFF"; render_webfig_block`)
+	if err != nil || strings.TrimSpace(out) != "dom=[] off=0" {
+		t.Fatalf("default: %v %q", err, out)
+	}
+	// on: its own site with its own certificate (a site address of its own) to the loopback port
+	out, err = webfigRun(t, missing, []string{"DOMAIN=isp.ftw.co.ke", "WEBFIG_DOMAIN=Tech.FTW.co.ke"}, `echo "dom=[$WEBFIG_DOMAIN]"; render_webfig_block`)
+	if err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	for _, want := range []string{"dom=[tech.ftw.co.ke]", "\ntech.ftw.co.ke {", "reverse_proxy 127.0.0.1:8082 {", "flush_interval -1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("block lacks %q:\n%s", want, out)
+		}
+	}
+	// kept from an earlier install when a later run leaves it out; "off" switches it off
+	envf := filepath.Join(dir, "ftnbilling.env")
+	os.WriteFile(envf, []byte("PUBLIC_BASE_URL=https://isp.ftw.co.ke\nWEBFIG_DOMAIN=tech.ftw.co.ke\n"), 0o600)
+	out, err = webfigRun(t, envf, nil, `echo "dom=[$WEBFIG_DOMAIN]"`)
+	if err != nil || strings.TrimSpace(out) != "dom=[tech.ftw.co.ke]" {
+		t.Fatalf("kept: %v %q", err, out)
+	}
+	out, err = webfigRun(t, envf, []string{"WEBFIG_DOMAIN=off"}, `echo "dom=[$WEBFIG_DOMAIN] off=$WEBFIG_OFF"; render_webfig_block`)
+	if err != nil || strings.TrimSpace(out) != "dom=[] off=1" {
+		t.Fatalf("off: %v %q", err, out)
+	}
+	// refused: not a host name, an address, the admin's own name, no DOMAIN to pair it with
+	for _, c := range []struct {
+		env  []string
+		want string
+	}{
+		{[]string{"DOMAIN=isp.ftw.co.ke", "WEBFIG_DOMAIN=tech"}, "must be a host name"},
+		{[]string{"DOMAIN=isp.ftw.co.ke", "WEBFIG_DOMAIN=tech_x.ftw.co.ke"}, "must be a host name"},
+		{[]string{"DOMAIN=isp.ftw.co.ke", "WEBFIG_DOMAIN=-a.ftw.co.ke"}, "must be a host name"},
+		{[]string{"DOMAIN=isp.ftw.co.ke", "WEBFIG_DOMAIN=162.35.47.106"}, "not an IP"},
+		{[]string{"DOMAIN=isp.ftw.co.ke", "WEBFIG_DOMAIN=isp.ftw.co.ke"}, "must differ from DOMAIN"},
+		{[]string{"WEBFIG_DOMAIN=tech.ftw.co.ke"}, "needs DOMAIN"},
+		{[]string{"DOMAIN=isp.ftw.co.ke", "WEBFIG_DOMAIN=tech.ftw.co.ke}\nevil {"}, "must be a host name"},
+	} {
+		out, err = webfigRun(t, missing, c.env, "")
+		if err == nil || !strings.Contains(out, c.want) {
+			t.Errorf("%v: want failure %q, got %v %q", c.env, c.want, err, out)
+		}
+	}
+}
+
+func TestInstallCaddyfileWithWebFig(t *testing.T) {
+	bashOrSkip(t)
+	render := func(webfig string) string {
+		script := "set -e\nWEBFIG_PORT=8082; WEBFIG_DOMAIN=\"$1\"\n" + fnSrc(t, "render_webfig_block") + "\n" + fnSrc(t, "render_caddyfile") +
+			"\nCF_SITE=isp.ftw.co.ke; CF_CB=''; CF_CATCHALL='http:// {\n\tredir https://isp.ftw.co.ke/pay 302\n}'\nrender_caddyfile\n"
+		out, err := exec.Command("bash", "-c", script, "bash", webfig).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+		return string(out)
+	}
+	off, on := render(""), render("tech.ftw.co.ke")
+	if strings.Contains(off, "8082") || strings.Contains(off, "tech") || strings.Contains(off, "flush_interval") {
+		t.Errorf("a server without WEBFIG_DOMAIN gets WebFig config:\n%s", off)
+	}
+	if !strings.HasPrefix(on, strings.TrimRight(off, "\n")) {
+		t.Errorf("turning WebFig on changed the main site:\n--- off\n%s\n--- on\n%s", off, on)
+	}
+	if strings.Count(on, "reverse_proxy 127.0.0.1:8080") != 1 || !strings.Contains(on, "tech.ftw.co.ke {") || !strings.Contains(on, "reverse_proxy 127.0.0.1:8082") {
+		t.Errorf("Caddyfile with WebFig:\n%s", on)
+	}
+	if site := on[strings.Index(on, "tech.ftw.co.ke {"):]; strings.Contains(site, "header_up") || strings.Contains(site, "trusted_proxies") {
+		t.Errorf("the WebFig site must not touch X-Forwarded-For handling:\n%s", on)
+	}
+}
+
+func TestInstallWebFigWiring(t *testing.T) {
+	bashOrSkip(t)
+	src, _ := os.ReadFile("install.sh")
+	for _, want := range []string{"webfig_settings\n  local ID", `setkv WEBFIG_DOMAIN "$WEBFIG_DOMAIN"`, `setkv WEBFIG_LISTEN "127.0.0.1:$WEBFIG_PORT"`, "$CF_CATCHALL$(render_webfig_block)"} {
+		if !strings.Contains(string(src), want) {
+			t.Errorf("install.sh lacks %q", want)
+		}
+	}
+	// ufw is not touched by the setting
+	if i := strings.Index(string(src), "ufw allow"); i >= 0 && strings.Contains(string(src)[i:i+200], "WEBFIG") {
+		t.Error("the installer opens a firewall port for WebFig")
+	}
+	// a dry run with the setting works and a bad one stops early
+	cmd := exec.Command("bash", "install.sh")
+	cmd.Env = append(os.Environ(), "DRY_RUN=1", "DOMAIN=isp.example.co.ke", "WEBFIG_DOMAIN=tech.example.co.ke", "PUBLIC_IP=203.0.113.7")
+	if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "write /etc/caddy/Caddyfile") {
+		t.Fatalf("dry run with WEBFIG_DOMAIN: %v\n%s", err, out)
+	}
+	cmd = exec.Command("bash", "install.sh")
+	cmd.Env = append(os.Environ(), "DRY_RUN=1", "DOMAIN=isp.example.co.ke", "WEBFIG_DOMAIN=isp.example.co.ke", "PUBLIC_IP=203.0.113.7")
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "must differ from DOMAIN") {
+		t.Fatalf("same host accepted: %v\n%s", err, out)
+	}
+}

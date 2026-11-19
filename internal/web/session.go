@@ -261,6 +261,8 @@ func (s *Server) minRole(method, path string) string {
 		path = "/admin/sites" + rest // D8: the new address has the old rules
 	}
 	switch {
+	case strings.HasPrefix(path, "/admin/sites/webfig"):
+		return store.RoleOwner // remote WebFig: owners only, read or write
 	case strings.HasPrefix(path, "/admin/security/users"):
 		return store.RoleOwner
 	case strings.HasPrefix(path, "/admin/security"):

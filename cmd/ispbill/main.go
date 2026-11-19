@@ -169,8 +169,25 @@ func run(log *slog.Logger) error {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	errc := make(chan error, 1)
+	errc := make(chan error, 2)
 	go func() { errc <- srv.ListenAndServe() }()
+
+	// Remote WebFig (WEBFIG_DOMAIN): its own loopback listener behind the reverse proxy.
+	var wfSrv *http.Server
+	if h := webSrv.WebFigHandler(); h != nil {
+		wfSrv = &http.Server{
+			Addr:              cfg.WebFigListen,
+			Handler:           h,
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       2 * time.Minute,
+			// No read or write timeout: WebFig uploads and long requests run as long
+			// as the session; the proxy ends them at the session's deadline.
+		}
+		log.Info("remote WebFig on", "domain", cfg.WebFigDomain, "listen", cfg.WebFigListen)
+		go func() { errc <- wfSrv.ListenAndServe() }()
+		wg.Add(1)
+		go func() { defer wg.Done(); webSrv.RunWebFig(ctx) }()
+	}
 
 	select {
 	case err := <-errc:
@@ -184,6 +201,9 @@ func run(log *slog.Logger) error {
 	log.Info("shutting down")
 	shCtx, shCancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer shCancel()
+	if wfSrv != nil {
+		_ = wfSrv.Shutdown(shCtx)
+	}
 	err = srv.Shutdown(shCtx)
 	wg.Wait()
 	mgr.Wait()

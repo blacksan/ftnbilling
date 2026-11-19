@@ -20,6 +20,7 @@
 <dt>Tunnel</dt><dd>{{if .Data.Status.Handshake}}up, last handshake {{.Data.Status.HandshakeAge}} s ago{{else if .Data.Status.WGKnown}}no handshake{{else}}unknown{{end}}</dd>
 {{if $s.TunnelIP}}<dt>Tunnel address</dt><dd class="mono">{{$s.TunnelIP}}</dd>
 <dt>Remote WinBox</dt>{{if .Data.MgmtWinbox}}<dd>Connect your management WireGuard profile, then open WinBox to <span class="mono">{{$s.TunnelIP}}</span> <span class="muted">(router login; set up a device with sudo ftnbilling-mgmt add)</span></dd>{{else}}<dd class="muted">Built without remote WinBox: reset the router and paste a new line to add it.</dd>{{end}}{{end}}
+{{with .Data.WF}}{{if .On}}<dt>WebFig</dt><dd><form method="post" action="/admin/routers/webfig" class="row"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button class="ghost sm">Open WebFig</button></form> <span class="muted">Opens through the server on its own address. Asks for your password and code again.</span></dd>{{end}}{{end}}
 <dt>Payment page</dt><dd class="mono" style="word-break:break-all">{{.Data.Portal}}</dd>
 {{if $X.Model}}<dt>Hardware</dt><dd>{{$X.Model}} <span class="muted">RouterOS {{$X.Version}}{{if $X.Temp}}, {{$X.Temp}}{{end}}</span></dd>{{end}}
 <dt>Equipment</dt><dd>{{$X.Equip}}</dd>
@@ -31,6 +32,13 @@
 <dt>Revenue this month</dt><dd>{{kes .ThisMonth}} <span class="muted">last month {{kes .LastMonth}}</span></dd>
 <dt>Equipment</dt><dd>{{index .ByStatus "installed"}} installed <span class="muted">{{index .ByStatus "in_stock"}} in stock, {{index .ByStatus "faulty"}} faulty</span></dd></dl></section>{{end}}
 </div>
+{{with .Data.WF}}{{if .On}}<section class="panel" data-webfig><div class="panel-h"><h2>WebFig access</h2></div>
+{{if .Sessions}}<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr><th>Who</th><th>From</th><th>Opened</th><th>Ends by</th><th></th></tr></thead><tbody>
+{{range .Sessions}}<tr><td data-label="Who">{{.User}}</td><td class="mono" data-label="From">{{.IP}}</td><td data-label="Opened">{{eat .Started}}</td><td data-label="Ends by">{{eat .Expires}}</td>
+<td><form method="post" action="/admin/routers/webfig/end"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="sid" value="{{.ID}}"><button class="ghost sm">End</button></form></td></tr>{{end}}</tbody></table></div>
+{{else}}<p class="muted">No WebFig session is open on this router.</p>{{end}}
+{{if .Activity}}<h3>Recent activity</h3><ul class="checks">{{range .Activity}}<li><span class="muted">{{eat .Time}}</span> {{.Msg}} <span class="muted">{{.Actor}}{{if .IP}} from {{.IP}}{{end}}</span></li>{{end}}</ul>{{end}}
+<p class="muted">A session belongs to one browser and one router. It ends after 30 minutes without use, or 2 hours after it opened.</p></section>{{end}}{{end}}
 {{with .Data.Rep}}<section class="panel"><h2>Revenue by month</h2>{{if .Months}}<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr><th>Month</th><th class="n">Payments</th><th class="n">KES</th></tr></thead><tbody>{{range .Months}}<tr><td data-label="Month">{{.Month}}</td><td class="n" data-label="Payments">{{.Payments}}</td><td class="n" data-label="KES">{{.KES}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No payments through this router yet.</p>{{end}}</section>{{end}}
 </div>
 

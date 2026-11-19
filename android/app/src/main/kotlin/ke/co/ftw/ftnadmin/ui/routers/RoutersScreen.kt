@@ -24,6 +24,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -203,6 +209,7 @@ fun RouterDetailScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     item { SiteSummary(s.value) }
+                    webfigLaunchUrl(s.value.webfigUrl, user.isOwner)?.let { url -> item { OpenWebFigCard(url) } }
                     item { SetupStepsCard(setupUi, onRetry = setupVm::retry, onChecks = { onChecks(id) }) }
                     item { BootstrapLineCard(setupUi, user.isOwner, onGet = setupVm::getLine, onHide = setupVm::hideLine) }
                     item { Button(onClick = { onNewDevices(id) }, modifier = Modifier.fillMaxWidth()) { Text("New devices on this router") } }
@@ -244,6 +251,39 @@ internal fun winboxNotice(tunnelAddress: String, mgmtWinbox: Boolean): String? =
     tunnelAddress.isBlank() -> null
     mgmtWinbox -> "Remote WinBox: connect your management WireGuard profile, then open WinBox to $tunnelAddress"
     else -> "No report that this router has remote WinBox. If it was set up before remote WinBox existed, reset it and paste a new line."
+}
+
+/**
+ * The address to open in the system browser for "Open WebFig", or null: only owners get the button, and only for
+ * an https address (the server sends its own admin page; anything else is never opened).
+ */
+internal fun webfigLaunchUrl(webfigUrl: String, isOwner: Boolean): String? =
+    webfigUrl.takeIf { isOwner && it.startsWith("https://") }
+
+@Composable
+private fun OpenWebFigCard(url: String) {
+    val context = LocalContext.current
+    var failed by remember { mutableStateOf(false) }
+    SectionCard("WebFig") {
+        Text(
+            "Opens the router's own web page through the server, in your browser. The browser asks for your password and authenticator code again.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Button(
+            onClick = {
+                val open = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)
+                failed = try {
+                    context.startActivity(open)
+                    false
+                } catch (_: ActivityNotFoundException) {
+                    true
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Open WebFig") }
+        if (failed) Text("No browser app was found on this phone.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+    }
 }
 
 @Composable

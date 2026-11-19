@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +27,12 @@ type Config struct {
 	AdminPass         string
 	PublicBaseURL     string
 	SupportPhone      string
+
+	// WebFigDomain (WEBFIG_DOMAIN) turns on remote WebFig access: the host name
+	// served by a second listener (WebFigListen, loopback only) that the
+	// reverse proxy sends to the app. Empty = the feature is off.
+	WebFigDomain string
+	WebFigListen string
 
 	// PublicIP is the VPS address the routers reach (the walled flats' payment
 	// page and the WireGuard endpoint).
@@ -168,6 +175,18 @@ func Load(getenv func(string) string) (Config, error) {
 	c.FUPTB = num("FUP_TB", 15)
 	c.OLTCapacityMbps = num("OLT_CAPACITY_MBPS", 10000)
 	c.NetflowAddr = get("NETFLOW_ADDR", ":2055")
+	c.WebFigDomain = strings.ToLower(get("WEBFIG_DOMAIN", ""))
+	c.WebFigListen = get("WEBFIG_LISTEN", "127.0.0.1:8082")
+	if c.WebFigDomain != "" {
+		if err := checkWebFigDomain(c.WebFigDomain, c.PublicBaseURL); err != nil {
+			errs = append(errs, err)
+		}
+		if h, _, err := net.SplitHostPort(c.WebFigListen); err != nil {
+			errs = append(errs, errors.New("WEBFIG_LISTEN must be host:port, e.g. 127.0.0.1:8082"))
+		} else if ip, err := netip.ParseAddr(h); err != nil || !ip.IsLoopback() {
+			errs = append(errs, errors.New("WEBFIG_LISTEN must be a loopback address (127.0.0.1:8082): only the reverse proxy may reach it"))
+		}
+	}
 	c.WGPublicKey = get("WG_PUBLIC_KEY", "")
 	c.WGEndpoint = get("WG_ENDPOINT", "")
 	if c.WGEndpoint == "" && c.PublicIP != "" {
@@ -360,4 +379,31 @@ func parseBool(s string) bool {
 		return true
 	}
 	return false
+}
+
+// checkWebFigDomain: a plain DNS name (not an address), different from the
+// admin's own host, so the two never share cookies.
+func checkWebFigDomain(d, base string) error {
+	if len(d) > 253 || !strings.Contains(d, ".") {
+		return errors.New("WEBFIG_DOMAIN must be a full host name such as tech.example.co.ke")
+	}
+	if _, err := netip.ParseAddr(d); err == nil {
+		return errors.New("WEBFIG_DOMAIN must be a host name, not an IP address")
+	}
+	for _, lab := range strings.Split(d, ".") {
+		if lab == "" || len(lab) > 63 || lab[0] == '-' || lab[len(lab)-1] == '-' {
+			return errors.New("WEBFIG_DOMAIN is not a valid host name")
+		}
+		for _, c := range lab {
+			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+				return errors.New("WEBFIG_DOMAIN is not a valid host name (letters, digits, dots and hyphens only)")
+			}
+		}
+	}
+	if base != "" {
+		if u, err := url.Parse(base); err == nil && strings.EqualFold(u.Hostname(), d) {
+			return errors.New("WEBFIG_DOMAIN must differ from the admin's host name (PUBLIC_BASE_URL): WebFig needs its own origin")
+		}
+	}
+	return nil
 }

@@ -34,6 +34,7 @@ func (s *Server) siteRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/sites/disable", s.adminSiteDisable)
 	post("/admin/sites/remove", s.adminSiteRemove)
 	post("/admin/sites/reboot", s.adminSiteReboot)
+	s.webfigRoutes(get, post)
 	s.deviceRoutes(get, post)
 }
 

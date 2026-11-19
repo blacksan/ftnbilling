@@ -136,7 +136,7 @@ func (s *Server) siteJSON(st store.Site, h siteHealth, cnt *siteCounts) map[stri
 		"id": st.ID, "name": st.Name, "access_mode": accessMode(st), "online": h.online, "cause": h.cause,
 		"wan_mode": st.WANMode, "wan_address": st.WANAddress, "wan_gateway": st.WANGateway, "wan_dns": st.WANDNS,
 		"pppoe_user": st.PPPoEUser, "pppoe_pass_set": st.PPPoEPassEnc != "", "lan_ports": st.LANPorts, "lan_subnet": st.LANSubnet,
-		"tunnel_address": st.TunnelIP, "mgmt_winbox": s.mgr.MgmtWinbox(st.ID),
+		"tunnel_address": st.TunnelIP, "mgmt_winbox": s.mgr.MgmtWinbox(st.ID), "webfig_url": s.webfigAdminURL(st),
 		"tunnel":      map[string]any{"handshake_age_s": h.handshake},
 		"accounts":    map[string]any{"total": cnt.Total, "active": cnt.Active, "expired": cnt.Expired, "suspended": cnt.Suspended},
 		"open_alerts": alertsOpen,

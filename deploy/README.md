@@ -49,7 +49,7 @@ To preview without changing anything: `DRY_RUN=1` (works without root and prints
 curl -fsSL -H "Authorization: Bearer $GH" https://raw.githubusercontent.com/blacksan/ftnbilling/main/deploy/install.sh | DRY_RUN=1 bash
 ```
 
-Options (environment variables): `DOMAIN`, `GH_TOKEN`, `VERSION` (a release tag; default is the latest release), `FROM_SOURCE=1` (build on the server instead of using a release), `NO_POSTGRES=1`, `NO_FIREWALL=1`, `DRY_RUN=1`, `PUBLIC_IP`, `ADMIN_PASS`, `BRAND_NAME`, `SUPPORT_PHONE`, `WG_PORT`, `WG_SUBNET`, `MGMT_PORT` (UDP, default 51821) and `MGMT_SUBNET` (default `10.98.0.0/24`) for remote WinBox, `SWAP_MB`. The header of `install.sh` lists them.
+Options (environment variables): `DOMAIN`, `GH_TOKEN`, `VERSION` (a release tag; default is the latest release), `FROM_SOURCE=1` (build on the server instead of using a release), `NO_POSTGRES=1`, `NO_FIREWALL=1`, `DRY_RUN=1`, `PUBLIC_IP`, `ADMIN_PASS`, `BRAND_NAME`, `SUPPORT_PHONE`, `WG_PORT`, `WG_SUBNET`, `MGMT_PORT` (UDP, default 51821) and `MGMT_SUBNET` (default `10.98.0.0/24`) for remote WinBox, `WEBFIG_DOMAIN` for remote WebFig (below), `SWAP_MB`. The header of `install.sh` lists them.
 
 ### Where the program comes from
 
@@ -148,6 +148,40 @@ If the line fails with a certificate error, correct the router's clock; the page
 To rebuild a router, press **Reset router** and paste the new line (the line erases the router first; running the set-up script a second time on a built router is refused). The router is never open while it builds: before any WAN connection exists the script puts a firewall hold at the top of the filter that drops new and invalid traffic from the WAN, the WAN connection is created switched off and is switched on only after the full rule set is in, and the hold is removed last. If the script stops on an error the hold stays and the WAN is switched on behind it so the failure report can reach the server. **Reset router** on the Setup tab (owner only, the router name typed to confirm) makes the server forget the router's keys and join state, so a new line can be made. It does not touch the router.
 
 A router that is "paused" in the admin gets no collection and no router changes, and tenants cannot buy there.
+
+## Remote WebFig
+
+Open a router's WebFig (its own web page) from the admin, through this server, from anywhere on the internet. The router's web page is never opened on its WAN: it still answers only the admin LAN and this server's tunnel address, and the server reaches it over the WireGuard tunnel.
+
+### Turn it on
+
+1. DNS: an `A` record for the WebFig host name to this server's public IP, like the one for `DOMAIN`. For this server: `tech.ftw.co.ke` -> `162.35.47.106` (the same address as `isp.ftw.co.ke`). The owner created this record; the installer does not check it, `sudo ftnbilling-doctor` does afterwards.
+2. Run the installer again with the setting (the same line you installed with, plus `WEBFIG_DOMAIN`):
+
+```bash
+GH=github_pat_xxx; curl -fsSL -H "Authorization: Bearer $GH" https://raw.githubusercontent.com/blacksan/ftnbilling/main/deploy/install.sh | sudo GH_TOKEN=$GH DOMAIN=isp.ftw.co.ke WEBFIG_DOMAIN=tech.ftw.co.ke bash
+```
+
+It writes `WEBFIG_DOMAIN` and `WEBFIG_LISTEN=127.0.0.1:8082` in `/etc/ftnbilling/ftnbilling.env`, adds a second Caddy site for the WebFig host with its own certificate (issued on first use; the DNS record must already exist), and restarts the app, which then listens on `127.0.0.1:8082` for it. Nothing else changes: ufw is untouched (443 is already open; 8082 is loopback only), and a server without `WEBFIG_DOMAIN` gets exactly the files it had before. Leaving the setting out on a later run keeps it; `WEBFIG_DOMAIN=off` switches the feature off again. `WEBFIG_DOMAIN` must be a host name different from `DOMAIN`.
+
+3. Check: `sudo ftnbilling-doctor` has a "Remote WebFig" section (listener on loopback, Caddy site, DNS points here, `https://<WEBFIG_DOMAIN>/_ftn/open` answers 403 without a ticket).
+
+Router side: nothing to do. The bootstrap line (first provisioning and every rebuild) already leaves the `www` service on the router's API port, restricted to the admin LAN and the server's tunnel address, `www-ssl` off, and the firewall accepts that port from the server's tunnel address only. The server never writes `/ip/service` over the API. A router built before this restriction needs a new line (Setup, Reset router) before the server can reach its web page. So WebFig is available for every router from its first provisioning: once the server has the setting, each router that has a tunnel gets the button.
+
+### Use it
+
+Admin, Routers, the router, Overview: **Open WebFig** (owners only; the Android app has the same button on the router page and opens the system browser). The first time in ten minutes it asks for your password and the 6-digit authenticator code, then sends the browser to `https://<WEBFIG_DOMAIN>/` where the router's own WebFig login appears; sign in there with a router account (for example `admin`). The billing API user cannot sign in to WebFig. The router page lists open WebFig sessions with an **End** button and the recent activity.
+
+### Security model
+
+- Owners only. Operators and viewers get 403 on every WebFig page. The browser needs an admin session, and a fresh step-up: password and authenticator code checked again within the last 10 minutes (same attempt limits and back-off as sign-in; a step-up belongs to that one admin session).
+- The admin mints a one-time ticket for 60 seconds, bound to the admin user, the router and the client address. It is exchanged on the WebFig host for a session cookie that is host-only (`__Host-` prefix: no `Domain`, `Secure`, `Path=/`), `HttpOnly`, `SameSite=Strict`, bound to exactly one router, 30 minutes idle and 2 hours at most. Opening WebFig again in the same browser ends the earlier session. An owner can end a session from the router page; a session also ends if its user stops being an owner or is disabled, or the router is removed.
+- The WebFig host is a different origin from the admin. The admin's cookies are host-only too, so the browser never sends them to the WebFig host and the proxy removes any `ftn_` or `__Host-ftn_` cookie before it talks to the router. No API token or admin cookie is ever forwarded. The admin refuses state-changing requests that say they come from another origin (including the WebFig host, which is "same-site" but not "same-origin"), and needs its CSRF token.
+- Only the session's router can be reached, only at its tunnel address and web port. The request target is always rebuilt: absolute-form targets, `CONNECT`, `//` paths, `..` and encoded dot-dot, backslashes and any `Host` other than `WEBFIG_DOMAIN` are refused, and the connection itself refuses any address but that one. Redirects (`Location`) are rewritten to the WebFig host; redirects to anywhere else become `/`. Cookies the router sets lose their `Domain` and are marked `Secure`. `X-Forwarded-*`, `Forwarded`, `Origin` and `Referer` are not passed to the router.
+- Proxied responses carry `X-Frame-Options: DENY`, `Cache-Control: no-store` and `Referrer-Policy: no-referrer`. The router's own scripts run on the WebFig host (WebFig needs them), which is why it has an origin of its own.
+- At most 4 requests at once per router and 16 overall (WebFig's long requests hold one each; the admin's own REST budget is separate). More get a 503 and "Retry-After".
+- Activity: every open and every end (idle, 2 hour limit, replaced, ended by an owner) is written to the audit log against the router with who, when and the client IP, and shown on the router page. Sessions live in the server's memory: a restart ends them (an end then has no record; the open does).
+- Behind Caddy only. The client address the ticket is bound to is the one Caddy reports, so a phone that changes network between the admin and the WebFig host must open it again.
 
 ## Remote WinBox
 
