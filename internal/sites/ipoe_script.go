@@ -70,6 +70,15 @@ func (r ipoeRule) Body(iface string) map[string]string {
 // per-flat queues see it, and flat-to-flat traffic is dropped.
 // Input chain: the REST port is blocked from the flats and a walled flat may
 // only use the router's DNS, DHCP and ping.
+//
+// Known gap (security review L-1): the router resolves every name for a walled
+// flat, so a DNS tunnel (dnstt, iodine) gives slow free internet. RouterOS 7 has
+// no per-client DNS policy ( /ip/dns/static FWD entries add names, they do not
+// remove the others), and a layer-7 regexp on DNS payloads cannot be tested
+// without a router and is heavy on small CPUs, so the rules are left alone and
+// the checklist carries a warning (CheckWalledDNS). Do not "fix" this by
+// dropping DNS for walled flats: the payment page and the phones' captive-portal
+// probes need names.
 func ipoeRuleSet(plan netplan.Plan, publicIP string, restPort int) (filter, nat []ipoeRule) {
 	lists := []string{listUnreg, billing.SuspendedList}
 	f := func(args, comment string) ipoeRule { return newIpoeRule("filter", args, comment) }
