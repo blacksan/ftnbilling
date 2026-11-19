@@ -393,21 +393,38 @@ func benchDiff(b *testing.B, payments int) {
 func BenchmarkDiff20k(b *testing.B)  { benchDiff(b, 20000) }
 func BenchmarkDiff200k(b *testing.B) { benchDiff(b, 200000) }
 
+// TestDiffBudget keeps the intent of the old wall-clock budget (one changed row
+// must not cost a pass that copies the ledger) without depending on how busy
+// the machine is. Allocations are counted, not timed: diffing one changed
+// payment allocates a few small objects whatever the ledger size, so the
+// per-op allocations of the 200k ledger must stay tiny and equal to the 20k
+// ledger's. The wall-clock bounds are only a generous backstop (about 10x what
+// a loaded 2-CPU box measured) against a diff that went quadratic.
 func TestDiffBudget(t *testing.T) {
 	if testing.Short() {
 		t.Skip()
 	}
 	if raceBuild {
-		t.Skip("timing budget is meaningful only without the race detector")
+		t.Skip("allocation counts and timings are meaningful only without the race detector")
 	}
 	r20 := testing.Benchmark(BenchmarkDiff20k)
 	r200 := testing.Benchmark(BenchmarkDiff200k)
-	t.Logf("diff per update: 20k rows %v, 200k rows %v", time.Duration(r20.NsPerOp()), time.Duration(r200.NsPerOp()))
-	if per := time.Duration(r20.NsPerOp()); per > 15*time.Millisecond {
-		t.Fatalf("diff of 20k rows took %v, budget 15ms", per)
+	t.Logf("diff per update: 20k rows %v (%d allocs, %d B), 200k rows %v (%d allocs, %d B)",
+		time.Duration(r20.NsPerOp()), r20.AllocsPerOp(), r20.AllocedBytesPerOp(),
+		time.Duration(r200.NsPerOp()), r200.AllocsPerOp(), r200.AllocedBytesPerOp())
+	for name, r := range map[string]testing.BenchmarkResult{"20k": r20, "200k": r200} {
+		if r.AllocsPerOp() > 50 || r.AllocedBytesPerOp() > 64<<10 {
+			t.Errorf("diff of %s rows allocates %d objects, %d bytes per update: it copies rows", name, r.AllocsPerOp(), r.AllocedBytesPerOp())
+		}
 	}
-	if per := time.Duration(r200.NsPerOp()); per > 300*time.Millisecond {
-		t.Fatalf("diff of 200k rows took %v, sanity limit 300ms", per)
+	if r200.AllocedBytesPerOp() > 4*r20.AllocedBytesPerOp()+4096 {
+		t.Errorf("diff allocation grows with the ledger: %d B at 20k rows, %d B at 200k", r20.AllocedBytesPerOp(), r200.AllocedBytesPerOp())
+	}
+	if per := time.Duration(r20.NsPerOp()); per > 150*time.Millisecond {
+		t.Errorf("diff of 20k rows took %v (backstop 150ms)", per)
+	}
+	if per := time.Duration(r200.NsPerOp()); per > 3*time.Second {
+		t.Errorf("diff of 200k rows took %v (backstop 3s)", per)
 	}
 }
 
