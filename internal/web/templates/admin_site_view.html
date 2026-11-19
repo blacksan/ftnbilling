@@ -17,6 +17,8 @@
 <section class="panel"><h2>Connection</h2><dl class="kv">
 <dt>Router API</dt><dd>{{if .Data.Status.RESTOK}}<span class="ok">reachable</span>{{else}}<span class="bad">not reachable</span> <span class="muted">{{.Data.Status.RESTErr}}</span>{{end}}</dd>
 <dt>Tunnel</dt><dd>{{if .Data.Status.Handshake}}up, last handshake {{.Data.Status.HandshakeAge}} s ago{{else if .Data.Status.WGKnown}}no handshake{{else}}unknown{{end}}</dd>
+{{if $s.TunnelIP}}<dt>Tunnel address</dt><dd class="mono">{{$s.TunnelIP}}</dd>
+<dt>Remote WinBox</dt><dd>Connect your management WireGuard profile, then open WinBox to <span class="mono">{{$s.TunnelIP}}</span> <span class="muted">(router login; set up a device with sudo ftnbilling-mgmt add)</span></dd>{{end}}
 <dt>Payment page</dt><dd class="mono" style="word-break:break-all">{{.Data.Portal}}</dd>
 {{if $X.Model}}<dt>Hardware</dt><dd>{{$X.Model}} <span class="muted">RouterOS {{$X.Version}}{{if $X.Temp}}, {{$X.Temp}}{{end}}</span></dd>{{end}}
 <dt>Equipment</dt><dd>{{$X.Equip}}</dd>

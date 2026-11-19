@@ -779,14 +779,31 @@ func TestAPIReadEndpoints(t *testing.T) {
 	if j := r.call(r.view.Access, "GET", "/dashboard?site="+r.B.ID, nil, nil).JSON(t); j["accounts"].(map[string]any)["active"] != float64(0) {
 		t.Errorf("dashboard by site: %s", jsonNum(j))
 	}
+	r.st.Update(func(d *store.Data) error {
+		x := d.Sites[r.A.ID]
+		x.TunnelIP = "10.99.0.7"
+		d.Sites[r.A.ID] = x
+		return nil
+	})
 	sites := r.call(r.view.Access, "GET", "/sites", nil, nil).JSON(t)["items"].([]any)
 	if len(sites) != 2 {
 		t.Fatalf("sites: %d", len(sites))
 	}
 	s0 := sites[0].(map[string]any)
-	for _, k := range []string{"id", "name", "access_mode", "online", "cause", "tunnel", "accounts", "open_alerts"} {
+	for _, k := range []string{"id", "name", "access_mode", "online", "cause", "tunnel", "tunnel_address", "accounts", "open_alerts"} {
 		if _, ok := s0[k]; !ok {
 			t.Errorf("site lacks %s", k)
+		}
+	}
+	for _, it := range sites {
+		m := it.(map[string]any)
+		if m["id"] == r.A.ID && m["tunnel_address"] != "10.99.0.7" {
+			t.Errorf("tunnel_address %v, want 10.99.0.7", m["tunnel_address"])
+		}
+		for k, v := range m { // no key material or password in the router JSON
+			if lk := strings.ToLower(k); strings.Contains(lk, "private") || strings.Contains(lk, "rest_pass") || lk == "password" {
+				t.Errorf("router JSON has %s=%v", k, v)
+			}
 		}
 	}
 	one := r.call(r.view.Access, "GET", "/sites/"+r.A.ID, nil, nil).JSON(t)

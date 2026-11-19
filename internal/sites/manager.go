@@ -46,6 +46,7 @@ type Manager struct {
 	opt  Options
 	now  func() time.Time
 	pfx  netip.Prefix
+	mgmt netip.Prefix   // remote-WinBox subnet (MGMT_SUBNET)
 	mock *routeros.Mock // shared by every building when ROUTER_MOCK=true
 
 	mu       sync.RWMutex
@@ -92,7 +93,11 @@ func New(o Options) *Manager {
 	if now == nil {
 		now = time.Now
 	}
-	m := &Manager{cfg: o.Cfg, st: o.Store, dir: o.Dir, log: o.Log, opt: o, now: now, pfx: pfx.Masked(), rts: map[string]*Runtime{},
+	mg, err := netip.ParsePrefix(o.Cfg.MgmtSubnet)
+	if err != nil || ValidMgmtSubnet(mg) != nil {
+		mg = DefaultMgmtRange
+	}
+	m := &Manager{cfg: o.Cfg, st: o.Store, dir: o.Dir, log: o.Log, opt: o, now: now, pfx: pfx.Masked(), mgmt: mg.Masked(), rts: map[string]*Runtime{},
 		autoFixDelay: 20 * time.Second}
 	if o.Cfg.RouterMock {
 		m.mock = routeros.NewMock()
@@ -110,6 +115,9 @@ func (m *Manager) MockRouter() *routeros.Mock { return m.mock }
 
 // Prefix is the WireGuard tunnel subnet.
 func (m *Manager) Prefix() netip.Prefix { return m.pfx }
+
+// MgmtPrefix is the remote-WinBox (wg-mgmt) subnet.
+func (m *Manager) MgmtPrefix() netip.Prefix { return m.mgmt }
 
 // MetricsPath is the file a building's collector saves to.
 func MetricsPath(dataDir, siteID string) string {
@@ -407,7 +415,7 @@ func (m *Manager) CreateSite(in SiteInput) (store.Site, error) {
 			return err
 		}
 		s = ApplyDefaults(m.cfg, s)
-		if err := ValidateNet(s, m.pfx); err != nil {
+		if err := ValidateNetMgmt(s, m.pfx, m.mgmt); err != nil {
 			return err
 		}
 		if nameTaken(d, s.Name, "") {
@@ -441,7 +449,7 @@ func (m *Manager) UpdateSite(id string, in SiteInput) error {
 		if s.Mode == store.SiteModeWG {
 			s = ApplyDefaults(m.cfg, s)
 		}
-		if err := ValidateNet(ApplyDefaults(m.cfg, s), m.pfx); err != nil {
+		if err := ValidateNetMgmt(ApplyDefaults(m.cfg, s), m.pfx, m.mgmt); err != nil {
 			return err
 		}
 		if nameTaken(d, s.Name, id) {

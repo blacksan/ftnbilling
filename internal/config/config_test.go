@@ -178,3 +178,29 @@ func TestOldAdminAllowCIDRIsIgnored(t *testing.T) {
 		}
 	}
 }
+
+func TestMgmtSubnet(t *testing.T) {
+	base := map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true"}
+	with := func(kv ...string) map[string]string {
+		m := map[string]string{}
+		for k, v := range base {
+			m[k] = v
+		}
+		for i := 0; i < len(kv); i += 2 {
+			m[kv[i]] = kv[i+1]
+		}
+		return m
+	}
+	c, err := Load(env(with()))
+	if err != nil || c.MgmtSubnet != "10.98.0.0/24" {
+		t.Fatalf("default: %v %q", err, c.MgmtSubnet)
+	}
+	if c, err = Load(env(with("MGMT_SUBNET", "172.20.9.0/24"))); err != nil || c.MgmtSubnet != "172.20.9.0/24" {
+		t.Fatalf("custom: %v", err)
+	}
+	for _, bad := range []string{"8.8.8.0/24", "10.98.0.0/8", "10.98.0.0/30", "nope", "10.99.1.0/24"} { // the last overlaps WG_SUBNET
+		if _, err := Load(env(with("MGMT_SUBNET", bad))); err == nil {
+			t.Errorf("MGMT_SUBNET=%q must be refused", bad)
+		}
+	}
+}

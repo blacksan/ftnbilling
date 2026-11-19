@@ -167,6 +167,8 @@
   /ip/firewall/filter add chain=input action=drop protocol=tcp dst-port=53 in-interface-list=WAN comment="ftn: no WAN DNS"
   /ip/firewall/filter add chain=input action=accept protocol=tcp in-interface=wg-ftn src-address=10.99.0.1 dst-port=8729 comment="ftn: wg rest"
   /ip/firewall/filter add chain=input action=accept protocol=icmp in-interface=wg-ftn src-address=10.99.0.1 comment="ftn: wg icmp"
+  /ip/firewall/filter add chain=input action=accept protocol=tcp dst-port=8291 src-address=10.98.0.0/24 in-interface=wg-ftn comment="ftn: mgmt winbox"
+  /ip/firewall/filter add chain=input action=accept protocol=icmp src-address=10.98.0.0/24 in-interface=wg-ftn comment="ftn: mgmt icmp"
   /ip/firewall/filter add chain=input action=drop in-interface=wg-ftn comment="ftn: wg drop other input"
   /ip/firewall/filter add chain=input action=accept in-interface-list=LAN comment="ftn: lan input"
   /ip/firewall/filter add chain=input action=accept protocol=udp dst-port=53 in-interface=br-customers comment="ftn: customer dns"
@@ -212,7 +214,9 @@
   /ip/service set www-ssl disabled=yes
   /ip/service set www port=8729 address=10.99.0.1/32 disabled=no
   /ip/service set ssh address=192.168.88.0/24 disabled=no
-  /ip/service set winbox address=192.168.88.0/24 disabled=no
+  # Remote WinBox: the LAN, plus the admin devices of the server's wg-mgmt interface (through the tunnel).
+  # MAC-WinBox below stays LAN-only.
+  /ip/service set winbox address=192.168.88.0/24,10.98.0.0/24 disabled=no
   :if ([:len [/interface/list/member/find where list="LAN"]] > 0) do={
     /tool/mac-server set allowed-interface-list=LAN
     /tool/mac-server/mac-winbox set allowed-interface-list=LAN
@@ -228,7 +232,10 @@
   /ip/address remove [find where comment="ftn: tunnel address"]
   /ip/address add address=10.99.0.2 network=10.99.0.1 interface=wg-ftn comment="ftn: tunnel address"
   /interface/wireguard/peers remove [find where comment="ftn: billing server"]
-  /interface/wireguard/peers add interface=wg-ftn public-key="SERVERPUBKEYSERVERPUBKEYSERVERPUBKEYSERV0=" endpoint-address=203.0.113.10 endpoint-port=51820 allowed-address=10.99.0.1/32 persistent-keepalive=25s comment="ftn: billing server"
+  /interface/wireguard/peers add interface=wg-ftn public-key="SERVERPUBKEYSERVERPUBKEYSERVERPUBKEYSERV0=" endpoint-address=203.0.113.10 endpoint-port=51820 allowed-address=10.99.0.1/32,10.98.0.0/24 persistent-keepalive=25s comment="ftn: billing server"
+  # Replies to the admin devices go back into the tunnel (the tunnel address only has a route to the server).
+  /ip/route remove [find where comment="ftn: mgmt route"]
+  /ip/route add dst-address=10.98.0.0/24 gateway=wg-ftn comment="ftn: mgmt route"
 } do={ :set report ($report . "9 WireGuard: " . $e . "\n"); :set abort ("ftn: section 9 WireGuard failed: " . $e); :error $abort }
 
 :put "ftn 10/12: API user for the billing server"

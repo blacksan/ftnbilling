@@ -185,7 +185,7 @@ func (m *Manager) consume(token, rosVersion, from string, noCheck bool) (script 
 		}
 		in := BootstrapInput{
 			Site: ApplyDefaults(m.cfg, site), PPPoEPass: pppoe, PrivateKey: priv, RESTPass: pass, ServerPub: m.cfg.WGPublicKey,
-			Endpoint: m.cfg.WGEndpoint, WGSubnet: m.pfx, PublicBase: m.cfg.PublicBaseURL, PublicIP: m.cfg.PublicIP, Generated: now, NoCheck: noCheck,
+			Endpoint: m.cfg.WGEndpoint, WGSubnet: m.pfx, MgmtSubnet: m.mgmt, PublicBase: m.cfg.PublicBaseURL, PublicIP: m.cfg.PublicIP, Generated: now, NoCheck: noCheck,
 			ROSVersion: rosVersion, Token: token,
 		}
 		if w, ok := m.flowWant(""); ok {

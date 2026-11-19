@@ -193,7 +193,9 @@
   /ip/service set www-ssl disabled=yes
   /ip/service set www port={{.RESTPort}} address={{.ServerIP}}/32 disabled=no
   /ip/service set ssh address={{.LAN.Network}} disabled=no
-  /ip/service set winbox address={{.LAN.Network}} disabled=no
+  # Remote WinBox: the LAN, plus the admin devices of the server's wg-mgmt interface (through the tunnel).
+  # MAC-WinBox below stays LAN-only.
+  /ip/service set winbox address={{.LAN.Network}},{{.MgmtSubnet}} disabled=no
   :if ([:len [/interface/list/member/find where list="LAN"]] > 0) do={
     /tool/mac-server set allowed-interface-list=LAN
     /tool/mac-server/mac-winbox set allowed-interface-list=LAN
@@ -209,7 +211,10 @@
   /ip/address remove [find where comment="ftn: tunnel address"]
   /ip/address add address={{.TunnelIP}} network={{.ServerIP}} interface={{.WGIface}} comment="ftn: tunnel address"
   /interface/wireguard/peers remove [find where comment="ftn: billing server"]
-  /interface/wireguard/peers add interface={{.WGIface}} public-key="{{.ServerPublicKey}}" endpoint-address={{.EndpointHost}} endpoint-port={{.EndpointPort}} allowed-address={{.ServerIP}}/32 persistent-keepalive=25s comment="ftn: billing server"
+  /interface/wireguard/peers add interface={{.WGIface}} public-key="{{.ServerPublicKey}}" endpoint-address={{.EndpointHost}} endpoint-port={{.EndpointPort}} allowed-address={{.ServerIP}}/32,{{.MgmtSubnet}} persistent-keepalive=25s comment="ftn: billing server"
+  # Replies to the admin devices go back into the tunnel (the tunnel address only has a route to the server).
+  /ip/route remove [find where comment="ftn: mgmt route"]
+  /ip/route add dst-address={{.MgmtSubnet}} gateway={{.WGIface}} comment="ftn: mgmt route"
 {{secClose 9 "WireGuard" true}}
 
 :put "ftn 10/12: API user for the billing server"

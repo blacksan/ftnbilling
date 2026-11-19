@@ -131,9 +131,10 @@ func (s *Server) siteJSON(st store.Site, h siteHealth, cnt *siteCounts) map[stri
 		"id": st.ID, "name": st.Name, "access_mode": accessMode(st), "online": h.online, "cause": h.cause,
 		"wan_mode": st.WANMode, "wan_address": st.WANAddress, "wan_gateway": st.WANGateway, "wan_dns": st.WANDNS,
 		"pppoe_user": st.PPPoEUser, "pppoe_pass_set": st.PPPoEPassEnc != "", "lan_ports": st.LANPorts, "lan_subnet": st.LANSubnet,
-		"tunnel":      map[string]any{"handshake_age_s": h.handshake},
-		"accounts":    map[string]any{"total": cnt.Total, "active": cnt.Active, "expired": cnt.Expired, "suspended": cnt.Suspended},
-		"open_alerts": alertsOpen,
+		"tunnel_address": st.TunnelIP,
+		"tunnel":         map[string]any{"handshake_age_s": h.handshake},
+		"accounts":       map[string]any{"total": cnt.Total, "active": cnt.Active, "expired": cnt.Expired, "suspended": cnt.Suspended},
+		"open_alerts":    alertsOpen,
 		"provision": map[string]any{"last_run_at": tp(ps.LastRunAt), "in_sync": ps.InSync, "drift": ps.Drift, "pending_ops": ps.PendingOps,
 			"last_error": ps.LastError, "foreign_conflicts": conflicts},
 	}

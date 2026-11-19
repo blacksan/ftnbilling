@@ -23,13 +23,18 @@ Unknown fields are ignored. Validation errors are 400 `validation_failed` with a
 | `pppoe_user` | string | "" | pppoe only |
 | `pppoe_pass` | string | "" | pppoe only. Write-only: never returned; stored sealed with `DATA_KEY`. On PATCH an empty string leaves it unchanged; `"pppoe_pass_clear": true` removes it |
 | `lan_ports` | string | `ether2` | comma list of interface names: the admin LAN (WinBox / laptop) |
-| `lan_subnet` | string | `192.168.88.0/24` | IPv4 /16 to /29 prefix; must not overlap `customer_subnet` or the WireGuard subnet |
+| `lan_subnet` | string | `192.168.88.0/24` | IPv4 /16 to /29 prefix; must not overlap `customer_subnet`, the WireGuard subnet or the management subnet (`MGMT_SUBNET`, default `10.98.0.0/24`); also applies to a static WAN network |
 | `olt_interface` | string | `sfp-sfpplus1` | fibre port |
 | `vlan_id` | int | 0 | 0 = untagged, else 1 to 4094 (the script makes `vlan<N>-customers` on the OLT port) |
 | `customer_subnet` | string | `10.5.50.0/24` | /20 to /24; gateway .1, unregistered pool .10-.59, flats from .60 |
 | `bench_port` | string | "" | optional extra customer-side port (e.g. `ether5`) |
 | `wan_cap_mbps`, `olt_cap_mbps`, `fup_tb` | number | 500 / 10000 / 15 | capacities |
 | `support_phone` | string | "" | shown on the payment page |
+
+Router JSON (list, detail, and the `router` in create/patch answers) also has `tunnel_address` (string): the router's address inside the
+WireGuard tunnel (for example `10.99.0.2`), empty until the router has fetched its script. It is what WinBox connects to over the management
+WireGuard profile (remote WinBox, `deploy/README.md`); the admin router page shows it with the line "Remote WinBox: connect your management
+WireGuard profile, then open WinBox to <tunnel address>". No private key or password is ever in router JSON.
 
 Removed from the body (ignored as unknown fields): `serving_customers`, `hotspot_server`, `wan_list`, `provision`,
 `legacy_container`. Router JSON keeps `access_mode` with the single value `"ipoe"`. Router JSON gains `wan_mode`,

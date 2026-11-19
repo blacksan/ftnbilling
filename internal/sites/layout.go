@@ -140,8 +140,30 @@ func HasControl(s string) bool {
 	return false
 }
 
-// ValidateNet is Validate with the tunnel subnet to keep clear of.
+// DefaultMgmtRange is the remote-WinBox (wg-mgmt) subnet assumed when the
+// caller has none: MGMT_SUBNET's default.
+var DefaultMgmtRange = netip.MustParsePrefix("10.98.0.0/24")
+
+// ValidMgmtSubnet reports why p cannot be the remote-WinBox subnet: it must be
+// a private IPv4 prefix from /16 to /29 (the server takes .1, devices the rest).
+func ValidMgmtSubnet(p netip.Prefix) error {
+	if !p.IsValid() || !p.Addr().Is4() || !p.Addr().IsPrivate() || p.Bits() < 16 || p.Bits() > 29 {
+		return fmt.Errorf("management subnet %s must be a private IPv4 prefix from /16 to /29", p)
+	}
+	return nil
+}
+
+// ValidateNet is Validate with the tunnel subnet to keep clear of. The
+// remote-WinBox subnet is the default one (see ValidateNetMgmt).
 func ValidateNet(s store.Site, wgNet netip.Prefix) error {
+	return ValidateNetMgmt(s, wgNet, netip.Prefix{})
+}
+
+// ValidateNetMgmt is ValidateNet with the remote-WinBox (wg-mgmt) subnet too:
+// the LAN, customer, tunnel and static WAN networks must not overlap it, since
+// the router sends the replies to those addresses into the tunnel. A zero mgmt
+// means DefaultMgmtRange.
+func ValidateNetMgmt(s store.Site, wgNet, mgmt netip.Prefix) error {
 	name := strings.TrimSpace(s.Name)
 	if name == "" || len([]rune(name)) > 60 {
 		return errors.New("the router needs a name of 1 to 60 characters")
@@ -226,10 +248,17 @@ func ValidateNet(s store.Site, wgNet netip.Prefix) error {
 		wgNet = DefaultTunnelRange
 	}
 	wgNet = wgNet.Masked()
+	if !mgmt.IsValid() {
+		mgmt = DefaultMgmtRange
+	}
+	if err := ValidMgmtSubnet(mgmt); err != nil {
+		return err
+	}
+	mgmt = mgmt.Masked()
 	nets := []struct {
 		label string
 		p     netip.Prefix
-	}{{"admin LAN subnet", lp}, {"customer subnet", cp}, {"tunnel subnet", wgNet}}
+	}{{"admin LAN subnet", lp}, {"customer subnet", cp}, {"tunnel subnet", wgNet}, {"management subnet", mgmt}}
 	if s.WANMode == WANStatic {
 		if a, err := netip.ParsePrefix(strings.TrimSpace(s.WANAddress)); err == nil {
 			nets = append(nets, struct {
