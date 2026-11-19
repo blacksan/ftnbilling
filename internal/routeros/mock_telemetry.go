@@ -4,30 +4,21 @@ import (
 	"context"
 	"math"
 	"math/rand"
-	"strconv"
-	"strings"
 	"time"
 )
 
 // Synthetic telemetry so the metrics page can be demoed with ROUTER_MOCK=true.
 // Counters grow with wall-clock time at rates that follow an evening peak.
 
-type mockSess struct {
-	in, out uint64
-	started time.Time
-}
-
 type mockState struct {
-	sess   map[string]*mockSess
 	ifaces map[string]*[2]uint64
 	last   time.Time // last Interfaces() call
-	lastS  time.Time // last ActiveSessions() call
 	rng    *rand.Rand
 }
 
 func (m *Mock) tel() *mockState {
 	if m.ms == nil {
-		m.ms = &mockState{sess: map[string]*mockSess{}, ifaces: map[string]*[2]uint64{}, rng: rand.New(rand.NewSource(7)), last: time.Now(), lastS: time.Now()}
+		m.ms = &mockState{ifaces: map[string]*[2]uint64{}, rng: rand.New(rand.NewSource(7)), last: time.Now()}
 	}
 	return m.ms
 }
@@ -38,51 +29,6 @@ func eveningFactor(t time.Time) float64 {
 	return 0.2 + 0.8*math.Exp(-math.Pow((h-20)/3.5, 2))
 }
 
-// rateCapBps parses the profile rate-limit ("10M/10M") of a user.
-func (m *Mock) capBps(user string) float64 {
-	u := m.users[user]
-	rl := m.profiles[u.Profile].RateLimit
-	a, _, _ := strings.Cut(rl, "/")
-	a = strings.TrimSuffix(a, "M")
-	n, _ := strconv.ParseFloat(a, 64)
-	if n <= 0 {
-		n = 10
-	}
-	return n * 1e6
-}
-
-func (m *Mock) ActiveSessions(context.Context) ([]Session, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.fail != nil {
-		return nil, m.fail
-	}
-	st := m.tel()
-	now := time.Now()
-	dt := now.Sub(st.lastS).Seconds()
-	st.lastS = now
-	var out []Session
-	for user, ip := range m.active {
-		s := st.sess[user]
-		if s == nil {
-			s = &mockSess{started: now}
-			st.sess[user] = s
-		}
-		cap := m.capBps(user)
-		down := cap * (0.1 + 0.8*st.rng.Float64()) * eveningFactor(now)
-		s.out += uint64(down / 8 * dt)
-		s.in += uint64(down / 8 * dt * 0.08)
-		out = append(out, Session{ID: "*" + user, User: user, Address: ip, MAC: m.users[user].MAC,
-			BytesIn: s.in, BytesOut: s.out, Uptime: now.Sub(s.started)})
-	}
-	for u := range st.sess {
-		if _, on := m.active[u]; !on {
-			delete(st.sess, u)
-		}
-	}
-	return out, nil
-}
-
 func (m *Mock) SimpleQueues(context.Context) ([]SimpleQueue, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -90,12 +36,7 @@ func (m *Mock) SimpleQueues(context.Context) ([]SimpleQueue, error) {
 		return nil, m.fail
 	}
 	var out []SimpleQueue
-	for user := range m.active {
-		cap := int64(m.capBps(user))
-		out = append(out, SimpleQueue{Name: "<hotspot-" + user + ">", Target: m.active[user] + "/32", MaxA: cap, MaxB: cap,
-			RateA: cap / 20, RateB: int64(float64(cap) * (0.2 + 0.75*m.tel().rng.Float64()))})
-	}
-	// Queues written through the row API (the IPoE reconciler's ftn-<code>).
+	// Queues written through the row API (the reconciler's ftn-<code>).
 	for _, r := range m.tables["/queue/simple"] {
 		q := SimpleQueue{Name: r["name"], Target: r["target"], Comment: r["comment"]}
 		q.MaxA, q.MaxB = splitPair(r["max-limit"])
@@ -123,7 +64,7 @@ func (m *Mock) Interfaces(context.Context) ([]Iface, error) {
 		name           string
 		rxMbps, txMbps float64
 	}{
-		{"ether1", 300, 40}, {"sfp-sfpplus1", 40, 300}, {"vlan100-customers", 40, 300}, {"br-hotspot", 40, 300}, {"ether5", 0, 0},
+		{"ether1", 300, 40}, {"sfp-sfpplus1", 40, 300}, {"vlan100-customers", 40, 300}, {"br-customers", 40, 300}, {"ether5", 0, 0},
 	}
 	var out []Iface
 	for _, sp := range spec {

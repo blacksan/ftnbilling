@@ -37,16 +37,12 @@ type Config struct {
 	// NetflowAddr is informational (shown on the usage page): the receiver
 	// lives in internal/sites and feeds HandleNetflow. "off" = no NetFlow.
 	NetflowAddr string
-	Synthetic   bool // ROUTER_MOCK: generate service data from session deltas
+	Synthetic   bool // ROUTER_MOCK: generate service data from queue deltas
 	// SiteID staggers this collector's loops against the other buildings'.
 	SiteID string
 	// PortAllow, when non-empty, limits SamplePorts to exactly these
 	// interface names (joined buildings). Empty keeps the legacy prefix filter.
 	PortAllow []string
-	// IPoE: the building serves flats by static lease and per-flat simple
-	// queues "ftn-<code>" (no hotspot sessions). Usage comes from the queue
-	// byte counters.
-	IPoE bool
 }
 
 // CapFraction is "at the cap" for the percent-of-time-at-cap measure.
@@ -85,11 +81,6 @@ type Live struct {
 	PortsAt time.Time
 }
 
-type sessPrev struct {
-	in, out uint64
-	at      time.Time
-}
-
 type queuePrev struct {
 	up, down uint64
 	at       time.Time
@@ -114,16 +105,14 @@ type Collector struct {
 	path string
 	now  func() time.Time
 
-	mu       sync.Mutex
-	D        Data
-	L        Live
-	prevS    map[string]sessPrev
-	prevQ    map[string]queuePrev
-	lastFlow time.Time
-	prevIf   map[string]ifPrev
-	ipCode   map[string]ipEntry
-	dns      map[netip.Addr]dnsInfo
-	failing  map[string]bool
+	mu      sync.Mutex
+	D       Data
+	L       Live
+	prevQ   map[string]queuePrev
+	prevIf  map[string]ifPrev
+	ipCode  map[string]ipEntry
+	dns     map[netip.Addr]dnsInfo
+	failing map[string]bool
 }
 
 type ipEntry struct {
@@ -135,7 +124,7 @@ type ipEntry struct {
 // Its directory is created when the first save happens.
 func New(path string, cfg Config, rt routeros.Telemetry, d Directory, log *slog.Logger) *Collector {
 	c := &Collector{cfg: cfg, rt: rt, dir: d, log: log, path: path, now: time.Now,
-		prevS: map[string]sessPrev{}, prevQ: map[string]queuePrev{}, prevIf: map[string]ifPrev{}, ipCode: map[string]ipEntry{},
+		prevQ: map[string]queuePrev{}, prevIf: map[string]ifPrev{}, ipCode: map[string]ipEntry{},
 		dns: map[netip.Addr]dnsInfo{}, failing: map[string]bool{}}
 	data, err := load(c.path)
 	if err != nil {
@@ -237,142 +226,6 @@ func (c *Collector) acctMap() map[string]AcctInfo {
 }
 
 // ---- samplers (all take "now" so tests can drive them) -----------------------
-
-func queueFor(qs []routeros.SimpleQueue, code, addr string) (routeros.SimpleQueue, bool) {
-	lc := strings.ToLower(code)
-	for _, q := range qs {
-		if strings.Contains(strings.ToLower(q.Name), lc) {
-			return q, true
-		}
-	}
-	if addr != "" {
-		for _, q := range qs {
-			if strings.HasPrefix(q.Target, addr+"/") || q.Target == addr {
-				return q, true
-			}
-		}
-	}
-	return routeros.SimpleQueue{}, false
-}
-
-// SampleSessions turns /ip/hotspot/active counters into per-flat deltas.
-// A counter that goes down, or a session not seen before, is a reset: the new
-// value is the delta (a session first seen with a long uptime right after a
-// collector restart is only baselined, because its counters hold old traffic).
-func (c *Collector) SampleSessions(now time.Time, sessions []routeros.Session, queues []routeros.SimpleQueue) {
-	accts := c.acctMap()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	gap := c.cfg.FlowEvery
-	if !c.lastFlow.IsZero() {
-		gap = now.Sub(c.lastFlow)
-	}
-	if gap <= 0 {
-		gap = time.Second
-	}
-	c.lastFlow = now
-	type agg struct {
-		down, up           uint64
-		dt                 time.Duration
-		downBps, upBps, cp float64
-		addr               string
-		qrate              bool
-	}
-	per := map[string]*agg{}
-	seen := map[string]bool{}
-	for _, s := range sessions {
-		info, known := accts[s.User]
-		if s.User == "" || !known {
-			continue
-		}
-		key := s.User + "|" + s.ID
-		seen[key] = true
-		prev, had := c.prevS[key]
-		var dIn, dOut uint64
-		dt := gap
-		baseline := false
-		switch {
-		case had:
-			dt = now.Sub(prev.at)
-			dIn, dOut = delta(prev.in, s.BytesIn), delta(prev.out, s.BytesOut)
-		case s.Uptime > 2*gap+10*time.Second:
-			baseline = true
-		default:
-			dIn, dOut = s.BytesIn, s.BytesOut
-			if s.Uptime > 0 && s.Uptime < dt {
-				dt = s.Uptime
-			}
-		}
-		c.prevS[key] = sessPrev{in: s.BytesIn, out: s.BytesOut, at: now}
-		if baseline {
-			continue
-		}
-		if dt < time.Second {
-			dt = time.Second
-		}
-		a := per[s.User]
-		if a == nil {
-			a = &agg{addr: s.Address}
-			per[s.User] = a
-		}
-		a.down += dOut
-		a.up += dIn
-		if dt > a.dt {
-			a.dt = dt
-		}
-		a.downBps += float64(dOut) * 8 / dt.Seconds()
-		a.upBps += float64(dIn) * 8 / dt.Seconds()
-		if c.ipCode != nil && s.Address != "" {
-			c.ipCode[s.Address] = ipEntry{s.User, now}
-		}
-		if q, ok := queueFor(queues, s.User, s.Address); ok && q.MaxB > 0 {
-			a.cp = float64(q.MaxB)
-		}
-		_ = info
-	}
-	for k := range c.prevS {
-		if !seen[k] {
-			delete(c.prevS, k)
-		}
-	}
-	live := map[string]LiveRate{}
-	for code, a := range per {
-		info := accts[code]
-		capBps := a.cp
-		if capBps <= 0 {
-			capBps = float64(info.SpeedMbps) * 1e6
-		}
-		cur := LiveRate{DownBps: a.downBps, UpBps: a.upBps, CapBps: capBps, Address: a.addr, At: now}
-		if q, ok := queueFor(queues, code, a.addr); ok {
-			cur.UpBps, cur.DownBps = float64(q.RateA), float64(q.RateB) // RouterOS lists upload/download
-		}
-		live[code] = cur
-		onMin := a.dt.Minutes()
-		atCap := capBps > 0 && a.downBps >= CapFraction*capBps
-		pkD, pkU := uint64(a.downBps), uint64(a.upBps)
-		c.getAcct(code).Add(now, func(cell *Cell) {
-			cell.Down += a.down
-			cell.Up += a.up
-			cell.PkDown = maxU(cell.PkDown, pkD)
-			cell.PkUp = maxU(cell.PkUp, pkU)
-			cell.OnMin += onMin
-			if atCap {
-				cell.CapMin += onMin
-			}
-			cell.N++
-		})
-		if c.cfg.Synthetic {
-			c.syntheticServices(now, code, a.down+a.up)
-		}
-	}
-	c.L.Flats = live
-	c.L.FlowAt = now
-	for k, e := range c.ipCode {
-		if now.Sub(e.seen) > 24*time.Hour {
-			delete(c.ipCode, k)
-		}
-	}
-}
 
 // queueCode returns the account code of a flat's queue "ftn-<code>" (""
 // when the queue is not one of ours).
@@ -710,25 +563,11 @@ func (c *Collector) Run(ctx context.Context) {
 		}
 	}
 	loop(c.cfg.FlowEvery, to(func(cx context.Context) {
-		if c.cfg.IPoE {
-			qs, err := c.rt.SimpleQueues(cx)
-			c.note("queues", err)
-			if err == nil {
-				c.SampleQueues(c.now(), qs)
-			}
-			return
+		qs, err := c.rt.SimpleQueues(cx)
+		c.note("queues", err)
+		if err == nil {
+			c.SampleQueues(c.now(), qs)
 		}
-		ss, err := c.rt.ActiveSessions(cx)
-		if err != nil {
-			c.note("sessions", err)
-			return
-		}
-		qs, qerr := c.rt.SimpleQueues(cx)
-		if qerr != nil {
-			qs = nil // rates fall back to counter deltas
-		}
-		c.note("sessions", nil)
-		c.SampleSessions(c.now(), ss, qs)
 	}))
 	loop(c.cfg.PortEvery, to(func(cx context.Context) {
 		ifs, err := c.rt.Interfaces(cx)

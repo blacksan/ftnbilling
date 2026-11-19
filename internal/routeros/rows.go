@@ -10,7 +10,7 @@ import (
 )
 
 // The generic row API on the REST client: GET / PUT / PATCH / DELETE per call,
-// with the same PATCH-then-/set fallback the hotspot upsert uses.
+// with a PATCH-then-/set fallback (RouterOS 7.20 answers some PATCH bodies with a bare 500).
 
 func rowsPath(path string) string { return "/" + strings.Trim(strings.TrimSpace(path), "/") }
 

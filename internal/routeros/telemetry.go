@@ -12,20 +12,11 @@ import (
 // Telemetry is the read-only monitoring surface used by the metrics collector.
 // REST and Mock both implement it.
 type Telemetry interface {
-	ActiveSessions(ctx context.Context) ([]Session, error)
 	SimpleQueues(ctx context.Context) ([]SimpleQueue, error)
 	Interfaces(ctx context.Context) ([]Iface, error)
 	DNSCache(ctx context.Context) ([]DNSEntry, error)
 	PingHost(ctx context.Context, target string, count int) (PingResult, error)
 	System(ctx context.Context) (SysInfo, error)
-}
-
-// Session is one /ip/hotspot/active row. BytesIn is upload (from the client),
-// BytesOut is download (to the client).
-type Session struct {
-	ID, User, Address, MAC string
-	BytesIn, BytesOut      uint64
-	Uptime                 time.Duration
 }
 
 // SimpleQueue is a /queue/simple row. RateA/MaxA is the first number of the
@@ -131,21 +122,6 @@ func ParseRouterDuration(s string) time.Duration {
 		i = j
 	}
 	return total
-}
-
-func (c *REST) ActiveSessions(ctx context.Context) ([]Session, error) {
-	var rows []map[string]string
-	if err := c.do(ctx, http.MethodGet, "/ip/hotspot/active", nil, nil, &rows); err != nil {
-		return nil, err
-	}
-	out := make([]Session, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, Session{
-			ID: r[".id"], User: r["user"], Address: r["address"], MAC: r["mac-address"],
-			BytesIn: atou(r["bytes-in"]), BytesOut: atou(r["bytes-out"]), Uptime: ParseRouterDuration(r["uptime"]),
-		})
-	}
-	return out, nil
 }
 
 func splitPair(s string) (int64, int64) {
@@ -302,22 +278,4 @@ func parseTemp(raw json.RawMessage) (float64, bool) {
 		}
 	}
 	return 0, false
-}
-
-// Hosts reads /ip/hotspot/host.
-func (c *REST) Hosts(ctx context.Context) ([]Host, error) {
-	var rows []map[string]string
-	if err := c.do(ctx, http.MethodGet, "/ip/hotspot/host", nil, nil, &rows); err != nil {
-		return nil, err
-	}
-	out := make([]Host, 0, len(rows))
-	for _, r := range rows {
-		addr := r["address"]
-		if addr == "" {
-			addr = r["to-address"]
-		}
-		out = append(out, Host{MAC: r["mac-address"], Address: addr, HostName: r["host-name"],
-			Authorized: isTrue(r["authorized"]), Bypassed: isTrue(r["bypassed"])})
-	}
-	return out, nil
 }
