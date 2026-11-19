@@ -318,6 +318,9 @@ type SiteInput struct {
 	PPPoEUser, PPPoEPass                    string
 	PPPoEPassClear                          bool
 	LANPorts, LANSubnet                     string
+	// Confirm says the operator accepted the warning for a change of the OLT port or VLAN on a router
+	// that is set up (customers lose service until the OLT uses the new setting). Not stored.
+	Confirm bool
 }
 
 // SiteInputOf is the input that leaves a router as it is (a PATCH starts from it).
@@ -327,6 +330,9 @@ func SiteInputOf(st store.Site) SiteInput {
 		WANMode: st.WANMode, WANAddress: st.WANAddress, WANGateway: st.WANGateway, WANDNS: st.WANDNS, PPPoEUser: st.PPPoEUser,
 		LANPorts: st.LANPorts, LANSubnet: st.LANSubnet}
 }
+
+// ErrOLTConfirmRequired: the OLT port or the VLAN of a set-up router cannot change without confirm.
+var ErrOLTConfirmRequired = errors.New("Customers on the OLT lose service until the OLT uses the new setting. Confirm to change the OLT port or the VLAN.")
 
 // ErrNoDataKey: a PPPoE password cannot be stored without DATA_KEY.
 var ErrNoDataKey = errors.New("the PPPoE password cannot be saved: DATA_KEY is not set on the server")
@@ -441,6 +447,9 @@ func (m *Manager) CreateSite(in SiteInput) (store.Site, error) {
 // UpdateSite saves the editable fields and restarts the building's runtime.
 func (m *Manager) UpdateSite(id string, in SiteInput) error {
 	var portsChanged bool
+	if err := m.checkPortsExist(id, in); err != nil {
+		return err
+	}
 	err := m.st.Update(func(d *store.Data) error {
 		portsChanged = false
 		cur, ok := d.Sites[id]
@@ -470,6 +479,9 @@ func (m *Manager) UpdateSite(id string, in SiteInput) error {
 		}
 		was, now := m.Effective(cur), m.Effective(s)
 		portsChanged = now.BenchPort != was.BenchPort || now.OLTInterface != was.OLTInterface || now.VLANID != was.VLANID
+		if (now.OLTInterface != was.OLTInterface || now.VLANID != was.VLANID) && cur.Runnable() && !in.Confirm {
+			return ErrOLTConfirmRequired
+		}
 		d.Sites[id] = s
 		return nil
 	})
@@ -480,6 +492,41 @@ func (m *Manager) UpdateSite(id string, in SiteInput) error {
 		}
 	}
 	return err
+}
+
+// checkPortsExist refuses a new OLT port or customer port the router does not have (a typo would
+// otherwise move the old port's membership away from working customers). It needs the router to
+// answer; when it does not, or the router is not set up yet, the layout validation alone decides.
+func (m *Manager) checkPortsExist(id string, in SiteInput) error {
+	var cur store.Site
+	var ok bool
+	m.st.View(func(d *store.Data) { cur, ok = d.Sites[id] })
+	if !ok || !cur.Runnable() {
+		return nil
+	}
+	was := m.Effective(cur)
+	bench := strings.TrimSpace(in.BenchPort)
+	olt := m.Effective(store.Site{OLTInterface: strings.TrimSpace(in.OLTInterface)}).OLTInterface
+	if (bench == "" || bench == was.BenchPort) && olt == was.OLTInterface {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), routeros.DefaultTimeout)
+	defer cancel()
+	choices := m.PortChoices(ctx, id)
+	if len(choices) == 0 {
+		return nil
+	}
+	has := map[string]bool{}
+	for _, c := range choices {
+		has[c] = true
+	}
+	if olt != was.OLTInterface && !has[olt] {
+		return fieldErr("olt_interface", "The router has no port called %s. Its ports: %s.", olt, strings.Join(choices, ", "))
+	}
+	if bench != "" && bench != was.BenchPort && !has[bench] {
+		return fieldErr("bench_port", "The router has no port called %s. Its ports: %s.", bench, strings.Join(choices, ", "))
+	}
+	return nil
 }
 
 // SetDisabled pauses or resumes a building. The WireGuard peer is kept.

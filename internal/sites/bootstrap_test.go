@@ -163,7 +163,7 @@ func TestBootstrapCommand(t *testing.T) {
 	// the fetches and the import are wrapped: a failure removes both files and says nothing was changed
 	wrap := strings.Index(c, ":do { /tool/fetch")
 	imp := strings.Index(c, "/import ftn-reset.rsc")
-	onErr := strings.Index(c, `on-error={ /file/remove [/file/find where name="ftn-setup.rsc"]; /file/remove [/file/find where name="ftn-reset.rsc"]; :put "ftn: setup failed, nothing was changed, files removed" }`)
+	onErr := strings.Index(c, `on-error={ /file/remove [/file/find where name="ftn-setup.rsc"]; /file/remove [/file/find where name="ftn-reset.rsc"]; :put "ftn: setup failed, nothing was changed, files removed"; :if ($d = 1) do={ :do { /ip/dns/set servers="" } on-error={}; :put "ftn: the DNS servers this line set were put back to empty" } }`)
 	if wrap < 0 || imp < wrap || onErr < imp || strings.Count(c, "/tool/fetch") != 2 || wrap > strings.Index(c, "/tool/fetch") {
 		t.Fatalf("fetch+fetch+import not wrapped in :do/on-error: %s", c)
 	}
@@ -662,5 +662,24 @@ func TestBootstrapCommandGivesDNSWhenNone(t *testing.T) {
 	}
 	if strings.ContainsAny(c, "\r\n") {
 		t.Fatal("the paste line must stay one line")
+	}
+}
+
+// A line that gave the router DNS servers puts them back to empty when the setup fails, and only then.
+func TestBootstrapCommandRestoresDNSOnFailure(t *testing.T) {
+	c := BootstrapCommand("https://isp.example.co.ke/", "TOK", true)
+	set, flag := strings.Index(c, ":set d 1"), strings.Index(c, ":local d 0")
+	onErr := strings.Index(c, `:if ($d = 1) do={ :do { /ip/dns/set servers="" } on-error={}`)
+	fail := strings.Index(c, "ftn: setup failed")
+	_ = fail
+	dns := strings.Index(c, "/ip/dns/set servers="+PasteLineDNS)
+	if flag < 0 || set < 0 || onErr < 0 || !(flag < dns && dns < set && set < onErr && fail < onErr) {
+		t.Fatalf("flag %d dns %d set %d restore %d failure %d", flag, dns, set, onErr, fail)
+	}
+	if strings.Count(c, ":set d 1") != 1 || strings.ContainsAny(c, "\r\n") {
+		t.Fatal("the flag is set once, only where the line sets DNS, and the line stays one line")
+	}
+	if n := BootstrapCommand("https://isp.example.co.ke", "TOK", false); !strings.Contains(n, `servers=""`) {
+		t.Fatal("the no-check line restores DNS too")
 	}
 }

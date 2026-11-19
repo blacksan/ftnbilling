@@ -80,7 +80,9 @@ type cpEntry struct {
 	fails int
 	next  time.Time
 	last  string // the last event text written (an unchanged error is recorded once)
-	auto  map[string]*autoState
+	// nextSweep: SweepSite does nothing before this time (5 minutes after a clean pass, 1 minute after a change or failure).
+	nextSweep time.Time
+	auto      map[string]*autoState
 }
 
 type cpState struct {
@@ -196,21 +198,28 @@ type cpResult struct {
 // makes the extra customer port and the OLT port match the fields. force
 // ignores the backoff (a save). The sweep calls it with force false.
 func (m *Manager) EnsureCustomerPort(ctx context.Context, siteID string, force bool) CustomerPortStatus {
+	st, _ := m.ensureCustomerPort(ctx, siteID, force)
+	return st
+}
+
+// ensureCustomerPort is EnsureCustomerPort that also says whether the pass wrote or failed.
+// A background pass (not force) leaves a router with paused automatic fixes alone; a save is an explicit action and runs.
+func (m *Manager) ensureCustomerPort(ctx context.Context, siteID string, force bool) (CustomerPortStatus, bool) {
 	e := m.cport.entry(siteID)
 	e.run.Lock()
 	defer e.run.Unlock()
 	var site store.Site
 	var ok bool
 	m.st.View(func(d *store.Data) { site, ok = d.Sites[siteID] })
-	if !ok || !site.Runnable() {
-		return m.CustomerPortStatus(siteID)
+	if !ok || !site.Runnable() || (!force && m.AutoFixPause(siteID).Paused) {
+		return m.CustomerPortStatus(siteID), false
 	}
 	eff := m.Effective(site)
 	now := m.now()
 	e.mu.Lock()
 	if !force && now.Before(e.next) {
 		e.mu.Unlock()
-		return m.CustomerPortStatus(siteID)
+		return m.CustomerPortStatus(siteID), false
 	}
 	e.mu.Unlock()
 
@@ -257,12 +266,15 @@ func (m *Manager) EnsureCustomerPort(ctx context.Context, siteID string, force b
 	if len(res.applied) > 0 {
 		m.chk.drop(siteID)
 	}
-	return st
+	return st, len(res.applied) > 0 || res.failed || res.state == PortError
 }
 
 var cpTables = []string{"/interface/bridge/port", "/interface", "/interface/vlan", "/interface/list/member", "/ip/address", "/ip/dhcp-server", "/ip/dhcp-client"}
 
-// cpPass reads the router and writes what the customer ports need.
+// cpPass reads the router and writes what the customer ports need. Order matters
+// for customers: everything new is written first, and nothing old is removed
+// until the replacement is in place; when anything is wrong (a typo'd port, a
+// port in another bridge) nothing at all is removed.
 func (m *Manager) cpPass(ctx context.Context, siteID string, eff store.Site) cpResult {
 	rt := m.Router(siteID)
 	bridges, err := rt.Rows(ctx, "/interface/bridge", nil)
@@ -280,9 +292,6 @@ func (m *Manager) cpPass(ctx context.Context, siteID string, eff store.Site) cpR
 	}
 	w := m.newFixWriter(rt, eff)
 	plan := planCustomerPorts(sn, eff)
-	for iface := range plan.stale {
-		w.stale[iface] = true
-	}
 	for _, p := range plan.ensure {
 		w.custPorts[p] = true
 	}
@@ -295,31 +304,17 @@ func (m *Manager) cpPass(ctx context.Context, siteID string, eff store.Site) cpR
 		return res
 	}
 
-	// 1. the server's own membership of ports that are no longer wanted
-	for _, r := range plan.staleRows {
-		if err := w.removeRow(ctx, "/interface/bridge/port", r); err != nil {
-			return fail(err)
-		}
-		w.note("took %s out of %s", r["interface"], CustomerBridge)
-	}
-	// 2. the OLT uplink
+	// 1. new: the OLT uplink (the customer VLAN is added or moved onto the OLT port)
 	if plan.oltProblem == "" && plan.vlanName != "" {
 		if err := ensureCustomerVLAN(ctx, w, sn, eff, plan); err != nil {
 			var pe *planError
-			if errors.As(err, &pe) {
-				plan.oltProblem = pe.msg
-			} else {
+			if !errors.As(err, &pe) {
 				return fail(err)
 			}
-		}
-		for _, r := range plan.oltBridgeRows { // a member of br-customers made by the server: out of the bridge
-			if err := w.removeRow(ctx, "/interface/bridge/port", r); err != nil {
-				return fail(err)
-			}
-			w.note("took %s out of %s (it carries VLAN %d now)", r["interface"], CustomerBridge, eff.VLANID)
+			plan.oltProblem = pe.msg
 		}
 	}
-	// 3. memberships
+	// 2. new: the memberships of br-customers
 	for _, p := range plan.ensure {
 		if p == plan.benchPort && plan.benchProblem != "" {
 			continue
@@ -329,6 +324,30 @@ func (m *Manager) cpPass(ctx context.Context, siteID string, eff store.Site) cpR
 		}
 		if err := ensureMember(ctx, w, sn, p); err != nil {
 			return fail(err)
+		}
+	}
+	// 3. old: only when everything is right, and only the server's own rows
+	if plan.oltProblem == "" && plan.benchProblem == "" {
+		for _, r := range plan.oltBridgeRows { // VLAN set: the OLT port itself leaves the bridge
+			w.stale[r["interface"]] = true
+			if err := w.removeRow(ctx, "/interface/bridge/port", r); err != nil {
+				return fail(err)
+			}
+			w.note("took %s out of %s (it carries VLAN %d now)", r["interface"], CustomerBridge, eff.VLANID)
+		}
+		for _, r := range plan.staleRows {
+			w.stale[r["interface"]] = true
+			if err := w.removeRow(ctx, "/interface/bridge/port", r); err != nil {
+				return fail(err)
+			}
+			w.note("took %s out of %s", r["interface"], CustomerBridge)
+		}
+		for _, v := range plan.leftoverVLANs {
+			w.oldVLANs[v["name"]] = true
+			if err := w.removeRow(ctx, "/interface/vlan", v); err != nil {
+				return fail(err)
+			}
+			w.note("removed the old customer VLAN %s", v["name"])
 		}
 	}
 	res.applied = append(res.applied, w.applied...)
@@ -371,9 +390,9 @@ type customerPlan struct {
 	benchProblem        string
 	oltProblem          string
 	ensure              []string // ports that must be members of br-customers
-	stale               map[string]bool
 	staleRows           []routeros.Row
 	oltBridgeRows       []routeros.Row
+	leftoverVLANs       []routeros.Row // customer VLAN interfaces the server made that are no longer wanted
 }
 
 func serverMade(c string) bool { return c == CustPortComment || c == oldBenchComment }
@@ -428,10 +447,13 @@ func portProblems(sn *snapshot, site store.Site, iface, role string) []string {
 			}
 		}
 	}
-	if role == "bench" {
+	// A VLAN interface the server did not make on a port that would join br-customers without a VLAN
+	// is reported in words (the port in the bridge would swallow its traffic); the server's own old
+	// customer VLAN is a leftover, removed once the replacement is in place.
+	if role == "bench" || (role == "olt" && site.VLANID == 0) {
 		for _, r := range sn.tbl("/interface/vlan") {
-			if r["interface"] == iface {
-				out = append(out, "a VLAN interface ("+r["name"]+") sits on "+iface)
+			if r["interface"] == iface && r["comment"] != CustVLANComment {
+				out = append(out, "a VLAN interface ("+r["name"]+") sits on "+iface+"; the server will not put it in the customer bridge")
 				break
 			}
 		}
@@ -440,7 +462,7 @@ func portProblems(sn *snapshot, site store.Site, iface, role string) []string {
 }
 
 func planCustomerPorts(sn *snapshot, site store.Site) customerPlan {
-	p := customerPlan{benchPort: site.BenchPort, stale: map[string]bool{}}
+	p := customerPlan{benchPort: site.BenchPort}
 	if site.VLANID > 0 {
 		p.vlanName = customerVLANName(site.VLANID)
 	}
@@ -463,12 +485,21 @@ func planCustomerPorts(sn *snapshot, site store.Site) customerPlan {
 	} else {
 		p.ensure = append(p.ensure, site.OLTInterface)
 	}
+	leftover := map[string]bool{}
+	for _, r := range sn.tbl("/interface/vlan") {
+		if r["comment"] == CustVLANComment && r["name"] != p.vlanName {
+			leftover[r["name"]] = true
+			p.leftoverVLANs = append(p.leftoverVLANs, r)
+		}
+	}
 	protected := map[string]bool{site.OLTInterface: true, site.WANInterface: true}
 	for _, e := range p.ensure {
 		protected[e] = true
 	}
 	for _, r := range sn.tbl("/interface/vlan") {
-		protected[r["name"]] = true
+		if !leftover[r["name"]] {
+			protected[r["name"]] = true
+		}
 	}
 	for _, l := range SplitPorts(site.LANPorts) {
 		protected[l] = true
@@ -478,7 +509,6 @@ func planCustomerPorts(sn *snapshot, site store.Site) customerPlan {
 	}
 	for _, r := range sn.tbl("/interface/bridge/port") {
 		if r["bridge"] == CustomerBridge && serverMade(r["comment"]) && r["interface"] != "" && !protected[r["interface"]] {
-			p.stale[r["interface"]] = true
 			p.staleRows = append(p.staleRows, r)
 		}
 	}
@@ -544,7 +574,7 @@ func ensureCustomerVLAN(ctx context.Context, w *fixWriter, sn *snapshot, site st
 // newFixWriter makes the allowlisted writer for a building's router.
 func (m *Manager) newFixWriter(rt routeros.Client, eff store.Site) *fixWriter {
 	insp, _ := rt.(routeros.Inspector)
-	w := &fixWriter{rt: rt, insp: insp, ifaces: map[string]bool{}, custPorts: map[string]bool{}, stale: map[string]bool{}, serverIP: ServerTunnelIP(m.pfx)}
+	w := &fixWriter{rt: rt, insp: insp, ifaces: map[string]bool{}, custPorts: map[string]bool{}, stale: map[string]bool{}, oldVLANs: map[string]bool{}, serverIP: ServerTunnelIP(m.pfx)}
 	for _, n := range []string{eff.OLTInterface, CustomerBridge} {
 		if n != "" {
 			w.ifaces[n] = true

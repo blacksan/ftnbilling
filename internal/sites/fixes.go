@@ -83,6 +83,7 @@ type fixWriter struct {
 	ifaces    map[string]bool // the OLT port of this building (fixOLT) and the customer bridge
 	custPorts map[string]bool // ports (and the customer VLAN interface) the server may put in br-customers
 	stale     map[string]bool // ports whose "ftn: customer port" membership of br-customers the server may remove
+	oldVLANs  map[string]bool // the server's own old customer VLAN interfaces it may remove once the new one is in place
 	vlanName  string          // the customer VLAN interface the server may add or move
 	oltPort   string          // the interface that VLAN sits on
 	custIface string          // the customer interface, for the DNS accept rules
@@ -132,8 +133,8 @@ func (w *fixWriter) allowedRow(path string, row routeros.Row) error {
 			return forbid("bridge port " + iface + " (bridge " + row["bridge"] + ") is not a customer port of this building")
 		}
 	case "/interface/vlan":
-		if row["name"] != w.vlanName || w.vlanName == "" || row["comment"] != CustVLANComment {
-			return forbid("a VLAN interface that is not the customer VLAN the server made")
+		if row["comment"] != CustVLANComment || !((w.vlanName != "" && row["name"] == w.vlanName) || w.oldVLANs[row["name"]]) {
+			return forbid("a VLAN interface that is not a customer VLAN the server made")
 		}
 	case "/ip/traffic-flow/target":
 		if w.serverIP == "" || row["dst-address"] != w.serverIP {
@@ -273,6 +274,10 @@ func (w *fixWriter) setRow(ctx context.Context, path string, row routeros.Row, d
 // removeRow deletes one existing row; row is the row as just read.
 func (w *fixWriter) removeRow(ctx context.Context, path string, row routeros.Row) error {
 	switch path {
+	case "/interface/vlan":
+		if !w.oldVLANs[row["name"]] || row["comment"] != CustVLANComment {
+			return forbid("only the server's own old customer VLAN may be removed")
+		}
 	case "/interface/bridge/port", "/ip/traffic-flow/target", "/ip/firewall/filter", "/ip/firewall/nat", "/file":
 		if err := w.allowedRow(path, row); err != nil {
 			return err
@@ -512,6 +517,10 @@ func roleRank(role string) int {
 // *RouterRefusedError for a router that answered with an error, and
 // billing.ErrNoSite. The result holds the re-read item and what was done.
 func (m *Manager) ApplyFix(ctx context.Context, siteID, checkID string, confirm bool, actorRole string) (FixResult, error) {
+	// one writer at a time per router: the sweep's passes and this fix never run together
+	e := m.cport.entry(siteID)
+	e.run.Lock()
+	defer e.run.Unlock()
 	return m.applyFix(ctx, siteID, checkID, confirm, actorRole, false)
 }
 
@@ -638,6 +647,9 @@ type AutoFixOutcome struct {
 // by "system". Fixes that need confirmation are not run. W5c / the join hook
 // call it after a successful join; it is safe to call again.
 func (m *Manager) ApplyAutoFixes(ctx context.Context, siteID string) ([]AutoFixOutcome, error) {
+	e := m.cport.entry(siteID)
+	e.run.Lock()
+	defer e.run.Unlock()
 	c, err := m.Checks(ctx, siteID, true)
 	if err != nil {
 		return nil, err
