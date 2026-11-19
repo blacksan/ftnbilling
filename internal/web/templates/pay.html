@@ -3,7 +3,7 @@
 {{if .Found}}
 <div class="card"><div class="flat">{{.Flat}}{{if .ByCode}} · Account {{.Code}}{{end}}</div>
 {{if .ByCode}}<p style="margin:6px 0">{{if eq .State "active"}}<span class="pill active">Active</span> until <b>{{eat .ExpiresAt}}</b>
-{{else if eq .State "expired"}}<span class="pill expired">Expired</span> on {{eat .ExpiresAt}}
+{{else if eq .State "expired"}}<span class="pill expired">Plan ended</span> Your plan ended at <b>{{eat .ExpiresAt}}</b>
 {{else}}<span class="pill new">No package yet</span>{{end}}</p>{{end}}</div>
 {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
 <form method="post" action="/pay/start"><input type="hidden" name="_pcsrf" value="{{.CSRF}}"><input type="hidden" name="tok" value="{{.Tok}}">

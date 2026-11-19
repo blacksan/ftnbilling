@@ -991,7 +991,10 @@ EOF
     # requests redirected to this server's public IP, whatever site they asked
     # for. Send them to the payment page. (Caddy already redirects http to https
     # for $DOMAIN itself; this only catches every other host name.)
-    catchall=$(printf '\n# Any other plain-HTTP host (customers suspended on the router): to the payment page.\nhttp:// {\n\tredir https://%s/pay 302\n}\n' "$DOMAIN")
+    # The domain itself keeps its permanent http->https redirect; this block spells it out (and puts it first, inside
+    # route, which keeps the written order) so the catch-all can never swallow it. ACME HTTP challenges are answered by
+    # Caddy before any route, so they are untouched. 302, never 204 or "Success": the device must see a portal.
+    catchall=$(printf '\n# Any other plain-HTTP host (customers suspended on the router, a captive-portal probe): to the payment page.\nhttp:// {\n\troute {\n\t\t@own host %s\n\t\tredir @own https://%s{uri} permanent\n\t\tredir https://%s/pay 302\n\t}\n}\n' "$DOMAIN" "$DOMAIN" "$DOMAIN")
   fi
   CF_SITE=$site; CF_CB=$cbblock; CF_CATCHALL=$catchall
   render_caddyfile | writef 644 root:root /etc/caddy/Caddyfile

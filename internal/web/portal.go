@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"ispbill/internal/store"
@@ -13,6 +14,12 @@ import (
 
 func (s *Server) portalRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /portal", toPay)
+	// The operating systems' captive-portal probes. Behind Caddy on a domain install they never get this far (every
+	// plain-HTTP host is redirected to /pay there); on an install without a domain they reach us with the probe's
+	// own Host, and the redirect keeps that Host, which the router sends back here again.
+	for _, probe := range []string{"/hotspot-detect.html", "/library/test/success.html", "/generate_204", "/gen_204", "/connecttest.txt", "/ncsi.txt", "/success.txt", "/canonical.html"} {
+		mux.HandleFunc("GET "+probe, captiveToPay)
+	}
 	s.payRoutes(mux)
 	mux.HandleFunc("GET /brand.woff2", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "font/woff2")
@@ -40,6 +47,12 @@ func (s *Server) portalRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/orders/{id}", s.apiOrder)
 }
 
+// captiveToPay answers a probe with a 302 (a 204 or a "Success" page would tell the device it is online).
+func captiveToPay(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	http.Redirect(w, r, "/pay", http.StatusFound)
+}
+
 func toPay(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/pay", http.StatusSeeOther)
 }
@@ -64,7 +77,8 @@ func (s *Server) apiOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"` + o.Status + `","reason":` + jsonStr(o.Reason) + `}`))
+	online := o.Status == store.OrderPaid && s.svc.OrderOnline(o)
+	w.Write([]byte(`{"status":"` + o.Status + `","reason":` + jsonStr(o.Reason) + `,"online":` + strconv.FormatBool(online) + `}`))
 }
 
 func (s *Server) portalSuccess(w http.ResponseWriter, r *http.Request) {
@@ -88,7 +102,7 @@ func (s *Server) portalSuccess(w http.ResponseWriter, r *http.Request) {
 	})
 	s.render(w, "success", map[string]any{
 		"Brand": s.cfg.BrandName, "SiteName": s.siteName(o.SiteID), "Acct": a, "Pkg": pkg,
-		"Support": support, "Expires": a.ExpiresAt,
+		"Support": support, "Expires": a.ExpiresAt, "Order": o.ID,
 	})
 }
 

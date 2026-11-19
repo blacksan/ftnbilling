@@ -344,6 +344,11 @@ func (s *Server) payChoose(w http.ResponseWriter, r *http.Request, p payPage, a 
 		}
 	}
 	p.Phone = r.FormValue("phone")
+	if p.Phone == "" && byCode {
+		// Prefilled (and editable) only for a visitor who typed the account code: a flat label is easy to guess, and
+		// must not show a stranger a neighbour's number.
+		p.Phone = localPhone(a.Phone)
+	}
 	s.render(w, "pay", p)
 }
 
@@ -467,4 +472,12 @@ func (s *Server) payVoucher(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/portal/success?order="+o.ID, http.StatusSeeOther)
+}
+
+// localPhone shows a stored 2547XXXXXXXX number the way people type it (07XX XXX XXX, no spaces).
+func localPhone(p string) string {
+	if len(p) == 12 && strings.HasPrefix(p, "254") {
+		return "0" + p[3:]
+	}
+	return p
 }

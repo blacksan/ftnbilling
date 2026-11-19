@@ -821,3 +821,17 @@ func blockedSet(m map[string]string) map[string]bool {
 	}
 	return out
 }
+
+// OrderOnline reports whether a paid order's flat is switched back on at its router: no queued router task for the
+// account, no suspended entry, and the building was compared with the router after the payment. The pay page's
+// "You're back online" waits for this.
+func (s *Service) OrderOnline(o store.Order) bool {
+	if o.Status != store.OrderPaid {
+		return false
+	}
+	st := s.AccountRouterState(o.AccountID)
+	if st.PendingTask || st.SuspendedOnRouter {
+		return false
+	}
+	return !s.ProvisionStatus(o.SiteID).LastRunAt.Before(o.PaidAt)
+}

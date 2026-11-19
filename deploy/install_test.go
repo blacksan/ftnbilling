@@ -137,7 +137,7 @@ func TestInstallCaddyfile(t *testing.T) {
 		}
 		return string(out)
 	}
-	withDomain := render("billing.example.co.ke", "''", "http:// {\n\tredir https://billing.example.co.ke/pay 302\n}")
+	withDomain := render("billing.example.co.ke", "''", "http:// {\n\troute {\n\t\t@own host billing.example.co.ke\n\t\tredir @own https://billing.example.co.ke{uri} permanent\n\t\tredir https://billing.example.co.ke/pay 302\n\t}\n}")
 	for _, want := range []string{"billing.example.co.ke {", "reverse_proxy 127.0.0.1:8080", "http:// {", "redir https://billing.example.co.ke/pay 302", "X-Forwarded-For"} {
 		if !strings.Contains(withDomain, want) {
 			t.Errorf("Caddyfile lacks %q:\n%s", want, withDomain)
@@ -147,6 +147,19 @@ func TestInstallCaddyfile(t *testing.T) {
 		if strings.Contains(withDomain, bad) {
 			t.Errorf("Caddyfile still has %q:\n%s", bad, withDomain)
 		}
+	}
+	// The catch-all as install.sh writes it: any other plain-HTTP host (a walled flat's dst-nat'd request keeps its own
+	// Host) gets a 302 to the payment page, after the domain's own permanent redirect, inside route so the order holds.
+	src, _ := os.ReadFile("install.sh")
+	for _, want := range []string{"http:// {\\n\\troute {", "@own host %s", "redir @own https://%s{uri} permanent", "redir https://%s/pay 302"} {
+		if !strings.Contains(string(src), want) {
+			t.Errorf("install.sh catch-all lacks %q", want)
+		}
+	}
+	own := strings.Index(withDomain, "redir @own")
+	pay := strings.Index(withDomain, "/pay 302")
+	if own < 0 || pay < own {
+		t.Errorf("the domain's own redirect must come before the 302 catch-all:\n%s", withDomain)
 	}
 	ip := render(":80", "''", "")
 	if strings.Contains(ip, "http://") || strings.Contains(ip, "redir") {

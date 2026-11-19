@@ -684,3 +684,83 @@ func TestBootstrapCommandRestoresDNSOnFailure(t *testing.T) {
 		t.Fatal("the no-check line restores DNS too")
 	}
 }
+
+// The captive page works because of these rules, in this order: a walled flat (unregistered range, or expired and
+// on ftn-suspended) reaches only the router's DNS and the server on 80/443; its plain HTTP to any other host is
+// dst-nat'd to the server's port 80 (so the device's own probe lands on the payment page); everything else is
+// refused at once (tcp-reset), above established/related so a connection that was open when the plan ended is cut.
+func TestBootstrapWalledGardenCaptiveRules(t *testing.T) {
+	out, err := RenderBootstrap(benchInput(benchSite()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, l := range strings.Split(string(out), "\n") {
+		lines = append(lines, strings.TrimSpace(l))
+	}
+	find := func(sub ...string) int {
+		t.Helper()
+		for i, l := range lines {
+			ok := true
+			for _, s := range sub {
+				ok = ok && strings.Contains(l, s)
+			}
+			if ok {
+				return i
+			}
+		}
+		t.Fatalf("no line with %q", sub)
+		return -1
+	}
+	const pub = "203.0.113.10"
+	for _, list := range []string{"ftn-unreg", "ftn-suspended"} {
+		// Plain HTTP to anywhere but the server goes to the server's port 80; the server itself is excluded.
+		nat := find("/ip/firewall/nat add chain=dstnat action=dst-nat", "protocol=tcp dst-port=80", "dst-address=!"+pub, "src-address-list="+list, "to-addresses="+pub, "to-ports=80")
+		// HTTPS is never redirected (a redirect would only give a certificate error).
+		for _, l := range lines {
+			if strings.Contains(l, "/ip/firewall/nat") && strings.Contains(l, "src-address-list="+list) && strings.Contains(l, "dst-port=443") {
+				t.Errorf("HTTPS must not be redirected: %s", l)
+			}
+		}
+		dnsU := find("/ip/firewall/nat add chain=dstnat action=redirect protocol=udp dst-port=53", "src-address-list="+list)
+		dnsT := find("/ip/firewall/nat add chain=dstnat action=redirect protocol=tcp dst-port=53", "src-address-list="+list)
+		if dnsU > nat || dnsT > nat {
+			t.Errorf("%s: DNS redirects must come before the HTTP dst-nat", list)
+		}
+		// Forward chain, top to bottom: server 80/443 accepted, other TCP reset, the rest refused, then est/rel.
+		acc := find("chain=forward action=accept protocol=tcp dst-port=80,443 dst-address="+pub, "src-address-list="+list)
+		rst := find("chain=forward action=reject reject-with=tcp-reset protocol=tcp", "src-address-list="+list)
+		rej := find("chain=forward action=reject reject-with=icmp-admin-prohibited", "src-address-list="+list)
+		custER := find("chain=forward action=accept connection-state=established,related src-address=10.5.50.0/24")
+		allER := find("chain=forward action=accept connection-state=established,related", `comment="ftn: forward est/rel"`)
+		if !(acc < rst && rst < rej && rej < custER && custER < allER) {
+			t.Errorf("%s: forward order wrong: accept %d, tcp-reset %d, reject %d, customer est/rel %d, est/rel %d", list, acc, rst, rej, custER, allER)
+		}
+		// Router input: DNS (all customers) is accepted above the walled drop; DHCP and ping for the walled; no WebFig.
+		dnsIn := find("chain=input action=accept protocol=udp dst-port=53 in-interface=br-customers")
+		drop := find("chain=input action=drop src-address-list=" + list)
+		if dnsIn > drop {
+			t.Errorf("%s: the router's DNS must stay reachable for a walled flat", list)
+		}
+	}
+	// The forward chain sees the address after dst-nat: a rule for the server's 80/443 therefore also admits the
+	// redirected probe. The router must resolve names for the walled (the probe hosts, isp.ftw.co.ke).
+	find("/ip/dns set servers=", "allow-remote-requests=yes")
+	// Router rules are written only after the tunnel interface exists, and the hold is lifted last.
+	if find(`/interface/wireguard add name=`) > find("chain=forward action=accept protocol=tcp dst-port=80,443") {
+		t.Error("a rule may not name an interface that does not exist yet")
+	}
+	lastHold := -1
+	for i, l := range lines {
+		if l == `/ip/firewall/filter remove [find where comment="ftn: hold"]` {
+			lastHold = i
+		}
+	}
+	if lastHold < find("/ip/firewall/nat add chain=dstnat action=dst-nat") {
+		t.Error("the hold must stay until the walled rules are in")
+	}
+	// RouterOS 7.25.1: no comment on traffic-flow targets.
+	if l := lines[find("/ip/traffic-flow/target add")]; strings.Contains(l, "comment") {
+		t.Errorf("traffic-flow target takes no comment: %s", l)
+	}
+}
