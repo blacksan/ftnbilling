@@ -1,0 +1,118 @@
+# FTN Admin (Android). Every push that touches android/ runs lint, unit tests and a debug build.
+# Tag android-vX.Y.Z builds a signed release APK and attaches it to a GitHub Release that is
+# NEVER marked "latest": deploy/install.sh installs the server from releases/latest.
+name: android
+on:
+  push:
+    branches: ['**']
+    tags: ['android-v*']
+    paths:
+      - 'android/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      # The Gradle wrapper jar is not committed yet; a pinned Gradle is used instead.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+      - name: Lint, unit tests, debug build
+        run: gradle -p android lint testDebugUnitTest assembleDebug --stacktrace
+      - name: Show lint findings on failure
+        if: failure()
+        run: cat android/app/build/reports/lint-results-debug.txt 2>/dev/null | head -150 || true
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ftn-admin-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+      - name: Upload reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-reports
+          path: |
+            android/app/build/reports/
+            android/app/build/test-results/
+          if-no-files-found: ignore
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/android-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check signing secrets
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          missing=""
+          for v in ANDROID_KEYSTORE_B64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Cannot publish $TAG: missing repository secrets:$missing. See android/README.md (Releases) to create the keystore and add them."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+      - name: Decode keystore
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+      - name: Build signed release APK
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          gradle -p android assembleRelease \
+            -PversionName="${TAG#android-v}" \
+            -PversionCode=${{ github.run_number }}
+      - name: Verify signature and name the artifacts
+        run: |
+          ver="${TAG#android-v}"
+          apk=$(ls android/app/build/outputs/apk/release/*.apk | head -n1)
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n1)
+          "$apksigner" verify --print-certs "$apk"
+          mkdir -p out
+          cp "$apk" "out/ftn-admin-$ver.apk"
+          (cd out && sha256sum "ftn-admin-$ver.apk" > "ftn-admin-$ver.apk.sha256")
+          cat out/*.sha256
+      - name: Publish release (not latest)
+        run: |
+          ver="${TAG#android-v}"
+          gh release create "$TAG" --title "FTN Admin $ver" --generate-notes --latest=false
+          gh release upload "$TAG" "out/ftn-admin-$ver.apk" "out/ftn-admin-$ver.apk.sha256" --clobber

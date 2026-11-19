@@ -38,5 +38,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes --latest
           gh release upload "$TAG" dist/ftnbilling-"$TAG"-linux-amd64.tar.gz dist/ftnbilling-"$TAG"-linux-arm64.tar.gz dist/SHA256SUMS --clobber
