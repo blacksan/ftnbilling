@@ -337,26 +337,6 @@ func (s *Server) apiAccountPatch(w http.ResponseWriter, r *http.Request, c *apiC
 	if req.Unit == nil {
 		req.Unit = req.Flat
 	}
-	// Moving first: the unit may change with it, and it is the call that can be refused.
-	moveApt, moveSite := "", ""
-	if req.ApartmentID != nil {
-		moveApt = *req.ApartmentID
-	}
-	if req.SiteID != nil {
-		moveSite = *req.SiteID
-	}
-	if (moveApt != "" && moveApt != a.ApartmentID) || (moveSite != "" && moveSite != a.SiteID) {
-		in := billing.MoveInput{AccountID: a.ID, ApartmentID: moveApt, SiteID: moveSite}
-		if req.Unit != nil {
-			in.Unit = *req.Unit
-		}
-		if _, err := s.svc.MoveToApartment(r.Context(), in); err != nil && !errors.Is(err, store.ErrNoChange) {
-			s.billingErr(w, err, "")
-			return
-		}
-		a, _ = s.svc.GetAccount(a.ID)
-		c.audit(s, "account "+a.Code+" moved to apartment "+a.ApartmentID)
-	}
 	flat, tenant, phone, notes := a.Unit, a.Tenant, a.Phone, a.Notes
 	if flat == "" {
 		flat = a.Flat
@@ -376,6 +356,38 @@ func (s *Server) apiAccountPatch(w http.ResponseWriter, r *http.Request, c *apiC
 	if strings.TrimSpace(flat) == "" {
 		validationErr(w, map[string]string{"unit": "a unit is required, e.g. B4"})
 		return
+	}
+	// Everything that can be refused for its own form is checked BEFORE a move is committed: a request that
+	// answers an error must not have moved the customer.
+	if err := s.svc.ValidateAccountEdit(flat, phone); err != nil {
+		s.billingErr(w, err, "")
+		return
+	}
+	// Moving first: the unit may change with it, and it is the call that can be refused.
+	moveApt, moveSite := "", ""
+	if req.ApartmentID != nil {
+		moveApt = *req.ApartmentID
+	}
+	if req.SiteID != nil {
+		moveSite = *req.SiteID
+	}
+	if (moveApt != "" && moveApt != a.ApartmentID) || (moveSite != "" && moveSite != a.SiteID) {
+		in := billing.MoveInput{AccountID: a.ID, ApartmentID: moveApt, SiteID: moveSite}
+		if req.Unit != nil {
+			in.Unit = *req.Unit
+		}
+		if _, err := s.svc.MoveToApartment(r.Context(), in); err != nil && !errors.Is(err, store.ErrNoChange) {
+			s.billingErr(w, err, "")
+			return
+		}
+		a, _ = s.svc.GetAccount(a.ID)
+		c.audit(s, "account "+a.Code+" moved to apartment "+a.ApartmentID)
+		if req.Unit == nil {
+			flat = a.Unit // the move may have settled the unit itself
+			if flat == "" {
+				flat = a.Flat
+			}
+		}
 	}
 	if err := s.svc.UpdateAccount(a.ID, flat, tenant, phone, notes); err != nil {
 		s.billingErr(w, err, "")
@@ -435,7 +447,7 @@ func (s *Server) apiAccountPackage(w http.ResponseWriter, r *http.Request, c *ap
 	}
 	var req struct {
 		PackageID string `json:"package_id"`
-		KeepTime  bool   `json:"keep_time"`
+		KeepTime  *bool  `json:"keep_time"` // default true, like the web: only an explicit false starts a fresh period
 	}
 	if !decode(w, r, &req, false) {
 		return
@@ -444,7 +456,7 @@ func (s *Server) apiAccountPackage(w http.ResponseWriter, r *http.Request, c *ap
 		validationErr(w, map[string]string{"package_id": "choose a package"})
 		return
 	}
-	if err := s.svc.ChangePackage(r.Context(), a.ID, req.PackageID, req.KeepTime); err != nil {
+	if err := s.svc.ChangePackage(r.Context(), a.ID, req.PackageID, req.KeepTime == nil || *req.KeepTime); err != nil {
 		s.billingErr(w, err, "")
 		return
 	}

@@ -215,6 +215,7 @@ func (s *Server) buildClients(ctx context.Context, st store.Site, q, kind, onlin
 	for _, d := range s.svc.Unregistered(st.ID, false) {
 		in.Devices = append(in.Devices, sites.ClientDevice{MAC: d.MAC, IP: d.IP, HostName: "", Vendor: d.Vendor, Online: d.Online, LastSeen: d.LastSeen})
 	}
+	in.Dismissed = s.svc.DismissedMACs(st.ID)
 	all := sites.MergeClients(in)
 	items := sites.FilterClients(all, q, kind, online)
 	v := clientsView{Counts: sites.CountClients(all), GeneratedAt: tables.GeneratedAt, Reachable: tables.Reachable}

@@ -162,12 +162,13 @@ type provState struct {
 }
 
 type acctSnap struct {
-	leaseStatus string // bound | waiting | none
-	lastSeen    time.Time
-	suspended   bool // on the router's suspended list
-	clash       bool // a foreign row or a flag keeps this flat from being provisioned
-	inSync      bool
-	err         string
+	leaseStatus     string // bound | waiting | none
+	lastSeen        time.Time
+	suspended       bool // on the router's suspended list
+	suspendedBefore bool // what the router had before this pass wrote
+	clash           bool // a foreign row or a flag keeps this flat from being provisioned
+	inSync          bool
+	err             string
 }
 
 func (s *Service) prov(siteID string) *provState {
@@ -402,6 +403,9 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 		}
 	}
 	ps.mu.Unlock()
+	// A flat that was given an address the router's own static lease already holds (the server had not run a pass
+	// yet when it was made) is moved to a free one; this pass leaves it alone, the next one writes the new address.
+	s.readdressClashes(siteID, pl, pd.foreignIPs)
 	for code, why := range blocked {
 		snap[code] = acctSnap{leaseStatus: "none", clash: true, err: why}
 	}
@@ -424,6 +428,7 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 
 	var firstErr error
 	failed := map[string]bool{}
+	suspFailed := map[string]bool{} // the suspended-list write of this account failed
 	sort.SliceStable(pd.ops, func(i, j int) bool { return pd.ops[i].phase < pd.ops[j].phase })
 	for _, op := range pd.ops {
 		if ctx.Err() != nil {
@@ -442,6 +447,9 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 		if e != nil {
 			run.Failed++
 			failed[op.code] = true
+			if op.path == pathList {
+				suspFailed[op.code] = true
+			}
 			if firstErr == nil {
 				firstErr = fmt.Errorf("%s %s: %w", op.kind, op.desc, e)
 			}
@@ -454,6 +462,9 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	// What the router holds now: a flat is in sync when its rows were all
 	// written (or already right) and nothing clashes.
 	for code, sn := range snap {
+		if suspFailed[code] || run.Waiting || firstErr != nil {
+			sn.suspended = sn.suspendedBefore // the write may not have happened: report what the router had
+		}
 		sn.inSync = !sn.clash && !failed[code] && !run.Waiting
 		if failed[code] {
 			sn.err = "a router write failed"
@@ -722,7 +733,9 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 			add(provOp{phase: phaseSuspend, kind: "add", path: pathList, code: a.Code,
 				body: map[string]string{"list": SuspendedList, "address": a.IP, "comment": w.comment}, desc: fmt.Sprintf("suspend %s (%s)", a.IP, a.Flat)})
 		}
-		sn.suspended = keep != nil
+		// What the router holds once this pass's writes are done (a failed write flips it back below): the answer
+		// to the admin's Suspend must not say "not suspended" for the entry the same pass just added.
+		sn.suspended, sn.suspendedBefore = wantIn, keep != nil
 		snap[a.Code] = sn
 	}
 	for code, rows := range ourList {

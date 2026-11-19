@@ -209,6 +209,19 @@ type UnregDevice struct {
 	BelongsTo *BelongsTo
 }
 
+// DismissedMACs lists the MACs the operator dismissed on a building's router.
+func (s *Service) DismissedMACs(siteID string) []string {
+	var out []string
+	s.st.View(func(d *store.Data) {
+		for _, dv := range d.DeviceList() {
+			if dv.SiteID == siteID && dv.Source == SourceDismissed {
+				out = append(out, dv.MAC)
+			}
+		}
+	})
+	return out
+}
+
 // Unregistered lists the devices that have no account, online first, then by
 // last seen. siteID "" means every building. Dismissed devices are not listed.
 func (s *Service) Unregistered(siteID string, onlineOnly bool) []UnregDevice {
@@ -606,7 +619,7 @@ func (s *Service) CreateCustomer(ctx context.Context, in AddCustomerInput) (stor
 	}
 	rc, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	s.runAccountSite(rc, a.ID)
+	s.runAccountSiteNoCap(rc, a.ID)
 	a, _ = s.GetAccount(a.ID)
 	return a, s.AccountRouterState(a.ID), nil
 }

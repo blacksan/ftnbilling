@@ -60,7 +60,7 @@ Write (role operator/owner):
 | PATCH `/accounts/{id}` | `{flat?,tenant?,phone?,notes?}` | `Account` |
 | PUT `/accounts/{id}/mac` | `{mac}` | `Account`; 409 `mac_in_use`; 400 `validation_failed` |
 | POST `/accounts/{id}/suspend`, `/unsuspend` | – | `Account` |
-| POST `/accounts/{id}/package` | `{package_id,keep_time}` | `Account` |
+| POST `/accounts/{id}/package` | `{package_id,keep_time?}` (default `true`: keep the paid time; `false` starts the new package fresh from now) | `Account` |
 | POST `/accounts/{id}/extend` | `{package_id,note?,force?}` | `Account`; 409 `lower_plan_active` (this is also "activate") |
 | POST `/accounts/{id}/reconcile` | – | 202 `{queued:true}` |
 | POST `/payments` | `{account_id,amount_kes,trans_code?,package_id?,paid_at?,note?,force?}` | 201 `Payment`; 409 `duplicate_payment` |
@@ -89,7 +89,7 @@ Supersedes the `GET /unregistered` row above. `GET /unregistered?site=&online=` 
 |---|---|---|
 | POST `/sites/{id}/unregistered/refresh` | – | 202 `{queued:true}` |
 | POST `/unregistered/attach` | `{site_id,mac,account_id}` | `Account`; 409 `mac_in_use` (details name the owning flat) |
-| POST `/unregistered/create` | `{site_id,mac,flat,tenant?,phone?,package_id?}` | 201 `Account`; 409 `mac_in_use` / `flat_in_use` |
+| POST `/unregistered/create` | `{site_id,mac,flat,tenant?,phone?,package_id?,activate?}` (a package is only the plan; `activate:true` grants its first period free, like `POST /accounts`) | 201 `Account`; 409 `mac_in_use` / `flat_in_use` |
 | POST `/unregistered/dismiss` | `{site_id,mac}` | 204 |
 
 `attach` goes through the same rule as `PUT /accounts/{id}/mac`: one MAC can never be on more than one open account in any router.

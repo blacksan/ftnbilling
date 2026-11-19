@@ -601,12 +601,7 @@ func (s *Service) MoveToApartment(ctx context.Context, in MoveInput) (store.Acco
 		return nil
 	})
 	if err == nil {
-		if from != "" {
-			s.RunSiteTasks(ctx, from)
-		}
-		if to != "" && to != from {
-			s.RunSiteTasks(ctx, to)
-		}
+		s.runSitesShort(ctx, to, from) // both at once: the new router never waits for the old one
 	}
 	return out, err
 }
