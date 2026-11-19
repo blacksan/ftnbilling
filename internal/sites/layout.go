@@ -55,6 +55,7 @@ func ApplyDefaults(cfg config.Config, s store.Site) store.Site {
 	s.LANPorts = nonEmpty(strings.ReplaceAll(s.LANPorts, " ", ""), DefaultLANPorts)
 	s.LANSubnet = nonEmpty(s.LANSubnet, DefaultLANSubnet)
 	s.OLTInterface = nonEmpty(s.OLTInterface, "sfp-sfpplus1")
+	s.CustomerPorts = strings.Join(SplitPorts(s.CustomerPorts), ",")
 	s.CustomerSubnet = nonEmpty(s.CustomerSubnet, "10.5.50.0/24")
 	if s.WANCapMbps <= 0 {
 		s.WANCapMbps = nonZero(cfg.WANCapacityMbps, 500)
@@ -217,8 +218,10 @@ func ValidateNetMgmt(s store.Site, wgNet, mgmt netip.Prefix) error {
 	if !ValidIface(s.OLTInterface) {
 		return fieldErr("olt_interface", "OLT uplink port %q: use letters, digits, dot, dash and underscore only", s.OLTInterface)
 	}
-	if s.BenchPort != "" && !ValidIface(s.BenchPort) {
-		return fieldErr("bench_port", "customer port %q: use letters, digits, dot, dash and underscore only", s.BenchPort)
+	for _, p := range SplitPorts(s.CustomerPorts) {
+		if !ValidIface(p) {
+			return fieldErr("customer_ports", "customer port %q: use letters, digits, dot, dash and underscore only", p)
+		}
 	}
 	if s.VLANID < 0 || s.VLANID > 4094 {
 		return errors.New("VLAN ID must be 0 (none) to 4094")
@@ -266,14 +269,18 @@ func ValidateNetMgmt(s store.Site, wgNet, mgmt netip.Prefix) error {
 	if s.WANInterface == s.OLTInterface {
 		return fieldErr("olt_interface", "OLT uplink port %s is also the WAN port: the OLT needs a port of its own", s.OLTInterface)
 	}
-	if s.BenchPort != "" {
-		switch s.BenchPort {
-		case s.WANInterface:
-			return fieldErr("bench_port", "%s is the WAN port, so it cannot also be the extra customer port", s.BenchPort)
-		case s.OLTInterface:
-			return &FieldError{Field: "bench_port", Also: []string{"olt_interface"},
-				Msg: fmt.Sprintf("%s is the OLT uplink port, so it cannot also be the extra customer port", s.BenchPort)}
+	custSeen := map[string]bool{}
+	for _, c := range SplitPorts(s.CustomerPorts) {
+		switch {
+		case c == s.WANInterface:
+			return fieldErr("customer_ports", "%s is the WAN port, so it cannot also be a customer port", c)
+		case c == s.OLTInterface:
+			return &FieldError{Field: "customer_ports", Also: []string{"olt_interface"},
+				Msg: fmt.Sprintf("%s is the OLT uplink port, so it cannot also be a customer port", c)}
+		case custSeen[c]:
+			return fieldErr("customer_ports", "customer port %s is listed twice", c)
 		}
+		custSeen[c] = true
 	}
 	lanSeen := map[string]bool{}
 	for _, p := range ports {
@@ -283,10 +290,10 @@ func ValidateNetMgmt(s store.Site, wgNet, mgmt netip.Prefix) error {
 		switch {
 		case p == s.OLTInterface:
 			return fieldErr("olt_interface", "OLT uplink port %s is an admin LAN port: pick a port that is not in the admin LAN list", p)
-		case s.BenchPort != "" && p == s.BenchPort:
-			return fieldErr("bench_port", "%s is an admin LAN port, so it cannot also be the extra customer port", p)
+		case custSeen[p]:
+			return fieldErr("customer_ports", "%s is an admin LAN port, so it cannot also be a customer port", p)
 		case p == s.WANInterface, lanSeen[p]:
-			return fmt.Errorf("port %s is used twice (WAN, fibre, bench and admin LAN ports must differ)", p)
+			return fmt.Errorf("port %s is used twice (WAN, fibre, customer and admin LAN ports must differ)", p)
 		}
 		lanSeen[p] = true
 	}

@@ -22,7 +22,7 @@ func cpRig(t *testing.T, bench string, vlan int) (*fixture, store.Site, *routero
 	s := f.joined("Block A")
 	if err := f.st.Update(func(d *store.Data) error {
 		x := d.Sites[s.ID]
-		x.BenchPort, x.VLANID = bench, vlan
+		x.CustomerPorts, x.VLANID = bench, vlan
 		d.Sites[s.ID] = x
 		return nil
 	}); err != nil {
@@ -76,7 +76,7 @@ func hasEvent(f *fixture, siteID, sub string) bool {
 func TestCustomerPortAppliedOnSave(t *testing.T) {
 	f, s, m := cpRig(t, "", 0)
 	m.ResetWrites()
-	if err := f.saveInput(s.ID, func(in *SiteInput) { in.BenchPort = "ether5" }); err != nil {
+	if err := f.saveInput(s.ID, func(in *SiteInput) { in.CustomerPorts = "ether5" }); err != nil {
 		t.Fatal(err)
 	}
 	r := portRow(m, "ether5")
@@ -113,7 +113,7 @@ func TestCustomerPortChangeAndClearRemoveTheOldMembership(t *testing.T) {
 	}
 	// a membership the server did not make stays, even on the old port's neighbour
 	m.SeedRow("/interface/bridge/port", R{"bridge": "br-customers", "interface": "ether4", "comment": "mine"})
-	if err := f.saveInput(s.ID, func(in *SiteInput) { in.BenchPort = "ether3" }); err != nil {
+	if err := f.saveInput(s.ID, func(in *SiteInput) { in.CustomerPorts = "ether3" }); err != nil {
 		t.Fatal(err)
 	}
 	if portRow(m, "ether5") != nil || portRow(m, "ether3") == nil {
@@ -122,7 +122,7 @@ func TestCustomerPortChangeAndClearRemoveTheOldMembership(t *testing.T) {
 	if portRow(m, "ether4") == nil {
 		t.Fatal("removed a row the server did not make")
 	}
-	if err := f.saveInput(s.ID, func(in *SiteInput) { in.BenchPort = "" }); err != nil {
+	if err := f.saveInput(s.ID, func(in *SiteInput) { in.CustomerPorts = "" }); err != nil {
 		t.Fatal(err)
 	}
 	if portRow(m, "ether3") != nil {
@@ -140,9 +140,9 @@ func TestCustomerPortRefusals(t *testing.T) {
 	f, s, m := cpRig(t, "", 0)
 	// up front: WAN, LAN, OLT
 	for port, want := range map[string]string{"ether1": "WAN port", "ether2": "admin LAN port", "sfp-sfpplus1": "OLT uplink port"} {
-		err := f.saveInput(s.ID, func(in *SiteInput) { in.BenchPort = port })
+		err := f.saveInput(s.ID, func(in *SiteInput) { in.CustomerPorts = port })
 		var fe *FieldError
-		if !errors.As(err, &fe) || fe.Field != "bench_port" || !strings.Contains(fe.Msg, want) {
+		if !errors.As(err, &fe) || fe.Field != "customer_ports" || !strings.Contains(fe.Msg, want) {
 			t.Errorf("%s: %v", port, err)
 		}
 	}
@@ -158,8 +158,8 @@ func TestCustomerPortRefusals(t *testing.T) {
 		t.Logf("writes %d", m.Writes())
 	}
 	// on the router: a port of the admin bridge is never moved
-	m.SeedRow("/interface/bridge/port", R{"bridge": "br-lan", "interface": "ether5", "comment": "ftn: LAN port"})
-	f.st.Update(func(d *store.Data) error { x := d.Sites[s.ID]; x.BenchPort = "ether5"; d.Sites[s.ID] = x; return nil })
+	m.SeedRow("/interface/bridge/port", R{"bridge": "br-lan", "interface": "ether5", "comment": ""})
+	f.st.Update(func(d *store.Data) error { x := d.Sites[s.ID]; x.CustomerPorts = "ether5"; d.Sites[s.ID] = x; return nil })
 	m.ResetWrites()
 	st := f.m.EnsureCustomerPort(context.Background(), s.ID, true)
 	if st.State != PortError || !strings.Contains(st.Message, "br-lan") || !strings.Contains(st.Text, "ether5:") {
@@ -306,7 +306,7 @@ func TestCustomerPortBackoffAfterFailure(t *testing.T) {
 func TestCustomerPortNonV5RouterIsUntouched(t *testing.T) {
 	f := newFixture(t, nil)
 	s := f.joined("Block A")
-	f.st.Update(func(d *store.Data) error { x := d.Sites[s.ID]; x.BenchPort = "ether5"; d.Sites[s.ID] = x; return nil })
+	f.st.Update(func(d *store.Data) error { x := d.Sites[s.ID]; x.CustomerPorts = "ether5"; d.Sites[s.ID] = x; return nil })
 	m := f.startedRouter(s.ID)
 	m.SeedRow("/interface/bridge", R{"name": "bridge"}) // an old layout: no v5 marker
 	m.SeedRow("/interface", R{"name": "ether5", "type": "ether"})

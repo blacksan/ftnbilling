@@ -311,7 +311,7 @@ type SiteInput struct {
 	CustomerNet                   string
 	VLANID                        int
 	WANCapMbps, OLTCapMbps, FUPTB float64
-	BenchPort                     string
+	CustomerPorts                 string // comma list of extra customer ports
 	// WAN, admin LAN. PPPoEPass is the clear text to seal; "" keeps the stored
 	// password unless PPPoEPassClear is set.
 	WANMode, WANAddress, WANGateway, WANDNS string
@@ -323,7 +323,7 @@ type SiteInput struct {
 // SiteInputOf is the input that leaves a router as it is (a PATCH starts from it).
 func SiteInputOf(st store.Site) SiteInput {
 	return SiteInput{Name: st.Name, Notes: st.Notes, SupportPhone: st.SupportPhone, WANInterface: st.WANInterface, OLTInterface: st.OLTInterface,
-		CustomerNet: st.CustomerSubnet, VLANID: st.VLANID, WANCapMbps: st.WANCapMbps, OLTCapMbps: st.OLTCapMbps, FUPTB: st.FUPTB, BenchPort: st.BenchPort,
+		CustomerNet: st.CustomerSubnet, VLANID: st.VLANID, WANCapMbps: st.WANCapMbps, OLTCapMbps: st.OLTCapMbps, FUPTB: st.FUPTB, CustomerPorts: st.CustomerPorts,
 		WANMode: st.WANMode, WANAddress: st.WANAddress, WANGateway: st.WANGateway, WANDNS: st.WANDNS, PPPoEUser: st.PPPoEUser,
 		LANPorts: st.LANPorts, LANSubnet: st.LANSubnet}
 }
@@ -359,7 +359,7 @@ func (m *Manager) applyInput(s store.Site, in SiteInput) (store.Site, error) {
 	s.WANInterface, s.OLTInterface = strings.TrimSpace(in.WANInterface), strings.TrimSpace(in.OLTInterface)
 	s.CustomerSubnet, s.VLANID = strings.TrimSpace(in.CustomerNet), in.VLANID
 	s.WANCapMbps, s.OLTCapMbps, s.FUPTB = in.WANCapMbps, in.OLTCapMbps, in.FUPTB
-	s.BenchPort = strings.TrimSpace(in.BenchPort)
+	s.CustomerPorts, s.BenchPort = strings.Join(SplitPorts(in.CustomerPorts), ","), ""
 	s.WANMode = strings.ToLower(strings.TrimSpace(in.WANMode))
 	s.LANPorts, s.LANSubnet = strings.Join(SplitPorts(in.LANPorts), ","), strings.TrimSpace(in.LANSubnet)
 	if s.WANMode == WANStatic {
@@ -469,7 +469,7 @@ func (m *Manager) UpdateSite(id string, in SiteInput) error {
 			return fmt.Errorf("there is already a router called %q", s.Name)
 		}
 		was, now := m.Effective(cur), m.Effective(s)
-		portsChanged = now.BenchPort != was.BenchPort || now.OLTInterface != was.OLTInterface || now.VLANID != was.VLANID
+		portsChanged = now.CustomerPorts != was.CustomerPorts || now.LANPorts != was.LANPorts || now.OLTInterface != was.OLTInterface || now.VLANID != was.VLANID
 		d.Sites[id] = s
 		return nil
 	})

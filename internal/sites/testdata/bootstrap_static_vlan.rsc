@@ -25,7 +25,7 @@
   :put ("   RouterOS " . $ver)
   :local major [:tonum [:pick $ver 0 [:find $ver "."]]]
   :if ($major < 7) do={ :error "RouterOS 7 or newer is required" }
-  :local need {"ether1";"sfp-sfpplus1";"ether2";"ether5"}
+  :local need {"ether1";"sfp-sfpplus1";"ether2";"ether4";"ether5"}
   :local waited 0
   :local ready false
   :local missing ""
@@ -127,6 +127,8 @@
   /interface/vlan add name=vlan100-customers vlan-id=100 interface=sfp-sfpplus1 comment="ftn: customer VLAN"
   /interface/bridge add name=br-customers arp=reply-only comment="ftn: customer bridge"
   /interface/bridge/port add bridge=br-customers interface=vlan100-customers horizon=1 comment="ftn: customer port"
+  /interface/bridge/port remove [find where interface="ether4"]
+  /interface/bridge/port add bridge=br-customers interface=ether4 horizon=1 comment="ftn: customer port"
   /interface/bridge/port remove [find where interface="ether5"]
   /interface/bridge/port add bridge=br-customers interface=ether5 horizon=1 comment="ftn: customer port"
   /ip/address add address=10.5.50.1/24 interface=br-customers comment="ftn: customer gateway"
@@ -222,8 +224,9 @@
   /ip/service set ftp disabled=yes
   /ip/service set api disabled=yes
   /ip/service set api-ssl disabled=yes
-  /ip/service set www-ssl disabled=yes
-  /ip/service set www port=8729 address=10.99.0.1/32 disabled=no
+  # WebFig (www, and www-ssl if it is ever switched on) answers the admin LAN and the billing server's tunnel address only.
+  /ip/service set www-ssl address=192.168.88.0/24,10.99.0.1/32 disabled=yes
+  /ip/service set www port=8729 address=192.168.88.0/24,10.99.0.1/32 disabled=no
   /ip/service set ssh address=192.168.88.0/24 disabled=no
   # Remote WinBox: the LAN, plus the admin devices of the server's wg-mgmt interface (through the tunnel).
   # MAC-WinBox below stays LAN-only.

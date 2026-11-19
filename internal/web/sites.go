@@ -135,7 +135,7 @@ func siteInput(r *http.Request) sites.SiteInput {
 	return sites.SiteInput{
 		Name: f("name"), Notes: f("notes"), SupportPhone: f("support"),
 		WANInterface: f("wan"), OLTInterface: f("olt"),
-		CustomerNet: f("subnet"), VLANID: vlan, WANCapMbps: fl("wancap"), OLTCapMbps: fl("oltcap"), FUPTB: fl("fup"), BenchPort: f("bench"),
+		CustomerNet: f("subnet"), VLANID: vlan, WANCapMbps: fl("wancap"), OLTCapMbps: fl("oltcap"), FUPTB: fl("fup"), CustomerPorts: f("customerports"),
 		WANMode: f("wanmode"), WANAddress: f("wanaddr"), WANGateway: f("wangw"), WANDNS: f("wandns"),
 		PPPoEUser: f("pppoeuser"), PPPoEPass: r.PostFormValue("pppoepass"), PPPoEPassClear: r.PostFormValue("pppoeclear") == "1",
 		LANPorts: f("lanports"), LANSubnet: f("lansubnet"),

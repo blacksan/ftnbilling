@@ -617,7 +617,7 @@ func ifaceRole(site store.Site, it Interface, customer string) string {
 		return RoleWAN
 	case it.Name == site.OLTInterface:
 		return RoleOLT
-	case site.BenchPort != "" && it.Name == site.BenchPort:
+	case containsStr(SplitPorts(site.CustomerPorts), it.Name):
 		return RoleBench
 	case it.Name == customer:
 		return RoleCustomer
@@ -1037,3 +1037,12 @@ func naturalLess(a, b string) bool {
 }
 
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+func containsStr(l []string, s string) bool {
+	for _, x := range l {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}

@@ -18,7 +18,7 @@
 <label class="field">WAN capacity (Mbps)<input name="wancap" value="{{f0 .WANCapMbps}}"></label>
 <label class="field">OLT capacity (Mbps)<input name="oltcap" value="{{f0 .OLTCapMbps}}"></label>
 <label class="field">Fair-use limit (TB/month)<input name="fup" value="{{f0 .FUPTB}}"></label>
-<label class="field">Customer port (extra)<input name="bench" value="{{.BenchPort}}" list="router-ports" autocomplete="off" placeholder="optional" aria-describedby="hint-bench"><span class="hint muted" id="hint-bench">A port where you can plug a customer device directly (for example ether5). The server sets it up.</span></label></div>{{end}}
+<label class="field">Customer ports (extra)<input name="customerports" value="{{.CustomerPorts}}" list="router-ports" autocomplete="off" placeholder="optional, comma list" aria-describedby="hint-bench"><span class="hint muted" id="hint-bench">Ports where you can plug a customer device directly (for example ether5,ether4). The server sets them up. The Ports tab does the same with buttons.</span></label></div>{{end}}
 
 {{define "admin_sites"}}{{template "ahead" .}}{{$d := .}}{{$c := .Data.Cnt}}
 <div class="stats">
