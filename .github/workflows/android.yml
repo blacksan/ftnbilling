@@ -1,6 +1,8 @@
 # FTN Admin (Android). Every push that touches android/ runs lint, unit tests and a debug build.
-# Tag android-vX.Y.Z builds a signed release APK and attaches it to a GitHub Release that is
-# NEVER marked "latest": deploy/install.sh installs the server from releases/latest.
+# A signed release is cut either by pushing a tag android-vX.Y.Z, or from the GitHub web UI:
+# Actions -> android -> Run workflow (branch main) -> version X.Y.Z (the workflow creates the tag).
+# The release is NEVER marked "latest": deploy/install.sh installs the server from releases/latest.
+# The release assets are ftn-admin-X.Y.Z.apk, its .sha256 and update.json (read by the in-app update check).
 name: android
 on:
   push:
@@ -10,18 +12,30 @@ on:
       - 'android/**'
       - '.github/workflows/android.yml'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version X.Y.Z (for example 0.2.0). Leave empty to only build. Run from branch main.'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
   group: android-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel a run that is publishing a release.
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Releases are cut from main only
+        if: github.event_name == 'workflow_dispatch' && inputs.version != '' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::A release can only be published from branch main (this run is on ${GITHUB_REF_NAME}). Pick main in Run workflow."
+          exit 1
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
@@ -54,27 +68,46 @@ jobs:
 
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/android-v')
+    if: startsWith(github.ref, 'refs/tags/android-v') || (github.event_name == 'workflow_dispatch' && inputs.version != '' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
-      TAG: ${{ github.ref_name }}
       GH_TOKEN: ${{ github.token }}
+      INPUT_VERSION: ${{ inputs.version }}
+      # SHA-256 of the signing certificate every release must carry. A different key means installed apps
+      # would refuse the update, so the job fails instead of publishing.
+      EXPECTED_CERT_SHA256: 'B9:4C:E4:0D:7A:66:F0:7E:B3:FB:CC:56:F0:FE:9B:EA:1E:D6:CF:5A:46:B1:01:13:D7:F0:6C:96:FA:42:89:C4'
     steps:
-      - name: Check signing secrets
-        env:
-          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      - name: Work out tag and version
         run: |
-          missing=""
-          for v in ANDROID_KEYSTORE_B64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
-            [ -n "${!v}" ] || missing="$missing $v"
-          done
-          if [ -n "$missing" ]; then
-            echo "::error::Cannot publish $TAG: missing repository secrets:$missing. See android/README.md (Releases) to create the keystore and add them."
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            ver="$INPUT_VERSION"
+            tag="android-v$ver"
+          else
+            tag="$GITHUB_REF_NAME"
+            ver="${tag#android-v}"
+          fi
+          if ! printf '%s' "$ver" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Version '$ver' is not of the form X.Y.Z (for example 0.2.0)."
+            exit 1
+          fi
+          {
+            echo "TAG=$tag"
+            echo "VERSION=$ver"
+          } >> "$GITHUB_ENV"
+      - name: Refuse to overwrite an existing release
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "::error::Release $TAG already exists. Pick a higher version."
+            exit 1
+          fi
+      - name: Check signing secret
+        env:
+          ANDROID_SIGNING_PASSPHRASE: ${{ secrets.ANDROID_SIGNING_PASSPHRASE }}
+        run: |
+          if [ -z "$ANDROID_SIGNING_PASSPHRASE" ]; then
+            echo "::error::Cannot publish $TAG: the repository secret ANDROID_SIGNING_PASSPHRASE is missing. Add it under Settings > Secrets and variables > Actions (see android/README.md, Releases)."
             exit 1
           fi
       - uses: actions/checkout@v4
@@ -85,34 +118,96 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
-      - name: Decode keystore
+      - name: Decrypt signing key
         env:
-          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          PASS: ${{ secrets.ANDROID_SIGNING_PASSPHRASE }}
         run: |
+          set -eu
           umask 077
-          printf '%s' "$ANDROID_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          dir="$RUNNER_TEMP/ftn-signing"
+          mkdir -p "$dir"
+          if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -pass env:PASS \
+              -in android/signing/ftn-admin-signing.enc -out "$dir/signing.tar" 2>/dev/null; then
+            echo "::error::Could not decrypt android/signing/ftn-admin-signing.enc: the secret ANDROID_SIGNING_PASSPHRASE is wrong or the file is damaged."
+            exit 1
+          fi
+          tar -xf "$dir/signing.tar" -C "$dir" --no-same-owner release.jks signing.env
+          rm -f "$dir/signing.tar"
+          found=""
+          while IFS= read -r line || [ -n "$line" ]; do
+            line="${line%$'\r'}"
+            case "$line" in
+              ANDROID_KEY_ALIAS=*|ANDROID_KEYSTORE_PASSWORD=*|ANDROID_KEY_PASSWORD=*)
+                name="${line%%=*}"
+                val="${line#*=}"
+                # Accept values written with one pair of surrounding quotes.
+                case "$val" in
+                  \"*\") val="${val#\"}"; val="${val%\"}" ;;
+                  \'*\') val="${val#\'}"; val="${val%\'}" ;;
+                esac
+                case "$name" in
+                  ANDROID_KEYSTORE_PASSWORD|ANDROID_KEY_PASSWORD) echo "::add-mask::$val" ;;
+                esac
+                printf '%s=%s\n' "$name" "$val" >> "$GITHUB_ENV"
+                found="$found $name"
+                ;;
+            esac
+          done < "$dir/signing.env"
+          for n in ANDROID_KEY_ALIAS ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_PASSWORD; do
+            case "$found" in
+              *"$n"*) ;;
+              *) echo "::error::signing.env in the encrypted bundle has no $n line."; exit 1 ;;
+            esac
+          done
+          echo "ANDROID_KEYSTORE_PATH=$dir/release.jks" >> "$GITHUB_ENV"
       - name: Build signed release APK
-        env:
-          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.jks
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           gradle -p android assembleRelease \
-            -PversionName="${TAG#android-v}" \
+            -PversionName="$VERSION" \
             -PversionCode=${{ github.run_number }}
-      - name: Verify signature and name the artifacts
+      - name: Verify signature and signing certificate
         run: |
-          ver="${TAG#android-v}"
+          set -eu
           apk=$(ls android/app/build/outputs/apk/release/*.apk | head -n1)
           apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n1)
-          "$apksigner" verify --print-certs "$apk"
+          "$apksigner" verify --min-sdk-version 26 --print-certs "$apk" | tee "$RUNNER_TEMP/apksigner.txt"
+          got=$(grep -E 'certificate SHA-256 digest:' "$RUNNER_TEMP/apksigner.txt" | head -n1 | sed 's/.*digest: *//' | tr -d ': \r' | tr 'A-F' 'a-f')
+          want=$(printf '%s' "$EXPECTED_CERT_SHA256" | tr -d ': ' | tr 'A-F' 'a-f')
+          if [ "$(grep -c 'certificate SHA-256 digest:' "$RUNNER_TEMP/apksigner.txt")" != "1" ]; then
+            echo "::error::The APK must have exactly one signer."
+            exit 1
+          fi
+          if [ "$got" != "$want" ]; then
+            echo "::error::Signing certificate mismatch. APK is signed with $got but the app expects $want. Not publishing."
+            exit 1
+          fi
+          echo "Signing certificate matches the expected SHA-256."
           mkdir -p out
-          cp "$apk" "out/ftn-admin-$ver.apk"
-          (cd out && sha256sum "ftn-admin-$ver.apk" > "ftn-admin-$ver.apk.sha256")
+          cp "$apk" "out/ftn-admin-$VERSION.apk"
+          (cd out && sha256sum "ftn-admin-$VERSION.apk" > "ftn-admin-$VERSION.apk.sha256")
           cat out/*.sha256
+      - name: Write release notes and update.json
+        run: |
+          set -eu
+          sha=$(cut -d' ' -f1 "out/ftn-admin-$VERSION.apk.sha256")
+          size=$(stat -c %s "out/ftn-admin-$VERSION.apk")
+          # GitHub's generated notes, also used as the release body so the two never differ.
+          gh api -X POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" --jq .body > out/notes.md 2>/dev/null || : > out/notes.md
+          notes=$(head -n 12 out/notes.md | head -c 800)
+          jq -n --arg version "$VERSION" --argjson code "${{ github.run_number }}" \
+            --arg apk "ftn-admin-$VERSION.apk" --arg sha "$sha" --argjson size "$size" --arg notes "$notes" \
+            '{version:$version, versionCode:$code, apk:$apk, sha256:$sha, size:$size, notes:$notes}' > out/update.json
+          cat out/update.json
       - name: Publish release (not latest)
         run: |
-          ver="${TAG#android-v}"
-          gh release create "$TAG" --title "FTN Admin $ver" --generate-notes --latest=false
-          gh release upload "$TAG" "out/ftn-admin-$ver.apk" "out/ftn-admin-$ver.apk.sha256" --clobber
+          set -eu
+          if [ -s out/notes.md ]; then notes=(--notes-file out/notes.md); else notes=(--generate-notes); fi
+          # Draft first, publish after the assets are attached: the update check never sees a half-made release.
+          gh release create "$TAG" --draft --latest=false --target "$GITHUB_SHA" --title "FTN Admin $VERSION" "${notes[@]}"
+          gh release upload "$TAG" "out/ftn-admin-$VERSION.apk" "out/ftn-admin-$VERSION.apk.sha256" out/update.json --clobber
+          gh release edit "$TAG" --draft=false --latest=false
+      - name: Delete decrypted signing files
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/ftn-signing" "$RUNNER_TEMP/apksigner.txt"

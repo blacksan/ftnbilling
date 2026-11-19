@@ -26,26 +26,44 @@ If the toolchain ever fails to resolve, the fallback is AGP 8.13.x, Gradle 8.14.
 
 ## Releases
 
-A tag `android-vX.Y.Z` builds a signed APK and publishes `ftn-admin-X.Y.Z.apk` and `.sha256`
-as a GitHub Release marked `--latest=false`. This matters: `deploy/install.sh` installs the server
-from `releases/latest`, so an Android release must never become "latest". The server workflow
-(`release.yml`) passes `--latest` for the same reason.
+A release is a signed APK published as a GitHub Release that is never marked "latest":
+`deploy/install.sh` installs the server from `releases/latest`, so an Android release must not
+become "latest" (the server workflow `release.yml` passes `--latest` for the same reason).
+Each release has three assets: `ftn-admin-X.Y.Z.apk`, `ftn-admin-X.Y.Z.apk.sha256` and
+`update.json` (read by the in-app update check, see below).
 
-Create the keystore once and add the four secrets:
+**Secret.** The signing key lives in this repository, encrypted: `android/signing/ftn-admin-signing.enc`
+(AES-256-CBC, PBKDF2, 600000 iterations; a tar of `release.jks` and `signing.env`). The only secret
+is its passphrase, stored as the repository secret `ANDROID_SIGNING_PASSPHRASE`
+(Settings > Secrets and variables > Actions). Without it the release job stops at once with a message
+naming it. The job also refuses to publish unless the APK is signed with the expected certificate
+(SHA-256 `B9:4C:E4:0D:7A:66:F0:7E:B3:FB:CC:56:F0:FE:9B:EA:1E:D6:CF:5A:46:B1:01:13:D7:F0:6C:96:FA:42:89:C4`).
 
-```
-keytool -genkeypair -v -keystore ftnadmin-release.jks -alias ftnadmin \
-  -keyalg RSA -keysize 4096 -validity 10000
-base64 -w0 ftnadmin-release.jks | gh secret set ANDROID_KEYSTORE_B64
-gh secret set ANDROID_KEYSTORE_PASSWORD
-gh secret set ANDROID_KEY_ALIAS          # ftnadmin
-gh secret set ANDROID_KEY_PASSWORD
-```
+**Cut a release from the web (no git needed).**
 
-Back the keystore up offline. If it is lost, the only way forward is to uninstall the app on every
-phone and import the tunnels again, because Android refuses updates signed with a different key.
-Without the secrets the release job fails immediately with a message naming what is missing, and
-local `assembleRelease` produces an unsigned APK.
+1. GitHub > Actions > **android** > **Run workflow**.
+2. Branch `main`, `version` = for example `0.2.0` (digits `X.Y.Z`). The workflow creates the tag
+   `android-v0.2.0` and the release. Leave `version` empty to only run a build.
+3. Wait for the `release` job. Phones with "Check for updates automatically" on offer the update
+   within about six hours; More > App settings > Check for updates does it at once.
+
+Pushing a tag `android-vX.Y.Z` does the same. `versionName` comes from the tag; `versionCode` is the
+workflow run number, so every release is higher than the one before (Android needs that to update).
+
+**Key backup.** Keep both halves: the encrypted file (it is in the repo, so it is backed up with it;
+also keep a copy elsewhere) and the passphrase in a password manager. If the passphrase is lost
+the key cannot be decrypted, no further updates can be built, and installed apps cannot be updated:
+Android refuses an APK signed with a different key, so every phone would have to uninstall the app
+and import the tunnels again. Never commit the decrypted `release.jks` or `signing.env`.
+Local `assembleRelease` without the key produces an unsigned APK.
+
+**In-app update check.** Release builds read `https://api.github.com/repos/blacksan/ftnbilling/releases`,
+take the newest published release whose tag starts with `android-v` (server releases `v*` are ignored),
+and read its `update.json`. An update is offered when its `versionCode` is higher than the installed
+one. The APK is downloaded with OkHttp only from `github.com`, `objects.githubusercontent.com` and
+`release-assets.githubusercontent.com` over https, checked against the size and SHA-256 in
+`update.json`, and its signing certificate must equal the installed app's before the system installer
+is opened. Debug builds (`.debug` application id) show the section disabled.
 
 ## Install (sideload) and verify
 
