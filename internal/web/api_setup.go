@@ -584,6 +584,7 @@ func (s *Server) apiPauseAutoFixes(w http.ResponseWriter, r *http.Request, c *ap
 		switch {
 		case errors.Is(err, sites.ErrPauseInPast):
 			validationErr(w, map[string]string{"until": err.Error()})
+			return
 		case errors.Is(err, store.ErrNoChange):
 		default:
 			if !s.storeErr(w, err) {
