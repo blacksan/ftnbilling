@@ -70,7 +70,7 @@ func newMultiOps(t *testing.T, mut func(*config.Config), mkOps func(cfg config.C
 	cfg := config.Config{BrandName: "Building WiFi", TestMode: true, AdminUser: "admin", AdminPass: pw,
 		SupportPhone: "0700 111 222", NetflowAddr: "off", PingTargets: []string{"8.8.8.8"},
 		WGPublicKey: pub, WGEndpoint: "203.0.113.10:51820", WGSubnet: "10.99.0.0/22", DataKey: testKey, JoinTokenTTL: 30 * time.Minute,
-		JoinRequireMikrotikUA: true, PublicBaseURL: "https://billing.example.co.ke", DataDir: t.TempDir(),
+		JoinRequireMikrotikUA: true, PublicIP: "203.0.113.10", PublicBaseURL: "https://billing.example.co.ke", DataDir: t.TempDir(),
 		FlowEvery: time.Hour, PortEvery: time.Hour, PingEvery: time.Hour, DNSEvery: time.Hour, SaveEvery: time.Hour}
 	if mut != nil {
 		mut(&cfg)
@@ -132,32 +132,6 @@ func (m *multi) selectSite(t *testing.T, id string) {
 		t.Fatalf("select: %d", r.StatusCode)
 	}
 	m.cookie = &http.Cookie{Name: "ftn_site", Value: id}
-}
-
-func TestPortalGuardIsPerSite(t *testing.T) {
-	m := newMulti(t)
-	A, B := m.addSite(t, "Alpha"), m.addSite(t, "Beta")
-	macB := "AA:BB:CC:DD:EE:0B"
-	if _, err := m.svc.CreateAccount(billing.AccountInput{SiteID: B.ID, Flat: "Flat B1", MAC: macB}); err != nil {
-		t.Fatal(err)
-	}
-	m.mock(A.ID)
-	m.mock(B.ID).AddHost(macB, "10.5.50.20")
-	time.Sleep(1100 * time.Millisecond)
-	// The device is on Beta's hotspot: Beta shows the flat, Alpha does not.
-	_, b := m.portal(t, "/portal?site="+B.ID+"&mac="+macB+"&ip=10.5.50.20")
-	if !strings.Contains(b, "Flat B1") || !strings.Contains(b, `name="site" value="`+B.ID+`"`) {
-		t.Fatalf("site B portal: %s", b)
-	}
-	_, b = m.portal(t, "/portal?site="+A.ID+"&mac="+macB+"&ip=10.5.50.20")
-	if strings.Contains(b, "Flat B1") {
-		t.Fatal("site A's portal accepted site B's MAC")
-	}
-	// No site and two buildings: the neutral page.
-	_, b = m.portal(t, "/portal?mac="+macB+"&ip=10.5.50.20")
-	if strings.Contains(b, "Flat B1") || !strings.Contains(b, "Open this page from the WiFi login") {
-		t.Fatalf("no site should be neutral: %s", b)
-	}
 }
 
 func TestAdminSwitcherFiltersLists(t *testing.T) {
@@ -358,47 +332,6 @@ func TestJoinEndpointIsRateLimited(t *testing.T) {
 	}
 	if !got429 {
 		t.Fatal("no rate limit on /j/")
-	}
-}
-
-func TestRouterFilesArePerSite(t *testing.T) {
-	m := newMulti(t)
-	A := m.addSite(t, "Alpha")
-	code, b := m.portal(t, "/routeros/hotspot/"+A.ID+"/login.html")
-	if code != 200 || !strings.Contains(b, "/portal?site="+A.ID+"&mac=$(mac-esc)") || strings.Contains(b, "{{") {
-		t.Fatalf("per-site login.html %d %s", code, b)
-	}
-	if code, _ = m.portal(t, "/routeros/hotspot/sdeadbe/login.html"); code != 404 {
-		t.Fatalf("unknown site: %d", code)
-	}
-	// No legacy building here, so the un-prefixed paths are gone.
-	if code, _ = m.portal(t, "/routeros/hotspot/login.html"); code != 404 {
-		t.Fatalf("legacy path served without a legacy building: %d", code)
-	}
-}
-
-func TestVoucherFromAnotherBuildingIsRefused(t *testing.T) {
-	m := newMulti(t)
-	A, B := m.addSite(t, "Alpha"), m.addSite(t, "Beta")
-	macA := "AA:BB:CC:00:0A:01"
-	m.svc.CreateAccount(billing.AccountInput{SiteID: A.ID, Flat: "Flat A1", MAC: macA})
-	m.mock(A.ID).AddHost(macA, "10.5.50.9")
-	time.Sleep(1100 * time.Millisecond)
-	var pkg string
-	m.st.View(func(d *store.Data) {
-		for id := range d.Packages {
-			pkg = id
-		}
-	})
-	_, vs, err := m.svc.GenerateVouchers(pkg, B.ID, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	form := url.Values{"site": {A.ID}, "mac": {macA}, "ip": {"10.5.50.9"}, "voucher": {vs[0].Code}}
-	r, _ := m.cl.PostForm(m.ts.URL+"/portal/voucher", form)
-	b := body(t, r)
-	if !strings.Contains(b, "invalid or already used") {
-		t.Fatalf("voucher from building B worked in A: %.300s", b)
 	}
 }
 

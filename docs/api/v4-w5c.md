@@ -1,3 +1,5 @@
+> **Superseded by v5** (docs/plan-v5-bootstrap.md and docs/api/v5-bootstrap.md): the set-up job, migration, cutover, rollback, access-mode and serving-intent endpoints are gone (they answer 410). A router is set up by one pasted line; the Setup shape and the endpoints are in v5-bootstrap.md.
+
 # API v4 W5c: router set-up job
 
 The server runs the router set-up itself. There is no confirm button (release plan A1): a fresh router needs none,

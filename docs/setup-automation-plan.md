@@ -1,3 +1,5 @@
+> **Superseded by v5** (docs/plan-v5-bootstrap.md and docs/api/v5-bootstrap.md): the join line plus scheduler kit, the set-up job and the staged cutover are replaced by the one bootstrap script and the reset stub.
+
 # Router onboarding automation (W5 server, W6 Android)
 
 Planned by Fable, 2026-11-18, after the first live bench join (RB5009, RouterOS 7.25.1, device-mode `home`, fetch/hotspot on, scheduler off). Goal: the operator pastes **one** join line, presses the router button **once** if device-mode must change, and does everything else from the web admin or the app.

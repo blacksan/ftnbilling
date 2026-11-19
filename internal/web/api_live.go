@@ -153,7 +153,7 @@ func (s *Server) buildLive(ctx context.Context, st store.Site) (sites.RouterLive
 	}
 	ps := s.svc.ProvisionStatus(st.ID)
 	lv.Provision = sites.LiveProvision{InSync: ps.InSync, Drift: ps.Drift, PendingOps: ps.PendingOps, LastError: ps.LastError}
-	lv.SetupState = s.mgr.Jobs().State(st.ID)
+	lv.SetupState = s.mgr.SetupStateOf(st.ID)
 	return lv, nil
 }
 
@@ -297,20 +297,16 @@ type rebootFail struct {
 }
 
 // rebootRouter is the one guarded reboot path (release plan A2), used by the
-// API and the web admin: the typed name, no provisioning job running, the
+// API and the web admin: the typed name, no other reboot in flight, the
 // router connected, one reboot per router per 10 minutes (one shared limiter),
 // then /system/reboot. The caller has already checked the owner role and audits.
 func (s *Server) rebootRouter(ctx context.Context, st store.Site, confirmName string) *rebootFail {
 	if !strings.EqualFold(strings.TrimSpace(confirmName), strings.TrimSpace(st.Name)) {
 		return &rebootFail{Kind: "validation", Msg: "type the router's name to confirm", Fields: map[string]string{"confirm_name": "type the router's name to confirm"}}
 	}
-	// the run slot is held until the reboot call is over, so a setup job cannot start between the check and the reboot
 	endReboot, free := s.mgr.BeginReboot(st.ID)
-	if !free || s.mgr.Jobs().Running(st.ID) {
-		if free {
-			endReboot()
-		}
-		return &rebootFail{Kind: "bad_state", Msg: "The router is being set up right now. Wait for that to finish before rebooting."}
+	if !free {
+		return &rebootFail{Kind: "bad_state", Msg: "The router is being rebooted right now."}
 	}
 	defer endReboot()
 	insp, isInsp := s.mgr.Router(st.ID).(routeros.Inspector)

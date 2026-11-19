@@ -11,13 +11,15 @@ import (
 	"ispbill/internal/sites"
 )
 
-// Session-authenticated JSON for the web admin's router setup tab (the templates are W7's).
-// Minimum roles come from minRole: POSTs under /admin/routers are owner-only there.
+// Session-authenticated JSON for the web admin's router setup tab (the
+// templates come from the web builder). Minimum roles come from minRole: POSTs
+// under /admin/routers are owner-only there.
 func (s *Server) setupAdminRoutes(get, post func(string, http.HandlerFunc)) {
 	get("/admin/sites/setup.json", s.adminSetupJSON)
-	post("/admin/sites/setup/run", s.adminSetupRun)
-	post("/admin/sites/setup/migrate", s.adminSetupMigrate)
-	post("/admin/sites/setup/rollback", s.adminSetupRollback)
+	post("/admin/sites/setup/reset", s.adminSetupReset)
+	post("/admin/sites/setup/run", s.adminSetupGone)
+	post("/admin/sites/setup/migrate", s.adminSetupGone)
+	post("/admin/sites/setup/rollback", s.adminSetupGone)
 }
 
 func (s *Server) adminSetupWrite(w http.ResponseWriter, status int, v any) {
@@ -47,56 +49,28 @@ func (s *Server) adminSetupJSON(w http.ResponseWriter, r *http.Request) {
 	s.adminSetupSend(w, r, http.StatusOK, st.ID)
 }
 
-func (s *Server) adminSetupErr(w http.ResponseWriter, err error) {
-	code := http.StatusConflict
-	if errors.Is(err, sites.ErrNameMismatch) {
-		code = http.StatusUnprocessableEntity
-	}
-	s.adminSetupWrite(w, code, map[string]string{"error": err.Error()})
+// adminSetupGone: the set-up job, the migration and the rollback are gone in v5.
+func (s *Server) adminSetupGone(w http.ResponseWriter, r *http.Request) {
+	s.adminSetupWrite(w, http.StatusGone, map[string]string{"error": "gone: the router is set up by the line pasted on it; see docs/api/v5-bootstrap.md"})
 }
 
-func (s *Server) adminSetupRun(w http.ResponseWriter, r *http.Request) {
+// adminSetupReset is POST /admin/routers/setup/reset: form fields id and confirm_name.
+// It answers the new Setup plus a fresh line.
+func (s *Server) adminSetupReset(w http.ResponseWriter, r *http.Request) {
 	st, ok := s.siteID(r)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 	u, _ := userOf(r)
-	if err := s.mgr.StartProvision(st.ID, sites.ProvOptions{Trigger: "run", Actor: u.Username}); err != nil {
-		s.adminSetupErr(w, err)
+	if err := s.mgr.ResetRouter(st.ID, strings.TrimSpace(r.PostFormValue("confirm_name")), u.Username); err != nil {
+		code := http.StatusConflict
+		if errors.Is(err, sites.ErrNameMismatch) {
+			code = http.StatusUnprocessableEntity
+		}
+		s.adminSetupWrite(w, code, map[string]string{"error": err.Error()})
 		return
 	}
-	s.adminSetupSend(w, r, http.StatusAccepted, st.ID)
-}
-
-func (s *Server) adminSetupMigrate(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.siteID(r)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	u, _ := userOf(r)
-	if err := s.mgr.StartMigration(st.ID, r.PostFormValue("confirm_name"), r.PostFormValue("keep_unknown") == "1", u.Username); err != nil {
-		s.adminSetupErr(w, err)
-		return
-	}
-	s.adminSetupSend(w, r, http.StatusAccepted, st.ID)
-}
-
-func (s *Server) adminSetupRollback(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.siteID(r)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	if strings.TrimSpace(r.PostFormValue("confirm_name")) != st.Name {
-		s.adminSetupErr(w, sites.ErrNameMismatch)
-		return
-	}
-	u, _ := userOf(r)
-	if err := s.mgr.RollbackNow(st.ID, u.Username); err != nil {
-		s.adminSetupErr(w, err)
-		return
-	}
-	s.adminSetupSend(w, r, http.StatusAccepted, st.ID)
+	s.audit(r, "router "+st.Name+" reset")
+	s.adminSetupSend(w, r, http.StatusOK, st.ID)
 }

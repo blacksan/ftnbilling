@@ -72,7 +72,7 @@ func run(log *slog.Logger) error {
 
 	var svc *billing.Service
 	mgr := sites.New(sites.Options{
-		Cfg: cfg, Store: st, Log: log,
+		Cfg: cfg, Store: st, Log: log, DataKey: cfg.DataKey,
 		Dir:      func(siteID string) metrics.Directory { return svc.Directory(siteID) },
 		OnJoined: func(siteID string) { svc.MarkProfilesDirty(siteID) },
 	})

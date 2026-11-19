@@ -36,12 +36,7 @@ func (s *Server) buildOverview(ctx context.Context, site string) billing.Overvie
 	for _, st := range list {
 		on := hs[st.ID].online
 		in.RouterOnline[st.ID] = on
-		switch js := s.mgr.Jobs().State(st.ID); {
-		case js != "":
-			in.RouterLive[st.ID] = on && js == "live"
-		default:
-			in.RouterLive[st.ID] = on && accessMode(st) == store.AccessIPoE
-		}
+		in.RouterLive[st.ID] = on && accessMode(st) == store.AccessIPoE
 		if col := s.mgr.Collector(st.ID); col != nil {
 			eff := s.mgr.Effective(st)
 			if lp, ok := col.Snapshot().Ports[eff.WANInterface]; ok && now.Sub(lp.At) < 5*time.Minute {

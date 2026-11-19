@@ -2,18 +2,23 @@
 <label class="field">Support phone (shown to tenants)<input name="support" value="{{.SupportPhone}}" placeholder="optional"></label></div>
 <label class="field">Notes<input name="notes" value="{{.Notes}}" maxlength="300"></label>{{end}}
 {{define "sitelayout"}}<div class="two">
-<label class="field">Hotspot server<input name="hotspot" value="{{.HotspotServer}}"></label>
+<label class="field">WAN mode<select name="wanmode">{{range seq "dhcp" "static" "pppoe"}}<option{{if eq . $.WANMode}} selected{{end}}>{{.}}</option>{{end}}</select></label>
 <label class="field">WAN port<input name="wan" value="{{.WANInterface}}"></label>
-<label class="field">WAN interface list<input name="wanlist" value="{{.WANList}}"></label>
+<label class="field">Static address (CIDR)<input name="wanaddr" value="{{.WANAddress}}" placeholder="198.51.100.5/24"></label>
+<label class="field">Static gateway<input name="wangw" value="{{.WANGateway}}"></label>
+<label class="field">Static DNS<input name="wandns" value="{{.WANDNS}}"></label>
+<label class="field">PPPoE user<input name="pppoeuser" value="{{.PPPoEUser}}" autocomplete="off"></label>
+<label class="field">PPPoE password (write-only)<input name="pppoepass" type="password" value="" autocomplete="new-password"></label>
+<label class="ck"><input type="checkbox" name="pppoeclear" value="1"> clear the stored PPPoE password</label>
+<label class="field">Admin LAN ports<input name="lanports" value="{{.LANPorts}}" placeholder="ether2"></label>
+<label class="field">Admin LAN subnet<input name="lansubnet" value="{{.LANSubnet}}" placeholder="192.168.88.0/24"></label>
 <label class="field">OLT port<input name="olt" value="{{.OLTInterface}}"></label>
 <label class="field">Customer subnet<input name="subnet" value="{{.CustomerSubnet}}" placeholder="10.5.50.0/24"></label>
 <label class="field">VLAN (0 = none)<input name="vlan" type="number" min="0" max="4094" value="{{.VLANID}}"></label>
 <label class="field">WAN capacity (Mbps)<input name="wancap" value="{{f0 .WANCapMbps}}"></label>
 <label class="field">OLT capacity (Mbps)<input name="oltcap" value="{{f0 .OLTCapMbps}}"></label>
 <label class="field">Fair-use limit (TB/month)<input name="fup" value="{{f0 .FUPTB}}"></label>
-<label class="field">Bench port (optional)<input name="bench" value="{{.BenchPort}}"></label></div>
-<label class="ck"><input type="checkbox" name="provision" value="1"{{if .Provision}} checked{{end}}> script builds the bridge, DHCP and hotspot</label>
-<label class="ck"><input type="checkbox" name="legacy" value="1"{{if .LegacyContainer}} checked{{end}}> router had the old container (script removes it)</label>{{end}}
+<label class="field">Bench port (optional)<input name="bench" value="{{.BenchPort}}"></label></div>{{end}}
 
 {{define "admin_sites"}}{{template "ahead" .}}{{$d := .}}{{$c := .Data.Cnt}}
 <div class="stats">

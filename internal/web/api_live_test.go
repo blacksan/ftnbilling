@@ -4,21 +4,11 @@ import (
 	"context"
 	"regexp"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"ispbill/internal/routeros"
 )
-
-type fakeJobs struct {
-	mu      sync.Mutex
-	running map[string]bool
-	state   map[string]string
-}
-
-func (j *fakeJobs) Running(id string) bool { j.mu.Lock(); defer j.mu.Unlock(); return j.running[id] }
-func (j *fakeJobs) State(id string) string { j.mu.Lock(); defer j.mu.Unlock(); return j.state[id] }
 
 func liveRig(t *testing.T) (*apiRig, *routeros.Mock) {
 	t.Helper()
@@ -56,7 +46,7 @@ func TestAPILiveAndInterfaces(t *testing.T) {
 			t.Errorf("missing %s", k)
 		}
 	}
-	if j["setup_state"] != "" {
+	if j["setup_state"] != "online" && j["setup_state"] != "ready" {
 		t.Fatalf("setup_state %v", j["setup_state"])
 	}
 	if th := j["throughput"].(map[string]any); th["step_s"].(float64) != 300 || len(th["t"].([]any)) != 36 {
@@ -168,8 +158,6 @@ func TestAPIClientsSearchAndFilters(t *testing.T) {
 
 func TestAPIRebootGuards(t *testing.T) {
 	r, mk := liveRig(t)
-	jobs := &fakeJobs{running: map[string]bool{}, state: map[string]string{}}
-	r.mgr.SetJobs(jobs)
 	path := "/routers/" + r.A.ID + "/actions/reboot"
 	reboots := func() int {
 		n := 0
@@ -198,12 +186,6 @@ func TestAPIRebootGuards(t *testing.T) {
 	if reboots() != 0 {
 		t.Fatal("a refused call rebooted the router")
 	}
-	// refused while a provisioning job runs; a refused attempt does not use the 10-minute slot
-	jobs.running[r.A.ID] = true
-	if x := r.call(r.owner.Access, "POST", path, map[string]any{"confirm_name": "Alpha"}, nil); x.Status != 409 || x.errCode(t) != "bad_state" {
-		t.Fatalf("%d %s", x.Status, x.Raw)
-	}
-	jobs.running[r.A.ID] = false
 	// the router itself says no: 409 router_refused, slot not used
 	mk.SetPathFail("/system/reboot", &routeros.APIError{Status: 403, Message: "Forbidden", Detail: "not enough permissions (9)", Method: "POST", Path: "/system/reboot"})
 	if x := r.call(r.owner.Access, "POST", path, map[string]any{"confirm_name": "alpha"}, nil); x.Status != 409 || x.errCode(t) != "router_refused" {

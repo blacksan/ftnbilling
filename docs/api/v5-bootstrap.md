@@ -10,7 +10,7 @@ Roles: `viewer` < `operator` < `owner`.
 `POST /routers` (owner) answers 201 `{router, join}` with `Cache-Control: no-store` (never replayed from the
 Idempotency-Key cache: the line is a one-time secret). `PATCH /routers/{id}` (owner) answers 200 with the router JSON.
 Both take the same JSON body; on PATCH every field is optional and only the fields present change. `name` is required on POST.
-Unknown fields are rejected (400). Validation errors are 422 `validation_failed` with a `fields` map.
+Unknown fields are ignored. Validation errors are 400 `validation_failed` with a `details.fields` map.
 
 | Field | Type | Default | Rule |
 |---|---|---|---|
@@ -31,7 +31,7 @@ Unknown fields are rejected (400). Validation errors are 422 `validation_failed`
 | `wan_cap_mbps`, `olt_cap_mbps`, `fup_tb` | number | 500 / 10000 / 15 | capacities |
 | `support_phone` | string | "" | shown on the payment page |
 
-Removed from the body (ignored with a 400 as unknown fields): `serving_customers`, `hotspot_server`, `wan_list`, `provision`,
+Removed from the body (ignored as unknown fields): `serving_customers`, `hotspot_server`, `wan_list`, `provision`,
 `legacy_container`. Router JSON keeps `access_mode` with the single value `"ipoe"`. Router JSON gains `wan_mode`,
 `wan_address`, `wan_gateway`, `wan_dns`, `pppoe_user`, `pppoe_pass_set` (bool), `lan_ports`, `lan_subnet`; it never has the password.
 
@@ -100,7 +100,7 @@ download makes new keys; the previous script stops working.
 
 ## Actions
 
-`POST /routers/{id}/actions/reset` (owner), body `{"confirm_name": "<router name>"}`. 422 on a wrong name. Clears the
+`POST /routers/{id}/actions/reset` (owner), body `{"confirm_name": "<router name>"}`. 400 `validation_failed` (field `confirm_name`) on a wrong name. Clears the
 router's join state (public key, REST password, join report, tasks, cached checks and live data, in-memory reconcile
 state), rewrites the WireGuard peers, stops the runtime, keeps accounts and the tunnel IP, queues every flat again and
 answers 200 `{router, join:{command, command_nocheck, expires_at}}` with a fresh line (`no-store`). It does not touch the

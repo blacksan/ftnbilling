@@ -54,7 +54,7 @@ func newSetRig(t *testing.T) *setRig {
 	t.Helper()
 	cfg := config.Config{BrandName: "Building WiFi", AdminUser: "admin", AdminPass: pw, RouterMock: true,
 		SupportPhone: "0700 111 222", WANInterface: "ether1", OLTInterface: "sfp-sfpplus1", WANCapacityMbps: 500, OLTCapacityMbps: 10000, FUPTB: 15,
-		NetflowAddr: "off", CustomerSubnet: "10.5.50.0/24", PingTargets: []string{"8.8.8.8"}, PublicBaseURL: "https://billing.example.co.ke",
+		NetflowAddr: "off", CustomerSubnet: "10.5.50.0/24", PingTargets: []string{"8.8.8.8"}, PublicIP: "203.0.113.10", PublicBaseURL: "https://billing.example.co.ke",
 		DataKey: []byte("0123456789abcdef0123456789abcdef"), MpesaEnv: "sandbox", MpesaUnknownRef: "reject", WALang: "en", WAAPIVersion: "v21.0"}
 	cfg.DataDir = t.TempDir()
 	cfg.FlowEvery, cfg.PortEvery, cfg.PingEvery, cfg.DNSEvery, cfg.SaveEvery = time.Hour, time.Hour, time.Hour, time.Hour, time.Hour

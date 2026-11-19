@@ -6,10 +6,8 @@ import (
 	"ispbill/internal/routeros"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"ispbill/internal/sites"
 	"ispbill/internal/store"
@@ -65,7 +63,7 @@ func TestWireAddCustomerReportsTheRealRouterState(t *testing.T) {
 	}
 
 	// A router that has not joined: queued, with the reason.
-	fresh, err := m.mgr.CreateRouter(sites.SiteInput{Name: "Unjoined"}, false)
+	fresh, err := m.mgr.CreateRouter(sites.SiteInput{Name: "Unjoined"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,130 +98,49 @@ func countFlat(m *multi, flat string) (n int) {
 	return
 }
 
-func TestWireAddRouterUsesTheSameIntentAsTheAPI(t *testing.T) {
+func TestWireAddRouterMakesTheBootstrapLine(t *testing.T) {
 	r := newAPIRig(t)
-	create := func(name, serving string) map[string]any {
-		f := url.Values{"name": {name}}
-		if serving != "" {
-			f.Set("serving", serving)
-		}
-		code, j := r.postJSON(t, "/admin/routers/create", f)
-		if code != 200 || j["ok"] != true {
-			t.Fatalf("%s: %d %v", name, code, j)
-		}
-		return j
+	code, j := r.postJSON(t, "/admin/routers/create", url.Values{"name": {"Web New"}, "wanmode": {"static"}, "wanaddr": {"198.51.100.5/24"}, "wangw": {"198.51.100.1"}})
+	if code != 200 || j["ok"] != true {
+		t.Fatalf("%d %v", code, j)
 	}
-	fresh, serving := create("Web New", ""), create("Web Serving", "1")
-	idOf := func(j map[string]any) string { return j["id"].(string) }
-	// one store of the intent, in the words W5c uses
-	for id, want := range map[string]string{idOf(fresh): "no", idOf(serving): "yes"} {
-		var got string
-		r.st.View(func(d *store.Data) { got = d.Settings["site."+id+".serving_customers"].Value })
-		if got != want {
-			t.Errorf("serving_customers of %s = %q, want %q", id, got, want)
-		}
+	id := j["id"].(string)
+	cmd := j["command"].(string)
+	if !strings.Contains(cmd, "/reset") || !strings.Contains(cmd, "/import ftn-reset.rsc") || strings.Contains(cmd, "hotspot") {
+		t.Errorf("the line: %s", cmd)
 	}
-	// the API reads the same value back
-	res := r.call(r.owner.Access, "GET", "/routers/"+idOf(serving)+"/setup", nil, nil)
-	if res.JSON(t)["serving_customers"] != true {
-		t.Fatalf("the API does not see the web's intent: %s", res.Raw)
+	var st store.Site
+	r.st.View(func(d *store.Data) { st = d.Sites[id] })
+	if st.AccessMode != store.AccessIPoE || st.WANMode != "static" || st.WANAddress != "198.51.100.5/24" {
+		t.Errorf("%+v", st)
 	}
-	// both are IPoE routers, as POST /routers makes them
-	for _, id := range []string{idOf(fresh), idOf(serving)} {
-		var st store.Site
-		r.st.View(func(d *store.Data) { st = d.Sites[id] })
-		if st.AccessMode != store.AccessIPoE || st.Provision {
-			t.Errorf("%s: mode %q provision %v", id, st.AccessMode, st.Provision)
-		}
+	// a bad layout is refused
+	if code, _ := r.postJSON(t, "/admin/routers/create", url.Values{"name": {"Bad"}, "wanmode": {"static"}}); code != 422 {
+		t.Errorf("static WAN without an address: %d", code)
 	}
-	// the join line asks for what the intent needs: a serving router needs the scheduler for the kit
-	fc, sc := fresh["command"].(string), serving["command"].(string)
-	if !strings.Contains(fc, "/tool/fetch") || strings.Contains(fc, "device-mode/get scheduler") {
-		t.Errorf("fresh line: %s", fc)
-	}
-	if !strings.Contains(sc, "device-mode/get scheduler") {
-		t.Errorf("serving line lacks the scheduler check: %s", sc)
-	}
-	// the setup tab mints the same kind of line, once
-	join := r.admin("POST", "/admin/routers/join", url.Values{"id": {idOf(serving)}})
-	if b := body(t, join); join.StatusCode != 200 || !strings.Contains(b, "device-mode/get scheduler") {
-		t.Errorf("the Setup tab line for a serving router: %d", join.StatusCode)
+	join := r.admin("POST", "/admin/routers/join", url.Values{"id": {id}})
+	if b := body(t, join); join.StatusCode != 200 || !strings.Contains(b, "/import ftn-reset.rsc") {
+		t.Errorf("the Setup tab line: %d", join.StatusCode)
 	}
 }
 
-func TestWireSetupJSONShapeIsWhatTheTemplateReads(t *testing.T) {
+func TestWireSetupJSONShape(t *testing.T) {
 	r, _ := liveRig(t)
-	// the tab draws from setup.json: the container and the owner marker are on the page
-	h := r.adminGet(t, "/admin/routers/view?id="+r.A.ID+"&tab=setup")
-	for _, want := range []string{"data-job", "data-owner", `data-name="Alpha"`} {
-		if !strings.Contains(h, want) {
-			t.Errorf("setup tab lacks %q", want)
-		}
-	}
-	post := r.admin("POST", "/admin/routers/setup/run", url.Values{"id": {r.A.ID}})
-	b := body(t, post)
-	if post.StatusCode != 202 {
-		t.Fatalf("%d %s", post.StatusCode, b)
-	}
 	var j map[string]any
-	if err := json.Unmarshal([]byte(b), &j); err != nil {
-		t.Fatal(err)
-	}
-	// every key app.js reads
-	for _, k := range []string{"state", "steps", "next_action", "join", "evidence", "seconds_left", "live_devices", "last_error"} {
+	r.getJSON(t, "/admin/routers/setup.json?id="+r.A.ID, &j)
+	for _, k := range []string{"state", "steps", "next_action", "join", "checks", "blockers", "last_error"} {
 		if _, ok := j[k]; !ok {
-			t.Errorf("setup.json lacks %q (app.js reads it)", k)
+			t.Errorf("setup.json lacks %q", k)
 		}
 	}
-	na := j["next_action"].(map[string]any)
-	for _, k := range []string{"kind", "text"} {
-		if _, ok := na[k]; !ok {
-			t.Errorf("next_action lacks %q", k)
+	if steps, _ := j["steps"].([]any); len(steps) != 4 {
+		t.Errorf("steps: %v", j["steps"])
+	}
+	for _, p := range []string{"run", "migrate", "rollback"} {
+		if code, _ := r.postJSON(t, "/admin/routers/setup/"+p, url.Values{"id": {r.A.ID}}); code != 410 {
+			t.Errorf("setup/%s: %d, want 410", p, code)
 		}
 	}
-	ev := j["evidence"].(map[string]any)
-	for _, k := range []string{"flats_required", "flats_bound"} {
-		if _, ok := ev[k]; !ok {
-			t.Errorf("evidence lacks %q", k)
-		}
-	}
-	steps, _ := j["steps"].([]any)
-	for i := 0; i < 40 && len(steps) == 0; i++ { // the job starts its steps a moment after the answer
-		time.Sleep(50 * time.Millisecond)
-		var cur map[string]any
-		r.getJSON(t, "/admin/routers/setup.json?id="+r.A.ID, &cur)
-		steps, _ = cur["steps"].([]any)
-	}
-	if len(steps) == 0 {
-		t.Fatal("a started job has no steps")
-	}
-	for _, k := range []string{"n", "key", "title", "status", "detail"} {
-		if _, ok := steps[0].(map[string]any)[k]; !ok {
-			t.Errorf("a step lacks %q", k)
-		}
-	}
-	// app.js reads exactly these names: the status values of W5c, not the old guesses
-	js, err := os.ReadFile("static/app.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	src := string(js)
-	for _, want := range []string{"st.status", "st.key", "j.next_action", "j.seconds_left", "ev.flats_bound", "data-migrate-name", "/admin/routers/setup/", `postJob("migrate"`, `postJob("rollback"`, "setup.json"} {
-		if !strings.Contains(src, want) {
-			t.Errorf("app.js does not use %q", want)
-		}
-	}
-	for _, gone := range []string{"can_rollback", "s.state ===", "setup/confirm", "cutover/confirm"} {
-		if strings.Contains(src, gone) {
-			t.Errorf("app.js still has %q", gone)
-		}
-	}
-	// the typed name is checked by the server too, and only an owner may start a migration
-	if code, jj := r.postJSON(t, "/admin/routers/setup/migrate", url.Values{"id": {r.A.ID}, "confirm_name": {"Wrong"}}); code != 422 || jj["error"] == nil {
-		t.Errorf("a wrong name: %d %v", code, jj)
-	}
-	op := r.admin("POST", "/admin/routers/setup/migrate", url.Values{"id": {r.A.ID}, "confirm_name": {"Alpha"}})
-	_ = body(t, op)
 }
 
 func TestWireClientsInterfacesAndOverviewTabs(t *testing.T) {
@@ -287,8 +204,6 @@ func TestWireClientsInterfacesAndOverviewTabs(t *testing.T) {
 
 func TestWireRebootThroughTheWebUsesTheSameGuards(t *testing.T) {
 	r, mk := liveRig(t)
-	jobs := &fakeJobs{running: map[string]bool{}, state: map[string]string{}}
-	r.mgr.SetJobs(jobs)
 	reboots := func() int {
 		n := 0
 		for _, c := range mk.Calls() {
@@ -308,11 +223,6 @@ func TestWireRebootThroughTheWebUsesTheSameGuards(t *testing.T) {
 	if code, j := reboot("Beta"); code != 422 || j["ok"] != false {
 		t.Fatalf("wrong name: %d %v", code, j)
 	}
-	jobs.running[r.A.ID] = true
-	if code, j := reboot("Alpha"); code != 409 || !strings.Contains(j["error"].(string), "set up") {
-		t.Fatalf("job running: %d %v", code, j)
-	}
-	jobs.running[r.A.ID] = false
 	if reboots() != 0 {
 		t.Fatal("a refused request rebooted the router")
 	}
@@ -435,26 +345,13 @@ func TestWireOutageNoticeReturnsToRouters(t *testing.T) {
 	}
 }
 
-func TestFixERollbackNeedsTheTypedNameAndFixCanRunAgain(t *testing.T) {
+func TestWireResetNeedsTheTypedName(t *testing.T) {
 	r, _ := liveRig(t)
-	src, err := os.ReadFile("static/app.js")
-	if err != nil {
-		t.Fatal(err)
+	if code, j := r.postJSON(t, "/admin/routers/setup/reset", url.Values{"id": {r.A.ID}}); code != 422 || j["error"] == nil {
+		t.Fatalf("reset without a name: %d %v", code, j)
 	}
-	js := string(src)
-	for _, want := range []string{`postJob("rollback", { id: rid, confirm_name: nm }`, "askName(", `na.kind === "fix"`, `postJob("run"`} {
-		if !strings.Contains(js, want) {
-			t.Errorf("app.js lacks %q", want)
-		}
-	}
-	if code, j := r.postJSON(t, "/admin/routers/setup/rollback", url.Values{"id": {r.A.ID}}); code != 422 || j["error"] == nil {
-		t.Fatalf("rollback without a name: %d %v", code, j)
-	}
-	if code, _ := r.postJSON(t, "/admin/routers/setup/rollback", url.Values{"id": {r.A.ID}, "confirm_name": {"Alpha"}}); code == 422 {
-		t.Fatalf("rollback with the name was refused as a name mismatch")
-	}
-	if h := r.adminGet(t, "/admin/tools"); strings.Contains(h, "need the router name and your password (the router itself") {
-		t.Error("stale console help")
+	if code, j := r.postJSON(t, "/admin/routers/setup/reset", url.Values{"id": {r.A.ID}, "confirm_name": {"Alpha"}}); code != 200 {
+		t.Fatalf("reset with the name: %d %v", code, j)
 	}
 }
 

@@ -1,3 +1,5 @@
+> **Superseded by v5** (docs/plan-v5-bootstrap.md and docs/api/v5-bootstrap.md): the W5c parts (set-up job, cutover and cleanup stages, kit, hotspot adoption) are replaced by the single bootstrap script. W7 to W9 still stand.
+
 # Fast Tech Net release: Routers, auto-provisioning, new UI (W5c, W7, W8, W9)
 
 Planned by Fable 2026-11-18, amended by the main session with the user's later decisions (see "Amendments" first — they override anything below).
