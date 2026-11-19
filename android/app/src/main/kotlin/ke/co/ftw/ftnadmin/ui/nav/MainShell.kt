@@ -181,6 +181,7 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
                 onNewDevices = { nav.navigate(NewDevicesRoute(it)) },
                 onOpenAccount = openAccount,
                 onChecks = { nav.navigate(SetupRoute(it)) },
+                onPorts = { id2, name -> nav.navigate(PortsRoute(id2, name)) },
                 onEdit = { nav.navigate(EditRouterRoute(it)) },
             )
         }
@@ -190,6 +191,10 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
         composable<SetupRoute> { e ->
             val id = e.toRoute<SetupRoute>().id
             SetupScreen(id, user, onBack = { nav.popBackStack() })
+        }
+        composable<PortsRoute> { e ->
+            val r = e.toRoute<PortsRoute>()
+            ke.co.ftw.ftnadmin.ui.routers.ports.PortsScreen(r.id, r.name, onBack = { nav.popBackStack() })
         }
         composable<EditRouterRoute> { e ->
             EditRouterScreen(e.toRoute<EditRouterRoute>().id, onBack = { nav.popBackStack() })

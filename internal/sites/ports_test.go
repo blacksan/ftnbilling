@@ -456,3 +456,25 @@ func setField(t *testing.T, m *routeros.Mock, path, name, key, val string) {
 	}
 	t.Fatalf("no row %s in %s", name, path)
 }
+
+func TestWebFigCheckIsOKForTheAdminLANAndTheServer(t *testing.T) {
+	f, s, m := portsRig(t)
+	for _, r := range m.Table("/ip/service") {
+		m.RemoveRow(context.Background(), "/ip/service", r[".id"])
+	}
+	srv := ServerTunnelIP(f.m.pfx)
+	m.SeedRow("/ip/service", R{"name": "www", "port": "8081", "address": "192.168.88.0/24," + srv + "/32", "disabled": "false"})
+	f.m.chk.drop(s.ID)
+	if it := checkItem(t, f, s.ID, CheckWWW); it.Status != StatusOK {
+		t.Fatalf("%+v", it)
+	}
+	// the old server-only address is still shown, as information
+	for _, r := range m.Table("/ip/service") {
+		m.RemoveRow(context.Background(), "/ip/service", r[".id"])
+	}
+	m.SeedRow("/ip/service", R{"name": "www", "port": "8081", "address": srv + "/32", "disabled": "false"})
+	f.m.chk.drop(s.ID)
+	if it := checkItem(t, f, s.ID, CheckWWW); it.Status != StatusInfo || !strings.Contains(it.Detail, "new line") {
+		t.Fatalf("%+v", it)
+	}
+}

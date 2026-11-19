@@ -16,6 +16,23 @@ class RouterLiveRepository(private val api: ApiClient) {
     suspend fun interfaces(routerId: String): List<NetInterface> =
         api.get<InterfacesResponse>("routers", routerId, "interfaces").items
 
+    /** Every physical port with its role; the server reads the router once per refresh (cached 4 s). */
+    suspend fun ports(routerId: String): PortsResponse = api.get("routers", routerId, "ports")
+
+    /**
+     * Enable/disable and change the role of one port (operator; owner for the admin LAN and the OLT uplink).
+     * [confirmName] is the typed router name the server asks for before risky changes.
+     */
+    suspend fun changePort(routerId: String, port: String, role: String? = null, disabled: Boolean? = null, confirmName: String? = null): PortChangeResponse =
+        api.patch(
+            "routers", routerId, "ports", port,
+            body = buildJsonObject {
+                role?.let { put("role", it) }
+                disabled?.let { put("disabled", it) }
+                if (!confirmName.isNullOrBlank()) put("confirm_name", confirmName)
+            },
+        )
+
     /** [kind] is `all`, `flats` or `unregistered`; [online] filters to connected devices. */
     suspend fun clients(routerId: String, query: String? = null, kind: String? = null, online: Boolean? = null): ClientsResponse =
         api.get(

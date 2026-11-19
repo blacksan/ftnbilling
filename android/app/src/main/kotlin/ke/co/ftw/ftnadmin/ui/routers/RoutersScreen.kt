@@ -145,6 +145,7 @@ fun RouterDetailScreen(
     onNewDevices: (String) -> Unit,
     onOpenAccount: (String) -> Unit,
     onChecks: (String) -> Unit,
+    onPorts: (String, String) -> Unit,
     onEdit: (String) -> Unit,
 ) {
     val container = LocalContainer.current
@@ -206,6 +207,7 @@ fun RouterDetailScreen(
                     item { BootstrapLineCard(setupUi, user.isOwner, onGet = setupVm::getLine, onHide = setupVm::hideLine) }
                     item { Button(onClick = { onNewDevices(id) }, modifier = Modifier.fillMaxWidth()) { Text("New devices on this router") } }
                     item { Button(onClick = { onChecks(id) }, modifier = Modifier.fillMaxWidth()) { Text("Setup and checks") } }
+                    item { Button(onClick = { onPorts(id, s.value.label) }, modifier = Modifier.fillMaxWidth()) { Text("Ports") } }
                     if (user.isOwner) {
                         item { OutlinedButton(onClick = { onEdit(id) }, modifier = Modifier.fillMaxWidth()) { Text("Router settings") } }
                     }

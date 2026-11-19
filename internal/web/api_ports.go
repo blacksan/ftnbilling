@@ -203,6 +203,9 @@ type statusRecorder struct {
 	buf    []byte
 }
 
-func (r *statusRecorder) Header() http.Header         { return r.header }
-func (r *statusRecorder) WriteHeader(code int)        { r.status = code }
-func (r *statusRecorder) Write(b []byte) (int, error) { r.buf = append(r.buf, b...); return len(b), nil }
+func (r *statusRecorder) Header() http.Header  { return r.header }
+func (r *statusRecorder) WriteHeader(code int) { r.status = code }
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	r.buf = append(r.buf, b...)
+	return len(b), nil
+}
