@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"ispbill/internal/billing"
+	"ispbill/internal/routeros"
 	"ispbill/internal/store"
 )
 
@@ -33,7 +34,7 @@ func (s *Server) adminRouterDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{}
-	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 	defer cancel()
 	if err := s.svc.RefreshHosts(ctx, st.ID); err != nil {
 		out["error"] = err.Error()
@@ -73,7 +74,7 @@ type devRow struct {
 func (s *Server) adminDevices(w http.ResponseWriter, r *http.Request) {
 	p := s.page(r, "devices")
 	sc := s.scopeOf(r)
-	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 	defer cancel()
 	if !sc.All { // refreshing asks one router; "all routers" shows what is already known
 		if err := s.svc.RefreshHosts(ctx, sc.ID); err != nil {
@@ -167,7 +168,7 @@ func (s *Server) adminDeviceCreate(w http.ResponseWriter, r *http.Request) {
 		s.back(w, r, "/admin/devices", "Error: "+err.Error())
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 	defer cancel()
 	msg := "Account created: " + a.Flat + " (" + a.Code + "). " + routerStateText(s.routerStateJSON(ctx, a, rs))
 	if err != nil {

@@ -16,9 +16,19 @@ func rowsPath(path string) string { return "/" + strings.Trim(strings.TrimSpace(
 
 // Rows lists the rows of path whose properties equal query.
 func (c *REST) Rows(ctx context.Context, path string, query map[string]string) ([]Row, error) {
+	return c.RowsProps(ctx, path, query, nil)
+}
+
+// RowsProps is Rows asking the router for only the listed properties
+// (.proplist), which cuts big tables (leases, ARP, hosts) on a slow tunnel.
+// The row's .id is always included. nil/empty props returns every property.
+func (c *REST) RowsProps(ctx context.Context, path string, query map[string]string, props []string) ([]Row, error) {
 	q := url.Values{}
 	for k, v := range query {
 		q.Set(k, v)
+	}
+	if len(props) > 0 {
+		q.Set(".proplist", strings.Join(append([]string{RowID}, props...), ","))
 	}
 	var raw []map[string]any
 	if err := c.do(ctx, http.MethodGet, rowsPath(path), q, nil, &raw); err != nil {

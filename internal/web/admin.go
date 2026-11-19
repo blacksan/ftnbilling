@@ -13,6 +13,7 @@ import (
 
 	"ispbill/internal/billing"
 	"ispbill/internal/metrics"
+	"ispbill/internal/routeros"
 	"ispbill/internal/sites"
 	"ispbill/internal/store"
 )
@@ -418,7 +419,7 @@ func (s *Server) adminAccountCreate(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 		defer cancel()
 		out := map[string]any{"ok": true, "id": a.ID, "code": a.Code, "flat": a.Flat, "url": s.accountURL(a.ID), "router": s.routerStateJSON(ctx, a, rs)}
 		if err != nil {
@@ -431,7 +432,7 @@ func (s *Server) adminAccountCreate(w http.ResponseWriter, r *http.Request) {
 		s.back(w, r, "/admin/accounts?mac="+url.QueryEscape(in.MAC)+"&flat="+url.QueryEscape(in.Flat), "Error: "+err.Error())
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 	defer cancel()
 	msg := "Account created: " + a.Flat + " (" + a.Code + "). " + routerStateText(s.routerStateJSON(ctx, a, rs))
 	if err != nil {
@@ -453,7 +454,7 @@ func (s *Server) adminAccountStatus(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 	defer cancel()
 	writeJSON(w, http.StatusOK, s.routerStateJSON(ctx, a, s.svc.AccountRouterState(a.ID)))
 }

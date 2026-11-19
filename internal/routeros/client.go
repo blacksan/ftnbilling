@@ -36,6 +36,9 @@ type Client interface {
 	// Rows lists the rows whose properties equal every key/value in query
 	// (nil = all rows; values compare case-insensitively, so MACs match).
 	Rows(ctx context.Context, path string, query map[string]string) ([]Row, error)
+	// RowsProps is Rows returning only the listed properties (RouterOS
+	// .proplist); the mock and NoRouter ignore props.
+	RowsProps(ctx context.Context, path string, query map[string]string, props []string) ([]Row, error)
 	// AddRow creates a row and returns its .id.
 	AddRow(ctx context.Context, path string, body map[string]string) (id string, err error)
 	// SetRow changes only the properties in diff on the row with .id id.

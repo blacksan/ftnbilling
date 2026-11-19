@@ -24,7 +24,7 @@ type Config struct {
 	RouterUser   string
 	RouterPass   string
 	RouterMock   bool
-	// RouterReadTimeout cuts one live read of a router (ROUTER_READ_TIMEOUT, default 8s: the tunnel can be slow).
+	// RouterReadTimeout cuts one live read of a router (ROUTER_READ_TIMEOUT, default 10s: the tunnel can be slow).
 	RouterReadTimeout time.Duration
 	HotspotServer     string
 	AdminUser         string
@@ -175,7 +175,7 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 		return d
 	}
-	c.RouterReadTimeout = dur("ROUTER_READ_TIMEOUT", 8*time.Second)
+	c.RouterReadTimeout = dur("ROUTER_READ_TIMEOUT", 10*time.Second)
 	c.WANInterface = get("WAN_INTERFACE", "ether1")
 	c.OLTInterface = get("OLT_INTERFACE", "sfp-sfpplus1")
 	c.WANCapacityMbps = num("WAN_CAPACITY_MBPS", 500)
