@@ -179,3 +179,21 @@ func (m *Mock) System(context.Context) (SysInfo, error) {
 	return SysInfo{CPULoad: 5 + int(30*eveningFactor(time.Now())*st.rng.Float64()), FreeMem: 700 << 20, TotalMem: 1 << 30,
 		Uptime: "3d4h", TempC: 44 + 8*st.rng.Float64(), HasTemp: true}, nil
 }
+
+// SetCustomerPathDown makes pings from a customer source address get no answer
+// (a broken masquerade or forwarding rule), while the router's own pings work.
+func (m *Mock) SetCustomerPathDown(down bool) { m.mu.Lock(); m.custDown = down; m.mu.Unlock() }
+
+// PingFrom implements SourcePinger.
+func (m *Mock) PingFrom(ctx context.Context, target, src string, count int) (PingResult, error) {
+	m.mu.Lock()
+	down := m.custDown
+	m.mu.Unlock()
+	if down {
+		if err := m.Ping(ctx); err != nil {
+			return PingResult{}, err
+		}
+		return PingResult{Target: target, Sent: count, LossPct: 100}, nil
+	}
+	return m.PingHost(ctx, target, count)
+}

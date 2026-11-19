@@ -68,7 +68,8 @@ type Server struct {
 	authn     *authn.Service
 	alertSink func(string) // tests: take security alerts instead of the outbox
 	idem      *idemStore
-	refreshRL *limiter // /api/v1/auth/refresh by client address
+	refreshRL *limiter    // /api/v1/auth/refresh by client address
+	reboots   rebootGuard // one router reboot per 10 minutes per router (api_live.go)
 
 	onlineMu sync.Mutex
 	online   map[string]onlineEntry
@@ -108,6 +109,7 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 		},
 		"dur":    billing.DescribeMinutes,
 		"eat":    func(t time.Time) string { return t.In(billing.EAT).Format("Mon 2 Jan 2006, 15:04") + " EAT" },
+		"eats":   func(t time.Time) string { return t.In(billing.EAT).Format("2 Jan 2006, 15:04") },
 		"left":   func(t time.Time) string { return billing.Remaining(t, svc.Now()) },
 		"pkgOf":  func(m map[string]store.Package, id string) store.Package { return m[id] },
 		"acctOf": func(m map[string]store.Account, id string) store.Account { return m[id] },
@@ -136,7 +138,33 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 			}
 			return m
 		},
-		"lines": func(v string) string { return strings.ReplaceAll(v, ",", "\n") },
+		"bps":   fmtBps,
+		"f64":   func(v int64) float64 { return float64(v) },
+		"bytes": fmtBytes,
+		"sub":   func(a, b int) int { return a - b },
+		"cond": func(c bool, a, b any) any {
+			if c {
+				return a
+			}
+			return b
+		},
+		"split": func(v, sep string) []string { return strings.Split(v, sep) },
+		// acts builds empty-state buttons from "Label|/href" strings; an href of
+		// "#modal:id" opens that dialog instead of navigating.
+		"acts": func(p ...string) []heroAct {
+			var out []heroAct
+			for _, v := range p {
+				l, h, _ := strings.Cut(v, "|")
+				a := heroAct{Label: l, Href: h}
+				if m, ok := strings.CutPrefix(h, "#modal:"); ok {
+					a.Href, a.Modal = "", m
+				}
+				out = append(out, a)
+			}
+			return out
+		},
+		"lines":  func(v string) string { return strings.ReplaceAll(v, ",", "\n") },
+		"static": staticURL,
 	}
 	s.tpl = template.Must(template.New("").Funcs(funcs).ParseFS(tplFS, "templates/*.html"))
 	return s
@@ -165,6 +193,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/portal", http.StatusFound) })
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /j/{token}", s.joinScript)
+	mux.HandleFunc("POST /j/{token}/report", s.joinReport)
 	s.portalRoutes(mux)
 	s.routerFileRoutes(mux)
 	s.callbackRoutes(mux)
@@ -172,6 +201,7 @@ func (s *Server) Handler() http.Handler {
 	s.loginRoutes(mux)
 	s.adminRoutes(mux)
 	s.apiRoutes(mux)
+	s.staticRoutes(mux)
 	return s.middleware(mux)
 }
 

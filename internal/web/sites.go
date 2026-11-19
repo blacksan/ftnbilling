@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +20,8 @@ func (s *Server) siteRoutes(get, post func(string, http.HandlerFunc)) {
 	get("/admin/sites/new", s.adminSiteNew)
 	get("/admin/sites/view", s.adminSiteView)
 	get("/admin/sites/status.json", s.adminSiteStatus)
+	get("/admin/sites/checks.json", s.adminSiteChecks)
+	post("/admin/sites/fix", s.adminSiteFix)
 	post("/admin/sites/create", s.adminSiteCreate)
 	post("/admin/sites/update", s.adminSiteUpdate)
 	post("/admin/sites/join", s.adminSiteJoin)
@@ -32,6 +33,7 @@ func (s *Server) siteRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/sites/mode", s.adminSiteMode)
 	post("/admin/sites/adopt", s.adminSiteAdopt)
 	post("/admin/sites/confirm", s.adminSiteConfirm)
+	post("/admin/sites/reboot", s.adminSiteReboot)
 	post("/admin/sites/script", s.adminSiteScript)
 	s.deviceRoutes(get, post)
 }
@@ -114,19 +116,6 @@ func (s *Server) siteRows() []siteRow {
 	return rows
 }
 
-func (s *Server) adminSites(w http.ResponseWriter, r *http.Request) {
-	p := s.page(r, "sites")
-	p.Data["Rows"] = s.siteRows()
-	s.render(w, "admin_sites", p)
-}
-
-func (s *Server) adminSiteNew(w http.ResponseWriter, r *http.Request) {
-	p := s.page(r, "sites")
-	p.Data["Mode"] = "new"
-	p.Data["Form"] = sites.ApplyDefaults(s.cfg, store.Site{Mode: store.SiteModeWG})
-	s.render(w, "admin_sites", p)
-}
-
 func siteInput(r *http.Request) sites.SiteInput {
 	f := func(k string) string { return strings.TrimSpace(r.PostFormValue(k)) }
 	fl := func(k string) float64 { v, _ := strconv.ParseFloat(f(k), 64); return v }
@@ -139,15 +128,6 @@ func siteInput(r *http.Request) sites.SiteInput {
 	}
 }
 
-func (s *Server) adminSiteCreate(w http.ResponseWriter, r *http.Request) {
-	st, err := s.mgr.CreateSite(siteInput(r))
-	if err != nil {
-		s.back(w, r, "/admin/sites/new", "Error: "+err.Error())
-		return
-	}
-	s.back(w, r, "/admin/sites/view?id="+st.ID, "Building added. Now connect its router with the join command below.")
-}
-
 func (s *Server) siteID(r *http.Request) (store.Site, bool) {
 	id := r.URL.Query().Get("id")
 	if id == "" {
@@ -157,67 +137,6 @@ func (s *Server) siteID(r *http.Request) (store.Site, bool) {
 	var ok bool
 	s.st.View(func(d *store.Data) { st, ok = d.Sites[id]; ok = ok && !st.Removed })
 	return st, ok
-}
-
-// siteView builds the building page; cmd and fallback are set only in the
-// response to a join request, which is the one time the command is shown.
-func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site, cmd, cmdNoCheck string, exp time.Time, stage string, extra ...map[string]any) {
-	p := s.page(r, "sites")
-	eff := s.mgr.Effective(st)
-	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
-	defer cancel()
-	status, _ := s.mgr.Status(ctx, st.ID)
-	p.Data["Site"], p.Data["Eff"], p.Data["Status"] = st, eff, status
-	p.Data["Env"] = st.Mode == store.SiteModeEnv
-	for _, m := range extra {
-		for k, v := range m {
-			p.Data[k] = v
-		}
-	}
-	p.Data["Cmd"], p.Data["CmdNoCheck"], p.Data["CmdExpires"], p.Data["CmdStage"] = cmd, cmdNoCheck, exp, stage
-	mode := st.AccessMode
-	if mode == "" {
-		mode = store.AccessHotspot
-	}
-	p.Data["Mode"], p.Data["IPoE"] = mode, billing.IPoE(st)
-	if billing.IPoE(st) {
-		p.Data["Prov"] = s.svc.ProvisionStatus(st.ID)
-		if pend, ok := s.mgr.CutoverPending(ctx, st.ID); ok {
-			p.Data["CutoverPending"] = pend
-		}
-	}
-	p.Data["Insecure"] = !strings.HasPrefix(s.cfg.PublicBaseURL, "https://")
-	p.Data["AllowInsecure"] = s.cfg.AllowInsecureJoin
-	p.Data["TTL"] = int(s.cfg.JoinTokenTTL.Minutes())
-	p.Data["Portal"] = s.portalBase(r) + "/portal?site=" + url.QueryEscape(st.ID)
-	var pkgs []store.Package
-	var accts int
-	s.st.View(func(d *store.Data) {
-		pkgs = d.PackageList()
-		for _, a := range d.Accounts {
-			if a.SiteID == st.ID {
-				accts++
-			}
-		}
-	})
-	p.Data["Pkgs"], p.Data["Accounts"] = pkgs, accts
-	if rep, ok := s.svc.Building(st.ID); ok {
-		p.Data["Rep"] = rep
-	}
-	p.Data["Roles"] = []string{store.RoleLandlord, store.RoleCaretaker, store.RoleAgent, store.RoleSecurity, store.RoleOther}
-	if cmd != "" {
-		w.Header().Set("Cache-Control", "no-store")
-	}
-	s.render(w, "admin_sites", p)
-}
-
-func (s *Server) adminSiteView(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.siteID(r)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	s.siteView(w, r, st, "", "", time.Time{}, "")
 }
 
 func (s *Server) adminSiteStatus(w http.ResponseWriter, r *http.Request) {
@@ -239,7 +158,7 @@ func (s *Server) adminSiteUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.mgr.UpdateSite(st.ID, siteInput(r))
-	s.back(w, r, "/admin/sites/view?id="+st.ID, msgOr(err, "Saved"))
+	s.back(w, r, "/admin/routers/view?id="+st.ID, msgOr(err, "Saved"))
 }
 
 func (s *Server) adminSiteJoin(w http.ResponseWriter, r *http.Request) {
@@ -248,14 +167,13 @@ func (s *Server) adminSiteJoin(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	tok, exp, err := s.mgr.MintJoin(st.ID)
+	cmd, noCheck, exp, err := s.joinLines(st)
 	if err != nil {
-		s.back(w, r, "/admin/sites/view?id="+st.ID, "Error: "+err.Error())
+		s.back(w, r, "/admin/routers/view?id="+st.ID+"&tab=setup", "Error: "+err.Error())
 		return
 	}
-	base := s.cfg.PublicBaseURL
-	// The command is rendered here and never put in a URL or the log.
-	s.siteView(w, r, st, sites.JoinCommand(base, tok, true), sites.JoinCommand(base, tok, false), exp, "")
+	// The line is rendered here and never put in a URL or the log.
+	s.siteView(w, r, st, cmd, noCheck, exp, "")
 }
 
 func (s *Server) adminSiteJoinRevoke(w http.ResponseWriter, r *http.Request) {
@@ -268,7 +186,7 @@ func (s *Server) adminSiteJoinRevoke(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, store.ErrNoChange) {
 		err = nil
 	}
-	s.back(w, r, "/admin/sites/view?id="+st.ID, msgOr(err, "The join command no longer works"))
+	s.back(w, r, "/admin/routers/view?id="+st.ID, msgOr(err, "The join command no longer works"))
 }
 
 func (s *Server) adminSitePackages(w http.ResponseWriter, r *http.Request) {
@@ -288,7 +206,7 @@ func (s *Server) adminSitePackages(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 	err := s.svc.SaveSiteOverrides(st.ID, ov)
-	s.back(w, r, "/admin/sites/view?id="+st.ID, msgOr(err, "Packages saved for this building"))
+	s.back(w, r, "/admin/routers/view?id="+st.ID, msgOr(err, "Packages saved for this router"))
 }
 
 func (s *Server) adminSiteSync(w http.ResponseWriter, r *http.Request) {
@@ -301,11 +219,11 @@ func (s *Server) adminSiteSync(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if billing.IPoE(st) {
 		_, err := s.svc.ReconcileSite(ctx, st.ID)
-		s.back(w, r, "/admin/sites/view?id="+st.ID, msgOr(err, "Router reconciled with the accounts"))
+		s.back(w, r, "/admin/routers/view?id="+st.ID, msgOr(err, "Router reconciled with the accounts"))
 		return
 	}
 	err := s.svc.SyncProfiles(ctx, st.ID)
-	s.back(w, r, "/admin/sites/view?id="+st.ID, msgOr(err, "Speed profiles pushed to the router"))
+	s.back(w, r, "/admin/routers/view?id="+st.ID, msgOr(err, "Speed profiles pushed to the router"))
 }
 
 func (s *Server) adminSiteDisable(w http.ResponseWriter, r *http.Request) {
@@ -319,7 +237,7 @@ func (s *Server) adminSiteDisable(w http.ResponseWriter, r *http.Request) {
 	if off {
 		msg = "Paused: no collection and no router changes until resumed"
 	}
-	s.back(w, r, "/admin/sites/view?id="+st.ID, msgOr(s.mgr.SetDisabled(st.ID, off), msg))
+	s.back(w, r, "/admin/routers/view?id="+st.ID, msgOr(s.mgr.SetDisabled(st.ID, off), msg))
 }
 
 func (s *Server) adminSiteRemove(w http.ResponseWriter, r *http.Request) {
@@ -329,10 +247,10 @@ func (s *Server) adminSiteRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.mgr.RemoveSite(st.ID, r.PostFormValue("confirm")); err != nil {
-		s.back(w, r, "/admin/sites/view?id="+st.ID, "Error: "+err.Error())
+		s.back(w, r, "/admin/routers/view?id="+st.ID, "Error: "+err.Error())
 		return
 	}
-	s.back(w, r, "/admin/sites", "Building removed: "+st.Name)
+	s.back(w, r, "/admin/routers", "Router removed: "+st.Name)
 }
 
 // adminSiteScript mints a one-time command for one stage of the IPoE move:
@@ -353,7 +271,7 @@ func (s *Server) adminSiteScript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if stage != sites.StageJoin && !billing.IPoE(st) {
-		s.back(w, r, "/admin/sites/view?id="+st.ID, "Error: set the access mode to IPoE observe or IPoE first")
+		s.back(w, r, "/admin/routers/view?id="+st.ID, "Error: set the access mode to IPoE observe or IPoE first")
 		return
 	}
 	force := r.PostFormValue("force") == "1"
@@ -376,7 +294,7 @@ func (s *Server) adminSiteScript(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, exp, err := s.mgr.MintJoinStage(st.ID, stage)
 	if err != nil {
-		s.back(w, r, "/admin/sites/view?id="+st.ID, "Error: "+err.Error())
+		s.back(w, r, "/admin/routers/view?id="+st.ID, "Error: "+err.Error())
 		return
 	}
 	base := s.cfg.PublicBaseURL
@@ -395,7 +313,7 @@ func (s *Server) adminSiteMode(w http.ResponseWriter, r *http.Request) {
 	}
 	mode := r.PostFormValue("mode")
 	if err := s.mgr.SetAccessModeForce(st.ID, mode, r.PostFormValue("override") == "1"); err != nil {
-		s.back(w, r, "/admin/sites/view?id="+st.ID, "Error: "+err.Error())
+		s.back(w, r, "/admin/routers/view?id="+st.ID, "Error: "+err.Error())
 		return
 	}
 	msg := "Access mode set to " + mode
@@ -406,7 +324,7 @@ func (s *Server) adminSiteMode(w http.ResponseWriter, r *http.Request) {
 			msg += ". First router pass failed: " + err.Error()
 		}
 	}
-	s.back(w, r, "/admin/sites/view?id="+st.ID, msg)
+	s.back(w, r, "/admin/routers/view?id="+st.ID, msg)
 }
 
 func (s *Server) adminSiteAdopt(w http.ResponseWriter, r *http.Request) {
@@ -419,10 +337,10 @@ func (s *Server) adminSiteAdopt(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	res, err := s.svc.AdoptLeases(ctx, st.ID)
 	if err != nil {
-		s.back(w, r, "/admin/sites/view?id="+st.ID, "Error: "+err.Error())
+		s.back(w, r, "/admin/routers/view?id="+st.ID, "Error: "+err.Error())
 		return
 	}
-	s.back(w, r, "/admin/sites/view?id="+st.ID, fmt.Sprintf("Adopted %d leases (%d already matched, %d skipped)", len(res.Adopted), res.Unchanged, len(res.Skipped))+skippedNote(res.Skipped))
+	s.back(w, r, "/admin/routers/view?id="+st.ID, fmt.Sprintf("Adopted %d leases (%d already matched, %d skipped)", len(res.Adopted), res.Unchanged, len(res.Skipped))+skippedNote(res.Skipped))
 }
 
 func (s *Server) adminSiteConfirm(w http.ResponseWriter, r *http.Request) {
@@ -433,7 +351,7 @@ func (s *Server) adminSiteConfirm(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	s.back(w, r, "/admin/sites/view?id="+st.ID, msgOr(s.mgr.ConfirmCutover(ctx, st.ID), "Cutover confirmed: the automatic rollback is cancelled"))
+	s.back(w, r, "/admin/routers/view?id="+st.ID, msgOr(s.mgr.ConfirmCutover(ctx, st.ID), "Cutover confirmed: the automatic rollback is cancelled"))
 }
 
 func skippedNote(skipped []string) string {

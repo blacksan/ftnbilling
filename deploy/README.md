@@ -1,14 +1,14 @@
-# Online billing server for many buildings (VPS + WireGuard)
+# Online billing server for many routers (VPS + WireGuard)
 
-One VPS runs billing, the tenant portal and the admin pages for every building.
-Each building keeps its own MikroTik router doing the hotspot. Routers join a
+One VPS runs billing, the tenant portal and the admin pages for every router.
+Each router keeps its own MikroTik router doing the hotspot. Routers join a
 private WireGuard network at the VPS; the VPS reaches each router's REST API
 through its tunnel address.
 
 ```
- Building A router ──┐                                 ┌─ ftnbilling 127.0.0.1:8080 (behind Caddy only)
- Building B router ──┼── WireGuard udp/51820 ──► VPS ──┤  Caddy :80/:443  (portal, /admin, /api, M-Pesa callbacks)
- Building C router ──┘   10.99.0.0/22, wg0             ├─ NetFlow udp/2055 on 10.99.0.1 (tunnel only)
+ Router A router ──┐                                 ┌─ ftnbilling 127.0.0.1:8080 (behind Caddy only)
+ Router B router ──┼── WireGuard udp/51820 ──► VPS ──┤  Caddy :80/:443  (portal, /admin, /api, M-Pesa callbacks)
+ Router C router ──┘   10.99.0.0/22, wg0             ├─ NetFlow udp/2055 on 10.99.0.1 (tunnel only)
                                                        └─ PostgreSQL (local socket only, no TCP)
  you, phones, the operator app ── https://DOMAIN/admin, /api, /portal ──► Caddy
 ```
@@ -16,16 +16,16 @@ through its tunnel address.
 | Path | How |
 |---|---|
 | VPS to router REST API | Over the tunnel, to the router's tunnel address (`10.99.0.x:8081`). The router allows REST only from `10.99.0.1`. |
-| Phones to portal | Public internet, `https://DOMAIN/portal?site=<building id>`. The hotspot walled garden lets unpaid phones reach only the VPS. |
-| Router to NetFlow | Through the tunnel, to `10.99.0.1:2055`. The server tells buildings apart by the tunnel source address. |
+| Phones to portal | Public internet, `https://DOMAIN/portal?site=<router id>`. The hotspot walled garden lets unpaid phones reach only the VPS. |
+| Router to NetFlow | Through the tunnel, to `10.99.0.1:2055`. The server tells routers apart by the tunnel source address. |
 | You to admin | Public, over HTTPS: `https://DOMAIN/admin` (password, then an authenticator code) and `https://DOMAIN/api` for the operator app. Caddy proxies both; the app listens on `127.0.0.1:8080` only, and refuses `/admin` and `/api` from the routers' tunnel. There is no admin VPN any more. |
 
-Design size: about 40 buildings and 1500 flats on a 1 vCPU / 2 GB VPS. The
+Design size: about 40 routers and 1500 flats on a 1 vCPU / 2 GB VPS. The
 service runs with `GOMEMLIMIT=600MiB GOGC=50`.
 
 The portal is public, so the server trusts a `mac`/`ip` pair only if that
-building's router currently lists it in `/ip/hotspot/host`. This check is
-always on for WireGuard buildings. Someone outside the building who guesses a
+router currently lists it in `/ip/hotspot/host`. This check is
+always on for WireGuard routers. Someone outside the router who guesses a
 flat's MAC gets the neutral "open this page from the WiFi login" page.
 
 ## 1. New server in one command
@@ -133,26 +133,26 @@ It checks every program the installer put in, every service, timer and port, Pos
 
 To restore from a local dump on the same server instead: `sudo systemctl stop ftnbilling`, then `sudo cat /var/backups/ftnbilling/db/<file>.dump | sudo -u postgres pg_restore --clean --if-exists --no-owner --role=ftnbilling -d ftnbilling`, then `sudo systemctl start ftnbilling`.
 
-## 2. Add a building
+## 2. Add a router
 
-1. Open the admin and go to **Buildings, Add building**. Give the name; the router layout defaults suit a standard install (hotspot server `hotspot1`, WAN `ether1`, OLT port `sfp-sfpplus1`).
-2. On the building page press **Make the join command**. It is shown once, works once, and expires after 30 minutes.
-3. Paste it in the router's terminal (WinBox, New Terminal). The router downloads its setup script, creates its own WireGuard key (the private key never reaches the server), brings the tunnel up, restricts REST to the server, sends NetFlow through the tunnel, installs the hotspot pages for that building and whitelists the VPS in the walled garden.
-4. The building page switches to "Connected" when the tunnel is up and the REST API answers.
+1. Open the admin and go to **Routers, Add router**. Give the name; the router layout defaults suit a standard install (hotspot server `hotspot1`, WAN `ether1`, OLT port `sfp-sfpplus1`).
+2. On the router page press **Make the join command**. It is shown once, works once, and expires after 30 minutes.
+3. Paste it in the router's terminal (WinBox, New Terminal). The router downloads its setup script, creates its own WireGuard key (the private key never reaches the server), brings the tunnel up, restricts REST to the server, sends NetFlow through the tunnel, installs the hotspot pages for that router and whitelists the VPS in the walled garden.
+4. The router page switches to "Connected" when the tunnel is up and the REST API answers.
 
 If the router's clock is wrong or it has no certificate store, the page offers a fallback command with `check-certificate=no`.
 
 The script moves WebFig off port 80 (the hotspot uses it). Keep WinBox or SSH to reach the router.
 
-A building that is "paused" in the admin gets no collection and no router changes, and tenants cannot buy there.
+A router that is "paused" in the admin gets no collection and no router changes, and tenants cannot buy there.
 
 ## 3. Check
 
 - `sudo ftnbilling-doctor` checks the whole server.
 - `curl -s localhost:8080/healthz` on the VPS shows `sites_total`, `sites_online` and `router_ok` (and `db_ok` on builds that report it).
-- `wg show wg0` on the VPS lists one peer per joined building.
-- The building page shows the router, the WireGuard handshake and the portal URL.
-- A phone on that building's WiFi should open the online portal.
+- `wg show wg0` on the VPS lists one peer per joined router.
+- The router page shows the router, the WireGuard handshake and the portal URL.
+- A phone on that router's WiFi should open the online portal.
 
 | Symptom | Fix |
 |---|---|
@@ -167,7 +167,7 @@ A building that is "paused" in the admin gets no collection and no router change
 
 ## 4. Alerts, email and WhatsApp
 
-The server monitors every building from the moment it starts (Admin, Fleet overview). To be told when something breaks, set up the channels you want in the admin: **Settings > Email** and **Settings > WhatsApp**. Each channel is optional, and what you save applies at once (no restart). The environment file (`/etc/ftnbilling/ftnbilling.env`) can still hold `SMTP_*`, `ALERT_EMAIL_TO`, `WA_TOKEN`, `WA_PHONE_NUMBER_ID`, `WA_ADMIN_NUMBERS` and the `MPESA_*` values as a fallback; a value saved in the admin wins over it.
+The server monitors every router from the moment it starts (Admin, Fleet overview). To be told when something breaks, set up the channels you want in the admin: **Settings > Email** and **Settings > WhatsApp**. Each channel is optional, and what you save applies at once (no restart). The environment file (`/etc/ftnbilling/ftnbilling.env`) can still hold `SMTP_*`, `ALERT_EMAIL_TO`, `WA_TOKEN`, `WA_PHONE_NUMBER_ID`, `WA_ADMIN_NUMBERS` and the `MPESA_*` values as a fallback; a value saved in the admin wins over it.
 
 Secrets saved in the admin are encrypted with `DATA_KEY` from the environment file. The installer generates it on every install. Restore it together with the database, or the saved secrets cannot be read.
 
@@ -194,12 +194,12 @@ Templates to create (`{{1}}` and so on are the parameters; the wording and the n
 
 | Name | Body | Parameters |
 |---|---|---|
-| `ftn_expiry_reminder` | Hello, your {{1}} internet plan for {{2}} ends on {{3}}. To stay connected, pay KES {{4}} via {{5}}, account number {{6}}. Thank you. | package, flat + building, expiry, price, pay hint, account code |
-| `ftn_plan_expired` | Hello, the internet plan for {{1}} ended on {{2}}. To reconnect, pay via {{3}}, account number {{4}}. You will be reconnected automatically. | flat + building, expiry, pay hint, code |
-| `ftn_payment_received` | Payment received: KES {{1}}, reference {{2}}. Your {{3}} plan for {{4}} is active until {{5}}. Thank you. | amount, receipt, package, flat + building, expiry |
-| `ftn_outage_notice` | Hello, we are aware of an internet outage at {{1}} since {{2}}. Our team is working on it. We apologise for the inconvenience. | building, start |
-| `ftn_outage_resolved` | Internet service at {{1}} was restored at {{2}}. Thank you for your patience. | building, time |
-| `ftn_admin_alert` | Network alert, {{1}}: {{2}} at {{3}}. Details: {{4}}. Time: {{5}}. End of alert. | PROBLEM/RECOVERED, rule, building, detail, time |
+| `ftn_expiry_reminder` | Hello, your {{1}} internet plan for {{2}} ends on {{3}}. To stay connected, pay KES {{4}} via {{5}}, account number {{6}}. Thank you. | package, flat + router, expiry, price, pay hint, account code |
+| `ftn_plan_expired` | Hello, the internet plan for {{1}} ended on {{2}}. To reconnect, pay via {{3}}, account number {{4}}. You will be reconnected automatically. | flat + router, expiry, pay hint, code |
+| `ftn_payment_received` | Payment received: KES {{1}}, reference {{2}}. Your {{3}} plan for {{4}} is active until {{5}}. Thank you. | amount, receipt, package, flat + router, expiry |
+| `ftn_outage_notice` | Hello, we are aware of an internet outage at {{1}} since {{2}}. Our team is working on it. We apologise for the inconvenience. | router, start |
+| `ftn_outage_resolved` | Internet service at {{1}} was restored at {{2}}. Thank you for your patience. | router, time |
+| `ftn_admin_alert` | Network alert, {{1}}: {{2}} at {{3}}. Details: {{4}}. Time: {{5}}. End of alert. | PROBLEM/RECOVERED, rule, router, detail, time |
 
 A tenant only gets messages if the account has a WhatsApp number (Accounts, the flat's page; "same as phone" copies the phone number) and has not been opted out. Messages go out between 07:00 and 21:00 EAT for reminders; payment confirmations and outage notices go at once. At most `WA_DAILY_LIMIT` (240) tenant messages are sent per day; admin alerts are not counted. Failed sends retry with growing waits (30 s up to 1 h, 8 tries). A rejected token pauses the channel and shows a banner on the Messages page.
 
@@ -208,14 +208,14 @@ Optional inbound replies (BALANCE, STATUS, STOP, START): set `WA_APP_SECRET` and
 ## Legacy: one router with the app in a container, or ROUTER_URL
 
 An install that already has `ROUTER_URL`/`ROUTER_PASS` in its settings keeps
-working with no change: its data becomes a building called "Main building"
+working with no change: its data becomes a router called "Main building"
 (legacy mode, configured by the environment). The old files `routeros/setup.rsc`
 and `internal/web/routerfiles/remote.rsc` (the old router-container setup) are
-legacy; new buildings use the join command instead.
+legacy; new routers use the join command instead.
 
-To move such a building onto WireGuard, add a new building, run its join
+To move such a router onto WireGuard, add a new router, run its join
 command on that router, then move the accounts to it (account page, Move to
-another building) and remove the old one.
+another router) and remove the old one.
 
 ## Moving data between servers
 

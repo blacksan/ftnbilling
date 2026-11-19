@@ -77,6 +77,11 @@ func newMultiOps(t *testing.T, mut func(*config.Config), mkOps func(cfg config.C
 	}
 	st, _ := storetest.Open(t, cfg.DataDir)
 	logs := &syncBuf{}
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Log(logs.String())
+		}
+	})
 	log := slog.New(slog.NewTextHandler(logs, nil))
 	m := &multi{mocks: map[string]*routeros.Mock{}, logs: logs}
 	var mu sync.Mutex
@@ -163,7 +168,7 @@ func TestAdminSwitcherFiltersLists(t *testing.T) {
 	m.svc.CreateAccount(billing.AccountInput{SiteID: B.ID, Flat: "Flat B2", MAC: "AA:BB:CC:00:00:02"})
 
 	html := m.adminGet(t, "/admin/accounts") // no cookie, two buildings: all
-	for _, f := range []string{"Flat A1", "Flat B1", "Flat B2", "<th>Building</th>", "All buildings"} {
+	for _, f := range []string{"Flat A1", "Flat B1", "Flat B2", "<th>Router</th>"} {
 		if !strings.Contains(html, f) {
 			t.Errorf("all view lacks %q", f)
 		}
@@ -282,24 +287,24 @@ func TestJoinEndpoint(t *testing.T) {
 	if len(token) < 40 {
 		t.Fatalf("token %q", token)
 	}
-	if strings.Contains(m.adminGet(t, "/admin/sites/view?id="+site.ID), token) {
+	if strings.Contains(m.adminGet(t, "/admin/routers/view?id="+site.ID), token) {
 		t.Fatal("the command is shown again on a later page load")
 	}
 
 	// A link preview (wrong User-Agent) neither works nor uses the token up.
 	r1, b1 := m.joinGet(token, "Slackbot-LinkExpanding 1.0")
 	// An unknown token looks exactly the same.
-	r2, b2 := m.joinGet("nope-nope-nope-nope-nope-nope-nope-nope-nope", "Mikrotik/7.15 Fetch")
+	r2, b2 := m.joinGet("nope-nope-nope-nope-nope-nope-nope-nope-nope", "RouterOS 7.20")
 	if r1.StatusCode != 404 || r2.StatusCode != 404 || b1 != b2 {
 		t.Fatalf("bad requests must look identical: %d %q vs %d %q", r1.StatusCode, b1, r2.StatusCode, b2)
 	}
-	r3, script := m.joinGet(token, "Mikrotik/7.15 Fetch")
+	r3, script := m.joinGet(token, "RouterOS 7.20")
 	if r3.StatusCode != 200 || !strings.HasPrefix(r3.Header.Get("Content-Type"), "text/plain") || r3.Header.Get("Cache-Control") != "no-store" ||
 		!strings.Contains(script, "wireguard") {
 		t.Fatalf("script %d %s %.200s", r3.StatusCode, r3.Header.Get("Content-Type"), script)
 	}
 	// Single use.
-	r4, b4 := m.joinGet(token, "Mikrotik/7.15 Fetch")
+	r4, b4 := m.joinGet(token, "RouterOS 7.20")
 	if r4.StatusCode != 404 || b4 != b1 {
 		t.Fatalf("second use: %d %q", r4.StatusCode, b4)
 	}
@@ -330,12 +335,12 @@ func TestJoinEndpointNoCheckVariant(t *testing.T) {
 	if !strings.Contains(page, "/j/"+tok+"?nocheck=1") {
 		t.Fatalf("the fallback command lacks ?nocheck=1: %.600s", page)
 	}
-	r, script := m.joinGet(tok+"?nocheck=1", "Mikrotik/7.15 Fetch")
+	r, script := m.joinGet(tok+"?nocheck=1", "RouterOS 7.20")
 	if r.StatusCode != 200 || strings.Contains(script, "check-certificate=yes") || !strings.Contains(script, "check-certificate=no") {
 		t.Fatalf("nocheck script %d: wants check-certificate=no on the page downloads", r.StatusCode)
 	}
 	tok2, _ := token("Epsilon")
-	r, script = m.joinGet(tok2, "Mikrotik/7.15 Fetch")
+	r, script = m.joinGet(tok2, "RouterOS 7.20")
 	if r.StatusCode != 200 || strings.Contains(script, "check-certificate=no") || !strings.Contains(script, "check-certificate=yes") {
 		t.Fatalf("default script %d: wants check-certificate=yes", r.StatusCode)
 	}
@@ -399,21 +404,21 @@ func TestVoucherFromAnotherBuildingIsRefused(t *testing.T) {
 
 func TestBuildingPages(t *testing.T) {
 	m := newMulti(t)
-	if h := m.adminGet(t, "/admin/sites"); !strings.Contains(h, "No buildings yet") {
+	if h := m.adminGet(t, "/admin/routers"); !strings.Contains(h, "No routers linked yet") {
 		t.Fatal("empty list")
 	}
-	if h := m.adminGet(t, "/admin/sites/new"); !strings.Contains(h, "Add building") {
+	if h := m.adminGet(t, "/admin/routers/new"); !strings.Contains(h, "Add router") {
 		t.Fatal("new page")
 	}
 	loc := m.adminPost(t, "/admin/sites/create", url.Values{"name": {"Delta Court"}, "support": {"0711000000"}})
-	if !strings.Contains(loc, "/admin/sites/view?id=") {
+	if !strings.Contains(loc, "/admin/routers/view?id=") {
 		t.Fatalf("create: %s", loc)
 	}
-	id := strings.TrimPrefix(strings.SplitN(loc, "&msg", 2)[0], "/admin/sites/view?id=")
-	if h := m.adminGet(t, "/admin/sites/view?id="+id); !strings.Contains(h, "Delta Court") || !strings.Contains(h, "Make the join command") {
+	id := strings.TrimPrefix(strings.SplitN(loc, "&", 2)[0], "/admin/routers/view?id=")
+	if h := m.adminGet(t, "/admin/routers/view?id="+id+"&tab=setup"); !strings.Contains(h, "Delta Court") || !strings.Contains(h, "Make the join line") {
 		t.Fatal("view page")
 	}
-	if h := m.adminGet(t, "/admin/sites/status.json?id="+id); !strings.Contains(h, `"token":"none"`) {
+	if h := m.adminGet(t, "/admin/routers/status.json?id="+id); !strings.Contains(h, `"token":"none"`) {
 		t.Fatalf("status json: %s", h)
 	}
 	if l := m.adminPost(t, "/admin/sites/create", url.Values{"name": {"delta court"}}); !strings.Contains(l, "Error") {
@@ -426,7 +431,7 @@ func TestBuildingPages(t *testing.T) {
 	if l := m.adminPost(t, "/admin/sites/remove", url.Values{"id": {id}, "confirm": {"Delta Court"}}); strings.Contains(l, "Error") {
 		t.Fatalf("remove: %s", l)
 	}
-	if h := m.adminGet(t, "/admin/sites"); strings.Contains(h, "Delta Court") {
+	if h := m.adminGet(t, "/admin/routers"); strings.Contains(h, "Delta Court") {
 		t.Fatal("removed building still listed")
 	}
 }

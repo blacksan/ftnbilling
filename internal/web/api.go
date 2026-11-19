@@ -64,6 +64,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	if err != nil {
 		status, b = http.StatusInternalServerError, []byte(`{"error":{"code":"internal","message":"could not encode the answer","details":{}}}`)
 	}
+	b = addRouterAliases(b)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = w.Write(append(b, '\n'))
@@ -260,6 +261,7 @@ func (s *Server) api(min string, h apiFunc) http.Handler {
 		ip := realIP(r)
 		s.authn.TouchDevice(dev.ID, ip)
 		c := &apiCtx{user: user, dev: dev, ip: ip}
+		aliasRequest(r) // ?router= and router_id mean site (D8)
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
 			h(w, r, c)
 			return
@@ -277,6 +279,10 @@ func bearer(r *http.Request) string {
 }
 
 func (s *Server) idempotent(w http.ResponseWriter, r *http.Request, c *apiCtx, h apiFunc) {
+	if idemExempt(r) { // the answer holds a one-time secret: never stored, never replayed
+		h(w, r, c)
+		return
+	}
 	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	if key == "" {
 		h(w, r, c)
@@ -418,7 +424,7 @@ func (s *Server) billingErr(w http.ResponseWriter, err error, mac string) {
 	case errors.Is(err, billing.ErrBadState):
 		apiErr(w, http.StatusConflict, codeBadState, "That payment is not waiting for a decision.", nil)
 	case errors.Is(err, billing.ErrNoSite):
-		validationErr(w, map[string]string{"site_id": "choose a building"})
+		validationErr(w, map[string]string{"site_id": "choose a router"})
 	case errors.Is(err, billing.ErrBadPhone):
 		validationErr(w, map[string]string{"phone": err.Error()})
 	case errors.Is(err, billing.ErrBadTransCode):
@@ -459,7 +465,12 @@ func (s *Server) apiRoutes(mux *http.ServeMux) {
 		operator = store.RoleOperator
 		owner    = store.RoleOwner
 	)
-	h := func(pattern, role string, f apiFunc) { mux.Handle(pattern, s.api(role, f)) }
+	// Every /api/v1/sites… route is also served at /api/v1/routers… (D8).
+	h := func(pattern, role string, f apiFunc) {
+		for _, p := range aliasPatterns(pattern) {
+			mux.Handle(p, s.api(role, f))
+		}
+	}
 	open := func(pattern string, f http.HandlerFunc) { mux.HandleFunc(pattern, f) }
 	// Sign-in and refresh need no token.
 	open("POST /api/v1/auth/login", s.apiLogin)
@@ -500,6 +511,11 @@ func (s *Server) apiRoutes(mux *http.ServeMux) {
 	h("POST /api/v1/unregistered/attach", operator, s.apiUnregAttach)
 	h("POST /api/v1/unregistered/create", operator, s.apiUnregCreate)
 	h("POST /api/v1/unregistered/dismiss", operator, s.apiUnregDismiss)
+
+	// One hook per later stream; each adds its routes in its own file.
+	s.setupRoutes(h)
+	s.liveRoutes(h)
+	s.overviewRoutes(h)
 
 	// Anything else under /api/v1/ is a clean JSON 404 (and cookies are never read here).
 	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, r *http.Request) {

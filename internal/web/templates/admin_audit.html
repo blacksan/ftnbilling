@@ -1,0 +1,9 @@
+{{define "admin_audit"}}{{template "ahead" .}}
+<div class="stats">
+{{template "stat" (dict "K" "Last 24 hours" "V" .Data.Today "S" "changes by people" "Icon" "audit" "Feature" true)}}
+{{template "stat" (dict "K" "Last 7 days" "V" .Data.Week "S" "changes by people" "Icon" "audit" "Tone" "info")}}
+</div>
+{{if .Data.Rows}}<div class="tw tall"><table class="rs"><thead><tr><th>When</th><th>Who</th><th>What</th><th>Router</th></tr></thead><tbody>
+{{range .Data.Rows}}<tr><td data-label="When">{{.Time}}</td><td data-label="Who">{{.Actor}}</td><td data-label="What">{{if .Href}}<a href="{{.Href}}">{{.Msg}}</a>{{else}}{{.Msg}}{{end}}</td><td data-label="Router">{{.Router}}</td></tr>{{end}}</tbody></table></div>
+{{else}}{{template "empty" (dict "Title" "Nothing recorded yet." "Text" "Sign-ins, plan changes, payments you record and router actions are listed here with who did them.")}}{{end}}
+{{template "afoot" .}}{{end}}

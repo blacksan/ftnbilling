@@ -16,6 +16,46 @@ func (s *Server) deviceRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/devices/create", s.adminDeviceCreate)
 	post("/admin/devices/attach", s.adminDeviceAttach)
 	post("/admin/devices/dismiss", s.adminDeviceDismiss)
+	get("/admin/sites/devices.json", s.adminRouterDevices)
+}
+
+// adminRouterDevices lists the devices a router sees that no flat owns, for the
+// "pick from the router" list in Add customer. It reads the router first so
+// the list is current; if that fails the last known devices are still listed.
+func (s *Server) adminRouterDevices(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("router")
+	if id == "" {
+		id = r.URL.Query().Get("site")
+	}
+	st, ok := s.siteByID(id)
+	if !ok || !s.scopeOf(r).Has(st.ID) {
+		http.NotFound(w, r)
+		return
+	}
+	out := map[string]any{}
+	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+	defer cancel()
+	if err := s.svc.RefreshHosts(ctx, st.ID); err != nil {
+		out["error"] = err.Error()
+	}
+	type item struct {
+		MAC        string `json:"mac"`
+		Vendor     string `json:"vendor"`
+		HostName   string `json:"host_name"`
+		IP         string `json:"ip"`
+		Online     bool   `json:"online"`
+		Seen       string `json:"seen"`
+		RouterUser string `json:"router_user"`
+	}
+	items := []item{}
+	for _, u := range s.svc.Unregistered(st.ID, false) {
+		if len(items) >= 40 {
+			break
+		}
+		items = append(items, item{MAC: u.MAC, Vendor: u.Vendor, HostName: u.HostName, IP: u.IP, Online: u.Online, Seen: shortAge(s.svc.Now().Sub(u.LastSeen)) + " ago", RouterUser: u.RouterUser})
+	}
+	out["items"] = items
+	writeJSON(w, http.StatusOK, out)
 }
 
 // pickItem is one flat in a building's account picker.
@@ -35,7 +75,7 @@ func (s *Server) adminDevices(w http.ResponseWriter, r *http.Request) {
 	sc := s.scopeOf(r)
 	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
 	defer cancel()
-	if !sc.All { // refreshing asks one router; "all buildings" shows what is already known
+	if !sc.All { // refreshing asks one router; "all routers" shows what is already known
 		if err := s.svc.RefreshHosts(ctx, sc.ID); err != nil {
 			p.Data["HostErr"] = err.Error()
 		}
@@ -72,7 +112,22 @@ func (s *Server) adminDevices(w http.ResponseWriter, r *http.Request) {
 		sort.SliceStable(pk, func(i, j int) bool { return pk[i].Stale && !pk[j].Stale })
 		rows = append(rows, devRow{UnregDevice: u, Pick: pk})
 	}
+	now := s.svc.Now().In(billing.EAT)
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, billing.EAT)
+	var onlineN, today, suggested int
+	for _, x := range rows {
+		if x.Online {
+			onlineN++
+		}
+		if !x.LastSeen.Before(dayStart) {
+			today++
+		}
+		if x.Suggested != nil {
+			suggested++
+		}
+	}
 	p.Data["Rows"], p.Data["Pkgs"], p.Data["OnlineOnly"], p.Data["Count"] = rows, pkgs, onlineOnly, len(rows)
+	p.Data["OnlineN"], p.Data["Today"], p.Data["Suggested"] = onlineN, today, suggested
 	s.render(w, "admin_devices", p)
 }
 
@@ -106,15 +161,19 @@ func (s *Server) resolveFlat(siteID, text string) (store.Account, bool) {
 }
 
 func (s *Server) adminDeviceCreate(w http.ResponseWriter, r *http.Request) {
-	a, err := s.svc.CreateFromDevice(r.Context(), billing.DeviceAccountInput{
-		SiteID: s.siteFor(r), MAC: r.PostFormValue("mac"), Flat: r.PostFormValue("flat"),
-		Tenant: r.PostFormValue("tenant"), Phone: r.PostFormValue("phone"), PackageID: r.PostFormValue("package"),
-	})
-	if err != nil {
+	in := customerFormOf(r, s.siteFor(r))
+	a, rs, err := s.createCustomer(r.Context(), in)
+	if err != nil && a.ID == "" {
 		s.back(w, r, "/admin/devices", "Error: "+err.Error())
 		return
 	}
-	s.back(w, r, "/admin/accounts/view?code="+a.Code, "Account created: "+a.Flat+" ("+a.Code+")")
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	msg := "Account created: " + a.Flat + " (" + a.Code + "). " + routerStateText(s.routerStateJSON(ctx, a, rs))
+	if err != nil {
+		msg += " " + err.Error()
+	}
+	s.back(w, r, "/admin/accounts/view?code="+a.Code, msg)
 }
 
 // adminDeviceAttach gives an existing flat this device's MAC (an ONT swap, or
@@ -127,7 +186,7 @@ func (s *Server) adminDeviceAttach(w http.ResponseWriter, r *http.Request) {
 		a, ok = s.svc.GetAccount(id)
 	}
 	if !ok {
-		s.back(w, r, "/admin/devices", "Error: choose a flat of this building (type its name or code)")
+		s.back(w, r, "/admin/devices", "Error: choose a flat of this router (type its name or code)")
 		return
 	}
 	if _, err := s.svc.AttachDevice(r.Context(), site, r.PostFormValue("mac"), a.ID); err != nil {

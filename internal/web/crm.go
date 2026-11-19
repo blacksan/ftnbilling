@@ -89,7 +89,7 @@ func (s *Server) adminSearch(w http.ResponseWriter, r *http.Request) {
 		case "payment":
 			to = "/admin/payments?q=" + url.QueryEscape(id)
 		case "building":
-			to = "/admin/sites/view?id=" + url.QueryEscape(id)
+			to = "/admin/routers/view?id=" + url.QueryEscape(id)
 		}
 		http.Redirect(w, r, to, http.StatusSeeOther)
 		return
@@ -468,7 +468,7 @@ func (s *Server) adminSiteProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.svc.SaveSiteProfile(billing.SiteProfileInput{SiteID: id, Address: r.PostFormValue("address"), Lat: lat, Lng: lng, GoLive: gl})
-	s.back(w, r, to, msgOr(err, "Building profile saved"))
+	s.back(w, r, to, msgOr(err, "Router profile saved"))
 }
 
 func parseCoord(v string) (float64, error) {

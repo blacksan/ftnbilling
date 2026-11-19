@@ -77,6 +77,7 @@ func run(log *slog.Logger) error {
 		OnJoined: func(siteID string) { svc.MarkProfilesDirty(siteID) },
 	})
 	svc = billing.NewService(st, mgr, log)
+	mgr.SetProvisioner(svc)
 	if err := svc.SetDataKey(cfg.DataKey); err != nil {
 		return fmt.Errorf("DATA_KEY: %w", err)
 	}

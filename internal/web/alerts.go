@@ -172,12 +172,12 @@ func (s *Server) adminAlertMute(w http.ResponseWriter, r *http.Request) {
 	id := r.PostFormValue("site")
 	hours, _ := strconv.Atoi(r.PostFormValue("hours"))
 	if id == "" || hours < 1 || hours > 24*30 {
-		s.back(w, r, "/admin/alerts", "Error: choose a building and a time")
+		s.back(w, r, "/admin/alerts", "Error: choose a router and a time")
 		return
 	}
 	s.ops.Alerts.Mute(id, s.svc.Now().Add(time.Duration(hours)*time.Hour))
 	_ = s.ops.Alerts.Save()
-	s.back(w, r, "/admin/alerts", fmt.Sprintf("Messages for this building are muted for %d hours", hours))
+	s.back(w, r, "/admin/alerts", fmt.Sprintf("Messages for this router are muted for %d hours", hours))
 }
 
 func (s *Server) adminAlertUnmute(w http.ResponseWriter, r *http.Request) {
@@ -192,7 +192,7 @@ func (s *Server) adminAlertUnmute(w http.ResponseWriter, r *http.Request) {
 
 // adminOutageNotice tells a building's tenants about the outage (WhatsApp).
 func (s *Server) adminOutageNotice(w http.ResponseWriter, r *http.Request) {
-	back := "/admin/fleet"
+	back := "/admin/routers"
 	if s.ops.Tenant == nil || s.ops.Alerts == nil {
 		s.back(w, r, back, "Error: tenant messages are not running")
 		return
@@ -213,7 +213,7 @@ func (s *Server) adminOutageNotice(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if name == "" {
-		s.back(w, r, back, "Error: choose a building")
+		s.back(w, r, back, "Error: choose a router")
 		return
 	}
 	n := s.ops.Tenant.SendOutageNotice(id, s.ops.Tenant.ManualOutageStart(id))

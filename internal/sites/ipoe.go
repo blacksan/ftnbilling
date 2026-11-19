@@ -161,6 +161,24 @@ func (m *Manager) ConfirmCutover(ctx context.Context, siteID string) error {
 	if len(servers) == 0 || servers[0]["disabled"] == "true" || servers[0]["disabled"] == "yes" {
 		return ErrNotCutOver
 	}
+	// The kit's markers (server-run setup): confirming removes ftn-armed and ftn-undo.
+	if armed, aerr := rt.Rows(ctx, pathAddrList, map[string]string{"list": KitListArmed}); aerr == nil && len(armed) > 0 {
+		var site store.Site
+		m.st.View(func(d *store.Data) { site = d.Sites[siteID] })
+		j := &jobCtl{m: m, ctx: ctx, siteID: siteID, rt: rt, site: m.Effective(site), job: ProvJob{}}
+		j.insp, _ = rt.(routeros.Inspector)
+		j.newWriter()
+		if err := j.disarm(ctx); err != nil {
+			return err
+		}
+		_ = m.st.Update(func(d *store.Data) error {
+			billing.SetSiteMarkLocked(d, siteID, billing.MarkCutoverConfirmed, true, m.now())
+			billing.SetSiteMarkLocked(d, siteID, billing.MarkCutoverSeen, true, m.now())
+			d.AddEvent(store.Event{Time: m.now(), SiteID: siteID, Kind: "audit", Msg: "cutover confirmed: kit markers removed"})
+			return nil
+		})
+		return nil
+	}
 	timers, err := rt.Rows(ctx, "/system/scheduler", map[string]string{"name": RollbackSchedule})
 	if err != nil {
 		return err
@@ -189,9 +207,15 @@ func (m *Manager) ConfirmCutover(ctx context.Context, siteID string) error {
 // that is, a cutover was run and not confirmed. ok is false when the router
 // cannot be asked.
 func (m *Manager) CutoverPending(ctx context.Context, siteID string) (pending, ok bool) {
-	rows, err := m.Router(siteID).Rows(ctx, "/system/scheduler", map[string]string{"name": RollbackSchedule})
+	rt := m.Router(siteID)
+	rows, err := rt.Rows(ctx, "/system/scheduler", map[string]string{"name": RollbackSchedule})
 	if err != nil {
 		return false, false
+	}
+	if len(rows) == 0 {
+		if armed, e := rt.Rows(ctx, pathAddrList, map[string]string{"list": KitListArmed}); e == nil {
+			return len(armed) > 0, true
+		}
 	}
 	return len(rows) > 0, true
 }

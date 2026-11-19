@@ -14,7 +14,7 @@ import (
 func (s *Server) apiPackages(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 	site := r.URL.Query().Get("site")
 	if site != "" && !s.siteExists(site) {
-		apiErr(w, http.StatusNotFound, codeNotFound, "No such building.", nil)
+		apiErr(w, http.StatusNotFound, codeNotFound, "No such router.", nil)
 		return
 	}
 	items := []map[string]any{}
@@ -189,7 +189,7 @@ func (s *Server) apiUnregistered(w http.ResponseWriter, r *http.Request, c *apiC
 		}
 		items = append(items, map[string]any{"site_id": dv.SiteID, "site_name": names[dv.SiteID], "mac": dv.MAC, "vendor": dv.Vendor,
 			"host_name": dv.HostName, "ip": dv.IP, "source": dv.Source, "online": on, "first_seen": tp(dv.FirstSeen), "last_seen": tp(dv.LastSeen),
-			"hits": dv.Hits, "suggested_account": suggested})
+			"hits": dv.Hits, "suggested_account": suggested, "router_user": s.svc.RouterUser(dv.SiteID, dv.MAC)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
@@ -227,7 +227,7 @@ func (s *Server) apiUnregAttach(w http.ResponseWriter, r *http.Request, c *apiCt
 		return
 	}
 	if !s.siteExists(req.SiteID) {
-		validationErr(w, map[string]string{"site_id": "no such building"})
+		validationErr(w, map[string]string{"site_id": "no such router"})
 		return
 	}
 	a, ok := s.accountOr404(w, req.AccountID)
@@ -235,7 +235,7 @@ func (s *Server) apiUnregAttach(w http.ResponseWriter, r *http.Request, c *apiCt
 		return
 	}
 	if a.SiteID != req.SiteID {
-		validationErr(w, map[string]string{"account_id": "that account is in another building"})
+		validationErr(w, map[string]string{"account_id": "that account is in another router"})
 		return
 	}
 	// The same rule as PUT /accounts/{id}/mac: one MAC, one open account, anywhere.
@@ -261,7 +261,7 @@ func (s *Server) apiUnregCreate(w http.ResponseWriter, r *http.Request, c *apiCt
 	}
 	fields := map[string]string{}
 	if !s.siteExists(req.SiteID) {
-		fields["site_id"] = "no such building"
+		fields["site_id"] = "no such router"
 	}
 	if strings.TrimSpace(req.Flat) == "" {
 		fields["flat"] = "a flat label is required"
@@ -309,7 +309,7 @@ func (s *Server) apiUnregDismiss(w http.ResponseWriter, r *http.Request, c *apiC
 		return
 	}
 	if !s.siteExists(req.SiteID) {
-		validationErr(w, map[string]string{"site_id": "no such building"})
+		validationErr(w, map[string]string{"site_id": "no such router"})
 		return
 	}
 	if err := s.svc.DismissDevice(req.SiteID, mac); err != nil {

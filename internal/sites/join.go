@@ -69,6 +69,15 @@ func (m *Manager) MintJoin(siteID string) (token string, expires time.Time, err 
 
 // stagePrefix binds a token to its stage: a cutover command cannot be made to
 // run the join (which rotates the router's keys), nor the other way round.
+// routerUserAgent reports whether a request comes from RouterOS /tool fetch.
+// RouterOS 7 sends "User-Agent: RouterOS <version>"; RouterOS 6 sent
+// "Mikrotik/6.x Fetch". The check only stops link previewers and browsers
+// from burning a one-time token; it is not authentication.
+func routerUserAgent(ua string) bool {
+	ua = strings.ToLower(strings.TrimSpace(ua))
+	return strings.HasPrefix(ua, "routeros") || strings.HasPrefix(ua, "mikrotik")
+}
+
 func stagePrefix(stage string) string {
 	switch stage {
 	case StageCutover:
@@ -163,7 +172,8 @@ func (m *Manager) ConsumeJoinForce(token, userAgent, from string, noCheck bool, 
 	if token == "" || len(token) > 128 {
 		return nil, "", ErrJoinInvalid
 	}
-	if m.cfg.JoinRequireMikrotikUA && !strings.HasPrefix(strings.ToLower(userAgent), "mikrotik") {
+	if m.cfg.JoinRequireMikrotikUA && !routerUserAgent(userAgent) {
+		m.noteRefusedUA(token, userAgent) // a valid token turned away for its User-Agent shows on the building page
 		return nil, "", ErrJoinInvalid
 	}
 	if !strings.HasPrefix(token, stagePrefix(stage)) || (stagePrefix(stage) == "" && (strings.HasPrefix(token, "cut.") || strings.HasPrefix(token, "cln."))) {
@@ -215,6 +225,8 @@ func (m *Manager) ConsumeJoinForce(token, userAgent, from string, noCheck bool, 
 			return ErrJoinInvalid
 		}
 		if stage == StageCutover || stage == StageCleanup {
+			stageROS.Store(site.ID, ROSVersionFromUA(userAgent)) // read by renderStage (see joinreport.go)
+			defer stageROS.Delete(site.ID)
 			return m.renderLaterStage(d, site, stage, now, from, noCheck, force, &script, &siteID)
 		}
 		priv, pub, err := wg.GenerateKeypair()
@@ -234,12 +246,13 @@ func (m *Manager) ConsumeJoinForce(token, userAgent, from string, noCheck bool, 
 			}
 			site.TunnelIP = ip
 		}
+		m.refused.clear(site.ID)
 		site.Join.UsedAt, site.Join.UsedFrom = now, from
 		site.JoinedAt = time.Time{} // the next successful ping marks it joined again
 		script, err = RenderJoinScript(ScriptInput{
 			Site: ApplyDefaults(m.cfg, site), PrivateKey: priv, RESTPass: pass, ServerPub: m.cfg.WGPublicKey,
 			Endpoint: m.cfg.WGEndpoint, WGSubnet: m.pfx, PublicBase: m.cfg.PublicBaseURL, PublicIP: m.cfg.PublicIP, Generated: now, NoCheck: noCheck,
-			Stage: stage,
+			Stage: stage, ROSVersion: ROSVersionFromUA(userAgent), Token: token,
 		})
 		if err != nil {
 			return fmt.Errorf("could not render the join script: %w", err)
@@ -294,6 +307,10 @@ type SiteStatus struct {
 	RESTOK       bool       `json:"rest_ok"`
 	RESTErr      string     `json:"rest_err,omitempty"`
 	Joined       bool       `json:"joined"`
+	// RefusedUA / RefusedAt: a fetch with this building's valid join token was
+	// turned away because its User-Agent is not a RouterOS fetch's.
+	RefusedUA string    `json:"refused_ua,omitempty"`
+	RefusedAt time.Time `json:"refused_at,omitempty"`
 }
 
 // TokenStateOf classifies a stored token.

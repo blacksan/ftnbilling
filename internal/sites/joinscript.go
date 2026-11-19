@@ -51,6 +51,13 @@ type ScriptInput struct {
 	// Accounts are the flats the cutover script writes (static lease and
 	// queue each), rendered from the accounts table.
 	Accounts []LeaseSeed
+	// ROSVersion is the router's RouterOS version from the fetch User-Agent
+	// ("7.25.1"); 7.13 and newer get ":onerror" section wrappers with the real
+	// error text, anything else the old form. See secwrap.go.
+	ROSVersion string
+	// Token is the join token the router fetched with; the join scripts use it
+	// to POST their report to /j/{token}/report.
+	Token string
 }
 
 // scriptData is the template view of ScriptInput.
@@ -76,6 +83,20 @@ type scriptData struct {
 	PageFiles                                               []string
 	NetflowPort                                             int
 	NoCheck                                                 bool
+	Token, ROSVersion                                       string
+	ReportPost                                              string // the router-side line that sends $report to the server
+	KitN                                                    int    // the kit section's number
+	KitTick, KitRollback                                    string // the kit scripts, escaped for a quoted string
+	KitTickName, KitRollbackName, KitTimerName              string
+	KitInterval, KitComment, KitScriptPolicy, KitTickPolicy string
+}
+
+// fillKit sets the fixed kit fields; n is the kit section's number.
+func (d *scriptData) fillKit(n int, hotspot string) {
+	d.KitN = n
+	d.KitTick, d.KitRollback = rqs(kitTickSource()), rqs(kitRollbackSource(hotspot))
+	d.KitTickName, d.KitRollbackName, d.KitTimerName = KitTickScript, KitRollback, KitTimer
+	d.KitInterval, d.KitComment, d.KitScriptPolicy, d.KitTickPolicy = KitInterval, KitComment, kitScriptPolic, kitTickPolicy
 }
 
 // rq escapes a value for use inside a RouterOS double-quoted string.
@@ -96,7 +117,31 @@ func fw(args, comment string) string {
 		f, f, args, f, rq(comment), f, args, rq(comment))
 }
 
-var joinTmpl = template.Must(template.New("join").Funcs(template.FuncMap{"rq": rq, "fw": fw}).Option("missingkey=error").Parse(joinTmplSrc))
+//go:embed kit_section.rsc.tmpl
+var kitSectionSrc string
+
+// parseScript parses a script template with its helper functions (the section
+// wrappers are placeholders here and replaced per render, see execScript) and
+// the shared kit section.
+func parseScript(name, src string) *template.Template {
+	t := template.New(name).Funcs(template.FuncMap{"rq": rq, "fw": fw}).Funcs(sectionFuncs("")).Option("missingkey=error")
+	return template.Must(template.Must(t.Parse(src)).Parse(kitSectionSrc))
+}
+
+// execScript renders t with the section wrappers for the router's RouterOS version.
+func execScript(t *template.Template, rosVersion string, data any) ([]byte, error) {
+	c, err := t.Clone()
+	if err != nil {
+		return nil, err
+	}
+	var b bytes.Buffer
+	if err := c.Funcs(sectionFuncs(rosVersion)).Execute(&b, data); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+var joinTmpl = parseScript("join", joinTmplSrc)
 
 // RenderJoinScript renders the router script. It is deterministic for fixed
 // input (the golden-file tests rely on that).
@@ -146,19 +191,22 @@ func RenderJoinScript(in ScriptInput) ([]byte, error) {
 		VLANID: s.VLANID, BenchPort: s.BenchPort, HotspotServer: s.HotspotServer, HotspotProfile: HotspotProf,
 		PublicBase: strings.TrimRight(in.PublicBase, "/"), PublicIP: in.PublicIP, HTTPSBase: u.Scheme == "https",
 		PageFiles: PageFiles, NetflowPort: 2055, NoCheck: in.NoCheck,
+		Token: in.Token, ROSVersion: in.ROSVersion,
 	}
+	d.ReportPost = reportPostLine(d.PublicBase, in.Token, d.HTTPSBase, in.NoCheck)
+	d.fillKit(7, s.HotspotServer)
 	if s.VLANID > 0 {
 		d.VLANName = fmt.Sprintf("vlan%d-customers", s.VLANID)
 		d.CustomerIface = d.VLANName
 	}
-	var b bytes.Buffer
-	if err := joinTmpl.Execute(&b, d); err != nil {
+	out, err := execScript(joinTmpl, in.ROSVersion, d)
+	if err != nil {
 		return nil, err
 	}
-	if bytes.Contains(b.Bytes(), []byte("{{")) {
+	if bytes.Contains(out, []byte("{{")) {
 		return nil, errors.New("join script: unrendered template text left in the output")
 	}
-	return b.Bytes(), nil
+	return out, nil
 }
 
 func splitEndpoint(ep string) (string, int, error) {
@@ -185,8 +233,43 @@ func JoinCommand(base, token string, checkCert bool) string {
 }
 
 // JoinCommandStage is JoinCommand for a stage of the IPoE scripts: the file is
-// ftn-<stage>.rsc and the link asks for ?stage=<stage>.
+// ftn-<stage>.rsc and the link asks for ?stage=<stage>. The legacy stage ("")
+// is the hotspot building's script, so its command also checks the hotspot
+// feature of device-mode.
 func JoinCommandStage(base, token string, checkCert bool, stage string) string {
+	return JoinCommandFor(base, token, checkCert, stage, stage == "")
+}
+
+// JoinCommandFor builds the pasted line. A RouterOS in device-mode "home"
+// blocks fetch, scheduler and hotspot, and changing that needs a button press
+// and a reboot, so it is never done by a script and never silently: the line
+// itself checks device-mode first. If a feature the script needs is off, it
+// runs ONE /system/device-mode/update (the router then waits for the button)
+// and says to paste the same line again; otherwise it fetches and imports.
+// The cleanup stage needs no scheduler. hotspot adds the hotspot feature.
+// BENCH-CHECK: [/system/device-mode/get <feature>] returns a bool or "yes"/"no"
+// on 7.25.1 (both are accepted); the update command's argument names.
+func JoinCommandFor(base, token string, checkCert bool, stage string, hotspot bool) string {
+	return JoinCommandIntent(base, token, checkCert, stage, IntentServing, hotspot)
+}
+
+// JoinIntent says what the router is for, and so which device-mode features
+// the pasted line insists on.
+type JoinIntent string
+
+const (
+	// IntentFresh: a router not serving customers yet. Only fetch is needed
+	// (the line itself); no kit is wanted, so usually no button press.
+	IntentFresh JoinIntent = "fresh"
+	// IntentServing: a router already serving customers. The cutover safety
+	// net needs the scheduler (and hotspot buildings the hotspot feature).
+	IntentServing JoinIntent = "serving"
+)
+
+// JoinCommandIntent is JoinCommandFor with the router's intent. The kit
+// section of the script still installs whenever the scheduler is available
+// and is skipped with a message otherwise.
+func JoinCommandIntent(base, token string, checkCert bool, stage string, intent JoinIntent, hotspot bool) string {
 	file, q := "ftn-join.rsc", ""
 	if stage != "" {
 		file, q = "ftn-"+stage+".rsc", "?stage="+stage
@@ -200,8 +283,26 @@ func JoinCommandStage(base, token string, checkCert bool, stage string) string {
 			q += "&nocheck=1"
 		}
 	}
-	return fmt.Sprintf(`/tool/fetch url="%s/j/%s%s" dst-path=%s check-certificate=%s; :delay 1s; /import %s`,
-		strings.TrimRight(base, "/"), token, q, file, chk, file)
+	feats := []string{"fetch"}
+	if stage != StageCleanup && intent != IntentFresh {
+		feats = append(feats, "scheduler")
+	}
+	if hotspot && intent != IntentFresh {
+		feats = append(feats, "hotspot")
+	}
+	// Every feature is read once into $vN. If a read comes back empty the line says so and does NOT call
+	// update: an update that cannot finish uses one of the router's 3 unconfirmed attempts.
+	var reads, shows, conds, empties, sets []string
+	for i, f := range feats {
+		reads = append(reads, fmt.Sprintf(`:local v%d [:tostr [/system/device-mode/get %s]];`, i, f))
+		shows = append(shows, fmt.Sprintf(`" %s=" . $v%d`, f, i))
+		conds = append(conds, fmt.Sprintf(`($v%d ~ $o)`, i))
+		empties = append(empties, fmt.Sprintf(`[:len $v%d] = 0`, i))
+		sets = append(sets, f+"=yes")
+	}
+	return fmt.Sprintf(`:local o "^(true|yes)\$"; %s :put ("ftn: device-mode" . %s); :if (%s) do={ :put "ftn: cannot read device-mode, nothing was changed" } else={ :if (%s) do={ /tool/fetch url="%s/j/%s%s" dst-path=%s check-certificate=%s; :delay 1s; /import %s } else={ :put "ftn: press the router button within 5 minutes (it then reboots), then paste this same line again"; /system/device-mode/update %s } }`,
+		strings.Join(reads, " "), strings.Join(shows, " . "), strings.Join(empties, " || "), strings.Join(conds, " && "),
+		strings.TrimRight(base, "/"), token, q, file, chk, file, strings.Join(sets, " "))
 }
 
 // NoCheckQuery is the query string of the no-certificate-check join command.

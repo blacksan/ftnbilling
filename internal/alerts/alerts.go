@@ -46,7 +46,7 @@ var RuleOrder = []string{RuleOffline, RuleWANSat, RuleLoss, RuleLatency, RuleOLT
 func Label(rule string) string {
 	switch rule {
 	case RuleOffline:
-		return "Building offline"
+		return "Router offline"
 	case RuleWANSat:
 		return "WAN saturated"
 	case RuleLoss:
@@ -626,8 +626,8 @@ func (e *Engine) resolveLocked(key string, a *Alert, now time.Time, announce boo
 		}
 		if st := e.d.Storms[a.Group]; st != nil && !st.Resolved {
 			st.Resolved = true
-			e.sendLocked("RECOVERED", "Many buildings offline", fmt.Sprintf("%d of %d buildings", len(st.Names), st.Total),
-				"all buildings are reachable again: "+strings.Join(st.Names, ", "), "alertok:"+a.Group, now, "")
+			e.sendLocked("RECOVERED", "Many routers offline", fmt.Sprintf("%d of %d routers", len(st.Names), st.Total),
+				"all routers are reachable again: "+strings.Join(st.Names, ", "), "alertok:"+a.Group, now, "")
 		}
 		return
 	}
@@ -697,7 +697,7 @@ func (e *Engine) notifyLocked(sites []store.Site, set Settings, now time.Time) {
 				}
 				sort.Strings(st.Names)
 				e.d.Storms[id] = st
-				e.sendLocked("PROBLEM", "Many buildings offline", fmt.Sprintf("%d of %d buildings", len(group), len(sites)),
+				e.sendLocked("PROBLEM", "Many routers offline", fmt.Sprintf("%d of %d routers", len(group), len(sites)),
 					"offline together: "+strings.Join(st.Names, ", "), "alert:"+id, now, "")
 				var rest []*Alert
 				for _, o := range cands {
@@ -777,13 +777,28 @@ func (e *Engine) sendLocked(status, rule, building, detail, dedupe string, at ti
 	}
 }
 
+// Announce sends a one-off notice about a router (a setup job's outcome) to
+// the admins' WhatsApp and email targets, through the same channels and
+// templates as an alert. dedupe keeps a retried call from sending twice (an
+// empty dedupe is never deduplicated). A mute does not hold a notice back:
+// it reports something that happened once, not a condition.
+func (e *Engine) Announce(siteID, text, dedupe string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	d := ""
+	if dedupe != "" {
+		d = "announce:" + dedupe
+	}
+	e.sendLocked("NOTICE", "Router setup", e.siteName(siteID), text, d, e.now(), siteID)
+}
+
 // TestMessage is the message the Test button sends on one channel (never deduped).
 func (e *Engine) TestMessage(channel string) (notify.Message, bool) {
 	e.mu.Lock()
 	set := e.d.Settings
 	e.mu.Unlock()
 	set.Email, set.WhatsApp = true, true
-	for _, m := range e.compose("PROBLEM", "Test alert", "Test building", "this is a test from the Alerts page", "", e.now(), "", set) {
+	for _, m := range e.compose("PROBLEM", "Test alert", "Test router", "this is a test from the Alerts page", "", e.now(), "", set) {
 		if m.Channel == channel {
 			m.Kind = notify.KindTest
 			return m, true

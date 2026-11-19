@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ispbill/internal/routeros"
@@ -123,7 +124,11 @@ type provState struct {
 	started time.Time       // first pass, the baseline of "not seen for 24 h"
 	foreign map[string]bool // addresses of the router's own static leases, from the last pass
 	sawOn   bool            // ftn-dhcp has been seen enabled by this server
-	run     sync.Mutex      // one pass at a time per building
+	// routerUsers: normalised MAC -> the hotspot session, user or binding that
+	// holds it on the router, from the last refreshDevices.
+	routerUsers map[string]string
+	run         sync.Mutex  // one pass at a time per building
+	held        atomic.Bool // a provisioning job holds run (HoldSite): passes are refused, not queued
 }
 
 type acctSnap struct {
@@ -245,10 +250,18 @@ type wantAcct struct {
 func (s *Service) ReconcileSite(ctx context.Context, siteID string) (ProvisionRun, error) {
 	var run ProvisionRun
 	site, ok := s.site(siteID)
-	if !ok || !site.Runnable() || !IPoE(site) {
+	if !ok || !site.Runnable() {
 		return run, nil
 	}
 	ps := s.prov(siteID)
+	if ps.held.Load() {
+		return run, ErrSiteHeld // a provisioning job is working on the router: writes would race it
+	}
+	if !IPoE(site) {
+		ps.run.Lock()
+		defer ps.run.Unlock()
+		return run, s.reconcileBypass(ctx, site)
+	}
 	ps.run.Lock()
 	defer ps.run.Unlock()
 	run, err := s.reconcileSite(ctx, site, ps)
@@ -256,8 +269,150 @@ func (s *Service) ReconcileSite(ctx context.Context, siteID string) (ProvisionRu
 		ps.mu.Lock()
 		ps.status.LastRunAt, ps.status.LastError, ps.status.InSync = s.now(), err.Error(), false
 		ps.mu.Unlock()
+	} else if !run.Waiting {
+		s.dropBypass(ctx, site) // the site is on IPoE again: hotspot bypass rows have no purpose
 	}
 	return run, err
+}
+
+// ErrSiteHeld is returned by ReconcileSite while a provisioning job holds the
+// building (HoldSite). The caller's task is retried later; nothing was written.
+var ErrSiteHeld = errors.New("a router setup job is running for this router; the reconcile pass is skipped for now")
+
+// HoldSite takes the building's reconcile lock for a provisioning job: it waits
+// for a pass that is running, and until release is called every ReconcileSite
+// of the building returns ErrSiteHeld without touching the router.
+func (s *Service) HoldSite(siteID string) (release func()) {
+	ps := s.prov(siteID)
+	ps.run.Lock()
+	ps.held.Store(true)
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			ps.held.Store(false)
+			ps.run.Unlock()
+		})
+	}
+}
+
+// SiteHeld reports whether a provisioning job holds the building.
+func (s *Service) SiteHeld(siteID string) bool { return s.prov(siteID).held.Load() }
+
+// ---- hotspot bypass after an automatic rollback (release plan A1) -------------------------------
+
+// MarkHotspotBypass is the building's flag "after a rollback, entitled flats
+// are bypassed on the hotspot". Set by the setup job and by rollback detection;
+// cleared when the building is on IPoE again.
+const MarkHotspotBypass = "hotspot_bypass_at"
+
+const pathBinding = "/ip/hotspot/ip-binding"
+
+// SetHotspotBypass sets or clears the flag; the next ReconcileSite pass writes
+// (or removes) the ip-binding rows.
+func (s *Service) SetHotspotBypass(siteID string, on bool) {
+	_ = s.st.Update(func(d *store.Data) error {
+		if SiteMark(d, siteID, MarkHotspotBypass) == on {
+			return store.ErrNoChange
+		}
+		SetSiteMarkLocked(d, siteID, MarkHotspotBypass, on, s.now())
+		return nil
+	})
+}
+
+// HotspotBypassOn reports the flag.
+func (s *Service) HotspotBypassOn(siteID string) (on bool) {
+	s.st.View(func(d *store.Data) { on = SiteMark(d, siteID, MarkHotspotBypass) })
+	return
+}
+
+// bypassWant is an entitled flat: a MAC, not flagged, with paid time and not suspended.
+func (s *Service) bypassWants(siteID string) map[string]store.Account {
+	now := s.now()
+	out := map[string]store.Account{}
+	s.st.View(func(d *store.Data) {
+		for _, a := range d.AccountList() {
+			if a.SiteID == siteID && a.MAC != "" && !a.MACConflict && AccountState(a, now) == StateActive {
+				out[a.Code] = a
+			}
+		}
+	})
+	return out
+}
+
+// reconcileBypass makes the hotspot ip-binding rows "ftn:acct:<code>" (type
+// bypassed) match the flag and the accounts: one per entitled flat while the
+// flag is on, none otherwise. It only touches rows whose comment starts "ftn:acct:".
+func (s *Service) reconcileBypass(ctx context.Context, site store.Site) error {
+	rt := s.router(site.ID)
+	on := s.HotspotBypassOn(site.ID)
+	rows, err := rt.Rows(ctx, pathBinding, nil)
+	if err != nil {
+		if !on {
+			return nil // nothing to remove and the table may not exist (no hotspot package)
+		}
+		return fmt.Errorf("reading hotspot bindings: %w", err)
+	}
+	var wants map[string]store.Account
+	if on {
+		wants = s.bypassWants(site.ID)
+	}
+	seen := map[string]bool{}
+	var firstErr error
+	note := func(e error) {
+		if e != nil && firstErr == nil {
+			firstErr = e
+		}
+	}
+	for _, r := range rows {
+		if !isOurs(r) {
+			continue
+		}
+		code := codeOfComment(r["comment"])
+		a, want := wants[code]
+		if !want || seen[code] {
+			note(rt.RemoveRow(ctx, pathBinding, r[routeros.RowID]))
+			continue
+		}
+		seen[code] = true
+		w := bypassBody(a)
+		if diff := rowDiff(r, w); len(diff) > 0 {
+			note(rt.SetRow(ctx, pathBinding, r[routeros.RowID], diff))
+		}
+	}
+	codes := make([]string, 0, len(wants))
+	for c := range wants {
+		codes = append(codes, c)
+	}
+	sort.Strings(codes)
+	for _, c := range codes {
+		if !seen[c] {
+			_, e := rt.AddRow(ctx, pathBinding, bypassBody(wants[c]))
+			note(e)
+		}
+	}
+	return firstErr
+}
+
+func bypassBody(a store.Account) map[string]string {
+	return map[string]string{"mac-address": a.MAC, "type": "bypassed", "comment": AcctComment(a.Code, a.Flat)}
+}
+
+// dropBypass removes the bypass rows and the flag once the building serves from ftn-dhcp (best effort).
+func (s *Service) dropBypass(ctx context.Context, site store.Site) {
+	if !s.HotspotBypassOn(site.ID) {
+		rows, err := s.router(site.ID).Rows(ctx, pathBinding, nil)
+		if err != nil {
+			return
+		}
+		for _, r := range rows {
+			if isOurs(r) {
+				_ = s.router(site.ID).RemoveRow(ctx, pathBinding, r[routeros.RowID])
+			}
+		}
+		return
+	}
+	s.SetHotspotBypass(site.ID, false)
+	_ = s.reconcileBypass(ctx, site)
 }
 
 func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provState) (ProvisionRun, error) {
@@ -807,6 +962,7 @@ func (s *Service) revertToHotspot(siteID string) {
 		st.AccessMode = store.AccessHotspot
 		d.Sites[siteID] = st
 		ClearCutoverMarks(d, siteID)
+		SetSiteMarkLocked(d, siteID, MarkHotspotBypass, true, s.now()) // entitled flats must not meet a hotspot login
 		d.AddEvent(store.Event{Time: s.now(), SiteID: siteID, Kind: "audit", Msg: "the router rolled back to the hotspot (" + DHCPServerName + " is disabled): access mode set back to hotspot"})
 		changed = true
 		return nil
@@ -821,4 +977,9 @@ func (s *Service) revertToHotspot(siteID string) {
 		ps.sawOn = false
 		ps.mu.Unlock()
 	}
+}
+
+// RouterRows reads rows of a building's router (read only; the setup tests and the bench helper use it).
+func (s *Service) RouterRows(ctx context.Context, siteID, path string, query map[string]string) ([]routeros.Row, error) {
+	return s.router(siteID).Rows(ctx, path, query)
 }

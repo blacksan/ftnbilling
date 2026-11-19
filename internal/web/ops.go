@@ -63,7 +63,7 @@ func ago(d time.Duration) string {
 func causeText(c string) string {
 	switch c {
 	case fleet.CauseNoHandshake:
-		return "tunnel down (no WireGuard handshake): power or internet at the building"
+		return "tunnel down (no WireGuard handshake): power or internet at the router"
 	case fleet.CauseRESTDown:
 		return "tunnel up, router API not answering"
 	}

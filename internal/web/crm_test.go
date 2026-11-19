@@ -85,7 +85,7 @@ func TestCustomersEquipmentSearchAndAccountCards(t *testing.T) {
 		t.Error("equipment detail lacks history or customer")
 	}
 	card := a.adminGet(t, "/admin/accounts/view?code="+acct.Code)
-	for _, want := range []string{"Wanjiru Kamau", "Location in the building", "ZTEGC0FFEE01", "Install from stock"} {
+	for _, want := range []string{"Wanjiru Kamau", "Floor and fibre box", "ZTEGC0FFEE01", "Install from stock"} {
 		if !strings.Contains(card, want) && want != "Install from stock" {
 			t.Errorf("account page lacks %q", want)
 		}
@@ -169,7 +169,7 @@ func TestPaymentFiltersAndFilteredCSV(t *testing.T) {
 
 func TestBuildingProfileAndContacts(t *testing.T) {
 	a := newApp(t, false)
-	if l := a.adminPost(t, "/admin/sites/profile", url.Values{"id": {a.site}, "address": {"Hatheru Road, Lavington"}, "lat": {"-1.2864"}, "lng": {"36.7677"}, "go_live": {"2026-09-01"}}); !strings.Contains(l, "Building profile saved") {
+	if l := a.adminPost(t, "/admin/sites/profile", url.Values{"id": {a.site}, "address": {"Hatheru Road, Lavington"}, "lat": {"-1.2864"}, "lng": {"36.7677"}, "go_live": {"2026-09-01"}}); !strings.Contains(l, "Router profile saved") {
 		t.Fatal(l)
 	}
 	if l := a.adminPost(t, "/admin/sites/profile", url.Values{"id": {a.site}, "lat": {"95"}, "lng": {"36"}}); !strings.Contains(l, "Error") {
@@ -178,8 +178,8 @@ func TestBuildingProfileAndContacts(t *testing.T) {
 	if l := a.adminPost(t, "/admin/sites/contacts/save", url.Values{"site": {a.site}, "role": {"caretaker"}, "name": {"Mzee Otieno"}, "phone": {"0722000111"}}); !strings.Contains(l, "Contact saved") {
 		t.Fatal(l)
 	}
-	page := a.adminGet(t, "/admin/sites/view?id="+a.site)
-	for _, want := range []string{"Hatheru Road, Lavington", "Mzee Otieno", "2026-09-01", "openstreetmap.org", "Revenue by month"} {
+	page := a.adminGet(t, "/admin/routers/view?id="+a.site+"&tab=profile") + a.adminGet(t, "/admin/routers/view?id="+a.site)
+	for _, want := range []string{"Hatheru Road, Lavington", "Mzee Otieno", "2026-09-01", "geo:-1.2864,36.7677", "Revenue by month"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("building page lacks %q", want)
 		}

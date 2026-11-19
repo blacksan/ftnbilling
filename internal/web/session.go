@@ -257,6 +257,9 @@ func (s *Server) auditPost(w http.ResponseWriter, r *http.Request, u store.Admin
 // router set-up, users, national IDs and account deletion.
 func (s *Server) minRole(method, path string) string {
 	read := method == http.MethodGet || method == http.MethodHead
+	if rest, ok := strings.CutPrefix(path, "/admin/routers"); ok && (rest == "" || rest[0] == '/') {
+		path = "/admin/sites" + rest // D8: the new address has the old rules
+	}
 	switch {
 	case strings.HasPrefix(path, "/admin/security/users"):
 		return store.RoleOwner

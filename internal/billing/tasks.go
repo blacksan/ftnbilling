@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -166,6 +167,19 @@ func (s *Service) reconcile(ctx context.Context, t store.Task) error {
 		_, err := s.ReconcileSite(ctx, t.SiteID) // IPoE: the table diff covers the task
 		return err
 	}
+	if err := s.reconcileHotspotTask(ctx, t); err != nil {
+		return err
+	}
+	// after a rollback the entitled flats are bypassed on the hotspot: a flat that expired or was
+	// suspended loses its bypass row in the same task (release review S3)
+	if s.HotspotBypassOn(t.SiteID) {
+		_, err := s.ReconcileSite(ctx, t.SiteID)
+		return err
+	}
+	return nil
+}
+
+func (s *Service) reconcileHotspotTask(ctx context.Context, t store.Task) error {
 	var a store.Account
 	var pkg store.Package
 	var found bool
@@ -282,6 +296,20 @@ func (s *Service) Sweep(ctx context.Context) {
 				}
 			}
 			s.RunSiteTasks(ctx, id)
+			if s.HotspotBypassOn(id) { // expiry and suspension take the bypass rows away
+				if _, err := s.ReconcileSite(ctx, id); err != nil && !errors.Is(err, ErrSiteHeld) {
+					s.log.Warn("hotspot bypass sweep failed", "site", id, "err", err)
+				}
+			}
+			// A hotspot building has no reconcile pass: read its devices here
+			// (best effort, read only) so the unregistered list stays current.
+			if st, ok := s.site(id); ok && !IPoE(st) && (st.Mode == store.SiteModeEnv || !st.JoinedAt.IsZero()) {
+				dctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+				defer cancel()
+				if err := s.refreshDevices(dctx, st); err != nil {
+					s.log.Debug("device refresh failed", "site", id, "err", err)
+				}
+			}
 		}()
 	}
 	wg.Wait()

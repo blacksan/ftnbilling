@@ -22,7 +22,7 @@
 <h3>Throughput over time</h3>
 <div class="grid2">
 <div class="card"><b>WAN (to Safaricom)</b><div class="muted">Download = received on {{.Data.Cfg.WAN}}, upload = sent. Dashed line = capacity.</div>{{.Data.WANChart}}</div>
-<div class="card"><b>OLT uplink ({{.Data.Cfg.OLT}})</b><div class="muted">Traffic between the router and the building. Link size {{f0 .Data.Cfg.OLTCapMbps}} Mbps.</div>{{.Data.OLTChart}}</div>
+<div class="card"><b>OLT uplink ({{.Data.Cfg.OLT}})</b><div class="muted">Traffic between the router and the router. Link size {{f0 .Data.Cfg.OLTCapMbps}} Mbps.</div>{{.Data.OLTChart}}</div>
 </div>
 
 <h3>Flats</h3>
@@ -55,7 +55,7 @@
 <p><b>Services</b> come from the router's traffic-flow export and are guessed from DNS names, then from ports. They are a good guide, not an exact count: devices that use their own encrypted DNS (DNS-over-HTTPS) show up as "HTTPS (other)", and the router must not fast-track the hotspot traffic or it is invisible to traffic-flow.</p>
 <p><b>Fair-use limit</b> counts WAN download plus upload for the calendar month (EAT) since this app began collecting; it turns amber above {{f0 (index .Data.C "FUPWarn")}}%. The projection assumes the average pace so far continues.</p>
 <p>Flag thresholds: WAN above {{f0 (index .Data.C "WANUtil")}}% for {{index .Data.C "WANHours"}} or more hours in 7 days; flats above {{f0 (index .Data.C "CapShare")}}% of time at cap; loss above {{f0 (index .Data.C "Loss")}}%.</p></div>
-{{template "afoot"}}{{end}}
+{{template "afoot" .}}{{end}}
 
 {{define "admin_metrics_flat"}}{{template "ahead" .}}{{$R := .Data.Row}}{{$P := .Data.Period}}
 <h2>{{$R.Flat}} <small class="muted">Account {{$R.Code}}</small></h2>
@@ -68,4 +68,4 @@
 <div class="tile">Now<b>{{if ge $R.CurrentMbps 0.0}}{{f1 $R.CurrentMbps}} Mbps{{else}}offline{{end}}</b></div></div>
 <div class="card"><b>Usage over time</b><div class="muted">Average speed per bucket. Dashed line = package speed.</div>{{.Data.Chart}}</div>
 <div class="card"><b>Services</b><div class="muted">Share of this flat's bytes.</div>{{.Data.SvcChart}}</div>
-{{template "afoot"}}{{end}}
+{{template "afoot" .}}{{end}}

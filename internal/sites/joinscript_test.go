@@ -42,6 +42,7 @@ func baseInput() ScriptInput {
 		PublicBase: "https://billing.example.co.ke",
 		PublicIP:   "203.0.113.10",
 		Generated:  time.Date(2026, 11, 18, 9, 30, 0, 0, time.UTC),
+		Token:      "TOKEN-abc_123",
 	}
 }
 
@@ -53,9 +54,10 @@ func TestJoinScriptGolden(t *testing.T) {
 		{"join_plain.rsc", func(in *ScriptInput) {}}, // Provision off: the router already has its hotspot
 		{"join_provision_vlan.rsc", func(in *ScriptInput) {
 			in.Site.Provision, in.Site.VLANID, in.Site.BenchPort = true, 30, "ether5"
+			in.ROSVersion = "7.25.1" // the :onerror wrapper form
 		}},
 		{"join_provision_vlan0.rsc", func(in *ScriptInput) { in.Site.Provision = true }},
-		{"join_nocheck.rsc", func(in *ScriptInput) { in.NoCheck = true }},
+		{"join_nocheck.rsc", func(in *ScriptInput) { in.NoCheck = true; in.ROSVersion = "7.13" }},
 		{"join_legacy.rsc", func(in *ScriptInput) {
 			in.Site.LegacyContainer = true
 			in.Site.Name = `Old "main" building $1`
@@ -89,20 +91,22 @@ func TestJoinScriptContentRules(t *testing.T) {
 		`address=10.99.0.2 network=10.99.0.1 interface=wg-ftn`,
 		`allowed-address=10.99.0.1/32 persistent-keepalive=25s`,
 		`endpoint-address=203.0.113.10 endpoint-port=51820`,
-		`policy=read,write,test,sensitive,rest-api`,
+		`policy=read,write,test,sensitive,api,rest-api,reboot`,
 		`/ip/service set www port=8081 disabled=no address=10.99.0.1/32`,
 		`:if ([:len [/ip/firewall/filter find where dynamic=no]] > 0)`,
 		`place-before=([/ip/firewall/filter find where dynamic=no]->0)`,
 		`ranges=10.5.50.10-10.5.50.254`,
 		`login-by=http-pap,http-chap,mac-cookie`,
 		`https://billing.example.co.ke/routeros/hotspot/sab12cd/`,
-		`dst-address=10.99.0.1 port=2055 version=5`,
 		`name=vlan30-customers vlan-id=30`,
 		`/file remove [find where name="ftn-join.rsc"]`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("script lacks %q", want)
 		}
+	}
+	if strings.Contains(s, "traffic-flow") {
+		t.Error("the join script must not set traffic flow: the server does it over REST")
 	}
 	if strings.Contains(s, "172.17.0.0/24") || strings.Contains(s, "/container/") {
 		t.Error("legacy parts without the legacy flag")
@@ -172,9 +176,42 @@ func TestPlanSubnet(t *testing.T) {
 
 func TestJoinCommand(t *testing.T) {
 	got := JoinCommand("https://b.example/", "TOK", true)
-	want := `/tool/fetch url="https://b.example/j/TOK" dst-path=ftn-join.rsc check-certificate=yes; :delay 1s; /import ftn-join.rsc`
-	if got != want {
-		t.Fatal(got)
+	for _, w := range []string{
+		`:local o "^(true|yes)\$";`,
+		`:local v0 [:tostr [/system/device-mode/get fetch]];`, `:local v2 [:tostr [/system/device-mode/get hotspot]];`,
+		`:put ("ftn: device-mode" . " fetch=" . $v0 . " scheduler=" . $v1 . " hotspot=" . $v2)`,
+		`:if ([:len $v0] = 0 || [:len $v1] = 0 || [:len $v2] = 0) do={ :put "ftn: cannot read device-mode, nothing was changed" }`,
+		`($v0 ~ $o) && ($v1 ~ $o) && ($v2 ~ $o)`,
+		`do={ /tool/fetch url="https://b.example/j/TOK" dst-path=ftn-join.rsc check-certificate=yes; :delay 1s; /import ftn-join.rsc }`,
+		`else={ :put "ftn: press the router button within 5 minutes (it then reboots), then paste this same line again"; /system/device-mode/update`,
+		`/system/device-mode/update fetch=yes scheduler=yes hotspot=yes } }`,
+	} {
+		if !strings.Contains(got, w) {
+			t.Errorf("command lacks %q:\n%s", w, got)
+		}
+	}
+	// Exactly one device-mode update, and it comes after the fetch branch: the line never loops.
+	if strings.Count(got, "/system/device-mode/update") != 1 || strings.Count(got, "/import") != 1 {
+		t.Error("one update, one import")
+	}
+	if long := JoinCommand("https://billing.example.co.ke", strings.Repeat("x", 43), true); len(long) > 820 {
+		t.Errorf("the line is %d characters; keep it pasteable", len(long))
+	}
+	// No hotspot requirement for the join stage of a building that is not (yet) hotspot-mode.
+	if j := JoinCommandFor("https://b.example", "T", true, "", false); strings.Contains(j, "get hotspot") {
+		t.Error("hotspot=false must not require hotspot")
+	}
+	// Fresh router: fetch only, so usually no button press; serving router: the full set.
+	fresh := JoinCommandIntent("https://b.example", "T", true, StageJoin, IntentFresh, true)
+	if !strings.Contains(fresh, "get fetch") || strings.Contains(fresh, "get scheduler") || strings.Contains(fresh, "get hotspot") || !strings.Contains(fresh, "/system/device-mode/update fetch=yes } }") {
+		t.Errorf("fresh intent needs fetch only: %s", fresh)
+	}
+	serving := JoinCommandIntent("https://b.example", "TOK", true, "", IntentServing, true)
+	if serving != got {
+		t.Error("serving intent is the default command")
+	}
+	if sv := JoinCommandIntent("https://b.example", "T", true, StageJoin, IntentServing, false); !strings.Contains(sv, "get scheduler") || strings.Contains(sv, "get hotspot") {
+		t.Errorf("serving, not hotspot mode: fetch+scheduler: %s", sv)
 	}
 	fb := JoinCommand("https://b.example", "T", false)
 	if !strings.Contains(fb, "check-certificate=no") || !strings.Contains(fb, `url="https://b.example/j/T?nocheck=1"`) {
@@ -192,10 +229,10 @@ func TestJoinScriptCertificateChecks(t *testing.T) {
 		}
 		return string(b)
 	}
-	if s := render(false); strings.Contains(s, "check-certificate=no") || strings.Count(s, "check-certificate=yes") != 1 {
+	if s := render(false); strings.Contains(s, "check-certificate=no") || strings.Count(s, "check-certificate=yes") != 3 { // the page downloads, and the report on both exits
 		t.Error("default script must check certificates for the page downloads")
 	}
-	if s := render(true); strings.Contains(s, "check-certificate=yes") || strings.Count(s, "check-certificate=no") != 1 {
+	if s := render(true); strings.Contains(s, "check-certificate=yes") || strings.Count(s, "check-certificate=no") != 3 {
 		t.Error("no-check script must skip the check for the page downloads")
 	}
 }

@@ -10,6 +10,7 @@ func ipoeInput(stage string) ScriptInput {
 	in.Stage = stage
 	in.Site.AccessMode = "ipoe_observe"
 	in.Site.WANList = "WAN"
+	in.ROSVersion = "7.25.1"
 	in.Accounts = []LeaseSeed{
 		{Code: "K7Q2MX", Flat: "Flat 3B", MAC: "AA:BB:CC:DD:EE:01", IP: "10.5.50.60", MaxLimit: "20M/20M"},
 		{Code: "P4R8TN", Flat: `Flat "10A" $x`, MAC: "00:E0:FC:12:34:56", IP: "10.5.50.61", MaxLimit: "10M/10M", Suspended: true},
@@ -51,7 +52,7 @@ func TestIPoEStagesCommentEverythingAndStayOffTheWAN(t *testing.T) {
 				continue
 			}
 			for _, bad := range []string{"/ip/route", "/ip/service disable", "/interface/ethernet", "/ip/dhcp-client", "/interface/bridge/port", "/user/remove", "/ip/firewall/connection", "/system/reset", "/system/reboot"} {
-				if strings.Contains(tl, bad) && !(bad == "/interface/ethernet" && strings.Contains(tl, "$ifc") || (bad == "/interface/ethernet" && strings.Contains(tl, "$eth->0"))) {
+				if strings.Contains(tl, bad) && !(bad == "/interface/ethernet" && strings.Contains(tl, "$ifc") || (bad == "/interface/ethernet" && strings.Contains(tl, "$eth->0") || (bad == "/interface/ethernet" && strings.Contains(tl, "name=$ifc]")) || (bad == "/interface/ethernet" && strings.Contains(tl, "ethernet/get $x arp")) || (bad == "/interface/ethernet" && strings.Contains(tl, "ethernet set $x arp")))) {
 					t.Errorf("%s: touches %q: %s", stage, bad, tl)
 				}
 			}
@@ -210,9 +211,20 @@ func TestIPoEStageRefusals(t *testing.T) {
 
 func TestJoinCommandStages(t *testing.T) {
 	got := JoinCommandStage("https://b.example/", "TOK", true, StageCutover)
-	want := `/tool/fetch url="https://b.example/j/TOK?stage=cutover" dst-path=ftn-cutover.rsc check-certificate=yes; :delay 1s; /import ftn-cutover.rsc`
-	if got != want {
-		t.Fatal(got)
+	for _, w := range []string{
+		`/tool/fetch url="https://b.example/j/TOK?stage=cutover" dst-path=ftn-cutover.rsc check-certificate=yes; :delay 1s; /import ftn-cutover.rsc`,
+		`[/system/device-mode/get fetch]`, `[/system/device-mode/get scheduler]`,
+		`/system/device-mode/update fetch=yes scheduler=yes } }`,
+	} {
+		if !strings.Contains(got, w) {
+			t.Errorf("cutover command lacks %q:\n%s", w, got)
+		}
+	}
+	if strings.Contains(got, "device-mode/get hotspot") {
+		t.Error("the IPoE stages do not need the hotspot feature")
+	}
+	if cl := JoinCommandStage("https://b.example", "T", true, StageCleanup); strings.Contains(cl, "scheduler") {
+		t.Error("cleanup does not need the scheduler")
 	}
 	if fb := JoinCommandStage("https://b.example", "T", false, StageJoin); !strings.Contains(fb, `url="https://b.example/j/T?stage=join&nocheck=1"`) || !strings.Contains(fb, "check-certificate=no") {
 		t.Fatal(fb)
@@ -257,7 +269,7 @@ func TestCutoverRunTwiceIsSafe(t *testing.T) {
 	}
 	// A re-run must not record "arp=reply-only" as the value to restore (B1): only when different,
 	// and only when no line for this interface exists yet (a prefix match, not the whole line).
-	if strings.Count(s, `$cur != "reply-only" && [:len $rbs] > 0 && [:typeof [:find $rbs $pre]] = "nil"`) != 3 {
+	if strings.Count(s, `[:typeof [:find $rb $pre]] = "nil"`) != 3 {
 		t.Fatal("bridge, vlan and ethernet must each guard the recorded arp line")
 	}
 	if strings.Contains(s, `. [/interface/bridge/get ($b->0) arp] .`) {

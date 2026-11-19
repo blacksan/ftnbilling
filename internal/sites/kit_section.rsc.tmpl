@@ -1,0 +1,15 @@
+{{define "kit"}}:if ([:tostr [/system/device-mode/get scheduler]] ~ "^(true|yes)\$") do={
+{{secOpen .KitN "cutover kit" false}}
+  /system/scheduler remove [find where name="{{.KitTimerName}}"]
+  /system/script remove [find where name="{{.KitTickName}}"]
+  /system/script remove [find where name="{{.KitRollbackName}}"]
+  /system/script add name={{.KitRollbackName}} policy={{.KitScriptPolicy}} source="{{.KitRollback}}" comment="{{.KitComment}}"
+  /system/script add name={{.KitTickName}} policy={{.KitTickPolicy}} source="{{.KitTick}}" comment="{{.KitComment}}"
+  /system/scheduler add name={{.KitTimerName}} interval={{.KitInterval}} on-event={{.KitTickName}} policy={{.KitTickPolicy}} comment="{{.KitComment}}"
+  :put "   kit installed: the server can now run the cutover safety net itself"
+{{secClose .KitN "cutover kit" false}}
+} else={
+  :set fails ($fails + 1)
+  :set report ($report . "{{.KitN}} cutover kit: skipped, the scheduler is off in device-mode\n")
+  :put "   cutover kit NOT installed: device-mode has the scheduler off. Run /system/device-mode/update scheduler=yes, press the button, then paste the join command again"
+}{{end}}
