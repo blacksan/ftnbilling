@@ -28,7 +28,7 @@ func (s *Server) setupRoutes(h func(pattern, role string, f apiFunc)) {
 	h("PATCH /api/v1/routers/{id}", owner, s.apiRouterPatch)
 	h("GET /api/v1/routers/{id}/setup", viewer, s.apiSetup)
 	h("POST /api/v1/routers/{id}/actions/reset", owner, s.apiRouterReset)
-	h("GET /api/v1/routers/{id}/script", owner, s.apiRouterScript)
+	h("POST /api/v1/routers/{id}/script", owner, s.apiRouterScript)
 
 	h("GET /api/v1/sites/{id}/checks", viewer, s.apiChecks)
 	h("POST /api/v1/sites/{id}/checks/{check_id}/fix", operator, s.apiCheckFix)
@@ -56,7 +56,7 @@ func (s *Server) apiGone(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 // idemExempt: calls whose answer holds a one-time secret are never replayed from the Idempotency-Key cache.
 func idemExempt(r *http.Request) bool {
 	p := strings.TrimRight(r.URL.Path, "/")
-	return r.Method == http.MethodPost && (p == "/api/v1/routers" || strings.HasSuffix(p, "/join-command"))
+	return r.Method == http.MethodPost && (p == "/api/v1/routers" || strings.HasSuffix(p, "/join-command") || strings.HasSuffix(p, "/script"))
 }
 
 func (s *Server) routerFail(w http.ResponseWriter, err error) bool {
@@ -274,23 +274,35 @@ func (s *Server) apiRouterReset(w http.ResponseWriter, r *http.Request, c *apiCt
 	writeJSON(w, http.StatusOK, map[string]any{"router": s.siteJSON(st, h, s.siteCounts()[st.ID]), "join": join})
 }
 
-// apiRouterScript is Line B: the same script as the paste line fetches, as a file download
-// for a router that cannot take the line. It makes new keys.
+// apiRouterScript is POST /routers/{id}/script: the same script as the paste line fetches, as a file download
+// for a router that cannot take the line. It makes new keys, so it needs {confirm_name} and is refused (409)
+// for a router that is joined with its tunnel up unless {force: true}. API only: the web admin has no button.
 func (s *Server) apiRouterScript(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 	st, ok := s.site404(w, r.PathValue("id"))
 	if !ok {
 		return
 	}
-	script, err := s.mgr.DownloadScript(st.ID, "download:"+c.user.Username)
+	var req struct {
+		ConfirmName string `json:"confirm_name"`
+		Force       bool   `json:"force"`
+	}
+	if !decode(w, r, &req, false) {
+		return
+	}
+	if strings.TrimSpace(req.ConfirmName) != st.Name {
+		validationErr(w, map[string]string{"confirm_name": "type the router name to confirm"})
+		return
+	}
+	script, err := s.mgr.DownloadScript(st.ID, "download:"+c.user.Username, req.Force)
 	if err != nil {
-		if errors.Is(err, sites.ErrCannotRender) || errors.Is(err, sites.ErrInsecureBase) {
+		if errors.Is(err, sites.ErrCannotRender) || errors.Is(err, sites.ErrInsecureBase) || errors.Is(err, sites.ErrRouterLive) {
 			apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
 		} else if !s.storeErr(w, err) {
 			apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
 		}
 		return
 	}
-	c.audit(s, "router "+st.Name+" script downloaded")
+	c.audit(s, "router "+st.Name+" script downloaded"+map[bool]string{true: " (forced)", false: ""}[req.Force])
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+sites.SetupFile+`"`)
 	w.Header().Set("Cache-Control", "no-store")

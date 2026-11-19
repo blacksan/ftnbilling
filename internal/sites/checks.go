@@ -43,6 +43,7 @@ const (
 const (
 	CheckVersion      = "router.version"
 	CheckAPIPolicy    = "api_user.policy"
+	CheckLayout       = "router.layout"
 	CheckDMFetch      = "device_mode.fetch"
 	CheckDNS          = "dns.remote_requests"
 	CheckCustDNS      = "customer.dns_input"
@@ -112,17 +113,17 @@ type CheckFix struct {
 
 // CheckItem is one line of the checklist.
 type CheckItem struct {
-	ID            string   `json:"id"`
-	Group         string   `json:"group"` // router | network | devices | services
-	Status        string   `json:"status"`
-	BlocksCutover bool     `json:"blocks_cutover"`
-	Title         string   `json:"title"`
-	Detail        string   `json:"detail"`
-	Evidence      []string `json:"evidence"`
-	Fix           CheckFix `json:"fix"`
-	// Override names the cutover option that lets the operator go on in spite
-	// of this item ("keep_unknown", "force"); "" if none.
-	Override string `json:"override,omitempty"`
+	ID       string   `json:"id"`
+	Group    string   `json:"group"` // router | network | devices | services
+	Status   string   `json:"status"`
+	Blocks   bool     `json:"-"` // a failing item that stops the router from counting as ready
+	Title    string   `json:"title"`
+	Detail   string   `json:"detail"`
+	Evidence []string `json:"evidence"`
+	Fix      CheckFix `json:"fix"`
+	// Override names the option that lets the operator go on in spite of this
+	// item ("keep_unknown", "force"); "" if none. Not part of the JSON.
+	Override string `json:"-"`
 }
 
 // RouterInfo is what the pass learned about the router itself.
@@ -134,11 +135,10 @@ type RouterInfo struct {
 
 // CheckSummary counts the items by status.
 type CheckSummary struct {
-	OK           int  `json:"ok"`
-	Warn         int  `json:"warn"`
-	Fail         int  `json:"fail"`
-	Unknown      int  `json:"unknown"`
-	CutoverReady bool `json:"cutover_ready"`
+	OK      int `json:"ok"`
+	Warn    int `json:"warn"`
+	Fail    int `json:"fail"`
+	Unknown int `json:"unknown"`
 }
 
 // Checks is the answer of GET /sites/{id}/checks.
@@ -148,7 +148,11 @@ type Checks struct {
 	Router      RouterInfo   `json:"router"`
 	Summary     CheckSummary `json:"summary"`
 	JoinReport  *JoinReport  `json:"join_report"`
-	Items       []CheckItem  `json:"items"`
+	// Layout is "v5" (the router has the layout the bootstrap script builds),
+	// "old" (it has not: nothing is written to it, it must be rebuilt) or
+	// "unknown" (the bridges could not be read).
+	Layout string      `json:"layout"`
+	Items  []CheckItem `json:"items"`
 	// Slow is true when some read of the router timed out: the server repeats the pass by itself.
 	Slow bool `json:"slow,omitempty"`
 }
@@ -163,13 +167,13 @@ func (c Checks) Item(id string) (CheckItem, bool) {
 	return CheckItem{}, false
 }
 
-// Blockers lists the ids of the items that stop a cutover (status fail or
-// unknown, blocks_cutover), leaving out the ones the options override:
+// Blockers lists the ids of the items that stop the router from counting as
+// ready (status fail or unknown), leaving out the ones the options override:
 // keepUnknown covers unmanaged.devices, force covers flats.unseen.
 func (c Checks) Blockers(keepUnknown, force bool) []string {
 	var out []string
 	for _, it := range c.Items {
-		if !it.BlocksCutover || (it.Status != StatusFail && it.Status != StatusUnknown) {
+		if !it.Blocks || (it.Status != StatusFail && it.Status != StatusUnknown) {
 			continue
 		}
 		if (it.Override == "keep_unknown" && keepUnknown) || (it.Override == "force" && force) {
@@ -481,6 +485,7 @@ func detectCustomer(sn *snapshot, plan netplan.Plan) custInfo {
 
 // readPaths each check needs; a failed read makes the item unknown.
 var needs = map[string][]string{
+	CheckLayout:      {"/interface/bridge"},
 	CheckVersion:     {"/system/resource"},
 	CheckAPIPolicy:   {"/user/group"},
 	CheckDMFetch:     {"/system/device-mode"},
@@ -508,6 +513,7 @@ type checkDef struct {
 
 // checkDefs is the checklist, in display order.
 var checkDefs = []checkDef{
+	{CheckLayout, "router", "Router was built by the set-up script", true, "", evalLayout},
 	{CheckVersion, "router", "Router software version", false, "", evalVersion},
 	{CheckAPIPolicy, "router", "Server login has the rights it needs", false, "", evalAPIPolicy},
 	{CheckDMFetch, "router", "Router allows file downloads", false, "", evalDMFetch},
@@ -572,7 +578,7 @@ func shortErr(err error) string {
 func (e *evalCtx) buildChecks() []CheckItem {
 	items := make([]CheckItem, 0, len(checkDefs))
 	for _, d := range checkDefs {
-		it := CheckItem{ID: d.id, Group: d.group, Title: d.title, BlocksCutover: d.blocks, Override: d.override,
+		it := CheckItem{ID: d.id, Group: d.group, Title: d.title, Blocks: d.blocks, Override: d.override,
 			Evidence: []string{}, Fix: CheckFix{Kind: FixNone}}
 		if !e.unknown(&it, d.id) {
 			d.eval(e, &it)
@@ -583,6 +589,42 @@ func (e *evalCtx) buildChecks() []CheckItem {
 		items = append(items, it)
 	}
 	return items
+}
+
+// Layout values of Checks.
+const (
+	LayoutV5      = "v5"
+	LayoutOld     = "old"
+	LayoutUnknown = "unknown"
+)
+
+// RebuildText is what the operator is told for a router without the v5 layout.
+const RebuildText = "Rebuild required: reset the router and paste a new line."
+
+// ErrRebuildRequired is returned by a fix on a router that does not have the v5 layout.
+var ErrRebuildRequired = errors.New("rebuild required: reset the router and paste a new line (the server writes nothing to a router the set-up script did not build)")
+
+// LayoutOf reads the v5 marker (the customer bridge the script makes, with its
+// comment) from a snapshot.
+func LayoutOf(sn *snapshot) string {
+	if _, err := sn.failed("/interface/bridge"); err != nil {
+		return LayoutUnknown
+	}
+	if billing.HasV5Layout(sn.tbl("/interface/bridge")) {
+		return LayoutV5
+	}
+	return LayoutOld
+}
+
+func evalLayout(e *evalCtx, it *CheckItem) {
+	switch LayoutOf(e.sn) {
+	case LayoutV5:
+		okItem(it, "The router has the layout the set-up script builds.")
+	default:
+		it.Status = StatusFail
+		it.Detail = RebuildText + " This router was not built by the set-up script (it has no " + billing.CustomerBridgeName + " bridge made by it), so the server changes nothing on it."
+		it.Fix = CheckFix{Kind: FixNone}
+	}
 }
 
 func evalVersion(e *evalCtx, it *CheckItem) {
@@ -1691,11 +1733,18 @@ func (m *Manager) runChecks(ctx context.Context, site store.Site) Checks {
 		e.cust = detectCustomer(e.sn, e.plan)
 	}
 	items := e.buildChecks()
+	layout := LayoutOf(e.sn)
+	if layout != LayoutV5 {
+		// No fix of any kind on a router that does not have the v5 layout: nothing is written to it.
+		for i := range items {
+			items[i].Fix = CheckFix{Kind: FixNone}
+		}
+	}
 	res := e.sn.single("/system/resource")
 	out := Checks{SiteID: site.ID, GeneratedAt: now, Items: items, JoinReport: m.loadJoinReport(site.ID),
 		Router: RouterInfo{Reachable: e.sn.errs["/system/resource"] == nil, Version: res["version"], Board: res["board-name"]}}
+	out.Layout = layout
 	out.Slow = e.slow
 	out.Summary = summarize(items)
-	out.Summary.CutoverReady = out.Router.Reachable && len(out.Blockers(false, false)) == 0 // "ready": no failing check
 	return out
 }

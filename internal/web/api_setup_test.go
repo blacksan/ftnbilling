@@ -3,6 +3,7 @@ package web_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"ispbill/internal/store"
 )
@@ -24,7 +25,7 @@ func TestAPISetupRoles(t *testing.T) {
 		{"GET", "/routers/" + id + "/checks", nil, OK, OK, OK},
 		{"POST", "/routers/" + id + "/join-command", nil, F, F, OK},
 		{"POST", "/routers/" + id + "/actions/reset", map[string]any{"confirm_name": "nope"}, F, F, OK},
-		{"GET", "/routers/" + id + "/script", nil, F, F, OK},
+		{"POST", "/routers/" + id + "/script", map[string]any{"confirm_name": "nope"}, F, F, OK},
 	} {
 		for who, want := range map[string]int{r.view.Access: c.viewer, r.oper.Access: c.oper, r.owner.Access: c.owner} {
 			got := r.call(who, c.method, c.path, c.body, nil)
@@ -159,15 +160,65 @@ func TestAPIResetNeedsTheNameAndGivesANewLine(t *testing.T) {
 	}
 }
 
-func TestAPIScriptDownloadIsOwnerOnlyAndNotCached(t *testing.T) {
+func TestAPIScriptDownloadIsPostOwnerOnlyConfirmedAndNotCached(t *testing.T) {
 	r := newAPIRig(t)
 	id := r.A.ID
-	x := r.call(r.owner.Access, "GET", "/routers/"+id+"/script", nil, nil)
+	// the old GET is gone: a download changes keys, so it is never a plain link
+	if x := r.call(r.owner.Access, "GET", "/routers/"+id+"/script", nil, nil); x.Status == 200 {
+		t.Fatalf("GET still serves the script: %d", x.Status)
+	}
+	// make the router a not-yet-joined one first
+	r.st.Update(func(d *store.Data) error {
+		s := d.Sites[id]
+		s.JoinedAt = time.Time{}
+		d.Sites[id] = s
+		return nil
+	})
+	for _, bad := range []any{nil, map[string]any{}, map[string]any{"confirm_name": "nope"}} {
+		x := r.call(r.owner.Access, "POST", "/routers/"+id+"/script", bad, nil)
+		if x.Status != 422 && x.Status != 400 {
+			t.Fatalf("without the router name: %d %.200s", x.Status, x.Raw)
+		}
+	}
+	x := r.call(r.owner.Access, "POST", "/routers/"+id+"/script", map[string]any{"confirm_name": r.A.Name}, nil)
 	if x.Status != 200 || !strings.Contains(string(x.Raw), "ftn: ") || !strings.Contains(x.Header.Get("Cache-Control"), "no-store") {
 		t.Fatalf("%d %.200s", x.Status, x.Raw)
 	}
 	if !strings.Contains(string(x.Raw), "/system/reset-configuration") && !strings.Contains(string(x.Raw), "ftn-setup.rsc") {
 		t.Fatalf("not the bootstrap script: %.200s", x.Raw)
+	}
+}
+
+// A router that is joined with its tunnel up keeps its keys: the download is refused with 409 unless force is set.
+func TestAPIScriptDownloadRefusesALiveRouterUnlessForced(t *testing.T) {
+	r := newAPIRig(t)
+	id := r.A.ID
+	var before store.Site
+	r.st.Update(func(d *store.Data) error {
+		s := d.Sites[id]
+		s.JoinedAt = time.Now()
+		d.Sites[id] = s
+		before = s
+		return nil
+	})
+	body := map[string]any{"confirm_name": r.A.Name}
+	x := r.call(r.owner.Access, "POST", "/routers/"+id+"/script", body, nil)
+	if x.Status != 409 {
+		t.Fatalf("live router: %d %.200s", x.Status, x.Raw)
+	}
+	var after store.Site
+	r.st.View(func(d *store.Data) { after = d.Sites[id] })
+	if after.WGPublicKey != before.WGPublicKey || after.RESTPass != before.RESTPass {
+		t.Fatal("a refused download still rotated the router's keys")
+	}
+	body["force"] = true
+	x = r.call(r.owner.Access, "POST", "/routers/"+id+"/script", body, nil)
+	if x.Status != 200 || !strings.Contains(string(x.Raw), "ftn-setup.rsc") {
+		t.Fatalf("forced: %d %.200s", x.Status, x.Raw)
+	}
+	// the operator never gets it, forced or not
+	if x := r.call(r.oper.Access, "POST", "/routers/"+id+"/script", body, nil); x.Status != 403 {
+		t.Fatalf("operator: %d", x.Status)
 	}
 }
 

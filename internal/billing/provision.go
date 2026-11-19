@@ -31,15 +31,22 @@ import (
 const (
 	AcctPrefix     = "ftn:acct:"
 	DHCPServerName = "ftn-dhcp"
-	SuspendedList  = "ftn-suspended"
-	UnregList      = "ftn-unreg"
-	unregComment   = "ftn: unregistered range"
 
-	pathLease = "/ip/dhcp-server/lease"
-	pathDHCP  = "/ip/dhcp-server"
-	pathQueue = "/queue/simple"
-	pathList  = "/ip/firewall/address-list"
-	pathARP   = "/ip/arp"
+	// The v5 layout marker: the bootstrap script creates the customer bridge
+	// with this name and comment, and nothing else does. A router without it
+	// was not built by the v5 script, so nothing is written to it.
+	CustomerBridgeName    = "br-customers"
+	CustomerBridgeComment = "ftn: customer bridge"
+	SuspendedList         = "ftn-suspended"
+	UnregList             = "ftn-unreg"
+	unregComment          = "ftn: unregistered range"
+
+	pathBridge = "/interface/bridge"
+	pathLease  = "/ip/dhcp-server/lease"
+	pathDHCP   = "/ip/dhcp-server"
+	pathQueue  = "/queue/simple"
+	pathList   = "/ip/firewall/address-list"
+	pathARP    = "/ip/arp"
 
 	// walledRate is the queue of a flat that has no package yet.
 	walledRate = "2M/2M"
@@ -230,6 +237,21 @@ type wantAcct struct {
 	comment  string
 }
 
+// ErrNotSetUp is returned by ReconcileSite when the router is reachable but does
+// not have the v5 layout. Nothing was written, and the caller keeps its queued
+// tasks for when the router has been rebuilt.
+var ErrNotSetUp = errors.New("router not set up: it does not have the v5 layout, nothing was written")
+
+// HasV5Layout reports whether the bridge rows hold the v5 marker.
+func HasV5Layout(bridges []routeros.Row) bool {
+	for _, r := range bridges {
+		if r["name"] == CustomerBridgeName && r["comment"] == CustomerBridgeComment {
+			return true
+		}
+	}
+	return false
+}
+
 // ReconcileSite compares the building's router with the accounts table and
 // changes the router where they differ. It
 // is safe to call from anywhere: passes of one building run one at a time.
@@ -307,6 +329,10 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	if err != nil {
 		return run, fmt.Errorf("reading DHCP servers: %w", err)
 	}
+	bridges, err := rt.Rows(ctx, pathBridge, nil)
+	if err != nil {
+		return run, fmt.Errorf("reading bridges: %w", err)
+	}
 	arp, arpErr := rt.Rows(ctx, pathARP, nil) // best effort: only feeds the device list
 	if arpErr != nil {
 		arp = nil
@@ -342,11 +368,13 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	run.Conflicts = append(pd.conflicts, skipped...)
 	run.Ops = len(pd.ops)
 
-	// The one gate: a router with no ftn-dhcp has not been set up yet, so
-	// nothing is written (the set-up script builds it).
+	// The one gate: a router without the v5 layout (the customer bridge the
+	// script makes, and its ftn-dhcp server) has not been set up by the v5
+	// script, so nothing is written. The caller gets ErrNotSetUp and keeps its
+	// tasks queued.
 	note := ""
-	if ftn == nil {
-		run.Waiting, note = true, "router not set up: it has no "+DHCPServerName+" DHCP server yet, nothing was written"
+	if ftn == nil || !HasV5Layout(bridges) {
+		run.Waiting, note = true, "router not set up: rebuild required (reset the router and paste a new line), nothing was written"
 		pd.ops = nil
 	} else {
 		ps.mu.Lock()
@@ -414,6 +442,9 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	st.InSync = firstErr == nil && !run.Waiting && st.Drift == 0
 	ps.status = st
 	ps.mu.Unlock()
+	if firstErr == nil && run.Waiting {
+		firstErr = ErrNotSetUp
+	}
 	return run, firstErr
 }
 

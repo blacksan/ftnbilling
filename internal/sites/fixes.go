@@ -555,6 +555,13 @@ func (m *Manager) applyFix(ctx context.Context, siteID, checkID string, confirm 
 	if !c.Router.Reachable {
 		return res, ErrRouterUnreachable
 	}
+	switch c.Layout {
+	case LayoutV5:
+	case LayoutOld:
+		return res, ErrRebuildRequired
+	default:
+		return res, ErrRouterUnreachable
+	}
 	if item.Status == StatusOK || item.Status == StatusInfo {
 		return res, nil // nothing to fix
 	}

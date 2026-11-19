@@ -88,7 +88,7 @@ func NewService(st *store.Store, rs RouterSource, log *slog.Logger) *Service {
 	if h, ok := rs.(interface {
 		SetForeignIPs(func(siteID string) map[string]bool)
 	}); ok {
-		h.SetForeignIPs(svc.foreignIPs) // the cutover script's address allocation avoids the router's own static leases
+		h.SetForeignIPs(svc.foreignIPs) // address allocation avoids the router's own static leases
 	}
 	return svc
 }

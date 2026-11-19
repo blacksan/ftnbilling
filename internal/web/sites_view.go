@@ -56,6 +56,8 @@ func setupLabel(state string) (label, tone string) {
 		return "Checking", "waiting"
 	case sites.StateWaitingRouter:
 		return "Setting up", "waiting"
+	case sites.StateStalled:
+		return "Needs a new line", "drift"
 	}
 	return "Waiting for the line", "waiting"
 }
