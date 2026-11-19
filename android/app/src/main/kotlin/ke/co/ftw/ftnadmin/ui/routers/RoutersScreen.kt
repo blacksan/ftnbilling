@@ -33,6 +33,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ke.co.ftw.ftnadmin.data.sites.SetupState
 import ke.co.ftw.ftnadmin.ui.routers.setup.BootstrapLineCard
+import ke.co.ftw.ftnadmin.ui.routers.setup.CopyButton
 import ke.co.ftw.ftnadmin.ui.routers.setup.ResetRouterCard
 import ke.co.ftw.ftnadmin.ui.routers.setup.ResetRouterDialog
 import ke.co.ftw.ftnadmin.ui.routers.setup.RouterSetupViewModel
@@ -236,6 +237,25 @@ fun RouterDetailScreen(
     }
 }
 
+/** What the router page says about remote WinBox, or null when the router has no tunnel address yet. */
+internal fun winboxNotice(tunnelAddress: String, mgmtWinbox: Boolean): String? = when {
+    tunnelAddress.isBlank() -> null
+    mgmtWinbox -> "Remote WinBox: connect your management WireGuard profile, then open WinBox to $tunnelAddress"
+    else -> "Built without remote WinBox: reset the router and paste a new line to add it."
+}
+
+@Composable
+private fun RemoteWinbox(s: Site) {
+    if (s.tunnelAddress.isNotBlank()) LabeledValue("Tunnel address", s.tunnelAddress)
+    val notice = winboxNotice(s.tunnelAddress, s.mgmtWinbox) ?: return
+    Text(
+        notice,
+        style = MaterialTheme.typography.bodySmall,
+        color = if (s.mgmtWinbox) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+    )
+    if (s.mgmtWinbox) CopyButton("Copy address", s.tunnelAddress)
+}
+
 @Composable
 private fun SiteSummary(s: Site) {
     SectionCard(s.label) {
@@ -245,6 +265,7 @@ private fun SiteSummary(s: Site) {
         if (!s.online && s.cause.isNotBlank()) Text(s.cause, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         LabeledValue("Flats", "${s.accounts.total} (${s.accounts.active} active, ${s.accounts.expired} expired, ${s.accounts.suspended} suspended)")
         s.tunnel.handshakeAgeS?.let { LabeledValue("Tunnel handshake", "$it s ago") }
+        RemoteWinbox(s)
         s.uptime30dPct?.let { LabeledValue("Uptime, 30 days", String.format(Locale.US, "%.2f%%", it)) }
         LabeledValue("Open alerts", s.openAlerts.toString())
         s.provision?.let { p ->

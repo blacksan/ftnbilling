@@ -203,6 +203,10 @@ data class Site(
     @SerialName("pppoe_pass_set") val pppoePassSet: Boolean = false,
     @SerialName("lan_ports") val lanPorts: String = "",
     @SerialName("lan_subnet") val lanSubnet: String = "",
+    /** The router's address inside the WireGuard tunnel; empty until it has fetched its script. */
+    @SerialName("tunnel_address") val tunnelAddress: String = "",
+    /** True only when the router reported being built with remote WinBox for the current management subnet. */
+    @SerialName("mgmt_winbox") val mgmtWinbox: Boolean = false,
     @SerialName("olt_interface") val oltInterface: String = "",
     @SerialName("vlan_id") val vlanId: Int = 0,
     @SerialName("customer_subnet") val customerSubnet: String = "",
