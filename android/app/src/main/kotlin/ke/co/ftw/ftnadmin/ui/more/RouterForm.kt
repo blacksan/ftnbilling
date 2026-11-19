@@ -49,6 +49,7 @@ object RouterField {
 
 /** Labels and hints of the port fields (one place, so the form and its test agree). */
 object RouterFormCopy {
+    const val OLT_CONFIRM = "Customers on the OLT lose service until the OLT uses the new setting."
     const val OLT_LABEL = "OLT uplink port"
     const val OLT_HINT = "The port the OLT is plugged into: an SFP port (sfp-sfpplus1) or an Ethernet port (for example ether3)."
     const val CUSTOMER_PORT_LABEL = "Customer port (extra)"
@@ -88,7 +89,11 @@ data class RouterForm(
     val wanCap: String = "",
     val supportPhone: String = "",
 ) {
-    fun toInput() = RouterInput(
+    /** True when the OLT port or the VLAN differs from [original]: the server then needs a confirm on a set-up router. */
+    fun changesOlt(original: RouterForm): Boolean =
+        oltInterface.trim() != original.oltInterface.trim() || (vlan.toIntOrNull() ?: 0) != (original.vlan.toIntOrNull() ?: 0)
+
+    fun toInput(confirm: Boolean = false) = RouterInput(
         name = name,
         wanInterface = wanInterface,
         wanMode = wanMode,
@@ -106,6 +111,7 @@ data class RouterForm(
         benchPort = benchPort,
         wanCapMbps = wanCap.toIntOrNull(),
         supportPhone = supportPhone,
+        confirm = confirm,
     )
 
     companion object {

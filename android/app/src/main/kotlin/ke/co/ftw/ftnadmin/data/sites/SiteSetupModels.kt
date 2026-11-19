@@ -102,6 +102,14 @@ data class Checks(
     val summary: ChecksSummary = ChecksSummary(),
     @SerialName("join_report") val joinReport: JoinReport? = null,
     val items: List<CheckItem> = emptyList(),
+    @SerialName("auto_fixes") val autoFixes: AutoFixes? = null,
+)
+
+/** Whether the server's automatic fixes of this router are paused (owner toggle), and until when. */
+@Serializable
+data class AutoFixes(
+    val paused: Boolean = false,
+    val until: String? = null,
 )
 
 @Serializable

@@ -49,6 +49,13 @@ class RouterPortFieldsTest {
         assertEquals(listOf("ether1", "ether3", "sfp-sfpplus1", "combo1"), portChoices(list))
     }
 
+    @Test fun theChecklistReadsTheAutoFixPause() {
+        val json = Json { ignoreUnknownKeys = true }
+        val c = json.decodeFromString<ke.co.ftw.ftnadmin.data.sites.Checks>("""{"items":[],"auto_fixes":{"paused":true,"until":"2026-11-20T08:00:00Z"}}""")
+        assertTrue(c.autoFixes!!.paused)
+        assertNull(json.decodeFromString<ke.co.ftw.ftnadmin.data.sites.Checks>("""{"items":[]}""").autoFixes)
+    }
+
     @Test fun checkCardHidesBlankEvidenceAndTheButtonOfAutoFixes() {
         val blank = CheckItem(id = "a", status = CheckStatus.WARN, evidence = listOf("", "  ", "\t"))
         assertTrue(blank.shownEvidence.isEmpty())

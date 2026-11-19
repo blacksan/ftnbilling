@@ -21,6 +21,15 @@ class SiteSetupRepository(private val api: ApiClient) {
         body = buildJsonObject { if (confirm) put("confirm", true) },
     )
 
+    /** Owner only. Pauses (optionally until an RFC 3339 time) or resumes the server's automatic fixes of a router. */
+    suspend fun pauseAutoFixes(routerId: String, paused: Boolean, until: String? = null): AutoFixes = api.post(
+        "routers", routerId, "actions", "pause-auto-fixes",
+        body = buildJsonObject {
+            put("paused", paused)
+            if (paused && until != null) put("until", until)
+        },
+    )
+
     suspend fun joinCommand(siteId: String): JoinCommand = api.post("routers", siteId, "join-command")
 
     /** The four derived setup steps; the server only reads its own state and cached checks. */
