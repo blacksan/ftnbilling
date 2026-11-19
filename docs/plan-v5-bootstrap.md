@@ -84,6 +84,7 @@ Firewall (script owns the whole table, top to bottom, no FastTrack so queues app
 - Forward: walled rules from `ipoeRuleSet`; accept est/rel; drop invalid; drop `wg-ftn` in/out; isolate flats; accept `LAN`→`WAN`; accept `LAN`→customers (OLT mgmt); accept customers→`WAN`; drop rest.
 - NAT: `ftn: customer masquerade` and `ftn: lan masquerade` out `WAN`; walled DNS redirect and HTTP→payment-page dst-nat from `ipoeRuleSet`.
 - Nothing opened on WAN (router is the WireGuard initiator).
+- Never unfiltered on a re-paste: section 6 first adds `ftn: hold` at the top of the filter table (drop new and invalid input from `WAN`), then removes the old `ftn:` rules except the hold, adds the new rule set, and removes the hold last. If a rule fails, the section stops with the hold still in place, so the router stays closed.
 No secrets printed or reported; `sanitizeReport` stays. Golden test per WAN mode.
 
 ### After the join

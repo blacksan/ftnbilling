@@ -444,7 +444,7 @@ func (s *Service) LiveFacts(siteID string) SiteCountsLive {
 }
 
 // ResyncSite starts a full router sync for one router in the background: the
-// IPoE reconcile (a no-op for a hotspot router), the queued per-account tasks
+// reconcile, the queued per-account tasks
 // and a refresh of the device list. It does not wait for the router.
 func (s *Service) ResyncSite(siteID string) error {
 	if _, ok := s.site(siteID); !ok {

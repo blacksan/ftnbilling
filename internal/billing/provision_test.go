@@ -59,26 +59,9 @@ const (
 	macC  = "AA:BB:CC:DD:EE:A3"
 )
 
-// ipoe puts building A in an IPoE mode and gives its router the ftn-dhcp
-// server the join script's cutover creates.
-func (e *env) ipoe(t *testing.T, mode string) {
-	t.Helper()
-	e.setMode(t, e.site, mode)
-	e.rt.SeedRow("/ip/dhcp-server", routeros.Row{"name": DHCPServerName, "interface": "br-hotspot", "disabled": "false"})
-	e.rt.ResetWrites()
-}
-
-func (e *env) setMode(t *testing.T, site, mode string) {
-	t.Helper()
-	if err := e.st.Update(func(d *store.Data) error {
-		s := d.Sites[site]
-		s.AccessMode = mode
-		d.Sites[site] = s
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
+// ipoe is kept so the tests read the same: every building is IPoE and addSite
+// already gave its router the ftn-dhcp server.
+func (e *env) ipoe(t *testing.T, _ string) { t.Helper() }
 
 func (e *env) reconcile(t *testing.T) ProvisionRun {
 	t.Helper()
@@ -425,8 +408,16 @@ func TestAdoptLeasesAndAddressReuse(t *testing.T) {
 	a := e.flat(t, "Flat 1", macA)
 	b := e.flat(t, "Flat 2", macB2)
 	e.flat(t, "Flat 3", macC)
+	// These flats were registered before the router was reachable: no address yet.
+	e.st.Update(func(d *store.Data) error {
+		for id, x := range d.Accounts {
+			x.IP = ""
+			d.Accounts[id] = x
+		}
+		return nil
+	})
 	// Flat 1 holds .23, inside the unregistered pool (.10-.59): it must not keep it.
-	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": macA, "active-address": "10.5.50.23", "address": "10.5.50.23", "status": "bound", "dynamic": "true", "server": "dhcp-hotspot"})
+	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": macA, "active-address": "10.5.50.23", "address": "10.5.50.23", "status": "bound", "dynamic": "true", "server": "dhcp-other"})
 	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": macB2, "active-address": "10.5.50.74", "address": "10.5.50.74", "status": "bound", "dynamic": "true"})
 	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": "00:11:22:33:44:99", "address": "10.5.50.80", "status": "bound", "dynamic": "true"})
 	res, err := e.svc.AdoptLeases(context.Background(), e.site)
@@ -491,8 +482,6 @@ func TestFreeIPAvoidsForeignStaticLeaseAddresses(t *testing.T) {
 func TestMoveAccountReallocatesAddress(t *testing.T) {
 	e := newEnv(t)
 	b, _ := e.addSite(t, "Block B")
-	e.setMode(t, e.site, store.AccessIPoE)
-	e.setMode(t, b, store.AccessIPoE)
 	a := e.flat(t, "Flat 1", macA)
 	other := e.flatAt(t, b, "Flat X", macC)
 	if a.IP != "10.5.50.60" || other.IP != "10.5.50.60" {

@@ -14,17 +14,7 @@ type noRouter struct{}
 // NoRouter returns a Client whose every call fails with ErrNoRouter.
 func NoRouter() Client { return noRouter{} }
 
-func (noRouter) Ping(context.Context) error                   { return ErrNoRouter }
-func (noRouter) EnsureProfile(context.Context, Profile) error { return ErrNoRouter }
-func (noRouter) EnsureUser(context.Context, User) error       { return ErrNoRouter }
-func (noRouter) RemoveUser(context.Context, string) error     { return ErrNoRouter }
-func (noRouter) RemoveProfile(context.Context, string) error  { return ErrNoRouter }
-func (noRouter) KickUser(context.Context, string) error       { return ErrNoRouter }
-func (noRouter) Login(context.Context, string, string, string, string) error {
-	return ErrNoRouter
-}
-func (noRouter) Hosts(context.Context) ([]Host, error)               { return nil, ErrNoRouter }
-func (noRouter) ActiveSessions(context.Context) ([]Session, error)   { return nil, ErrNoRouter }
+func (noRouter) Ping(context.Context) error                          { return ErrNoRouter }
 func (noRouter) SimpleQueues(context.Context) ([]SimpleQueue, error) { return nil, ErrNoRouter }
 func (noRouter) Interfaces(context.Context) ([]Iface, error)         { return nil, ErrNoRouter }
 func (noRouter) DNSCache(context.Context) ([]DNSEntry, error)        { return nil, ErrNoRouter }
@@ -47,3 +37,6 @@ func (noRouter) AddRow(context.Context, string, map[string]string) (string, erro
 }
 func (noRouter) SetRow(context.Context, string, string, map[string]string) error { return ErrNoRouter }
 func (noRouter) RemoveRow(context.Context, string, string) error                 { return ErrNoRouter }
+func (noRouter) RowsProps(context.Context, string, map[string]string, []string) ([]Row, error) {
+	return nil, ErrNoRouter
+}

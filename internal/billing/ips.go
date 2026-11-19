@@ -28,14 +28,6 @@ type layoutSource interface {
 	Effective(store.Site) store.Site
 }
 
-// IPoE reports whether the reconciler owns the building's router. From v5
-// every router joined over WireGuard is IPoE (the Hotspot is gone); the access
-// mode column only keeps the single value "ipoe". This function goes away with
-// the last hotspot code.
-func IPoE(s store.Site) bool {
-	return s.Mode == store.SiteModeWG || s.AccessMode == store.AccessIPoE || s.AccessMode == store.AccessIPoEObserve
-}
-
 // PlanFor is the address plan of a building's customer subnet.
 func (s *Service) PlanFor(site store.Site) (netplan.Plan, error) {
 	if ls, ok := s.routers.(layoutSource); ok {
@@ -272,7 +264,7 @@ func (s *Service) EnqueueSite(siteID, reason string) {
 		n := 0
 		for _, a := range d.AccountList() {
 			if a.SiteID == siteID {
-				s.enqueueLocked(d, a, false, reason)
+				s.enqueueLocked(d, a, reason)
 				n++
 			}
 		}
@@ -296,5 +288,4 @@ func (s *Service) ForgetSite(siteID string) {
 	ps.started = time.Time{}
 	ps.foreign = nil
 	ps.sawOn = false
-	ps.routerUsers = nil
 }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"ispbill/internal/routeros"
 	"ispbill/internal/store"
 )
 
@@ -30,45 +29,6 @@ func (s *Service) SeedPackages() error {
 		}
 		return nil
 	})
-}
-
-// SyncProfiles creates/updates one router profile per package on the
-// building's router. Every package that is not deleted is pushed, hidden or
-// not, because an admin can still assign it.
-func (s *Service) SyncProfiles(ctx context.Context, siteID string) error {
-	var pkgs []store.Package
-	s.st.View(func(d *store.Data) { pkgs = d.PackageList() })
-	state := s.state(siteID)
-	state.profilesOK.Store(false)
-	rt := s.router(siteID)
-	for _, p := range pkgs {
-		if err := rt.EnsureProfile(ctx, routeros.Profile{Name: p.Profile(), RateLimit: p.RateLimit(), SharedUsers: 1}); err != nil {
-			return fmt.Errorf("profile %s: %w", p.Profile(), err)
-		}
-	}
-	state.profilesOK.Store(true)
-	return nil
-}
-
-// syncAllSites marks every building's profiles as out of date and starts a
-// background sync per building (15 s limit each). It never blocks the caller.
-func (s *Service) syncAllSites(then func(ctx context.Context, siteID string)) {
-	for _, id := range s.runnableSites() {
-		s.state(id).profilesOK.Store(false)
-		s.bg.Add(1)
-		go func() {
-			defer s.bg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			if then != nil {
-				then(ctx, id)
-				return
-			}
-			if err := s.SyncProfiles(ctx, id); err != nil {
-				s.log.Warn("profile push failed; will retry", "site", id, "err", err)
-			}
-		}()
-	}
 }
 
 // ErrPriceCollision is returned when two enabled packages would cost the same
@@ -163,7 +123,7 @@ func (s *Service) SavePackage(ctx context.Context, p store.Package) (store.Packa
 	if err != nil {
 		return p, err
 	}
-	s.syncAllSites(nil)
+	s.ResyncAll()
 	return p, nil
 }
 
@@ -258,4 +218,21 @@ func Remaining(t, now time.Time) string {
 		return fmt.Sprintf("%d h %d min", m/60, m%60)
 	}
 	return fmt.Sprintf("%d min", m+1)
+}
+
+// ResyncAll starts a router reconcile per building in the background
+// (15 s limit each), so a changed package speed reaches the flats' queues. It
+// never blocks the caller; the sweeper retries a failed pass.
+func (s *Service) ResyncAll() {
+	for _, id := range s.runnableSites() {
+		s.bg.Add(1)
+		go func() {
+			defer s.bg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if _, err := s.ReconcileSite(ctx, id); err != nil {
+				s.log.Warn("router reconcile after a package change failed; will retry", "site", id, "err", err)
+			}
+		}()
+	}
 }

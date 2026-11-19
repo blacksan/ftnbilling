@@ -324,19 +324,19 @@
   $$("form[data-ajax=router]").forEach(function (f) { ajaxForm(f, "router"); });
 
   /* ---- join progress (Add router, router page) ------------------------------------------------ */
-  function joinText(r) {
-    if (r.rest_ok && (r.joined || r.token === "used")) return ["Connected. The server is setting the router up.", true];
-    if (r.handshake) return ["Tunnel is up. Waiting for the router's API…", false];
-    if (r.token === "used") return ["The router ran the line. Waiting for the tunnel…", false];
-    if (r.refused_ua) return ["The line was fetched by something that is not a RouterOS router. Paste it in the router's terminal.", false];
-    if (r.token === "expired") return ["The line expired. Make a new one.", false];
-    return ["Waiting for the router to run the line", false];
+  // The wording of the derived setup state (GET /admin/routers/setup.json). done: the router is ready.
+  function joinText(j) {
+    if (j.state === "ready") return ["Ready. The router is set up and every check is green.", true];
+    var na = j.next_action || {};
+    if (j.state === "not_started" && j.join && j.join.state === "waiting") return ["Waiting for the line to be pasted on the router", false];
+    if (na.text) return [na.text, false];
+    return ["Waiting for the router", false];
   }
   function pollJoin(scope, id) {
     var txt = $("[data-join-text]", scope), spin = $("[data-join-spin]", scope), n = 0;
     if (!txt) return;
     (function tick() {
-      getJSON("/admin/routers/status.json?id=" + enc(id)).then(function (r) {
+      getJSON("/admin/routers/setup.json?id=" + enc(id)).then(function (r) {
         var t = joinText(r); txt.textContent = t[0];
         if (t[1]) { if (spin) { spin.className = ""; spin.textContent = "✓"; } return; }
         if (++n < 400) setTimeout(tick, 3000);
@@ -344,6 +344,14 @@
     })();
   }
   $$("[data-join-poll]").forEach(function (b) { pollJoin(b, b.getAttribute("data-join-poll")); });
+
+  /* ---- router form: show the fields of the chosen WAN mode ------------------------------------------ */
+  $$("[data-wan-form]").forEach(function (box) {
+    var sel = $("[data-wan-mode]", box);
+    if (!sel) return;
+    var sync = function () { $$("[data-wan-only]", box).forEach(function (x) { x.hidden = x.getAttribute("data-wan-only") !== sel.value; }); };
+    sel.addEventListener("change", sync); sync();
+  });
 
   /* ---- Live now ------------------------------------------------------------------------------------- */
   function bps(v) {
@@ -404,10 +412,6 @@
           var ul = el("ul", "ev"); it.evidence.slice(0, 12).forEach(function (x) { ul.appendChild(el("li", "", x)); }); dt.appendChild(ul); body.appendChild(dt);
         }
         var fx = it.fix || {};
-        if (fx.kind === "manual" && fx.command) {
-          var c = el("code", "cmd", fx.command); body.appendChild(c);
-          var cp = el("button", "btn ghost sm", "Copy command"); cp.type = "button"; cp.setAttribute("data-copy", fx.command); cp.style.marginTop = "6px"; body.appendChild(cp);
-        }
         li.appendChild(body);
         if ((fx.kind === "auto" || fx.kind === "confirm") && it.status !== "ok" && it.status !== "info") {
           var wrap = el("div", "fix"), b = el("button", "btn sm", fx.label || "Fix"); b.type = "button";
@@ -433,79 +437,57 @@
     var rc = $("[data-recheck]", setup); if (rc) rc.addEventListener("click", function () { loadChecks(true); });
     loadChecks(false);
 
-    // The provisioning job (W5c): /admin/routers/setup.json draws the stepper, the next action
-    // and the two buttons the job allows (Start migration with the router name typed, Roll back
-    // now). There is no confirm button: the server keeps or rolls back a migration on evidence.
-    var jobBox = $("[data-job]", setup), rname = setup.getAttribute("data-name") || "", isOwner = setup.hasAttribute("data-owner");
-    var STATE_TEXT = { fixing: "Fixing\u2026", checking: "Checking the router\u2026", staging: "Getting ready\u2026", building: "Building the network\u2026",
-      arming: "Arming the safety net\u2026", switching: "Switching customers over\u2026", verifying: "Checking that every flat is back online\u2026",
-      rolling_back: "Rolling back\u2026", live: "Live", rolled_back: "Rolled back to how it was", waiting_router: "Waiting for the router to join" };
-    var ROLLBACK_STATES = { arming: 1, switching: 1, verifying: 1 };
-    var MARKS = { ok: "\u2713", failed: "\u00d7", skipped: "\u2013", running: "", pending: "" };
-    var postJob = function (path, data, okMsg) {
-      return postForm("/admin/routers/setup/" + path, data).then(function (r) {
-        if (r.__status >= 200 && r.__status < 300) { if (okMsg) toast(okMsg); } else toast(r.error || "That did not work.", true);
-        loadJob(true);
+    // The four set-up steps are derived by the server (GET /admin/routers/setup.json): the router
+    // fetched the script, the tunnel is up, the server can log in, the checks are green. The view
+    // is drawn on the server too; this keeps it fresh every few seconds until the router is ready.
+    var rname = setup.getAttribute("data-name") || "";
+    var view = $("[data-setup-view]", setup), stateEl = $("[data-setup-state]", setup);
+    var MARKS = { ok: "\u2713", failed: "\u00d7" };
+    var drawSetup = function (j) {
+      if (!view || !j || !j.steps) return;
+      view.textContent = "";
+      var na = j.next_action || {}, ready = j.state === "ready";
+      var tone = ready ? "ok" : j.last_error ? "bad" : "";
+      var nx = el("div", "next-action" + (tone ? " " + tone : "")); nx.setAttribute("role", "status"); nx.setAttribute("data-next-kind", na.kind || "none");
+      nx.appendChild(el("b", "", ready ? "Ready" : (na.text || "")));
+      if (j.last_error) nx.appendChild(el("span", "", j.last_error));
+      view.appendChild(nx);
+      var ol = el("ol", "steps");
+      j.steps.forEach(function (st) {
+        var cls = st.status === "ok" ? "done" : st.status === "running" ? "now" : st.status === "failed" ? "fail" : "";
+        var li = el("li", cls); li.setAttribute("data-step-key", st.key || "");
+        li.appendChild(el("span", "dot", MARKS[st.status] || String(st.n)));
+        var d = el("div"); d.appendChild(el("b", "", st.title || st.key || "")); if (st.detail) d.appendChild(el("span", "", st.detail)); li.appendChild(d); ol.appendChild(li);
       });
+      view.appendChild(ol);
+      if (stateEl) { stateEl.textContent = j.state; stateEl.className = "pill " + (ready ? "live" : "waiting"); }
+      return ready;
     };
-    var loadJob = function (force) {
-      if (!force && jobBox.contains(doc.activeElement) && doc.activeElement.tagName === "INPUT") return; // do not wipe what is being typed
+    var setupReady = null;
+    var loadSetup = function () {
       getJSON("/admin/routers/setup.json?id=" + enc(rid)).then(function (j) {
-        if (j.__status !== 200 || (!j.state && !j.steps)) return;
-        var typed = $("[data-migrate-name]", jobBox), keep = $("[data-keep-unknown]", jobBox);
-        var typedV = typed ? typed.value : "", keepV = keep ? keep.checked : false;
-        jobBox.textContent = "";
-        var na = j.next_action || {}, text = na.text || STATE_TEXT[j.state] || "";
-        if (j.state === "live") text = "Live";
-        if (text) {
-          var tone = j.state === "live" ? "ok" : (j.state === "failed" || j.state === "rolled_back" || na.kind === "fix") ? "bad" : "";
-          var nx = el("div", "next-action" + (tone ? " " + tone : "")); nx.setAttribute("role", "status"); nx.setAttribute("data-next-kind", na.kind || "none");
-          nx.appendChild(el("b", "", text));
-          if (j.last_error && j.last_error !== text) nx.appendChild(el("span", "", j.last_error));
-          jobBox.appendChild(nx);
-        }
-        var meta = [];
-        if (j.state) meta.push("State: " + String(j.state).replace(/_/g, " "));
-        if (j.seconds_left > 0) meta.push("rolls back by itself in " + (j.seconds_left >= 90 ? Math.ceil(j.seconds_left / 60) + " min" : j.seconds_left + " s") + " if a flat does not come back");
-        var ev = j.evidence || {};
-        if (ev.flats_required > 0) meta.push(ev.flats_bound + " of " + ev.flats_required + " flats back on the new network");
-        if (meta.length) jobBox.appendChild(el("p", "muted", meta.join(". ") + "."));
-        var steps = j.steps || [];
-        if (steps.length) {
-          var ol = el("ol", "steps");
-          steps.forEach(function (st) {
-            var cls = st.status === "ok" ? "done" : st.status === "running" ? "now" : st.status === "failed" ? "fail" : "";
-            var li = el("li", cls); li.setAttribute("data-step-key", st.key || "");
-            li.appendChild(el("span", "dot", st.status === "pending" || st.status === "running" ? String(st.n) : (MARKS[st.status] || String(st.n))));
-            var d = el("div"); d.appendChild(el("b", "", st.title || st.key || "")); if (st.detail) d.appendChild(el("span", "", st.detail)); li.appendChild(d); ol.appendChild(li);
-          });
-          jobBox.appendChild(ol);
-        }
-        var act = el("div", "row"); act.style.marginTop = "12px";
-        if (!isOwner) { if (j.state === "ready" || na.kind === "migrate" || na.kind === "retry" || na.kind === "fix") jobBox.appendChild(el("p", "muted", "Only an owner can start or roll back a set-up.")); return; }
-        if ((na.kind === "retry" || na.kind === "fix") && j.state !== "waiting_router" && j.state !== "rolling_back") {
-          var rn = el("button", "btn", "Run set-up"); rn.type = "button"; rn.onclick = function () { rn.disabled = true; postJob("run", { id: rid }); }; act.appendChild(rn);
-        }
-        if (na.kind === "migrate" || j.state === "ready") {
-          var box = el("div", "migrate");
-          box.appendChild(el("p", "", "Type the router name to start the migration. The server keeps it if every flat comes back, and rolls it back if not."));
-          var inp = el("input"); inp.setAttribute("data-migrate-name", ""); inp.placeholder = rname; inp.autocomplete = "off"; inp.setAttribute("aria-label", "Router name"); inp.value = typedV;
-          var m = el("button", "btn", "Start migration"); m.type = "button"; m.disabled = inp.value.trim() !== rname;
-          inp.addEventListener("input", function () { m.disabled = inp.value.trim() !== rname; });
-          m.onclick = function () { m.disabled = true; postJob("migrate", { id: rid, confirm_name: inp.value.trim(), keep_unknown: kp.checked ? "1" : "" }, "Migration started."); };
-          var lb = el("label", "ck"), kp = el("input"); kp.type = "checkbox"; kp.setAttribute("data-keep-unknown", ""); kp.checked = keepV; lb.appendChild(kp); lb.appendChild(doc.createTextNode(" Keep devices the server does not know"));
-          var rowm = el("div", "row"); rowm.appendChild(inp); rowm.appendChild(m); box.appendChild(rowm); if (j.live_devices > 0) box.appendChild(lb);
-          jobBox.appendChild(box);
-        }
-        if (ROLLBACK_STATES[j.state]) {
-          var rb = el("button", "btn danger", "Roll back now"); rb.type = "button";
-          rb.onclick = function () { askName("Roll back now?", "The router goes back to how it was before the switch within about 30 seconds. Type the router name to confirm.", "Roll back").then(function (nm) { if (nm != null) postJob("rollback", { id: rid, confirm_name: nm }, "Rolling back."); }); };
-          act.appendChild(rb);
-        }
-        if (act.childNodes.length) jobBox.appendChild(act);
+        if (j.__status !== 200) return;
+        var now = !!drawSetup(j);
+        if (setupReady === false && now) loadChecks(false);
+        setupReady = now;
       }).catch(function () {});
     };
-    if (jobBox) { loadJob(true); setInterval(function () { if (!doc.hidden) loadJob(false); }, 4000); }
+    if (view) { loadSetup(); setInterval(function () { if (!doc.hidden) loadSetup(); }, 4000); }
+
+    // Reset router (owner): the server forgets the router's keys and join state; the router itself
+    // is rebuilt by the next line. The router name is typed to confirm.
+    var rf = $("[data-reset-router]", setup);
+    if (rf) rf.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var typed = $("[name=confirm_name]", rf).value.trim();
+      askName("Reset this router?", "The server forgets its tunnel and login. Flats stay. You will make a new line and paste it on the router. Type the router name to confirm.", "Reset router", rname).then(function (nm) {
+        if (nm == null) return;
+        postForm("/admin/routers/setup/reset", { id: rid, confirm_name: nm || typed }).then(function (r) {
+          if (r.__status >= 200 && r.__status < 300) { toast("Router reset. Make a new line."); location.href = "/admin/routers/view?id=" + enc(rid) + "&tab=setup"; }
+          else toast(r.error || "That did not work.", true);
+        });
+      });
+    });
   }
 
   /* ---- router page: live tabs refresh in place ------------------------------------------------------ */

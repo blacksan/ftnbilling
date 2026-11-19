@@ -60,12 +60,9 @@ func newSetRig(t *testing.T) *setRig {
 	cfg.FlowEvery, cfg.PortEvery, cfg.PingEvery, cfg.DNSEvery, cfg.SaveEvery = time.Hour, time.Hour, time.Hour, time.Hour, time.Hour
 	st, _ := storetest.Open(t, cfg.DataDir)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	envID, err := sites.Bootstrap(cfg, st, log)
-	if err != nil {
-		t.Fatal(err)
-	}
+	envID := seedSite(t, st, "Block A")
 	var svc *billing.Service
-	mgr := sites.New(sites.Options{Cfg: cfg, Store: st, Log: log, Dir: func(id string) metrics.Directory { return svc.Directory(id) }})
+	mgr := sites.New(sites.Options{Cfg: cfg, Store: st, Log: log, DataKey: cfg.DataKey, Dir: func(id string) metrics.Directory { return svc.Directory(id) }})
 	svc = billing.NewService(st, mgr, log)
 	svc.SeedPackages()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -251,7 +248,7 @@ func TestToolsConsolePolicy(t *testing.T) {
 		}
 		return string(b)
 	}
-	if out := run(url.Values{"cmd": {"/ip/address/print"}}); !strings.Contains(out, "bridge-hotspot") {
+	if out := run(url.Values{"cmd": {"/ip/address/print"}}); !strings.Contains(out, "br-customers") {
 		t.Fatalf("read-only command did not run: %s", out)
 	}
 	if out := run(url.Values{"cmd": {"/user/print"}}); !strings.Contains(out, "not allowed") {
@@ -323,7 +320,7 @@ func TestToolsNeverBuildScriptsFromInput(t *testing.T) {
 		t.Fatalf("ping ran a script on the router: %v", r.rt.Executed[n:])
 	}
 	for _, cmd := range []string{`:put "$[/system reset-configuration]"`, `:put [/interface wireguard get wg0 private-key]`, `:global f [:parse ":put 1"]; $f`,
-		"$f", "/system reset-configuration", "/ping 8.8.8.8 count=1; /user add name=x", "/interface wireguard get wg0 private-key", "/ip hotspot user print where password=x"} {
+		"$f", "/system reset-configuration", "/ping 8.8.8.8 count=1; /user add name=x", "/interface wireguard get wg0 private-key", "/ip firewall filter remove [find]"} {
 		resp := r.do("POST", "/admin/tools/console", url.Values{"site": {r.site.ID}, "cmd": {cmd}, "confirm_site": {r.site.Name}, "current_password": {pw}}, pw)
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -362,7 +359,7 @@ func TestToolsNeverBuildScriptsFromInput(t *testing.T) {
 		if !strings.Contains(m, r.site.Name) || !strings.Contains(m, "bytes") {
 			t.Errorf("audit line lacks building or size: %s", m)
 		}
-		if strings.Contains(m, "bridge-hotspot") {
+		if strings.Contains(m, "br-customers") {
 			t.Errorf("audit line holds output: %s", m)
 		}
 	}

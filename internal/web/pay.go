@@ -122,6 +122,7 @@ func (s *Server) payRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /pay", s.payHome)
 	mux.HandleFunc("POST /pay/find", s.payFind)
 	mux.HandleFunc("POST /pay/start", s.payStart)
+	mux.HandleFunc("POST /pay/voucher", s.payVoucher)
 }
 
 // payPage is everything the public payment page shows. It never carries a
@@ -300,6 +301,24 @@ func (s *Server) payChoose(w http.ResponseWriter, r *http.Request, p payPage, a 
 	s.render(w, "pay", p)
 }
 
+// payFormAccount finds the open account a pay form is about: the signed token
+// of the package step, or the account code. Only open accounts can pay: a
+// closed or deleted one is refused.
+func (s *Server) payFormAccount(r *http.Request) (a store.Account, byCode, ok bool) {
+	if id, tok := payTokenAccount(r.FormValue("tok"), s.svc.Now()); tok {
+		a, ok = s.svc.GetAccount(id)
+	} else if c := strings.ToUpper(strings.TrimSpace(r.FormValue("code"))); c != "" && len(c) <= 40 {
+		a, ok = s.svc.AccountByCode(c)
+		byCode = true
+	}
+	if ok {
+		if open, found := s.svc.AccountByCode(a.Code); !found || open.ID != a.ID {
+			ok = false
+		}
+	}
+	return a, byCode, ok
+}
+
 // payStart creates the order and sends the M-Pesa prompt to the phone.
 func (s *Server) payStart(w http.ResponseWriter, r *http.Request) {
 	p := s.payBase(r)
@@ -312,19 +331,7 @@ func (s *Server) payStart(w http.ResponseWriter, r *http.Request) {
 		s.payFail(w, r, http.StatusTooManyRequests, p, "Too many attempts. Wait a few minutes and try again.")
 		return
 	}
-	var a store.Account
-	var ok, byCode bool
-	if id, tok := payTokenAccount(r.FormValue("tok"), s.svc.Now()); tok {
-		a, ok = s.svc.GetAccount(id)
-	} else if c := strings.ToUpper(strings.TrimSpace(r.FormValue("code"))); c != "" && len(c) <= 40 {
-		a, ok = s.svc.AccountByCode(c)
-		byCode = true
-	}
-	if ok { // only open accounts can pay: a closed or deleted one is refused explicitly
-		if open, found := s.svc.AccountByCode(a.Code); !found || open.ID != a.ID {
-			ok = false
-		}
-	}
+	a, byCode, ok := s.payFormAccount(r)
 	if !ok {
 		s.payFail(w, r, http.StatusNotFound, p, "We could not find that account. Please start again, or call "+p.Support+".")
 		return
@@ -365,4 +372,45 @@ func (s *Server) payStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/portal/wait?order="+o.ID, http.StatusSeeOther)
+}
+
+// payVoucher redeems a prepaid voucher for the account the visitor named. A
+// voucher made for one building is refused at every other building, and the
+// answer for a wrong, used or foreign voucher is the same.
+func (s *Server) payVoucher(w http.ResponseWriter, r *http.Request) {
+	p := s.payBase(r)
+	if !payCSRFOK(r) {
+		s.payFail(w, r, http.StatusForbidden, p, payExpired)
+		return
+	}
+	ip := limitKey(realIP(r))
+	if !payStartLimiter(p).allow(ip) {
+		s.payFail(w, r, http.StatusTooManyRequests, p, "Too many attempts. Wait a few minutes and try again.")
+		return
+	}
+	a, byCode, ok := s.payFormAccount(r)
+	if !ok {
+		s.payFail(w, r, http.StatusNotFound, p, "We could not find that account. Please start again, or call "+p.Support+".")
+		return
+	}
+	if !payAcctRL.allow("voucher|" + ip + "|" + a.ID) {
+		s.payFail(w, r, http.StatusTooManyRequests, p, "Too many attempts. Wait a few minutes and try again.")
+		return
+	}
+	again := func(code int, msg string) { s.payChoose(w, r, p, a, byCode, code, msg, "") }
+	v, err := s.svc.LookupVoucher(r.FormValue("voucher"))
+	if err != nil || (v.SiteID != "" && v.SiteID != a.SiteID) {
+		again(http.StatusBadRequest, "That voucher is invalid or already used.")
+		return
+	}
+	o, err := s.svc.CreateOrder(billing.OrderInput{AccountID: a.ID, PackageID: v.PackageID, Method: "voucher", VoucherCode: v.Code})
+	if err != nil {
+		again(http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.providers["voucher"].Start(r.Context(), o); err != nil {
+		again(http.StatusBadRequest, "That voucher is invalid or already used.")
+		return
+	}
+	http.Redirect(w, r, "/portal/success?order="+o.ID, http.StatusSeeOther)
 }

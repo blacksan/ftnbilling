@@ -39,12 +39,12 @@ func TestVendorLookup(t *testing.T) {
 
 func TestIPoEPassCollectsUnknownMACsFromLeasesAndARP(t *testing.T) {
 	e := newEnv(t)
-	e.ipoe(t, store.AccessIPoEObserve)
+	e.ipoe(t, store.AccessIPoE)
 	a := e.flat(t, "Flat 1", macA)
 	_ = a
 	e.dynLease(macHuawei, "10.5.50.11", "HG8010H", "bound")
 	e.dynLease(macPhone, "10.5.50.12", "Pixel", "waiting")
-	e.rt.SeedRow("/ip/arp", routeros.Row{"mac-address": macNew, "address": "10.5.50.13", "interface": "br-hotspot", "status": "reachable"})
+	e.rt.SeedRow("/ip/arp", routeros.Row{"mac-address": macNew, "address": "10.5.50.13", "interface": "br-customers", "status": "reachable"})
 	e.rt.SeedRow("/ip/arp", routeros.Row{"mac-address": "00:15:EB:00:00:09", "address": "10.5.50.14", "status": "stale"})
 	e.rt.SeedRow("/ip/arp", routeros.Row{"mac-address": "00:15:EB:00:00:0A", "address": "192.168.99.5", "status": "reachable"}) // other network: ignored
 	e.reconcile(t)

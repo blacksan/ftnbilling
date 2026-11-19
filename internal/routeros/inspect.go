@@ -175,13 +175,6 @@ func (m *Mock) pathErrLocked(path string) error {
 	return m.failPaths[cleanPath(path)]
 }
 
-// AddHostRow adds a hotspot host with every field as given (authorised or not).
-func (m *Mock) AddHostRow(h Host) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.hosts = append(m.hosts, h)
-}
-
 // ---- NoRouter --------------------------------------------------------------
 
 func (noRouter) One(context.Context, string) (Row, error) { return nil, ErrNoRouter }

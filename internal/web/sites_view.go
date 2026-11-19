@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"ispbill/internal/billing"
 	"ispbill/internal/metrics"
+	"ispbill/internal/routeros"
 	"ispbill/internal/sites"
 	"ispbill/internal/store"
 )
@@ -37,18 +37,27 @@ func (s *Server) joinLines(st store.Site) (cmd, nocheck string, exp time.Time, e
 // ---- list -----------------------------------------------------------------------------------
 
 type rtRow struct {
-	S                      store.Site
-	State                  string // up | down | paused | waiting
-	Mode, Setup, SetupTone string
-	Flats, Active, Online  int
-	WAN, Tunnel, Seen      string
-	WANPct                 float64
-	Attention              bool
-	Detail                 string
+	S                     store.Site
+	State                 string // up | down | paused | waiting
+	Setup, SetupTone      string // the setup view's state: not_started, waiting_router, online, ready (or paused)
+	Flats, Active, Online int
+	WAN, Tunnel, Seen     string
+	WANPct                float64
+	Attention             bool
+	Detail                string
 }
 
-func modeLabel(st store.Site) string {
-	return "Server-driven"
+// setupLabel is how the setup view's state reads in the router list.
+func setupLabel(state string) (label, tone string) {
+	switch state {
+	case sites.StateReady:
+		return "Ready", "live"
+	case sites.StateOnline:
+		return "Checking", "waiting"
+	case sites.StateWaitingRouter:
+		return "Setting up", "waiting"
+	}
+	return "Waiting for the line", "waiting"
 }
 
 func (s *Server) routerRows(ctx context.Context, sc scope) []rtRow {
@@ -74,7 +83,7 @@ func (s *Server) routerRows(ctx context.Context, sc scope) []rtRow {
 	var out []rtRow
 	for _, st := range list {
 		b := base[st.ID]
-		r := rtRow{S: st, State: states[st.ID], Mode: modeLabel(st), Flats: b.Accounts, Active: b.Active, Online: onl[st.ID], Detail: b.Detail}
+		r := rtRow{S: st, State: states[st.ID], Flats: b.Accounts, Active: b.Active, Online: onl[st.ID], Detail: b.Detail}
 		if col := s.mgr.Collector(st.ID); col != nil {
 			cfg, snap := col.Config(), col.Snapshot()
 			if pt, ok := snap.Ports[cfg.WAN]; ok {
@@ -104,18 +113,12 @@ func (s *Server) routerRows(ctx context.Context, sc scope) []rtRow {
 		switch {
 		case r.State == "paused":
 			r.Setup, r.SetupTone = "Paused", "paused"
-		case r.State == "waiting":
-			r.Setup, r.SetupTone = "Waiting to join", "waiting"
-		case billing.IPoE(st):
-			ps := s.svc.ProvisionStatus(st.ID)
-			if ps.InSync {
-				r.Setup, r.SetupTone = "Live", "live"
-			} else {
-				r.Setup, r.SetupTone = fmt.Sprintf("Drift %d", ps.Drift), "drift"
+		default:
+			r.Setup, r.SetupTone = setupLabel(s.mgr.SetupStateOf(st.ID))
+			if r.Setup == "Ready" && !s.svc.ProvisionStatus(st.ID).InSync {
+				r.Setup, r.SetupTone = "Out of sync", "drift"
 				r.Attention = true
 			}
-		default:
-			r.Setup, r.SetupTone = "Setting up", "waiting"
 		}
 		if r.State == "down" {
 			r.Attention = true
@@ -140,7 +143,7 @@ func shortAge(d time.Duration) string {
 func (s *Server) adminSites(w http.ResponseWriter, r *http.Request) {
 	p := s.page(r, "sites")
 	sc := scope{All: true, Sites: s.scopeOf(r).Sites} // the router list always shows every router
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 	defer cancel()
 	all := s.routerRows(ctx, sc)
 	tab := r.URL.Query().Get("tab")
@@ -262,28 +265,23 @@ func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site,
 		tab = "setup"
 	}
 	eff := s.mgr.Effective(st)
-	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 	defer cancel()
 	status, _ := s.mgr.Status(ctx, st.ID)
 	p.Data["Site"], p.Data["Eff"], p.Data["Status"] = st, eff, status
-	p.Data["Env"] = st.Mode == store.SiteModeEnv
 	for _, m := range extra {
 		for k, v := range m {
 			p.Data[k] = v
 		}
 	}
 	p.Data["Cmd"], p.Data["CmdNoCheck"], p.Data["CmdExpires"] = cmd, cmdNoCheck, exp
-	p.Data["Mode"], p.Data["IPoE"] = store.AccessIPoE, true
-	p.Data["ModeLabel"] = modeLabel(st)
-	p.Data["Serving"] = true
-	p.Data["Prov"] = s.svc.ProvisionStatus(st.ID)
 	if jr, ok := s.mgr.JoinReport(st.ID); ok {
 		p.Data["JoinReport"] = jr
 	}
 	p.Data["Insecure"] = !strings.HasPrefix(s.cfg.PublicBaseURL, "https://")
 	p.Data["AllowInsecure"] = s.cfg.AllowInsecureJoin
 	p.Data["TTL"] = int(s.cfg.JoinTokenTTL.Minutes())
-	p.Data["Portal"] = s.portalBase(r) + "/portal?site=" + url.QueryEscape(st.ID)
+	p.Data["Portal"] = strings.TrimRight(s.cfg.PublicBaseURL, "/") + "/pay"
 	var pkgs []store.Package
 	var accts int
 	s.st.View(func(d *store.Data) {
@@ -295,6 +293,11 @@ func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site,
 		}
 	})
 	p.Data["Pkgs"], p.Data["Accounts"] = pkgs, accts
+	if tab == "setup" {
+		if v, ok := s.mgr.SetupView(ctx, st.ID); ok {
+			p.Data["SetupView"] = v
+		}
+	}
 	if rep, ok := s.svc.Building(st.ID); ok {
 		p.Data["Rep"] = rep
 	}

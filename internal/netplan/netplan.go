@@ -16,8 +16,8 @@ import (
 //	.10 - .59     UnregFrom - UnregTo: pool for unregistered MACs (ftn-unreg)
 //	.60 - .254    StaticFrom - StaticTo: one fixed address per flat
 //
-// PoolFrom/PoolTo (.10 to the last address minus one) is the single pool the
-// hotspot mode uses; IPoE splits it into the two ranges above.
+// PoolFrom/PoolTo (.10 to the last address minus one) is the whole dynamic
+// range; it is split into the two ranges above.
 type Plan struct {
 	Network   string // 10.5.50.0/24
 	Gateway   string // 10.5.50.1

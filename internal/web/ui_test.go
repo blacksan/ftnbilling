@@ -238,14 +238,20 @@ func TestAddRouterModalFlow(t *testing.T) {
 func TestRouterSetupTabChecklistEndpoints(t *testing.T) {
 	m, site, _ := uiRig(t)
 	h := m.adminGet(t, "/admin/routers/view?id="+site+"&tab=setup")
-	for _, want := range []string{"data-setup=", "data-checks", "data-recheck", "data-job"} {
+	for _, want := range []string{"data-setup=", "data-checks", "data-recheck", "data-setup-view", "data-reset-router"} {
 		if !strings.Contains(h, want) {
 			t.Errorf("setup tab lacks %q", want)
 		}
 	}
-	// A1: there is no Confirm button anywhere; only Roll back now (drawn by app.js).
-	if strings.Contains(h, "Confirm cutover") || strings.Contains(h, `action="/admin/routers/confirm"`) || strings.Contains(h, `action="/admin/sites/confirm"`) {
-		t.Error("the page offers a Confirm button (A1)")
+	// The removed endpoints have no button anywhere.
+	for _, gone := range []string{"/routers/confirm", "/sites/confirm", "setup/run", "setup/migrate", "setup/rollback", "/cutover", "/adopt", "/routers/mode", "Roll back", "Start migration", "Run set-up"} {
+		if strings.Contains(h, gone) {
+			t.Errorf("the setup tab offers %q", gone)
+		}
+	}
+	// The bootstrap line is the only router command, and the reset is typed.
+	if strings.Contains(h, "data-copy=") {
+		t.Error("a manual command can be copied from the setup tab")
 	}
 	var ck map[string]any
 	m.getJSON(t, "/admin/routers/checks.json?id="+site, &ck)

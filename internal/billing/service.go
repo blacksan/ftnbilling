@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"ispbill/internal/routeros"
 	"ispbill/internal/store"
 )
 
@@ -127,11 +126,6 @@ func AccountState(a store.Account, now time.Time) string {
 		return StateActive
 	}
 	return StateExpired
-}
-
-// wantUser: should the router hold a hotspot user for this account?
-func wantUser(a store.Account, now time.Time) bool {
-	return AccountState(a, now) == StateActive
 }
 
 // ---- accounts -----------------------------------------------------------
@@ -252,23 +246,19 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 		a = store.Account{
 			ID: RandomID(), SiteID: in.SiteID, Code: s.uniqueCode(d), Flat: flat, MAC: mac,
 			Tenant: cleanText(in.Tenant, 60), Phone: phone, Notes: cleanText(in.Notes, 300), WhatsApp: wa,
-			HSPass: RandomSecret(16), CreatedAt: s.now(),
+			CreatedAt: s.now(),
 		}
-		if st := d.Sites[in.SiteID]; IPoE(st) {
-			// An IPoE flat gets its fixed address now, and the router a task.
-			pl, err := s.PlanFor(st)
-			if err != nil {
-				return err
-			}
-			if a.IP, err = FreeIPLocked(d, in.SiteID, pl, s.foreignIPs(in.SiteID)); err != nil {
-				return err
-			}
+		// A flat gets its fixed address now, and the router a task.
+		pl, err := s.PlanFor(d.Sites[in.SiteID])
+		if err != nil {
+			return err
+		}
+		if a.IP, err = FreeIPLocked(d, in.SiteID, pl, s.foreignIPs(in.SiteID)); err != nil {
+			return err
 		}
 		d.Accounts[a.ID] = a
 		delete(d.Devices, store.DeviceKey(a.SiteID, mac))
-		if IPoE(d.Sites[in.SiteID]) {
-			s.enqueueLocked(d, a, false, "account created")
-		}
+		s.enqueueLocked(d, a, "account created")
 		return nil
 	})
 	if err == nil {
@@ -302,8 +292,8 @@ func (s *Service) UpdateAccount(id, flat, tenant, phone, notes string) error {
 	})
 }
 
-// ChangeMAC moves an account to a new ONT: the router user's mac-address is
-// updated and any live session on the old ONT is kicked (retried until done).
+// ChangeMAC moves an account to a new ONT: the flat's lease on the router is
+// rewritten for the new MAC (a queued task, retried until done).
 func (s *Service) ChangeMAC(ctx context.Context, id, rawMAC string) error {
 	mac, err := NormalizeMAC(rawMAC)
 	if err != nil {
@@ -332,7 +322,7 @@ func (s *Service) ChangeMAC(ctx context.Context, id, rawMAC string) error {
 		a.MAC, a.MACConflict = mac, false
 		d.Accounts[id] = a
 		delete(d.Devices, store.DeviceKey(a.SiteID, mac))
-		s.enqueueLocked(d, a, true, "MAC changed")
+		s.enqueueLocked(d, a, "MAC changed")
 		return nil
 	})
 	if err == nil {
@@ -341,8 +331,8 @@ func (s *Service) ChangeMAC(ctx context.Context, id, rawMAC string) error {
 	return err
 }
 
-// SetSuspended suspends or unsuspends an account. Suspending removes the
-// router user and kicks the session; unsuspending restores an unexpired plan.
+// SetSuspended suspends or unsuspends an account. Suspending puts the flat's
+// address on the router's suspended list; unsuspending restores an unexpired plan.
 func (s *Service) SetSuspended(ctx context.Context, id string, suspended bool) error {
 	err := s.st.Update(func(d *store.Data) error {
 		a, ok := d.Accounts[id]
@@ -354,7 +344,7 @@ func (s *Service) SetSuspended(ctx context.Context, id string, suspended bool) e
 		}
 		a.Suspended = suspended
 		d.Accounts[id] = a
-		s.enqueueLocked(d, a, suspended, "suspend toggled")
+		s.enqueueLocked(d, a, "suspend toggled")
 		return nil
 	})
 	if err == nil {
@@ -376,23 +366,6 @@ func (s *Service) AccountByCode(code string) (a store.Account, ok bool) {
 // AccountByMAC finds the open account that owns a MAC in any building.
 func (s *Service) AccountByMAC(mac string) (a store.Account, ok bool) {
 	s.st.View(func(d *store.Data) { a, ok = d.AccountByMAC(mac) })
-	return
-}
-
-// PortalAccount finds the account a device on siteID's own network belongs
-// to: the open account with that MAC in this building (the owner first, else a flagged one)
-// A flagged account is used when migration found the MAC on two flats: the
-// hotspot keeps working for the flat behind this router until somebody fixes
-// the MAC. An account of another building is never returned.
-func (s *Service) PortalAccount(siteID, mac string) (a store.Account, ok bool) {
-	s.st.View(func(d *store.Data) {
-		for _, c := range d.OpenAccountsByMAC(mac) {
-			if c.SiteID == siteID {
-				a, ok = c, true
-				return
-			}
-		}
-	})
 	return
 }
 
@@ -438,11 +411,6 @@ func (s *Service) NoteDevice(siteID, mac, ip, source string) {
 	})
 }
 
-// HotspotHosts returns the building router's current hotspot host table.
-func (s *Service) HotspotHosts(ctx context.Context, siteID string) ([]routeros.Host, error) {
-	return s.router(siteID).Hosts(ctx)
-}
-
 // DismissDevice removes a MAC from the unregistered list. A device the
 // reconciler keeps seeing (source dhcp or arp) is kept as a dismissed marker
 // so it does not come back every minute; one that opens the portal again does.
@@ -486,42 +454,6 @@ func (s *Service) PackageForAmount(siteID string, amount int) (p store.Package, 
 func (s *Service) Ping(ctx context.Context, siteID string) error { return s.router(siteID).Ping(ctx) }
 
 // ---- login --------------------------------------------------------------
-
-// AutoLogin logs the device in through REST when the account is active. If the
-// account already has a session from the same IP it counts as logged in; a
-// session from another IP is replaced (shared-users is 1).
-func (s *Service) AutoLogin(ctx context.Context, a store.Account, ip string) bool {
-	if ip == "" || !wantUser(a, s.now()) {
-		return false
-	}
-	rt := s.router(a.SiteID)
-	if sessions, err := rt.ActiveSessions(ctx); err == nil {
-		for _, se := range sessions {
-			if se.User != a.Code {
-				continue
-			}
-			if se.Address == ip {
-				return true
-			}
-			if err := rt.KickUser(ctx, a.Code); err != nil {
-				s.log.Warn("kick stale session failed", "code", a.Code, "err", err)
-			}
-		}
-	}
-	if err := rt.Login(ctx, a.Code, a.HSPass, a.MAC, ip); err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "already") {
-			return true
-		}
-		s.log.Warn("router login failed", "code", a.Code, "err", err)
-		return false
-	}
-	return true
-}
-
-// Kick ends the account's live session without touching the subscription.
-func (s *Service) Kick(ctx context.Context, siteID, code string) error {
-	return s.router(siteID).KickUser(ctx, strings.ToUpper(code))
-}
 
 // runAccountSite runs the router tasks of the building that holds the account.
 func (s *Service) runAccountSite(ctx context.Context, accountID string) {

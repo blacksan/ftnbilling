@@ -18,26 +18,18 @@ type Config struct {
 	DataDir    string
 	BrandName  string
 	TestMode   bool
-	RouterURL  string
-	// RouterURLSet is true when ROUTER_URL was given explicitly (container mode).
-	RouterURLSet bool
-	RouterUser   string
-	RouterPass   string
-	RouterMock   bool
-	// RouterReadTimeout cuts one live read of a router (ROUTER_READ_TIMEOUT, default 8s: the tunnel can be slow).
+	// RouterMock serves every router from one in-memory fake (development and tests).
+	RouterMock bool
+	// RouterReadTimeout cuts one live read of a router (ROUTER_READ_TIMEOUT, default 10s: the tunnel can be slow).
 	RouterReadTimeout time.Duration
-	HotspotServer     string
 	AdminUser         string
 	AdminPass         string
 	PublicBaseURL     string
 	SupportPhone      string
 
-	// Remote (VPS) mode. VerifyHotspotHost makes the public portal trust a
-	// mac/ip pair only if the router currently has that device in
-	// /ip/hotspot/host, so nobody on the internet can open a flat's page by
-	// guessing its MAC. PublicIP is the VPS address the router whitelists.
-	VerifyHotspotHost bool
-	PublicIP          string
+	// PublicIP is the VPS address the routers reach (the walled flats' payment
+	// page and the WireGuard endpoint).
+	PublicIP string
 
 	MpesaEnv       string
 	MpesaKey       string
@@ -69,7 +61,6 @@ type Config struct {
 	JoinTokenTTL          time.Duration
 	AllowInsecureJoin     bool // permit minting join links when PUBLIC_BASE_URL is not https (bench only)
 	JoinRequireMikrotikUA bool // only a RouterOS fetch User-Agent ("RouterOS 7.x" or "Mikrotik/6.x") consumes a join token
-	SiteName              string
 
 	// Metrics / QoE collector.
 	WANInterface    string
@@ -80,7 +71,7 @@ type Config struct {
 	NetflowAddr     string
 	CustomerSubnet  string
 	PingTargets     []string
-	FlowEvery       time.Duration // hotspot sessions + queues
+	FlowEvery       time.Duration // per-flat queue counters
 	PortEvery       time.Duration // interface counters
 	PingEvery       time.Duration // ping + system resource
 	DNSEvery        time.Duration // DNS cache refresh
@@ -129,17 +120,11 @@ func Load(getenv func(string) string) (Config, error) {
 		DataDir:            get("DATA_DIR", "/data"),
 		BrandName:          get("BRAND_NAME", "Fast Tech Net"),
 		TestMode:           parseBool(getenv("TEST_MODE")),
-		RouterURL:          strings.TrimRight(get("ROUTER_URL", "http://172.17.0.1"), "/"),
-		RouterURLSet:       strings.TrimSpace(getenv("ROUTER_URL")) != "",
-		RouterUser:         get("ROUTER_USER", "ispbill"),
-		RouterPass:         getenv("ROUTER_PASS"),
 		RouterMock:         parseBool(getenv("ROUTER_MOCK")),
-		HotspotServer:      get("HOTSPOT_SERVER", "hotspot1"),
 		AdminUser:          get("ADMIN_USER", "admin"),
 		AdminPass:          getenv("ADMIN_PASS"),
 		PublicBaseURL:      strings.TrimRight(get("PUBLIC_BASE_URL", ""), "/"),
 		SupportPhone:       get("SUPPORT_PHONE", ""),
-		VerifyHotspotHost:  get("VERIFY_HOTSPOT_HOST", "false") == "true",
 		PublicIP:           get("PUBLIC_IP", ""),
 		MpesaEnv:           strings.ToLower(get("MPESA_ENV", "sandbox")),
 		MpesaKey:           get("MPESA_CONSUMER_KEY", ""),
@@ -175,7 +160,7 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 		return d
 	}
-	c.RouterReadTimeout = dur("ROUTER_READ_TIMEOUT", 8*time.Second)
+	c.RouterReadTimeout = dur("ROUTER_READ_TIMEOUT", 10*time.Second)
 	c.WANInterface = get("WAN_INTERFACE", "ether1")
 	c.OLTInterface = get("OLT_INTERFACE", "sfp-sfpplus1")
 	c.WANCapacityMbps = num("WAN_CAPACITY_MBPS", 500)
@@ -194,7 +179,6 @@ func Load(getenv func(string) string) (Config, error) {
 	c.JoinTokenTTL = dur("JOIN_TOKEN_TTL", 30*time.Minute)
 	c.AllowInsecureJoin = parseBool(getenv("ALLOW_INSECURE_JOIN"))
 	c.JoinRequireMikrotikUA = get("JOIN_REQUIRE_MIKROTIK_UA", "true") != "false"
-	c.SiteName = get("SITE_NAME", "")
 	if p, err := netip.ParsePrefix(c.WGSubnet); err != nil || !p.Addr().Is4() || p.Bits() > 29 {
 		errs = append(errs, errors.New("WG_SUBNET must be an IPv4 CIDR no smaller than /29, e.g. 10.99.0.0/22"))
 	}
@@ -294,9 +278,6 @@ func (c Config) Validate() error {
 	// ADMIN_PASS is no longer required here: the admin password may live in
 	// the database (Settings > General). main calls CheckAdminPass when the
 	// database holds no password.
-	// ROUTER_PASS is no longer required here: buildings joined over WireGuard
-	// carry their own credentials. main refuses to start only when a legacy
-	// env-mode building exists and ROUTER_PASS is empty.
 	if c.MpesaUnknownRef != "reject" && c.MpesaUnknownRef != "accept" {
 		errs = append(errs, fmt.Errorf("MPESA_UNKNOWN_REF must be reject or accept, got %q", c.MpesaUnknownRef))
 	}

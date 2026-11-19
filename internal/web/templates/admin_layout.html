@@ -83,19 +83,14 @@
 <header><h2 id="ar-t">Add router</h2><button type="button" class="ibtn" data-close aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></header>
 <div class="stack" data-step="form">
 <label class="field">Name<input name="name" required maxlength="60" autocomplete="off" placeholder="Riverside Apartments"><span class="hint">Tenants and the team see this name.</span></label>
-<fieldset class="field" style="border:0;padding:0;margin:0"><legend style="font:600 13px var(--f-sans);padding:0;margin-bottom:6px">Is it already serving customers?</legend>
-<div class="seg" role="radiogroup"><label><input type="radio" name="serving" value="" checked class="sr">No, it is new</label><label><input type="radio" name="serving" value="1" class="sr">Yes, switch it over</label></div>
-<span class="hint">New routers are set up by the server. A router with live customers is switched over safely and rolls back by itself if anything fails.</span></fieldset>
-<details><summary>Advanced</summary><div class="stack" style="margin-top:10px">{{with .Data.RouterDefaults}}
-<div class="two"><label class="field">WAN port<input name="wan" value="{{.WANInterface}}"></label><label class="field">OLT port<input name="olt" value="{{.OLTInterface}}"></label></div>
-<div class="two"><label class="field">VLAN (0 for none)<input name="vlan" type="number" min="0" max="4094" value="{{.VLANID}}"></label><label class="field">Customer subnet<input name="subnet" value="{{.CustomerSubnet}}" placeholder="10.5.50.0/24"></label></div>
-<div class="two"><label class="field">WAN capacity (Mbps)<input name="wancap" value="{{f0 .WANCapMbps}}"></label><label class="field">Support phone<input name="support" value="{{.SupportPhone}}" placeholder="optional"></label></div>{{end}}</div></details>
+<p class="hint">The server sets the router up from one line you paste on it. The router is erased and built again, so use a new router or one you mean to rebuild.</p>
+<details><summary>Router layout</summary><div class="stack" style="margin-top:10px">{{with .Data.RouterDefaults}}{{template "sitelayout" .}}<label class="field">Support phone<input name="support" value="{{.SupportPhone}}" placeholder="optional"></label>{{end}}</div></details>
 </div>
 <div class="stack" data-step="status" hidden aria-live="polite">
-<p><b>Paste this one line</b> into the router's terminal (WinBox, then New Terminal). It works once and expires in {{.Data.JoinTTL}} minutes.</p>
+<p><b>Paste this one line</b> into the router's terminal (WinBox, then New Terminal). It works once and expires in {{.Data.JoinTTL}} minutes. The router builds itself; nothing else is typed on it.</p>
 <div class="copyline"><textarea readonly rows="3" data-join-cmd aria-label="Join command"></textarea><button type="button" class="btn" data-copy-from="[data-join-cmd]">Copy</button></div>
-<details><summary>Clock wrong, or no certificate store?</summary><p class="muted">This skips the certificate check. Use it only if the line above fails with a certificate error.</p><div class="copyline"><textarea readonly rows="3" data-join-cmd2 aria-label="Join command without certificate check"></textarea><button type="button" class="btn ghost" data-copy-from="[data-join-cmd2]">Copy</button></div></details>
-<div class="prov"><div class="row2"><span class="spin" data-join-spin></span><span data-join-text>Waiting for the router to connect</span></div></div>
+<details><summary>Certificate error?</summary><p class="muted">Correct the router's clock first. If that is not possible, this is the same line without the certificate check.</p><div class="copyline"><textarea readonly rows="3" data-join-cmd2 aria-label="Join command without certificate check"></textarea><button type="button" class="btn ghost" data-copy-from="[data-join-cmd2]">Copy</button></div></details>
+<div class="prov"><div class="row2"><span class="spin" data-join-spin></span><span data-join-text>Waiting for the line to be pasted</span></div></div>
 </div>
 <footer data-step="form"><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn">Create router</button></footer>
 <footer data-step="status" hidden><a class="btn" data-view-router href="/admin/routers">Open router</a></footer>

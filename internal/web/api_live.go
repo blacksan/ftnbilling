@@ -203,8 +203,7 @@ func (s *Server) buildClients(ctx context.Context, st store.Site, q, kind, onlin
 	for _, a := range s.siteAccounts(st.ID) {
 		fi := facts(a)
 		ca := sites.ClientAccount{ID: a.ID, Code: a.Code, Flat: a.Flat, Tenant: a.Tenant, State: pkgState(a), MAC: a.MAC, IP: a.IP,
-			LeaseStatus: fi.rs.LeaseStatus, LastSeen: fi.rs.LastSeen, SuspendedOnRouter: fi.rs.SuspendedOnRouter, InSync: fi.rs.InSync,
-			RouterUser: s.svc.RouterUser(st.ID, a.MAC)}
+			LeaseStatus: fi.rs.LeaseStatus, LastSeen: fi.rs.LastSeen, SuspendedOnRouter: fi.rs.SuspendedOnRouter, InSync: fi.rs.InSync}
 		if col != nil {
 			ca.UsageToday, ca.UsageMonth = col.FlatUsage(a.Code, now)
 		}
@@ -214,7 +213,7 @@ func (s *Server) buildClients(ctx context.Context, st store.Site, q, kind, onlin
 		in.Accounts = append(in.Accounts, ca)
 	}
 	for _, d := range s.svc.Unregistered(st.ID, false) {
-		in.Devices = append(in.Devices, sites.ClientDevice{MAC: d.MAC, IP: d.IP, HostName: "", Vendor: d.Vendor, RouterUser: d.RouterUser, Online: d.Online, LastSeen: d.LastSeen})
+		in.Devices = append(in.Devices, sites.ClientDevice{MAC: d.MAC, IP: d.IP, HostName: "", Vendor: d.Vendor, Online: d.Online, LastSeen: d.LastSeen})
 	}
 	all := sites.MergeClients(in)
 	items := sites.FilterClients(all, q, kind, online)
@@ -360,23 +359,10 @@ func (s *Server) apiRouterReboot(w http.ResponseWriter, r *http.Request, c *apiC
 	writeJSON(w, http.StatusAccepted, map[string]any{"queued": true})
 }
 
-// notSent: the connection was never made (dial failure, refused, no route, DNS), so the reboot
-// request did not leave. A timeout while connecting is the same; only a timeout after the request
-// was written means the router may be going down.
-func notSent(err error) bool {
-	var oe *net.OpError
-	if errors.As(err, &oe) && oe.Op == "dial" {
-		return true
-	}
-	m := err.Error()
-	return strings.Contains(m, "dial tcp") || strings.Contains(m, "connection refused") || strings.Contains(m, "no route to host") ||
-		strings.Contains(m, "network is unreachable") || strings.Contains(m, "no such host")
-}
-
 // rebootDropped is true when the router cut the connection while it went down:
 // the reboot did start.
 func rebootDropped(err error) bool {
-	if notSent(err) {
+	if routeros.NotSent(err) {
 		return false
 	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {

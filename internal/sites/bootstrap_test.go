@@ -30,7 +30,7 @@ func benchSite() store.Site {
 }
 
 func benchInput(s store.Site) BootstrapInput {
-	cfg := config.Config{PublicIP: "203.0.113.10", WANInterface: "ether1", OLTInterface: "sfp-sfpplus1", CustomerSubnet: "10.5.50.0/24", RouterUser: "ispbill"}
+	cfg := config.Config{PublicIP: "203.0.113.10", WANInterface: "ether1", OLTInterface: "sfp-sfpplus1", CustomerSubnet: "10.5.50.0/24"}
 	s.RESTUser = "ispbill"
 	return BootstrapInput{Site: ApplyDefaults(cfg, s), PrivateKey: tPriv, RESTPass: tRest, ServerPub: "SERVERPUBKEYSERVERPUBKEYSERVERPUBKEYSERV0=",
 		Endpoint: "203.0.113.10:51820", WGSubnet: netip.MustParsePrefix("10.99.0.0/22"), PublicBase: "https://billing.example.co.ke",
@@ -56,7 +56,7 @@ func TestBootstrapGolden(t *testing.T) {
 			in := benchInput(s)
 			ss := s
 			mut(&ss, &in)
-			cfg := config.Config{PublicIP: "203.0.113.10", WANInterface: "ether1", OLTInterface: "sfp-sfpplus1", CustomerSubnet: "10.5.50.0/24", RouterUser: "ispbill"}
+			cfg := config.Config{PublicIP: "203.0.113.10", WANInterface: "ether1", OLTInterface: "sfp-sfpplus1", CustomerSubnet: "10.5.50.0/24"}
 			ss.RESTUser = "ispbill"
 			in.Site = ApplyDefaults(cfg, ss)
 			out, err := RenderBootstrap(in)
@@ -215,4 +215,44 @@ func (f *fixture) joined(name string) store.Site {
 		f.t.Fatal(err)
 	}
 	return f.site(s.ID)
+}
+
+// A second paste must never leave the router unfiltered: the hold rule goes in
+// first, the old rules are removed behind it, and the hold comes out last.
+func TestBootstrapFirewallIsNeverOpenOnRerun(t *testing.T) {
+	for name, mut := range map[string]func(*store.Site){"dhcp": func(*store.Site) {}, "vlan_pppoe": func(s *store.Site) { s.WANMode, s.PPPoEUser, s.PPPoEPassEnc = WANPPPoE, "u", "sealed" }} {
+		s := benchSite()
+		mut(&s)
+		in := benchInput(s)
+		in.PPPoEPass = tPPP
+		in.Site = ApplyDefaults(config.Config{PublicIP: "203.0.113.10", WANInterface: "ether1", OLTInterface: "sfp-sfpplus1", CustomerSubnet: "10.5.50.0/24"}, s)
+		out, err := RenderBootstrap(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(string(out), "\n")
+		hold, drop, lastAdd, release := -1, -1, -1, -1
+		for i, l := range lines {
+			l = strings.TrimSpace(l)
+			switch {
+			case strings.Contains(l, "/ip/firewall/filter add") && strings.Contains(l, `comment="ftn: hold"`) && hold < 0:
+				hold = i
+			case strings.HasPrefix(l, "/ip/firewall/filter remove") && strings.Contains(l, `comment~"^ftn:"`):
+				if !strings.Contains(l, `comment!="ftn: hold"`) {
+					t.Fatalf("%s: line %d removes every ftn rule, hold included: %s", name, i, l)
+				}
+				drop = i
+			case strings.HasPrefix(l, "/ip/firewall/filter add") && !strings.Contains(l, "ftn: hold"):
+				lastAdd = i
+			case l == `/ip/firewall/filter remove [find where comment="ftn: hold"]`:
+				release = i
+			}
+		}
+		if hold < 0 || drop < 0 || lastAdd < 0 || !(hold < drop && drop < lastAdd && lastAdd < release) {
+			t.Fatalf("%s: wrong order: hold %d, remove old %d, last new rule %d, release %d", name, hold, drop, lastAdd, release)
+		}
+		if !strings.Contains(string(out), "in-interface-list=WAN") || !strings.Contains(string(out), "connection-state=new,invalid") {
+			t.Fatalf("%s: the hold must drop new input from the WAN", name)
+		}
+	}
 }

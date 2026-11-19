@@ -19,7 +19,7 @@ import (
 //   - one static DHCP lease per flat (MAC -> the flat's fixed IP) on ftn-dhcp,
 //   - one simple queue "ftn-<code>" per flat at the package speed,
 //   - the "ftn-suspended" address-list holds the IP of every flat that has no
-//     paid time (ipoe mode only; observe mode never adds to it).
+//     paid time .
 //
 // It only ever changes rows whose comment starts "ftn:acct:". A row that is
 // not ours but clashes with a flat (same MAC, IP or queue name) is reported
@@ -124,10 +124,7 @@ type provState struct {
 	started time.Time       // first pass, the baseline of "not seen for 24 h"
 	foreign map[string]bool // addresses of the router's own static leases, from the last pass
 	sawOn   bool            // ftn-dhcp has been seen enabled by this server
-	// routerUsers: normalised MAC -> the hotspot session, user or binding that
-	// holds it on the router, from the last refreshDevices.
-	routerUsers map[string]string
-	run         sync.Mutex // one pass at a time per building
+	run     sync.Mutex      // one pass at a time per building
 }
 
 type acctSnap struct {
@@ -147,7 +144,6 @@ func (s *Service) prov(siteID string) *provState {
 
 // ProvisionStatus reports the reconciler state of a building.
 func (s *Service) ProvisionStatus(siteID string) ProvisionStatus {
-	site, _ := s.site(siteID)
 	ps := s.prov(siteID)
 	ps.mu.Lock()
 	out := ps.status
@@ -156,9 +152,6 @@ func (s *Service) ProvisionStatus(siteID string) ProvisionStatus {
 		out.ForeignConflicts = []string{}
 	}
 	out.Mode = store.AccessIPoE
-	if !IPoE(site) {
-		out.InSync = true // nothing to reconcile
-	}
 	s.st.View(func(d *store.Data) {
 		for _, t := range d.Tasks {
 			if t.SiteID == siteID {
@@ -189,9 +182,6 @@ func (s *Service) AccountRouterState(accountID string) AccountRouterState {
 			}
 		}
 	})
-	if !IPoE(site) {
-		return st
-	}
 	ps := s.prov(site.ID)
 	ps.mu.Lock()
 	snap, ok := ps.accts[code]
@@ -241,15 +231,12 @@ type wantAcct struct {
 }
 
 // ReconcileSite compares the building's router with the accounts table and
-// changes the router where they differ. Hotspot buildings are left alone. It
+// changes the router where they differ. It
 // is safe to call from anywhere: passes of one building run one at a time.
 func (s *Service) ReconcileSite(ctx context.Context, siteID string) (ProvisionRun, error) {
 	var run ProvisionRun
 	site, ok := s.site(siteID)
 	if !ok || !site.Runnable() {
-		return run, nil
-	}
-	if !IPoE(site) {
 		return run, nil
 	}
 	ps := s.prov(siteID)
@@ -263,8 +250,6 @@ func (s *Service) ReconcileSite(ctx context.Context, siteID string) (ProvisionRu
 	}
 	return run, err
 }
-
-// ---- hotspot bypass after an automatic rollback (release plan A1) -------------------------------
 
 func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provState) (ProvisionRun, error) {
 	var run ProvisionRun
@@ -524,7 +509,7 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 		// A dynamic lease on our MAC or address would block the static one.
 		for _, r := range dynLeases {
 			if r["server"] != DHCPServerName {
-				continue // the hotspot's own dynamic leases are not ours to remove
+				continue // another DHCP server's leases are not ours to remove
 			}
 			if strings.EqualFold(r["mac-address"], a.MAC) || (r["address"] == a.IP && !strings.EqualFold(r["mac-address"], a.MAC)) {
 				if !clash {

@@ -17,6 +17,10 @@
 {{if .Test}}<button type="submit" name="method" value="test" class="alt">Test payment (no money)</button>{{end}}
 {{else}}<p class="muted">Online payment is not available right now. Call {{.Support}}.</p>{{end}}
 </form>
+<div class="card"><b>Have a voucher?</b>
+<form method="post" action="/pay/voucher"><input type="hidden" name="_pcsrf" value="{{.CSRF}}"><input type="hidden" name="tok" value="{{.Tok}}">
+<input type="text" name="voucher" placeholder="Voucher code" autocapitalize="characters" autocomplete="off" required maxlength="40">
+<button type="submit" class="grey">Redeem voucher</button></form></div>
 {{else}}
 <div class="card"><b>{{if .Detected}}Your internet is paused{{else}}Pay for your internet{{end}}</b>
 <p class="muted">Enter your account number{{if .Detected}} (or your flat, for example Flat 3B){{end}} to pay with M-Pesa. Your internet comes back within a minute of paying.</p></div>

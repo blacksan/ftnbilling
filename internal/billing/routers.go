@@ -2,7 +2,6 @@ package billing
 
 import (
 	"sync"
-	"sync/atomic"
 
 	"ispbill/internal/routeros"
 	"ispbill/internal/store"
@@ -31,13 +30,12 @@ func (m MockRouters) Router(siteID string) routeros.Client {
 	return routeros.NoRouter()
 }
 
-// siteState is the per-building state of the service: whether the router's
-// profiles are known to be in sync, and a lock that serialises task runs.
+// siteState is the per-building state of the service: a lock that serialises
+// task runs and the last reconcile pass.
 type siteState struct {
-	profilesOK atomic.Bool
-	taskMu     sync.Mutex
-	provOnce   sync.Once
-	prov       *provState
+	taskMu   sync.Mutex
+	provOnce sync.Once
+	prov     *provState
 }
 
 func (s *Service) state(siteID string) *siteState {
@@ -50,14 +48,6 @@ func (s *Service) state(siteID string) *siteState {
 
 // router returns the building's router client.
 func (s *Service) router(siteID string) routeros.Client { return s.routers.Router(siteID) }
-
-// ProfilesOK reports whether the building's router profiles are known to be in
-// sync with the package list.
-func (s *Service) ProfilesOK(siteID string) bool { return s.state(siteID).profilesOK.Load() }
-
-// MarkProfilesDirty forgets that a building's profiles are in sync (a router
-// that was just (re)joined may have lost them).
-func (s *Service) MarkProfilesDirty(siteID string) { s.state(siteID).profilesOK.Store(false) }
 
 // site returns a copy of the site record.
 func (s *Service) site(siteID string) (st store.Site, ok bool) {
@@ -77,6 +67,5 @@ func (s *Service) runnableSites() (ids []string) {
 	return
 }
 
-// Wait blocks until background work started by the service (package profile
-// pushes) has finished. Used at shutdown and in tests.
+// Wait blocks until background work started by the service has finished. Used at shutdown and in tests.
 func (s *Service) Wait() { s.bg.Wait() }

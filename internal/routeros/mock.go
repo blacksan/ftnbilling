@@ -2,7 +2,6 @@ package routeros
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -10,15 +9,9 @@ import (
 
 // Mock is an in-memory fake router for ROUTER_MOCK=true and tests.
 type Mock struct {
-	mu       sync.Mutex
-	profiles map[string]Profile
-	users    map[string]User
-	active   map[string]string // user -> ip
-	fail     error
-	ms       *mockState
-	hosts    []Host // extra (unauthorised) hosts for demos and tests
-	// Kicks records the names passed to KickUser (including no-op kicks).
-	Kicks []string
+	mu   sync.Mutex
+	fail error
+	ms   *mockState
 	// Executed records every command passed to Execute.
 	Executed []string
 	// ExecOut, when set, answers Execute instead of the built-in samples.
@@ -38,7 +31,7 @@ type Mock struct {
 }
 
 func NewMock() *Mock {
-	return &Mock{profiles: map[string]Profile{}, users: map[string]User{}, active: map[string]string{}}
+	return &Mock{}
 }
 
 // SetFail makes every call return err (nil restores normal behaviour).
@@ -50,129 +43,7 @@ func (m *Mock) Ping(context.Context) error {
 	return m.fail
 }
 
-func (m *Mock) EnsureProfile(_ context.Context, p Profile) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.fail != nil {
-		return m.fail
-	}
-	m.profiles[p.Name] = p
-	return nil
-}
-
-func (m *Mock) EnsureUser(_ context.Context, u User) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.fail != nil {
-		return m.fail
-	}
-	if _, ok := m.profiles[u.Profile]; !ok {
-		return &APIError{Status: 400, Message: "input does not match any value of profile"}
-	}
-	if old, ok := m.users[u.Name]; ok && u.MAC == "" {
-		u.MAC = old.MAC // like PATCH: omitted fields stay as they were
-	}
-	m.users[u.Name] = u
-	return nil
-}
-
-func (m *Mock) RemoveUser(_ context.Context, name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.fail != nil {
-		return m.fail
-	}
-	delete(m.users, name)
-	return nil
-}
-
-func (m *Mock) RemoveProfile(_ context.Context, name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.fail != nil {
-		return m.fail
-	}
-	delete(m.profiles, name)
-	return nil
-}
-
-func (m *Mock) KickUser(_ context.Context, name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.fail != nil {
-		return m.fail
-	}
-	m.Kicks = append(m.Kicks, name)
-	delete(m.active, name)
-	return nil
-}
-
-func (m *Mock) Login(_ context.Context, user, password, mac, ip string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.fail != nil {
-		return m.fail
-	}
-	u, ok := m.users[user]
-	if !ok || u.Password != password {
-		return &APIError{Status: 400, Message: "failure: invalid username or password"}
-	}
-	if u.MAC != "" && mac != "" && !strings.EqualFold(u.MAC, mac) {
-		return &APIError{Status: 400, Message: "failure: user is bound to another mac-address"}
-	}
-	if _, on := m.active[user]; on {
-		return &APIError{Status: 400, Message: "failure: already logged in"}
-	}
-	if ip == "" {
-		return errors.New("mock: ip required")
-	}
-	m.active[user] = ip
-	return nil
-}
-
-// AddHost adds an unauthorised hotspot host (a device that has not logged in).
-func (m *Mock) AddHost(mac, ip string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.hosts = append(m.hosts, Host{MAC: mac, Address: ip})
-}
-
-// Hosts returns authorised hosts (active sessions) plus any added with AddHost.
-func (m *Mock) Hosts(context.Context) ([]Host, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.fail != nil {
-		return nil, m.fail
-	}
-	var out []Host
-	for user, ip := range m.active {
-		out = append(out, Host{MAC: m.users[user].MAC, Address: ip, Authorized: true})
-	}
-	return append(out, m.hosts...), nil
-}
-
 // Inspection helpers for tests and the UI.
-
-func (m *Mock) GetUser(name string) (User, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	u, ok := m.users[name]
-	return u, ok
-}
-
-func (m *Mock) GetProfile(name string) (Profile, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	p, ok := m.profiles[name]
-	return p, ok
-}
-
-func (m *Mock) IsActive(name string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	_, ok := m.active[name]
-	return ok
-}
 
 // AddLease adds a DHCP lease for Leases (demos and tests).
 func (m *Mock) AddLease(l Lease) {
@@ -212,7 +83,7 @@ func (m *Mock) Execute(_ context.Context, cmd string) (string, error) {
 		b.WriteString("    sent=4 received=4 packet-loss=0% min-rtt=4ms388us avg-rtt=4ms612us max-rtt=5ms101us")
 		return b.String(), nil
 	case c == "ip address print":
-		return "0 address=10.5.50.1/24 interface=bridge-hotspot\n1 address=10.99.0.2/22 interface=wg-ftn", nil
+		return "0 address=10.5.50.1/24 interface=br-customers\n1 address=10.99.0.2/22 interface=wg-ftn", nil
 	}
 	return "", nil
 }
@@ -269,6 +140,11 @@ func copyRow(r Row) Row {
 		c[k] = v
 	}
 	return c
+}
+
+// RowsProps is Rows; the mock returns every property.
+func (m *Mock) RowsProps(ctx context.Context, path string, query map[string]string, _ []string) ([]Row, error) {
+	return m.Rows(ctx, path, query)
 }
 
 // Rows returns copies of the rows of path that match query.
@@ -418,21 +294,21 @@ func (m *Mock) SeedLive() {
 		{"name": "ether1", "type": "ether", "running": "true", "disabled": "false", "mac-address": "78:9A:18:00:00:01", "mtu": "1500", "rx-byte": "1000000", "tx-byte": "200000", "comment": "WAN", "last-link-up-time": "2026-11-15 08:00:00"},
 		{"name": "sfp-sfpplus1", "type": "ether", "running": "true", "disabled": "false", "mac-address": "78:9A:18:00:00:02", "mtu": "1500", "rx-byte": "300000", "tx-byte": "2000000", "comment": "OLT"},
 		{"name": "ether5", "type": "ether", "running": "false", "disabled": "false", "mac-address": "78:9A:18:00:00:06", "mtu": "1500", "rx-byte": "0", "tx-byte": "0"},
-		{"name": "br-hotspot", "type": "bridge", "running": "true", "disabled": "false", "mac-address": "78:9A:18:00:00:07", "mtu": "1500", "rx-byte": "300000", "tx-byte": "2000000"},
+		{"name": "br-customers", "type": "bridge", "running": "true", "disabled": "false", "mac-address": "78:9A:18:00:00:07", "mtu": "1500", "rx-byte": "300000", "tx-byte": "2000000"},
 		{"name": "wg-ftn", "type": "wg", "running": "true", "disabled": "false", "mtu": "1380", "rx-byte": "5000", "tx-byte": "9000"},
 	} {
 		m.SeedRow("/interface", r)
 	}
-	m.SeedRow("/ip/address", Row{"address": "10.5.50.1/24", "network": "10.5.50.0", "interface": "br-hotspot", "disabled": "false"})
+	m.SeedRow("/ip/address", Row{"address": "10.5.50.1/24", "network": "10.5.50.0", "interface": "br-customers", "disabled": "false"})
 	m.SeedRow("/ip/address", Row{"address": "192.168.100.2/24", "network": "192.168.100.0", "interface": "ether1", "disabled": "false"})
 	m.SeedRow("/ip/address", Row{"address": "10.99.0.2/22", "network": "10.99.0.0", "interface": "wg-ftn", "disabled": "false"})
 	m.SeedRow("/ip/dhcp-server/lease", Row{"address": "10.5.50.60", "mac-address": "AA:BB:CC:DD:EE:01", "host-name": "Brians-iPhone", "status": "bound", "server": "ftn-dhcp", "last-seen": "12s", "comment": "ftn:acct:K7Q2MX Flat 3B"})
 	m.SeedRow("/ip/dhcp-server/lease", Row{"address": "10.5.50.61", "mac-address": "AA:BB:CC:DD:EE:02", "status": "waiting", "server": "ftn-dhcp", "comment": "ftn:acct:P4R8TN Flat 10A"})
 	m.SeedRow("/ip/dhcp-server/lease", Row{"address": "10.5.50.15", "mac-address": "3C:07:54:00:00:09", "host-name": "guest-laptop", "status": "bound", "server": "ftn-dhcp", "dynamic": "true", "last-seen": "40s"})
-	m.SeedRow("/ip/arp", Row{"address": "10.5.50.60", "mac-address": "AA:BB:CC:DD:EE:01", "interface": "br-hotspot", "complete": "true", "dynamic": "false"})
-	m.SeedRow("/ip/arp", Row{"address": "10.5.50.15", "mac-address": "3C:07:54:00:00:09", "interface": "br-hotspot", "complete": "true", "dynamic": "true"})
-	m.SeedRow("/interface/bridge/host", Row{"mac-address": "AA:BB:CC:DD:EE:01", "on-interface": "sfp-sfpplus1", "bridge": "br-hotspot", "local": "false"})
-	m.SeedRow("/interface/bridge/host", Row{"mac-address": "3C:07:54:00:00:09", "on-interface": "sfp-sfpplus1", "bridge": "br-hotspot", "local": "false"})
+	m.SeedRow("/ip/arp", Row{"address": "10.5.50.60", "mac-address": "AA:BB:CC:DD:EE:01", "interface": "br-customers", "complete": "true", "dynamic": "false"})
+	m.SeedRow("/ip/arp", Row{"address": "10.5.50.15", "mac-address": "3C:07:54:00:00:09", "interface": "br-customers", "complete": "true", "dynamic": "true"})
+	m.SeedRow("/interface/bridge/host", Row{"mac-address": "AA:BB:CC:DD:EE:01", "on-interface": "sfp-sfpplus1", "bridge": "br-customers", "local": "false"})
+	m.SeedRow("/interface/bridge/host", Row{"mac-address": "3C:07:54:00:00:09", "on-interface": "sfp-sfpplus1", "bridge": "br-customers", "local": "false"})
 	m.SeedRow("/queue/simple", Row{"name": "ftn-K7Q2MX", "target": "10.5.50.60/32", "max-limit": "20000000/20000000", "bytes": "1000/5000", "rate": "0/0", "comment": "ftn:acct:K7Q2MX Flat 3B"})
 	m.SeedRow("/queue/simple", Row{"name": "ftn-P4R8TN", "target": "10.5.50.61/32", "max-limit": "2000000/2000000", "bytes": "0/0", "rate": "0/0", "comment": "ftn:acct:P4R8TN Flat 10A"})
 }

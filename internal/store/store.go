@@ -47,19 +47,14 @@ const (
 // Site modes.
 const (
 	SiteModeWG  = "wg"  // joined over WireGuard
-	SiteModeEnv = "env" // legacy / container mode: router settings come from the environment
+	SiteModeEnv = "env" // legacy rows only (the on-router container): kept so old data loads, never run
 )
 
-// Site access modes (Site.AccessMode). From format 7 every router is IPoE: the
-// column keeps the single value "ipoe". The other constants stay only so old
-// data and tests still read.
-const (
-	AccessHotspot     = "hotspot"
-	AccessIPoEObserve = "ipoe_observe" // computes and reports, never suspends
-	AccessIPoE        = "ipoe"
-)
+// Site access mode (Site.AccessMode). Every router is IPoE: the column keeps
+// the single value "ipoe" (an empty value reads as ipoe).
+const AccessIPoE = "ipoe"
 
-// Site is one building: one MikroTik router with its own hotspot.
+// Site is one building: one MikroTik router, built by the bootstrap script.
 type Site struct {
 	ID           string `json:"id"` // "s" + 6 hex, immutable, used in portal URLs
 	Name         string `json:"name"`
@@ -79,19 +74,15 @@ type Site struct {
 	JoinedAt    time.Time `json:"joined_at,omitempty"` // first successful REST ping after a join
 
 	// Router layout (metrics + join script)
-	HotspotServer  string  `json:"hotspot_server,omitempty"` // "hotspot1"
-	WANInterface   string  `json:"wan_interface,omitempty"`  // "ether1"
-	WANList        string  `json:"wan_list,omitempty"`       // "WAN"
-	OLTInterface   string  `json:"olt_interface,omitempty"`  // "sfp-sfpplus1"
-	VLANID         int     `json:"vlan_id,omitempty"`        // 0 = untagged
+	WANInterface   string  `json:"wan_interface,omitempty"` // "ether1"
+	WANList        string  `json:"wan_list,omitempty"`      // "WAN"
+	OLTInterface   string  `json:"olt_interface,omitempty"` // "sfp-sfpplus1"
+	VLANID         int     `json:"vlan_id,omitempty"`       // 0 = untagged
 	CustomerSubnet string  `json:"customer_subnet,omitempty"`
 	WANCapMbps     float64 `json:"wan_cap_mbps,omitempty"`
 	OLTCapMbps     float64 `json:"olt_cap_mbps,omitempty"`
 	FUPTB          float64 `json:"fup_tb,omitempty"`
-	Provision      bool    `json:"provision,omitempty"` // script builds bridge/DHCP/hotspot
 	BenchPort      string  `json:"bench_port,omitempty"`
-	// LegacyContainer makes the script stop the old ispbill/tailscale containers.
-	LegacyContainer bool `json:"legacy_container,omitempty"`
 
 	// Bootstrap script (format 7). WANMode is dhcp (the default, also when
 	// empty), static or pppoe. The static fields are used for static only. The
@@ -117,8 +108,7 @@ type Site struct {
 	Lng     float64   `json:"lng,omitempty"`
 	GoLive  time.Time `json:"go_live,omitempty"`
 
-	// AccessMode is hotspot (default), ipoe_observe or ipoe. Empty is stored
-	// as hotspot.
+	// AccessMode is always ipoe; empty is stored as ipoe.
 	AccessMode string `json:"access_mode,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
@@ -152,9 +142,6 @@ type Package struct {
 	Sort        int    `json:"sort"`
 }
 
-// Profile is the RouterOS hotspot user profile name for the package.
-func (p Package) Profile() string { return "ispbill-" + p.Slug }
-
 // RateLimit is the RouterOS rate-limit string, e.g. "10M/10M".
 func (p Package) RateLimit() string { return fmt.Sprintf("%dM/%dM", p.SpeedMbps, p.SpeedMbps) }
 
@@ -184,11 +171,6 @@ type Account struct {
 	PackageID string    `json:"package_id,omitempty"`
 	ExpiresAt time.Time `json:"expires_at,omitempty"`
 	Suspended bool      `json:"suspended,omitempty"`
-
-	// HSPass is the internal hotspot password. It is random and never shown.
-	HSPass string `json:"hs_pass"`
-	// RouterActive is what the router was last told: true = user present.
-	RouterActive bool `json:"router_active,omitempty"`
 
 	// Reminder bookkeeping: the ExpiresAt value an event was already logged for.
 	RemindedFor time.Time `json:"reminded_for,omitempty"`
@@ -223,10 +205,6 @@ type Order struct {
 	CheckoutRequestID string    `json:"checkout_request_id,omitempty"`
 	Receipt           string    `json:"receipt,omitempty"`
 	VoucherCode       string    `json:"voucher_code,omitempty"`
-	LoggedIn          bool      `json:"logged_in"`
-	MAC               string    `json:"mac,omitempty"`
-	IP                string    `json:"ip,omitempty"`
-	Dst               string    `json:"dst,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 	PaidAt            time.Time `json:"paid_at,omitempty"`
 }
@@ -263,13 +241,13 @@ type Payment struct {
 	ResolvedAt time.Time `json:"resolved_at,omitempty"`
 }
 
-// Device is a MAC that opened the portal (or showed up as a hotspot host)
+// Device is a MAC that opened the payment page (or showed up on the router)
 // without a matching account.
 type Device struct {
 	SiteID string `json:"site_id"`
 	MAC    string `json:"mac"`
 	IP     string `json:"ip,omitempty"`
-	Source string `json:"source"` // portal, hotspot-host, dhcp, arp
+	Source string `json:"source"` // portal, dhcp, arp
 	// Vendor (from the MAC prefix), HostName (DHCP) and Online (lease bound or
 	// ARP complete recently) help the operator pick the right MAC.
 	Vendor    string    `json:"vendor,omitempty"`
@@ -288,8 +266,7 @@ type Task struct {
 	SiteID    string    `json:"site_id"`
 	AccountID string    `json:"account_id"`
 	Code      string    `json:"code"`
-	Kick      bool      `json:"kick,omitempty"` // also end the live session (MAC change)
-	Rev       int       `json:"rev"`            // bumped when the task is refreshed
+	Rev       int       `json:"rev"` // bumped when the task is refreshed
 	Reason    string    `json:"reason,omitempty"`
 	Attempts  int       `json:"attempts"`
 	NextTry   time.Time `json:"next_try"`
@@ -802,19 +779,6 @@ func (d *Data) SiteByTunnelIP(ip string) (Site, bool) {
 	return Site{}, false
 }
 
-// EnvSite returns the non-removed site that takes its router settings from
-// the environment (legacy / container mode), if there is one.
-func (d *Data) EnvSite() (Site, bool) {
-	var best Site
-	found := false
-	for _, s := range d.Sites {
-		if !s.Removed && s.Mode == SiteModeEnv && (!found || s.CreatedAt.Before(best.CreatedAt)) {
-			best, found = s, true
-		}
-	}
-	return best, found
-}
-
 // EffectivePackage is the shared package with the building's overrides
 // applied: the price is replaced when the override is non-zero, and the
 // package counts as disabled when the building hides it.
@@ -873,5 +837,5 @@ func (s Site) Runnable() bool {
 	if s.Removed || s.Disabled {
 		return false
 	}
-	return s.Mode == SiteModeEnv || s.WGPublicKey != ""
+	return s.Mode == SiteModeWG && s.WGPublicKey != ""
 }

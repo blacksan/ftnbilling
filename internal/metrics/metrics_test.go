@@ -36,8 +36,10 @@ func newCol(t *testing.T) *Collector {
 	return New(filepath.Join(t.TempDir(), "metrics.json"), testCfg(), routeros.NewMock(), d, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
-func sess(user, id string, in, out uint64, up time.Duration) routeros.Session {
-	return routeros.Session{ID: id, User: user, Address: "10.5.50.20", MAC: "AA:BB:CC:DD:EE:01", BytesIn: in, BytesOut: out, Uptime: up}
+// fq is one flat's simple queue "ftn-<code>" with its byte counters (up is from the flat,
+// down is to the flat) and download max-limit maxB (0 = not set).
+func fq(code string, up, down uint64, maxB int64) []routeros.SimpleQueue {
+	return []routeros.SimpleQueue{{Name: "ftn-" + code, Target: "10.5.50.20/32", MaxA: maxB, MaxB: maxB, BytesUp: up, BytesDown: down}}
 }
 
 // ---- NetFlow v5 --------------------------------------------------------------------
@@ -145,8 +147,8 @@ func TestClassify(t *testing.T) {
 
 func TestFlowAttributionDNSAndSampling(t *testing.T) {
 	c := newCol(t)
-	// A session maps 10.5.50.20 -> K7Q2MX.
-	c.SampleSessions(t0, []routeros.Session{sess("K7Q2MX", "*1", 0, 0, 5*time.Second)}, nil)
+	// A queue target maps 10.5.50.20 -> K7Q2MX.
+	c.SampleQueues(t0, fq("K7Q2MX", 0, 0, 0))
 	c.UpdateDNS(t0, []routeros.DNSEntry{
 		{Name: "rr1.googlevideo.com", Data: "142.250.0.10", Type: "A"},
 		{Name: "www.youtube.com", Data: "youtube-ui.l.google.com", Type: "CNAME"},
@@ -180,63 +182,56 @@ func total(c *Collector, code string) (down, up uint64) {
 	return s.Down, s.Up
 }
 
-func TestSessionDeltasAndCounterReset(t *testing.T) {
+func TestQueueDeltasAndCounterReset(t *testing.T) {
 	c := newCol(t)
-	// New session just started: its counters count in full.
-	c.SampleSessions(t0, []routeros.Session{sess("K7Q2MX", "*1", 100, 1000, 20*time.Second)}, nil)
-	if d, u := total(c, "K7Q2MX"); d != 1000 || u != 100 {
-		t.Fatalf("new session: %d %d", d, u)
+	// A queue seen for the first time is only baselined: its counters hold old traffic.
+	c.SampleQueues(t0, fq("K7Q2MX", 100, 1000, 0))
+	if d, u := total(c, "K7Q2MX"); d != 0 || u != 0 {
+		t.Fatalf("first sight counted old traffic: %d %d", d, u)
 	}
 	// Normal growth: delta.
-	c.SampleSessions(t0.Add(time.Minute), []routeros.Session{sess("K7Q2MX", "*1", 300, 5000, 80*time.Second)}, nil)
-	if d, u := total(c, "K7Q2MX"); d != 5000 || u != 300 {
+	c.SampleQueues(t0.Add(time.Minute), fq("K7Q2MX", 300, 5000, 0))
+	if d, u := total(c, "K7Q2MX"); d != 4000 || u != 200 {
 		t.Fatalf("delta: %d %d", d, u)
 	}
-	// Counter goes down (same session id): reset, delta = new value.
-	c.SampleSessions(t0.Add(2*time.Minute), []routeros.Session{sess("K7Q2MX", "*1", 50, 700, 140*time.Second)}, nil)
-	if d, u := total(c, "K7Q2MX"); d != 5700 || u != 350 {
+	// Counter goes down (queue recreated or counters reset): delta = new value.
+	c.SampleQueues(t0.Add(2*time.Minute), fq("K7Q2MX", 50, 700, 0))
+	if d, u := total(c, "K7Q2MX"); d != 4700 || u != 250 {
 		t.Fatalf("reset: %d %d", d, u)
 	}
-	// A different session id for the same user (re-login): new session, full value.
-	c.SampleSessions(t0.Add(3*time.Minute), []routeros.Session{sess("K7Q2MX", "*9", 10, 200, 30*time.Second)}, nil)
-	if d, u := total(c, "K7Q2MX"); d != 5900 || u != 360 {
-		t.Fatalf("new session id: %d %d", d, u)
+	// A queue that goes away is forgotten: when it comes back it is baselined again.
+	c.SampleQueues(t0.Add(3*time.Minute), nil)
+	c.SampleQueues(t0.Add(4*time.Minute), fq("K7Q2MX", 1<<30, 1<<33, 0))
+	if d, u := total(c, "K7Q2MX"); d != 4700 || u != 250 {
+		t.Fatalf("returning queue counted old traffic: %d %d", d, u)
 	}
-	// A long-running session first seen after a collector restart is only baselined.
-	c2 := newCol(t)
-	c2.SampleSessions(t0, []routeros.Session{sess("K7Q2MX", "*1", 1<<30, 1<<33, 20*24*time.Hour)}, nil)
-	if d, _ := total(c2, "K7Q2MX"); d != 0 {
-		t.Fatalf("restart baseline counted old traffic: %d", d)
-	}
-	c2.SampleSessions(t0.Add(time.Minute), []routeros.Session{sess("K7Q2MX", "*1", 1<<30+10, 1<<33+4000, 20*24*time.Hour+time.Minute)}, nil)
-	if d, u := total(c2, "K7Q2MX"); d != 4000 || u != 10 {
-		t.Fatalf("after baseline: %d %d", d, u)
-	}
-	// Unknown users (not an account) are ignored.
-	c2.SampleSessions(t0.Add(2*time.Minute), []routeros.Session{sess("admin", "*5", 1, 1, time.Second)}, nil)
-	if _, ok := c2.D.Accts["admin"]; ok {
-		t.Fatal("non-account user recorded")
+	// Queues that are not a flat's (no ftn- prefix, or not an account) are ignored.
+	c.SampleQueues(t0.Add(5*time.Minute), []routeros.SimpleQueue{{Name: "guests", BytesDown: 5}, {Name: "ftn-admin", BytesDown: 5}})
+	c.SampleQueues(t0.Add(6*time.Minute), []routeros.SimpleQueue{{Name: "guests", BytesDown: 9}, {Name: "ftn-admin", BytesDown: 9}})
+	if _, ok := c.D.Accts["admin"]; ok {
+		t.Fatal("non-account queue recorded")
 	}
 }
 
 func TestPeakAndTimeAtCap(t *testing.T) {
-	c := newCol(t) // K7Q2MX cap = 20 Mbps
-	c.SampleSessions(t0, []routeros.Session{sess("K7Q2MX", "*1", 0, 0, 10*time.Second)}, nil)
+	c := newCol(t) // K7Q2MX cap = 20 Mbps (package speed)
+	c.SampleQueues(t0, fq("K7Q2MX", 0, 0, 0))
 	// 60 s at 19 Mbps average (>= 90% of 20 Mbps).
 	bytes := uint64(19e6 / 8 * 60)
-	c.SampleSessions(t0.Add(time.Minute), []routeros.Session{sess("K7Q2MX", "*1", 0, bytes, 70*time.Second)}, nil)
+	c.SampleQueues(t0.Add(time.Minute), fq("K7Q2MX", 0, bytes, 0))
 	// 60 s at 2 Mbps.
-	c.SampleSessions(t0.Add(2*time.Minute), []routeros.Session{sess("K7Q2MX", "*1", 0, bytes+uint64(2e6/8*60), 130*time.Second)}, nil)
+	c.SampleQueues(t0.Add(2*time.Minute), fq("K7Q2MX", 0, bytes+uint64(2e6/8*60), 0))
 	s := c.D.Accts["K7Q2MX"].Sum(TD, t0.Add(-24*time.Hour), t0.Add(24*time.Hour))
-	if math.Abs(s.CapMin-1) > 0.01 || s.OnMin < 2.1 || s.OnMin > 2.3 {
+	if math.Abs(s.CapMin-1) > 0.01 || math.Abs(s.OnMin-2) > 0.01 {
 		t.Fatalf("cap minutes %.2f online %.2f", s.CapMin, s.OnMin)
 	}
 	if mb := float64(s.PkDown) / 1e6; math.Abs(mb-19) > 0.2 {
 		t.Fatalf("peak %.2f Mbps", mb)
 	}
-	// With a queue, the queue's max-limit is the cap (a 10 Mbps cap makes 2 Mbps not-at-cap but 19 at cap).
-	q := []routeros.SimpleQueue{{Name: "<hotspot-K7Q2MX>", MaxA: 5e6, MaxB: 10e6, RateA: 1e5, RateB: 8e6}}
-	c.SampleSessions(t0.Add(3*time.Minute), []routeros.Session{sess("K7Q2MX", "*1", 0, bytes+uint64(2e6/8*60)+uint64(9.5e6/8*60), 190*time.Second)}, q)
+	// The queue's max-limit is the cap (a 10 Mbps cap makes 9.5 Mbps at cap).
+	q := fq("K7Q2MX", 0, bytes+uint64(2e6/8*60)+uint64(9.5e6/8*60), 10e6)
+	q[0].RateA, q[0].RateB = 1e5, 8e6
+	c.SampleQueues(t0.Add(3*time.Minute), q)
 	if live := c.L.Flats["K7Q2MX"]; live.CapBps != 10e6 || live.DownBps != 8e6 || live.UpBps != 1e5 {
 		t.Fatalf("live %+v", live)
 	}
@@ -318,8 +313,9 @@ func TestBucketsRollupAndPrune(t *testing.T) {
 func TestSaveLoadBoundedAndAtomic(t *testing.T) {
 	c := newCol(t)
 	c.SetClock(func() time.Time { return t0 })
-	c.SampleSessions(t0.Add(-10*24*time.Hour), []routeros.Session{sess("K7Q2MX", "*1", 0, 1000, 10*time.Second)}, nil)
-	c.SampleSessions(t0, []routeros.Session{sess("K7Q2MX", "*1", 0, 4000, 10*time.Second)}, nil)
+	c.SampleQueues(t0.Add(-10*24*time.Hour), fq("K7Q2MX", 0, 1000, 0))
+	c.SampleQueues(t0.Add(-10*24*time.Hour+time.Minute), fq("K7Q2MX", 0, 2000, 0))
+	c.SampleQueues(t0, fq("K7Q2MX", 0, 4000, 0))
 	if err := c.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -501,7 +497,7 @@ func TestChartsProduceSVGWithPalette(t *testing.T) {
 
 func TestSnapshotIsACopy(t *testing.T) {
 	c := newCol(t)
-	c.SampleSessions(t0, []routeros.Session{sess("K7Q2MX", "*1", 100, 1000, 20*time.Second)}, nil)
+	c.SampleQueues(t0, fq("K7Q2MX", 100, 1000, 0))
 	c.SamplePing(t0, routeros.PingResult{Target: "8.8.8.8", Received: 5, AvgRTT: 12 * time.Millisecond})
 	c.note("ping", errors.New("boom"))
 	snap := c.Snapshot()
@@ -518,7 +514,7 @@ func TestSnapshotIsACopy(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 200; i++ {
-			c.SampleSessions(t0.Add(time.Duration(i)*time.Second), []routeros.Session{sess("K7Q2MX", "*1", uint64(i), uint64(i), 20*time.Second)}, nil)
+			c.SampleQueues(t0.Add(time.Duration(i)*time.Second), fq("K7Q2MX", uint64(i), uint64(i), 0))
 		}
 		close(done)
 	}()
@@ -530,14 +526,14 @@ func TestSnapshotIsACopy(t *testing.T) {
 
 func TestPortAllowFilter(t *testing.T) {
 	ifs := []routeros.Iface{{Name: "ether1", RxBytes: 1, TxBytes: 1, Running: true}, {Name: "ether2"}, {Name: "sfp-sfpplus1"},
-		{Name: "br-hotspot"}, {Name: "vlan30-customers"}, {Name: "bridge"}, {Name: "wg-ftn"}, {Name: "lo"}}
+		{Name: "br-customers"}, {Name: "vlan30-customers"}, {Name: "bridge"}, {Name: "wg-ftn"}, {Name: "lo"}}
 	legacy := newCol(t)
 	legacy.SamplePorts(t0, ifs)
 	if _, ok := legacy.L.Ports["ether2"]; !ok || len(legacy.L.Ports) != 5 {
 		t.Fatalf("legacy prefix filter: %v", legacy.L.Ports)
 	}
 	cfg := testCfg()
-	cfg.PortAllow = []string{"ether1", "sfp-sfpplus1", "br-hotspot", "vlan30-customers"}
+	cfg.PortAllow = []string{"ether1", "sfp-sfpplus1", "br-customers", "vlan30-customers"}
 	c := New(filepath.Join(t.TempDir(), "m.json"), cfg, routeros.NewMock(), fakeDir{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	c.SamplePorts(t0, ifs)
 	if len(c.L.Ports) != 4 {

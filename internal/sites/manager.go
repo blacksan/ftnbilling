@@ -31,10 +31,7 @@ type Options struct {
 	Log *slog.Logger
 	// NewClient overrides how a router client is built (tests).
 	NewClient func(store.Site) routeros.Client
-	// OnJoined is called after a join script was handed out and the runtime
-	// rebuilt: the router may be new, so its profiles must be pushed again.
-	OnJoined func(siteID string)
-	Now      func() time.Time
+	Now       func() time.Time
 	// DataKey seals the PPPoE password at rest (DATA_KEY, 32 bytes). Without it a
 	// PPPoE router cannot be saved.
 	DataKey []byte
@@ -49,7 +46,7 @@ type Manager struct {
 	opt  Options
 	now  func() time.Time
 	pfx  netip.Prefix
-	mock *routeros.Mock // shared by env-mode buildings when ROUTER_MOCK=true
+	mock *routeros.Mock // shared by every building when ROUTER_MOCK=true
 
 	mu       sync.RWMutex
 	rts      map[string]*Runtime
@@ -155,25 +152,14 @@ func (m *Manager) newClient(s store.Site) routeros.Client {
 	if m.opt.NewClient != nil {
 		return m.opt.NewClient(s)
 	}
-	if s.Mode == store.SiteModeWG {
-		return routeros.NewREST(fmt.Sprintf("http://%s:%d", s.TunnelIP, s.RESTPort), s.RESTUser, s.RESTPass)
-	}
 	if m.cfg.RouterMock {
 		return m.mock
 	}
-	return routeros.NewREST(m.cfg.RouterURL, m.cfg.RouterUser, m.cfg.RouterPass)
+	return routeros.NewREST(fmt.Sprintf("http://%s:%d", s.TunnelIP, s.RESTPort), s.RESTUser, s.RESTPass).WithTimeout(m.cfg.RouterReadTimeout)
 }
 
-// Effective returns the site as the runtime sees it: defaults filled in, and
-// for an env-mode building the layout read from the environment.
+// Effective returns the site as the runtime sees it: defaults filled in.
 func (m *Manager) Effective(s store.Site) store.Site { return ApplyDefaults(m.cfg, s) }
-
-// GuardRequired tells whether portal requests for this building must prove
-// that the MAC is on its hotspot. Always for wg buildings; VERIFY_HOTSPOT_HOST
-// only decides it for the env building.
-func (m *Manager) GuardRequired(s store.Site) bool {
-	return s.Mode == store.SiteModeWG || m.cfg.VerifyHotspotHost
-}
 
 func (m *Manager) collectorConfig(s store.Site) metrics.Config {
 	subnet, _ := netip.ParsePrefix(s.CustomerSubnet)
@@ -181,13 +167,11 @@ func (m *Manager) collectorConfig(s store.Site) metrics.Config {
 		WAN: s.WANInterface, OLT: s.OLTInterface, WANCapMbps: s.WANCapMbps, OLTCapMbps: s.OLTCapMbps, FUPTB: s.FUPTB,
 		PingTargets: m.cfg.PingTargets, Subnet: subnet.Masked(),
 		FlowEvery: m.cfg.FlowEvery, PortEvery: m.cfg.PortEvery, PingEvery: m.cfg.PingEvery, DNSEvery: m.cfg.DNSEvery, SaveEvery: m.cfg.SaveEvery,
-		NetflowAddr: m.cfg.NetflowAddr, SiteID: s.ID, IPoE: billing.IPoE(s),
+		NetflowAddr: m.cfg.NetflowAddr, SiteID: s.ID,
 	}
 	if m.cfg.RouterMock {
 		c.NetflowAddr = "off" // the fake router sends no traffic-flow
-		if s.Mode == store.SiteModeEnv {
-			c.Synthetic = true
-		}
+		c.Synthetic = true
 	}
 	if s.Mode == store.SiteModeWG {
 		c.PortAllow = []string{s.WANInterface, s.OLTInterface, CustomerBridge}
@@ -212,21 +196,6 @@ func (m *Manager) startLocked(s store.Site) {
 	}
 	col := metrics.New(MetricsPath(m.cfg.DataDir, id), m.collectorConfig(s), client, dir, m.log.With("site", id))
 	rt := &Runtime{Site: s, Client: client, Col: col, done: make(chan struct{})}
-	if m.GuardRequired(s) {
-		rt.Guard = NewHostGuard(func(ctx context.Context) (map[string]string, error) {
-			hs, err := m.Router(id).Hosts(ctx)
-			if err != nil {
-				return nil, err
-			}
-			out := make(map[string]string, len(hs))
-			for _, h := range hs {
-				if mac, err := billing.NormalizeMAC(h.MAC); err == nil {
-					out[mac] = strings.TrimSpace(h.Address)
-				}
-			}
-			return out, nil
-		})
-	}
 	ctx, cancel := context.WithCancel(m.ctx)
 	rt.cancel = cancel
 	m.mu.Lock()
@@ -284,31 +253,6 @@ func (m *Manager) Collector(siteID string) *metrics.Collector {
 		return rt.Col
 	}
 	return nil
-}
-
-// Guard returns the building's host guard, or nil when none runs for it.
-func (m *Manager) Guard(siteID string) *HostGuard {
-	if rt := m.runtime(siteID); rt != nil {
-		return rt.Guard
-	}
-	return nil
-}
-
-// VerifyHost reports whether a portal request for (mac, ip) may be trusted as
-// coming from the building's hotspot. It fails closed: when a guard is
-// required but the building has no running guard, the answer is no.
-func (m *Manager) VerifyHost(ctx context.Context, siteID, mac, ip string) bool {
-	var s store.Site
-	var ok bool
-	m.st.View(func(d *store.Data) { s, ok = d.Sites[siteID] })
-	if !ok || s.Removed {
-		return false
-	}
-	if !m.GuardRequired(s) {
-		return true
-	}
-	g := m.Guard(siteID)
-	return g != nil && g.OK(ctx, mac, ip)
 }
 
 // Stray is how many NetFlow datagrams came from a source that belongs to no building.
@@ -403,9 +347,6 @@ func (m *Manager) OpenPPPoEPass(s store.Site) (string, error) {
 // password is bound to it).
 func (m *Manager) applyInput(s store.Site, in SiteInput) (store.Site, error) {
 	s.Name, s.Notes, s.SupportPhone = clean(in.Name, 60), clean(in.Notes, 300), clean(in.SupportPhone, 30)
-	if s.Mode == store.SiteModeEnv { // the layout of an env building comes from the environment
-		return s, nil
-	}
 	s.WANInterface, s.OLTInterface = strings.TrimSpace(in.WANInterface), strings.TrimSpace(in.OLTInterface)
 	s.CustomerSubnet, s.VLANID = strings.TrimSpace(in.CustomerNet), in.VLANID
 	s.WANCapMbps, s.OLTCapMbps, s.FUPTB = in.WANCapMbps, in.OLTCapMbps, in.FUPTB
@@ -603,7 +544,7 @@ func (m *Manager) Status(ctx context.Context, siteID string) (SiteStatus, bool) 
 			}
 		}
 	}
-	pc, cancel := context.WithTimeout(ctx, 3*time.Second)
+	pc, cancel := context.WithTimeout(ctx, routeros.DefaultTimeout)
 	defer cancel()
 	if err := m.Router(siteID).Ping(pc); err != nil {
 		st.RESTErr = err.Error()

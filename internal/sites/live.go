@@ -744,7 +744,6 @@ type Client struct {
 	UsageMonthBytes   uint64  `json:"usage_month_bytes"`
 	SuspendedOnRouter bool    `json:"suspended_on_router"`
 	InSync            bool    `json:"in_sync"`
-	RouterUser        string  `json:"router_user"`
 }
 
 // ClientCounts are the totals of the whole list, before q/kind/online filters.
@@ -760,7 +759,6 @@ type ClientAccount struct {
 	LeaseStatus                            string
 	LastSeen                               time.Time
 	SuspendedOnRouter, InSync              bool
-	RouterUser                             string
 	UsageToday, UsageMonth                 uint64
 	LiveDown, LiveUp                       float64 // bit/s from the collector
 	LiveAt                                 time.Time
@@ -768,9 +766,9 @@ type ClientAccount struct {
 
 // ClientDevice is a device that has no account (billing.UnregDevice, trimmed).
 type ClientDevice struct {
-	MAC, IP, HostName, Vendor, RouterUser string
-	Online                                bool
-	LastSeen                              time.Time
+	MAC, IP, HostName, Vendor string
+	Online                    bool
+	LastSeen                  time.Time
 }
 
 // ClientInput is everything MergeClients needs.
@@ -828,7 +826,7 @@ func MergeClients(in ClientInput) []Client {
 		}
 		c := Client{Kind: "flat", AccountID: a.ID, Code: a.Code, Flat: a.Flat, Tenant: a.Tenant, State: a.State, MAC: mac,
 			Vendor: billing.Vendor(mac), IP: a.IP, LeaseStatus: a.LeaseStatus, SuspendedOnRouter: a.SuspendedOnRouter, InSync: a.InSync,
-			RouterUser: a.RouterUser, UsageTodayBytes: a.UsageToday, UsageMonthBytes: a.UsageMonth}
+			UsageTodayBytes: a.UsageToday, UsageMonthBytes: a.UsageMonth}
 		if c.LeaseStatus == "" {
 			c.LeaseStatus = "none"
 		}
@@ -876,7 +874,7 @@ func MergeClients(in ClientInput) []Client {
 		}
 		macs[mac] = true
 		c := Client{Kind: "unregistered", MAC: mac, Vendor: firstNonEmpty(d.Vendor, billing.Vendor(mac)), HostName: d.HostName, IP: d.IP,
-			LeaseStatus: "none", InSync: true, RouterUser: d.RouterUser}
+			LeaseStatus: "none", InSync: true}
 		if l, ok := leaseByMAC[mac]; ok {
 			c.HostName = firstNonEmpty(c.HostName, l.Host)
 			c.IP = firstNonEmpty(l.IP, c.IP)
