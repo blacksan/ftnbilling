@@ -124,7 +124,7 @@ class PortsViewModel(
     /** True when the typed router name matches (or no name is needed). */
     fun canConfirm(): Boolean {
         val p = _state.value.pending ?: return false
-        return !p.confirm.needsName || p.typed.trim().equals(routerName.trim(), ignoreCase = true)
+        return !p.confirm.needsName || p.typed.trim() == routerName.trim()
     }
 
     fun confirm() {

@@ -300,7 +300,7 @@ type rebootFail struct {
 // router connected, one reboot per router per 10 minutes (one shared limiter),
 // then /system/reboot. The caller has already checked the owner role and audits.
 func (s *Server) rebootRouter(ctx context.Context, st store.Site, confirmName string) *rebootFail {
-	if !strings.EqualFold(strings.TrimSpace(confirmName), strings.TrimSpace(st.Name)) {
+	if strings.TrimSpace(confirmName) != strings.TrimSpace(st.Name) || strings.TrimSpace(st.Name) == "" {
 		return &rebootFail{Kind: "validation", Msg: "type the router's name to confirm", Fields: map[string]string{"confirm_name": "type the router's name to confirm"}}
 	}
 	endReboot, free := s.mgr.BeginReboot(st.ID)

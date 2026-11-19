@@ -324,7 +324,15 @@ type SiteInput struct {
 	Confirm bool
 	// ConfirmName is the typed router name that a change of the admin LAN ports of a set-up router needs. Not stored.
 	ConfirmName string
+	// Base is the layout the editor started from (the effective LAN ports, customer ports, OLT port and VLAN
+	// it was shown). A field the editor left as it was keeps the stored value, so a form that has been open
+	// while the Ports tab changed a port cannot put the old value back. A field the editor changed while the
+	// stored value had moved on is refused (ErrStaleLayout). Nil: every field of the input counts.
+	Base *SiteInput
 }
+
+// ErrStaleLayout: the ports changed since the editor loaded them; reload and try again.
+var ErrStaleLayout = errors.New("The ports of this router changed since this page was loaded (for example on the Ports tab). Reload the page and make the change again.")
 
 // SiteInputOf is the input that leaves a router as it is (a PATCH starts from it).
 func SiteInputOf(st store.Site) SiteInput {
@@ -450,9 +458,65 @@ func (m *Manager) CreateSite(in SiteInput) (store.Site, error) {
 	return out, nil
 }
 
-// UpdateSite saves the editable fields and restarts the building's runtime.
+// layoutPorts is the port part of an input in the form the server compares: defaults filled in, no spaces.
+type layoutPorts struct {
+	lan, cust, olt string
+	vlan           int
+}
+
+func (m *Manager) layoutOf(in SiteInput) layoutPorts {
+	e := m.Effective(store.Site{LANPorts: in.LANPorts, OLTInterface: in.OLTInterface})
+	return layoutPorts{lan: strings.Join(SplitPorts(e.LANPorts), ","), cust: strings.Join(SplitPorts(in.CustomerPorts), ","), olt: e.OLTInterface, vlan: in.VLANID}
+}
+
+// rebaseInput applies "only what the editor changed": a port field equal to the editor's Base takes the stored
+// value; one that differs from Base while the store has moved on is stale.
+func (m *Manager) rebaseInput(cur store.Site, in SiteInput) (SiteInput, error) {
+	if in.Base == nil {
+		return in, nil
+	}
+	base, have, want := m.layoutOf(*in.Base), m.layoutOf(SiteInputOf(cur)), m.layoutOf(in)
+	if want.lan == base.lan {
+		in.LANPorts = cur.LANPorts
+	} else if have.lan != base.lan {
+		return in, ErrStaleLayout
+	}
+	if want.cust == base.cust {
+		in.CustomerPorts = cur.CustomerPorts
+	} else if have.cust != base.cust {
+		return in, ErrStaleLayout
+	}
+	if want.olt == base.olt {
+		in.OLTInterface = cur.OLTInterface
+	} else if have.olt != base.olt {
+		return in, ErrStaleLayout
+	}
+	if want.vlan == base.vlan {
+		in.VLANID = cur.VLANID
+	} else if have.vlan != base.vlan {
+		return in, ErrStaleLayout
+	}
+	return in, nil
+}
+
+// UpdateSite saves the editable fields and restarts the building's runtime. It takes the same per-router
+// lock as the port pass and ChangePort, so a form save and a Ports-tab change never interleave.
 func (m *Manager) UpdateSite(id string, in SiteInput) error {
 	var portsChanged bool
+	e := m.cport.entry(id)
+	e.run.Lock()
+	defer e.run.Unlock()
+	var cur0 store.Site
+	var found bool
+	m.st.View(func(d *store.Data) { cur0, found = d.Sites[id] })
+	if !found || cur0.Removed {
+		return billing.ErrNoSite
+	}
+	asked := in // what the editor sent; rebased again inside the transaction against the stored site
+	in, err0 := m.rebaseInput(cur0, asked)
+	if err0 != nil {
+		return err0
+	}
 	if err := m.checkPortsExist(id, in); err != nil {
 		return err
 	}
@@ -461,6 +525,10 @@ func (m *Manager) UpdateSite(id string, in SiteInput) error {
 		cur, ok := d.Sites[id]
 		if !ok || cur.Removed {
 			return billing.ErrNoSite
+		}
+		in, err := m.rebaseInput(cur, asked)
+		if err != nil {
+			return err
 		}
 		s, err := m.applyInput(cur, in)
 		if err != nil {
@@ -488,6 +556,14 @@ func (m *Manager) UpdateSite(id string, in SiteInput) error {
 		if (now.OLTInterface != was.OLTInterface || now.VLANID != was.VLANID) && siteIsSetUp(cur) && !in.Confirm {
 			return ErrOLTConfirmRequired
 		}
+		// a port that became an admin LAN port or the OLT uplink is not kept off any more
+		var keepOff []string
+		for _, p := range SplitPorts(s.DisabledPorts) {
+			if p != now.OLTInterface && !containsStr(SplitPorts(now.LANPorts), p) {
+				keepOff = append(keepOff, p)
+			}
+		}
+		s.DisabledPorts = strings.Join(keepOff, ",")
 		d.Sites[id] = s
 		return nil
 	})

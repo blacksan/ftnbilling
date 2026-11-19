@@ -676,3 +676,74 @@ func TestMovingAPortToLANOrOLTForgetsItsStoredOff(t *testing.T) {
 		t.Fatalf("%q", f.site(s.ID).DisabledPorts)
 	}
 }
+
+func TestStaleFormSaveKeepsAPortsTabChange(t *testing.T) {
+	f, s, m := portsRig(t)
+	ctx := context.Background()
+	// the form is loaded now ...
+	base := SiteInputOf(f.site(s.ID))
+	stale := base
+	stale.Base = &base
+	// ... then the Ports tab adds ether4 as an admin LAN port and makes ether5 a customer port
+	if _, err := f.m.ChangePort(ctx, s.ID, "ether4", PortChange{Role: sp("lan")}, ownerWho); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.m.ChangePort(ctx, s.ID, "ether5", PortChange{Role: sp("customer")}, operWho); err != nil {
+		t.Fatal(err)
+	}
+	f.m.cport.wg.Wait()
+	// the stale form (which still says ether2 / ether3) only changes the notes
+	stale.Notes = "new notes"
+	if err := f.m.UpdateSite(s.ID, stale); err != nil {
+		t.Fatal(err)
+	}
+	f.m.cport.wg.Wait()
+	got := f.site(s.ID)
+	if got.Notes != "new notes" || got.LANPorts != "ether2,ether4" || got.CustomerPorts != "ether3,ether5" {
+		t.Fatalf("%q %q %q", got.Notes, got.LANPorts, got.CustomerPorts)
+	}
+	if r := portRow(m, "ether4"); r == nil || r["bridge"] != "br-lan" {
+		t.Fatalf("the Ports change was undone on the router: %v", m.Table("/interface/bridge/port"))
+	}
+	// a form that CHANGES a port the Ports tab moved meanwhile is refused as stale
+	again := base
+	again.Base = &base
+	again.LANPorts, again.ConfirmName = "ether5", "Block A"
+	if err := f.m.UpdateSite(s.ID, again); !errors.Is(err, ErrStaleLayout) {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestUpdateSiteForgetsStoredOffForANewLANOrOLTPort(t *testing.T) {
+	f, s, _ := portsRig(t)
+	f.st.Update(func(d *store.Data) error {
+		x := d.Sites[s.ID]
+		x.DisabledPorts = "ether4,ether5"
+		d.Sites[s.ID] = x
+		return nil
+	})
+	if err := f.saveInput(s.ID, func(in *SiteInput) { in.LANPorts, in.ConfirmName = "ether2,ether4", "Block A" }); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.site(s.ID).DisabledPorts; got != "ether5" {
+		t.Fatalf("LAN: %q", got)
+	}
+	if err := f.saveInput(s.ID, func(in *SiteInput) { in.OLTInterface, in.Confirm = "ether5", true }); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.site(s.ID).DisabledPorts; got != "" {
+		t.Fatalf("OLT: %q", got)
+	}
+}
+
+func TestTypedRouterNameIsExact(t *testing.T) {
+	f, s, _ := twoLANs(t)
+	for _, name := range []string{"block a", "BLOCK A"} {
+		if pe := portErrOf(t, f, s.ID, "ether4", PortChange{Role: sp("unused"), ConfirmName: name}, ownerWho); pe.Kind != PortErrConfirm {
+			t.Errorf("%q: %+v", name, pe)
+		}
+	}
+	if err := f.saveInput(s.ID, func(in *SiteInput) { in.LANPorts, in.ConfirmName = "ether2", "block a" }); !errors.Is(err, ErrLANConfirmRequired) {
+		t.Fatalf("%v", err)
+	}
+}

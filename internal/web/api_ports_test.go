@@ -219,3 +219,21 @@ func TestAPIRouterLANPortsChangeNeedsTheNameAndAConnectedPort(t *testing.T) {
 		t.Fatalf("cable-less: %d %s", res.Status, res.Raw)
 	}
 }
+
+func TestAPIRouterPatchKeepsPortsTabChanges(t *testing.T) {
+	r, _, path := portsRig(t)
+	id := "/routers/" + r.A.ID
+	if res := r.call(r.owner.Access, "PATCH", path+"/ether4", map[string]any{"role": "lan"}, nil); res.Status != 200 {
+		t.Fatalf("%d %s", res.Status, res.Raw)
+	}
+	if res := r.call(r.owner.Access, "PATCH", id, map[string]any{"support_phone": "0700000001"}, nil); res.Status != 200 {
+		t.Fatalf("%d %s", res.Status, res.Raw)
+	}
+	j := r.call(r.view.Access, "GET", id, nil, nil).JSON(t)
+	if r2, ok := j["router"].(map[string]any); ok {
+		j = r2
+	}
+	if j["lan_ports"] != "ether2,ether4" {
+		t.Fatalf("lan_ports: %v", j["lan_ports"])
+	}
+}
