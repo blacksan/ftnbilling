@@ -1,6 +1,7 @@
 package web_test
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -120,25 +121,31 @@ func TestMgmtWinboxFollowsTheJoinReport(t *testing.T) {
 	// newSite makes a built router (it has a tunnel address). posted: the report goes through the real
 	// endpoint (the join fetch and report are rate limited, so only one router does that); otherwise the
 	// stored report text is written directly ("" for none).
+	nth := 10 // every router has its own tunnel address (the database insists)
 	newSite := func(name string) string {
+		nth++
 		site, err := r.mgr.CreateSite(sites.SiteInput{Name: name})
 		if err != nil {
 			t.Fatal(err)
 		}
-		r.st.Update(func(d *store.Data) error {
+		if err := r.st.Update(func(d *store.Data) error {
 			x := d.Sites[site.ID]
-			x.TunnelIP = "10.99.0.9"
+			x.TunnelIP = fmt.Sprintf("10.99.0.%d", nth)
 			d.Sites[site.ID] = x
 			return nil
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 		return site.ID
 	}
 	seed := func(id, stored string) {
-		r.st.Update(func(d *store.Data) error {
+		if err := r.st.Update(func(d *store.Data) error {
 			k := sites.JoinReportKey(id)
 			d.Settings[k] = store.Setting{Key: k, Value: stored, UpdatedAt: time.Now()}
 			return nil
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	apiFlag := func(id string) any {
 		return r.call(r.view.Access, "GET", "/sites/"+id, nil, nil).JSON(t)["mgmt_winbox"]
