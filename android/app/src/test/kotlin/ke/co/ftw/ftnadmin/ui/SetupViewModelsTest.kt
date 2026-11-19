@@ -56,14 +56,13 @@ class SetupViewModelsTest {
         server.start()
         val sessions = SessionManager(MemoryTokenStore(Session("a", "", "r", "", "d", owner)))
         sessions.restore()
-        api = ApiClient.create(server.url("/").toString(), sessions)
+        api = ApiClient.create(server.url("/").toString(), sessions, io = main.dispatcher)
         routes["GET /api/v1/routers/s1"] = ok("""{"id":"s1","name":"Kilimani","access_mode":"ipoe"}""")
     }
 
     @After fun tearDown() {
-        // Let responses still in flight land while the test Main dispatcher exists, so nothing leaks into the next test.
-        Thread.sleep(300)
-        main.dispatcher.scheduler.advanceUntilIdle()
+        // Cancel the view models first, so no call is resumed on a Main that is about to be reset.
+        main.cancelViewModels()
         server.shutdown()
     }
 
@@ -84,7 +83,7 @@ class SetupViewModelsTest {
 
     private fun requests(prefix: String) = synchronized(log) { log.filter { "${it.method} ${it.requestUrl!!.encodedPath}".startsWith(prefix) } }
 
-    private fun setupVm() = SetupViewModel("s1", SiteSetupRepository(api))
+    private fun setupVm() = main.track(SetupViewModel("s1", SiteSetupRepository(api)))
 
     private fun item(id: String, status: String, fix: String = "") =
         """{"id":"$id","group":"network","status":"$status","title":"T $id","detail":"d"$fix}"""
@@ -213,7 +212,7 @@ class SetupViewModelsTest {
     private val greenSetup = setupJson("ready", "ok", "ok", "ok", "ok", kind = "none")
 
     private fun setupCardVm(user: UserInfo = owner) =
-        RouterSetupViewModel("s1", SiteSetupRepository(api), SitesRepository(api), user, pollMs = 10)
+        main.track(RouterSetupViewModel("s1", SiteSetupRepository(api), SitesRepository(api), user, pollMs = 10))
 
     private fun TestScope.settle() {
         advanceUntilIdle()

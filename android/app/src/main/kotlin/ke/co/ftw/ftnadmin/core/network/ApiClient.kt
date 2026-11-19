@@ -2,10 +2,11 @@ package ke.co.ftw.ftnadmin.core.network
 
 import java.io.IOException
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
@@ -33,6 +34,8 @@ class ApiClient(
     baseUrl: HttpUrl,
     private val http: OkHttpClient,
     val json: Json = ApiJson,
+    /** Where response bodies are read. Tests pass their own dispatcher so no work hops to a real thread. */
+    private val io: CoroutineDispatcher = Dispatchers.IO,
 ) {
     private val root: HttpUrl = baseUrl.newBuilder().addPathSegments("api/v1").build()
 
@@ -95,7 +98,7 @@ class ApiClient(
         }
         val req = Request.Builder().url(url).method(method, rb).header("Accept", "application/json").build()
         val response = http.newCall(req).await()
-        return withContext(Dispatchers.IO) {
+        return withContext(io) {
             response.use { r ->
                 val text = try {
                     r.body?.string().orEmpty()
@@ -127,6 +130,7 @@ class ApiClient(
         )
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class) // resume(value, onCancellation)
     private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
         cont.invokeOnCancellation { cancel() }
         enqueue(
@@ -136,7 +140,13 @@ class ApiClient(
                 }
 
                 override fun onResponse(call: Call, response: Response) {
-                    cont.resume(response)
+                    // If the caller was cancelled while the response was arriving, nobody will read it: close it
+                    // so the connection goes back to the pool instead of leaking.
+                    if (!cont.isActive) {
+                        response.close()
+                        return
+                    }
+                    cont.resume(response) { _ -> response.close() }
                 }
             },
         )
@@ -156,7 +166,12 @@ class ApiClient(
          * Builds the production client. [baseUrl] is the server root, e.g. `https://isp.ftw.co.ke`.
          * The refresh client is separate so refreshing never recurses into the authenticator.
          */
-        fun create(baseUrl: String, sessions: SessionManager, json: Json = ApiJson): ApiClient {
+        fun create(
+            baseUrl: String,
+            sessions: SessionManager,
+            json: Json = ApiJson,
+            io: CoroutineDispatcher = Dispatchers.IO,
+        ): ApiClient {
             val base = baseUrl.toHttpUrl()
             val plain = plainHttpClient()
             val refreshUrl = base.newBuilder().addPathSegments("api/v1/auth/refresh").build()
@@ -165,7 +180,7 @@ class ApiClient(
                 .addInterceptor(IdempotencyInterceptor())
                 .authenticator(TokenAuthenticator(sessions, plain, refreshUrl, json))
                 .build()
-            return ApiClient(base, http, json)
+            return ApiClient(base, http, json, io)
         }
     }
 }

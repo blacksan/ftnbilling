@@ -353,8 +353,6 @@ data class NewDevice(
     @SerialName("last_seen") val lastSeen: String? = null,
     val hits: Int = 0,
     @SerialName("suggested_account") val suggestedAccount: SuggestedAccount? = null,
-    /** Name of the router entry holding this MAC when the server has no account for it. */
-    @SerialName("router_user") val routerUser: String = "",
     /** Set when the MAC belongs to a customer of another apartment: not provisioned here. */
     @SerialName("belongs_to") val belongsTo: BelongsTo? = null,
 ) {

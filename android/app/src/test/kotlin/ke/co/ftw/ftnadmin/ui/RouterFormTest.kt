@@ -56,13 +56,12 @@ class RouterFormTest {
         server.start()
         val sessions = SessionManager(MemoryTokenStore(Session("a", "", "r", "", "d", UserInfo("1", "b", "owner"))))
         sessions.restore()
-        api = ApiClient.create(server.url("/").toString(), sessions)
+        api = ApiClient.create(server.url("/").toString(), sessions, io = main.dispatcher)
     }
 
     @After fun tearDown() {
-        // Let responses still in flight land while the test Main dispatcher exists, so nothing leaks into the next test.
-        Thread.sleep(300)
-        main.dispatcher.scheduler.advanceUntilIdle()
+        // Cancel the view models first, so no call is resumed on a Main that is about to be reset.
+        main.cancelViewModels()
         server.shutdown()
     }
 
@@ -88,7 +87,7 @@ class RouterFormTest {
             """{"router":{"router_id":"r9","router_name":"Lav"},"join":{"command":"/tool fetch x","expires_at":"2099-01-01T00:00:00Z"}}""",
             201,
         )
-        val vm = AddRouterViewModel(RouterLiveRepository(api))
+        val vm = main.track(AddRouterViewModel(RouterLiveRepository(api)))
         vm.edit(RouterField.NAME) { it.copy(name = " Lav ", wanMode = "pppoe", pppoeUser = "u1", pppoePass = "s3cret", lanPorts = "ether2,ether3") }
         vm.submit()
         await(vm.state) { it.created != null }
@@ -107,7 +106,7 @@ class RouterFormTest {
         routes["POST /api/v1/routers"] = MockResponse().setResponseCode(400).setBody(
             """{"error":{"code":"validation_failed","message":"invalid","details":{"fields":{"wan_address":"must be IPv4 with prefix","lan_subnet":"overlaps customer_subnet"}}}}""",
         )
-        val vm = AddRouterViewModel(RouterLiveRepository(api))
+        val vm = main.track(AddRouterViewModel(RouterLiveRepository(api)))
         vm.edit(RouterField.NAME) { it.copy(name = "Lav", wanMode = "static", wanAddress = "bad") }
         vm.submit()
         await(vm.state) { it.fieldErrors.isNotEmpty() }
@@ -127,7 +126,7 @@ class RouterFormTest {
         )
         routes["PATCH /api/v1/routers/r1"] = ok("""{"router_id":"r1","router_name":"Kilimani"}""")
         var saved = false
-        val vm = EditRouterViewModel("r1", SitesRepository(api), RouterLiveRepository(api), onSaved = { saved = true })
+        val vm = main.track(EditRouterViewModel("r1", SitesRepository(api), RouterLiveRepository(api), onSaved = { saved = true }))
         await(vm.state) { it.form != null }
         val f = vm.state.value.form!!
         assertTrue(f.pppoePassSet)
@@ -146,7 +145,7 @@ class RouterFormTest {
     @Test fun clearingThePasswordSendsPppoePassClear() = runTest(main.dispatcher) {
         routes["GET /api/v1/routers/r1"] = ok("""{"router_id":"r1","router_name":"Kilimani","wan_mode":"pppoe","pppoe_pass_set":true}""")
         routes["PATCH /api/v1/routers/r1"] = ok("""{"router_id":"r1"}""")
-        val vm = EditRouterViewModel("r1", SitesRepository(api), RouterLiveRepository(api))
+        val vm = main.track(EditRouterViewModel("r1", SitesRepository(api), RouterLiveRepository(api)))
         await(vm.state) { it.form != null }
         vm.edit(RouterField.PPPOE_PASS) { it.copy(pppoePassClear = true) }
         vm.save()
@@ -159,7 +158,7 @@ class RouterFormTest {
     @Test fun changingTheOltPortOrVlanAsksFirstAndSendsConfirm() = runTest(main.dispatcher) {
         routes["GET /api/v1/routers/r1"] = ok("""{"router_id":"r1","router_name":"Kilimani","olt_interface":"sfp-sfpplus1","vlan_id":100}""")
         routes["PATCH /api/v1/routers/r1"] = ok("""{"router_id":"r1"}""")
-        val vm = EditRouterViewModel("r1", SitesRepository(api), RouterLiveRepository(api))
+        val vm = main.track(EditRouterViewModel("r1", SitesRepository(api), RouterLiveRepository(api)))
         await(vm.state) { it.form != null }
         // a customer port needs no confirm
         vm.edit(RouterField.CUSTOMER_PORTS) { it.copy(customerPorts = "ether4,ether5") }
@@ -182,7 +181,7 @@ class RouterFormTest {
     @Test fun customerPortsAreAListNotJustTheBenchAlias() = runTest(main.dispatcher) {
         routes["GET /api/v1/routers/r1"] = ok("""{"router_id":"r1","router_name":"Kilimani","customer_ports":["ether4","ether5"],"bench_port":"ether4","disabled_ports":["ether6"]}""")
         routes["PATCH /api/v1/routers/r1"] = ok("""{"router_id":"r1"}""")
-        val vm = EditRouterViewModel("r1", SitesRepository(api), RouterLiveRepository(api))
+        val vm = main.track(EditRouterViewModel("r1", SitesRepository(api), RouterLiveRepository(api)))
         await(vm.state) { it.form != null }
         assertEquals("ether4,ether5", vm.state.value.form!!.customerPorts)
         vm.edit(RouterField.CUSTOMER_PORTS) { it.copy(customerPorts = togglePort(it.customerPorts, "ether4")) }
@@ -197,7 +196,7 @@ class RouterFormTest {
     @Test fun changingTheAdminLanAsksForTheRouterNameAndSendsIt() = runTest(main.dispatcher) {
         routes["GET /api/v1/routers/r1"] = ok("""{"router_id":"r1","router_name":"Kilimani","lan_ports":"ether2"}""")
         routes["PATCH /api/v1/routers/r1"] = ok("""{"router_id":"r1"}""")
-        val vm = EditRouterViewModel("r1", SitesRepository(api), RouterLiveRepository(api))
+        val vm = main.track(EditRouterViewModel("r1", SitesRepository(api), RouterLiveRepository(api)))
         await(vm.state) { it.form != null }
         vm.edit(RouterField.LAN_PORTS) { it.copy(lanPorts = "ether3") }
         vm.save()
@@ -221,7 +220,7 @@ class RouterFormTest {
     @Test fun blankOltPortIsTheDefaultPortAndNoDialogWhenNothingChanges() = runTest(main.dispatcher) {
         routes["GET /api/v1/routers/r1"] = ok("""{"router_id":"r1","router_name":"Kilimani","olt_interface":"","vlan_id":0,"auto_fixes":{"paused":true}}""")
         routes["PATCH /api/v1/routers/r1"] = ok("""{"router_id":"r1"}""")
-        val vm = EditRouterViewModel("r1", SitesRepository(api), RouterLiveRepository(api))
+        val vm = main.track(EditRouterViewModel("r1", SitesRepository(api), RouterLiveRepository(api)))
         await(vm.state) { it.form != null }
         assertTrue(vm.state.value.autoFixesPaused)
         // typing the default port into a blank field is not a change

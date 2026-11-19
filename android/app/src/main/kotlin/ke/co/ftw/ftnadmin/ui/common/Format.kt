@@ -43,12 +43,9 @@ fun parseInstant(s: String?): Instant? = if (s.isNullOrBlank()) null else try {
 }
 
 private val DATE_TIME = DateTimeFormatter.ofPattern("d MMM yyyy HH:mm", Locale.ENGLISH).withZone(ZoneId.of("Africa/Nairobi"))
-private val DATE = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH).withZone(ZoneId.of("Africa/Nairobi"))
 
 /** Nairobi local time, or "-" when absent. */
 fun formatDateTime(s: String?): String = parseInstant(s)?.let(DATE_TIME::format) ?: "-"
-
-fun formatDate(s: String?): String = parseInstant(s)?.let(DATE::format) ?: "-"
 
 /** "12 s ago", "3 min ago", "2 h ago", "4 d ago", or "never". */
 fun formatAge(s: String?, now: Instant = Instant.now()): String {
