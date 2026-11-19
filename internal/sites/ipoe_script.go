@@ -116,6 +116,8 @@ func rollbackBase(hotspot string) string {
 	var b strings.Builder
 	b.WriteString(":log warning \"ftn: IPoE rollback running\"\n")
 	b.WriteString(g(`/ip dhcp-server disable [find where name="` + billing.DHCPServerName + `"]`)) // before the old server is enabled: one server per interface
+	// nobody is walled while ftn-dhcp is off: the walled rules reject these lists (the server's sweep does the same for kits that lack this line)
+	b.WriteString(g(`/ip firewall address-list disable [find where list~"^ftn-(unreg|suspended)\$"]`))
 	b.WriteString(g(`/ip hotspot enable [find where name="` + hotspot + `"]`))
 	b.WriteString(g(`/ip firewall filter remove [find where comment~"^ftn: ipoe"]`))
 	b.WriteString(g(`/ip firewall nat remove [find where comment~"^ftn: ipoe"]`))

@@ -586,6 +586,11 @@ func firstForeignQueue(rows []routeros.Row) string {
 
 func (j *jobCtl) stepDHCP() (string, error) {
 	pl := j.plan
+	// Staging starts from a clean wall: leftovers of an earlier cutover or rollback
+	// (an enabled ftn-unreg range) must not wall hotspot clients before the switch.
+	if _, err := j.wallOff(); err != nil {
+		return "", err
+	}
 	pools, err := j.rows("/ip/pool")
 	if err != nil {
 		return "", routerErr(err, "reading the pools")
@@ -696,6 +701,10 @@ func (j *jobCtl) stageFlats(lists []routeros.Row) (string, error) {
 func (j *jobCtl) stepFirewall() (string, error) {
 	if _, err := fmtAddr(j.m.cfg.PublicIP); err != nil {
 		return "", fail(JobNeedsAction, "PUBLIC_IP is not set on the server: walled flats could not reach the payment page")
+	}
+	// The walled rules reject ftn-unreg and ftn-suspended: those lists must be off until the switch.
+	if _, err := j.wallOff(); err != nil {
+		return "", err
 	}
 	rows, err := j.rows(pathFilter)
 	if err != nil {
@@ -1454,6 +1463,16 @@ func (j *jobCtl) rollbackTail(reason string) {
 		rc, rcancel := context.WithTimeout(context.Background(), 15*time.Second)
 		j.restoreLeases(rc)
 		rcancel()
+	}
+	{ // back on the hotspot: nobody is walled (the router script did it too; the sweep repeats it)
+		saved := j.ctx
+		wc, wcancel := context.WithTimeout(context.Background(), 15*time.Second)
+		j.ctx = wc
+		if _, err := j.wallOff(); err != nil {
+			j.log("walled lists after the rollback: %v", err)
+		}
+		j.ctx = saved
+		wcancel()
 	}
 	if j.job.Kind == KindMigrate {
 		j.m.revertToHotspotMode(j.siteID)

@@ -171,7 +171,7 @@ func TestCutoverStageOrderAndSafety(t *testing.T) {
 		t.Error("self-removal on both exits")
 	}
 	// The rollback script comes from the discovered names and every line is guarded.
-	if rb := rollbackBase("hotspot1"); !strings.Contains(rb, `/ip hotspot enable [find where name="hotspot1"]`) || strings.Count(rb, "on-error={}") != 10 {
+	if rb := rollbackBase("hotspot1"); !strings.Contains(rb, `/ip hotspot enable [find where name="hotspot1"]`) || strings.Count(rb, "on-error={}") != 11 {
 		t.Fatalf("rollback script: %s", rb)
 	}
 	if strings.Index(rollbackBase("h"), "disable [find where name=\"ftn-dhcp\"]") > strings.Index(rollbackBase("h"), "hotspot enable") {
@@ -326,7 +326,7 @@ func TestCutoverRunTwiceIsSafe(t *testing.T) {
 	}
 	// The rollback removes what the switch added.
 	rb := rollbackBase("h")
-	for _, want := range []string{`/ip arp remove [find where comment~"^ftn:acct:"]`, `/queue simple remove [find where comment~"^ftn:acct:"]`, `comment="ftn: keep"`} {
+	for _, want := range []string{`/ip firewall address-list disable [find where list~"^ftn-(unreg|suspended)\$"]`, `/ip arp remove [find where comment~"^ftn:acct:"]`, `/queue simple remove [find where comment~"^ftn:acct:"]`, `comment="ftn: keep"`} {
 		if !strings.Contains(rb, want) {
 			t.Errorf("rollback lacks %s", want)
 		}

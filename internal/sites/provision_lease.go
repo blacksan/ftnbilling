@@ -311,6 +311,7 @@ func (m *Manager) leaseSweeper(ctx context.Context) {
 	defer m.wg.Done()
 	for {
 		m.SweepLeases(ctx)
+		m.SweepWalls(ctx)
 		select {
 		case <-ctx.Done():
 			return

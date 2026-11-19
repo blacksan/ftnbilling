@@ -260,6 +260,7 @@ func (s *Service) ReconcileSite(ctx context.Context, siteID string) (ProvisionRu
 	if !IPoE(site) {
 		ps.run.Lock()
 		defer ps.run.Unlock()
+		s.wallOffIdle(ctx, site)
 		return run, s.reconcileBypass(ctx, site)
 	}
 	ps.run.Lock()
@@ -273,6 +274,58 @@ func (s *Service) ReconcileSite(ctx context.Context, siteID string) (ProvisionRu
 		s.dropBypass(ctx, site) // the site is on IPoE again: hotspot bypass rows have no purpose
 	}
 	return run, err
+}
+
+// wallOff keeps the walled-lists invariant: while ftn-dhcp is not enabled
+// (missing, disabled, or the building is on the hotspot) no customer is walled,
+// so every enabled ftn-unreg and ftn-suspended row of ours is disabled. The
+// rows are only turned off, never removed: the switch turns them on again.
+// It is the one write the reconciler still does while it waits for the cutover.
+func (s *Service) wallOff(ctx context.Context, rt routeros.Client, lists ...[]routeros.Row) (int, error) {
+	n := 0
+	var firstErr error
+	for _, rows := range lists {
+		for _, r := range rows {
+			if (r["list"] != UnregList && r["list"] != SuspendedList) || !strings.HasPrefix(r["comment"], "ftn:") {
+				continue
+			}
+			if r["disabled"] == "true" || r["disabled"] == "yes" {
+				continue
+			}
+			if err := rt.SetRow(ctx, pathList, r[routeros.RowID], map[string]string{"disabled": "yes"}); err != nil {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("switching off the walled list row %s: %w", r["address"], err)
+				}
+				continue
+			}
+			n++
+		}
+	}
+	return n, firstErr
+}
+
+// wallOffIdle is wallOff for a building in hotspot mode: it looks at ftn-dhcp
+// itself (best effort; an unreadable router changes nothing).
+func (s *Service) wallOffIdle(ctx context.Context, site store.Site) {
+	rt := s.router(site.ID)
+	servers, err := rt.Rows(ctx, pathDHCP, nil)
+	if err != nil {
+		return
+	}
+	for _, r := range servers {
+		if r["name"] == DHCPServerName && r["disabled"] != "true" && r["disabled"] != "yes" {
+			return // serving: the lists are live
+		}
+	}
+	var lists [][]routeros.Row
+	for _, l := range []string{UnregList, SuspendedList} {
+		rows, err := rt.Rows(ctx, pathList, map[string]string{"list": l})
+		if err != nil {
+			return
+		}
+		lists = append(lists, rows)
+	}
+	_, _ = s.wallOff(ctx, rt, lists...)
 }
 
 // ErrSiteHeld is returned by ReconcileSite while a provisioning job holds the
@@ -514,12 +567,20 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 		// Before the cutover the router still runs the hotspot: write nothing.
 		run.Waiting, note = true, "waiting for the cutover: the router has no "+DHCPServerName+" DHCP server yet, nothing was written"
 		pd.ops = nil
+		if _, err := s.wallOff(ctx, rt, unreg, suspended); err != nil {
+			note += "; " + err.Error()
+		}
 	case ftn["disabled"] == "true" || ftn["disabled"] == "yes":
 		// Disabled: the cutover has not switched yet, or the router rolled
 		// back to the hotspot. Either way the hotspot's own rows are live, so
 		// nothing is written (writes could disturb the flats' working leases).
 		run.Waiting, pd.ops = true, nil
 		note = DHCPServerName + " is disabled on the router: waiting for the cutover (or the router rolled back); nothing was written"
+		if n, err := s.wallOff(ctx, rt, unreg, suspended); err != nil {
+			note += "; " + err.Error()
+		} else if n > 0 {
+			note = fmt.Sprintf("%s is disabled on the router: waiting for the cutover (or the router rolled back); only switched off %d walled list row(s)", DHCPServerName, n)
+		}
 		// A rollback is: this server saw ftn-dhcp serving, it is off now, and a
 		// hotspot server on its interface is on again. (Off before the cutover,
 		// or off with no hotspot back, is only waiting.)

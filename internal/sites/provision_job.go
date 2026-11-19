@@ -187,6 +187,9 @@ type provMgr struct {
 	// lease restore backoff, per building
 	leaseNext map[string]time.Time
 	leaseTry  map[string]int
+	// walled-lists sweep backoff, per building
+	wallNext map[string]time.Time
+	wallTry  map[string]int
 }
 
 // SetProvisioner connects the billing service (reconcile lock, reconcile, bypass rows).
