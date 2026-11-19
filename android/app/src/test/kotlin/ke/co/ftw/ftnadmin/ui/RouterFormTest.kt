@@ -208,11 +208,13 @@ class RouterFormTest {
         vm.confirmLanSave()
         assertTrue("a wrong name sends nothing", synchronized(log) { log.none { it.method == "PATCH" } })
         vm.setTypedName("kilimani")
+        assertFalse("the name must match exactly, case included", vm.canConfirmLan())
+        vm.setTypedName("  Kilimani ")
         assertTrue(vm.canConfirmLan())
         vm.confirmLanSave()
         await(vm.state) { it.saved }
         val b = bodyOf("PATCH", "/api/v1/routers/r1")
-        assertEquals("kilimani", b["confirm_name"]!!.jsonPrimitive.content)
+        assertEquals("Kilimani", b["confirm_name"]!!.jsonPrimitive.content)
         assertEquals("ether3", b["lan_ports"]!!.jsonPrimitive.content)
     }
 

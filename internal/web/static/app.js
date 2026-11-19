@@ -122,35 +122,34 @@
     if (m && !window.confirm(m)) e.preventDefault();
   }, true);
 
-  /* Changing the OLT port or the VLAN of a router that is set up cuts the customers off until the OLT uses
-     the new setting: ask before the form is sent, and send confirm=1. */
+  /* Changing the OLT port or the VLAN of a router that is set up cuts the customers off until the OLT uses the
+     new setting, and changing the admin LAN ports can cut off WinBox. One handler, one dialog: it asks before the
+     form is sent and sets confirm=1 (OLT/VLAN) and/or confirmname (the typed router name, for the admin LAN). */
   doc.addEventListener("submit", function (e) {
     var f = e.target;
     if (!f.hasAttribute || !f.hasAttribute("data-plumb") || f.__plumbOK) return;
     var olt = $("input[name=olt]", f), vlan = $("input[name=vlan]", f), ok = $("input[name=confirm]", f);
-    if (!olt || !vlan || !ok) return;
+    var lan = $("input[name=lanports]", f), nm = $("input[name=confirmname]", f);
     /* effective values: a blank OLT port means the default port, so typing the default changes nothing */
     var dflt = f.getAttribute("data-olt-default") || "sfp-sfpplus1";
-    if ((olt.value.trim() || dflt) === (f.getAttribute("data-olt") || dflt) && String(parseInt(vlan.value || "0", 10) || 0) === f.getAttribute("data-vlan")) return;
+    var oltChanged = !!(olt && vlan && ok) && !((olt.value.trim() || dflt) === (f.getAttribute("data-olt") || dflt) && String(parseInt(vlan.value || "0", 10) || 0) === f.getAttribute("data-vlan"));
+    var norm = function (v) { return String(v || "").replace(/\s+/g, "") || "ether2"; };
+    var lanChanged = !!(lan && nm) && norm(lan.value) !== norm(f.getAttribute("data-lanports"));
+    if (!oltChanged && !lanChanged) return;
     e.preventDefault();
     var paused = f.hasAttribute("data-paused") ? " Automatic fixes are paused; this change is still applied now." : "";
-    ask("Change the OLT setting?", "Customers on the OLT lose service until the OLT uses the new setting. The server moves the port and the VLAN on the router by itself as soon as you confirm." + paused, "Change it").then(function (yes) {
-      if (!yes) return; ok.value = "1"; f.__plumbOK = true; if (f.requestSubmit) f.requestSubmit(); else f.submit();
-    });
-  }, true);
-
-  /* Changing the admin LAN ports of a router that is set up can cut off WinBox: type the router name first. */
-  doc.addEventListener("submit", function (e) {
-    var f = e.target;
-    if (!f.hasAttribute || !f.hasAttribute("data-plumb") || f.__lanOK) return;
-    var lan = $("input[name=lanports]", f), nm = $("input[name=confirmname]", f);
-    if (!lan || !nm) return;
-    var norm = function (v) { return String(v || "").replace(/\s+/g, "") || "ether2"; };
-    if (norm(lan.value) === norm(f.getAttribute("data-lanports"))) return;
-    e.preventDefault();
-    askName("Change the admin LAN ports?", "You may lose your WinBox session on this port. Type the router name to confirm. The server keeps the old port until the new one has a link.", "Change it", f.getAttribute("data-name")).then(function (typed) {
-      if (typed == null) return; nm.value = typed; f.__lanOK = true; f.submit();
-    });
+    var oltText = "Customers on the OLT lose service until the OLT uses the new setting. The server moves the port and the VLAN on the router by itself as soon as you confirm.";
+    var lanText = "You may lose your WinBox session on this port. The server keeps the old admin LAN port until the new one has a link.";
+    function go() { f.__plumbOK = true; if (f.requestSubmit) f.requestSubmit(); else f.submit(); }
+    if (lanChanged) {
+      var text = (oltChanged ? oltText + " " : "") + lanText + " Type the router name to confirm." + paused;
+      askName(oltChanged ? "Change the OLT setting and the admin LAN?" : "Change the admin LAN ports?", text, "Change it", f.getAttribute("data-name")).then(function (typed) {
+        if (typed == null) return;
+        nm.value = typed; if (oltChanged) ok.value = "1"; go();
+      });
+    } else {
+      ask("Change the OLT setting?", oltText + paused, "Change it").then(function (yes) { if (!yes) return; ok.value = "1"; go(); });
+    }
   }, true);
 
   /* A dialog that shows what a fix will do and asks for a yes. */

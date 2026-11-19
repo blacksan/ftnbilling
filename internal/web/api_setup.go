@@ -283,10 +283,15 @@ func (s *Server) apiRouterPatch(w http.ResponseWriter, r *http.Request, c *apiCt
 		return
 	}
 	in := sites.SiteInputOf(st)
-	if err := s.mgr.UpdateSite(st.ID, applyRouterReq(in, req)); err != nil {
+	base := in // only the fields that were sent change; the rest keep what is stored now, even if the Ports tab moved it meanwhile
+	in = applyRouterReq(in, req)
+	in.Base = &base
+	if err := s.mgr.UpdateSite(st.ID, in); err != nil {
 		var pe *sites.PortRefusal
 		if errors.Is(err, sites.ErrOLTConfirmRequired) {
 			apiErr(w, http.StatusConflict, codeConfirm, err.Error(), nil)
+		} else if errors.Is(err, sites.ErrStaleLayout) {
+			apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
 		} else if errors.Is(err, sites.ErrLANConfirmRequired) {
 			apiErr(w, http.StatusUnprocessableEntity, codeValidation, err.Error(),
 				map[string]any{"fields": map[string]any{"confirm_name": err.Error()}, "warning": sites.WarnLAN})

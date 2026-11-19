@@ -109,7 +109,7 @@ class EditRouterViewModel(
     fun canConfirmLan(): Boolean {
         val s = _state.value
         val want = s.original?.name?.trim().orEmpty()
-        return want.isNotEmpty() && s.typedName.trim().equals(want, ignoreCase = true)
+        return want.isNotEmpty() && s.typedName.trim() == want
     }
 
     /** Sends an admin LAN change with the typed router name (also confirms an OLT change made at the same time). */

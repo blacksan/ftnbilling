@@ -135,7 +135,14 @@ func siteInput(r *http.Request) sites.SiteInput {
 	f := func(k string) string { return strings.TrimSpace(r.PostFormValue(k)) }
 	fl := func(k string) float64 { v, _ := strconv.ParseFloat(f(k), 64); return v }
 	vlan, _ := strconv.Atoi(f("vlan"))
+	_ = r.ParseForm()
+	var base *sites.SiteInput
+	if _, ok := r.PostForm["orig_lanports"]; ok { // what the page was built with: unchanged ports keep the stored value
+		ov, _ := strconv.Atoi(f("orig_vlan"))
+		base = &sites.SiteInput{LANPorts: f("orig_lanports"), CustomerPorts: f("orig_customerports"), OLTInterface: f("orig_olt"), VLANID: ov}
+	}
 	return sites.SiteInput{
+		Base: base,
 		Name: f("name"), Notes: f("notes"), SupportPhone: f("support"),
 		WANInterface: f("wan"), OLTInterface: f("olt"),
 		CustomerNet: f("subnet"), VLANID: vlan, WANCapMbps: fl("wancap"), OLTCapMbps: fl("oltcap"), FUPTB: fl("fup"), CustomerPorts: f("customerports"),
