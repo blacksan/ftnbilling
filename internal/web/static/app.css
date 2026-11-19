@@ -168,7 +168,7 @@ button.lnk{background:none;border:0;padding:0;min-height:0;color:var(--brand-ink
 
 /* ---- stat cards -------------------------------------------------------------- */
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin:0 0 26px}
-.stat{--t:var(--ink-2);--t-soft:var(--surface-2);position:relative;display:grid;grid-template-columns:1fr auto;grid-template-areas:"k ic" "v v" "s s";gap:2px 10px;align-content:start;padding:16px 16px 14px;border-radius:var(--r3);background:var(--t-soft);color:var(--ink);text-decoration:none;min-width:0;overflow:hidden}
+.stat{--t:var(--ink-2);--t-soft:var(--surface-2);position:relative;display:grid;grid-template-columns:1fr auto;grid-template-areas:"k ic" "v p" "s s";gap:2px 10px;align-content:start;padding:16px 16px 14px;border-radius:var(--r3);background:var(--t-soft);color:var(--ink);text-decoration:none;min-width:0;overflow:hidden}
 a.stat:hover{filter:brightness(.98)}
 .stat .k{grid-area:k;font:700 12px/1.3 var(--f-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2)}
 .stat .ic{grid-area:ic;display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:var(--t);color:var(--t-soft)}
@@ -176,7 +176,8 @@ a.stat:hover{filter:brightness(.98)}
 .stat .v{grid-area:v;font:700 34px/1.1 var(--f-display);letter-spacing:-.02em;margin-top:6px;overflow-wrap:anywhere}
 .stat .v small{font:600 15px var(--f-sans);color:var(--ink-2);letter-spacing:0}
 .stat .s{grid-area:s;font-size:13px;color:var(--ink-2);min-height:19px}
-.stat svg.spark{grid-area:s;justify-self:end;align-self:end;width:96px;height:30px;margin-top:-30px;color:var(--t);pointer-events:none}
+/* The sparkline sits beside the number in its own cell, never over the sub-line. */
+.stat svg.spark{grid-area:p;justify-self:end;align-self:end;width:96px;height:30px;margin:0 0 6px;color:var(--t);pointer-events:none;overflow:hidden}
 .stat.t-brand{--t:var(--brand-ink);--t-soft:var(--brand-soft)}
 .stat.t-info{--t:var(--info);--t-soft:var(--info-soft)}
 .stat.t-teal{--t:var(--teal);--t-soft:var(--teal-soft)}
@@ -466,7 +467,8 @@ body.auth summary{margin-top:14px;font-size:13px;color:var(--muted)}
   .stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
   .stat{padding:12px 12px 10px;border-radius:var(--r2)}
   .stat .v{font-size:26px}.stat .k{font-size:11px}
-  .stat svg.spark{width:84px}
+  .stat:has(svg.spark){grid-template-areas:"k ic" "v v" "s p"}
+  .stat svg.spark{width:56px;height:22px;align-self:center;margin:0}
   .hero .act{width:100%}.hero .act>*{flex:1}
   .rsel{max-width:120px}
   .crumbs a:not(:last-of-type),.crumbs i{display:none}
