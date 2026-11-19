@@ -60,7 +60,13 @@ func ApplyDefaults(cfg config.Config, s store.Site) store.Site {
 		s.WANCapMbps = nonZero(cfg.WANCapacityMbps, 500)
 	}
 	if s.OLTCapMbps <= 0 {
-		s.OLTCapMbps = nonZero(cfg.OLTCapacityMbps, 10000)
+		// An explicit value is kept; otherwise the port decides (an SFP+ port is
+		// 10G, an Ethernet or 1G SFP port is 1G), and an unknown name gets the global default.
+		if d := OLTPortMbps(s.OLTInterface); d > 0 {
+			s.OLTCapMbps = d
+		} else {
+			s.OLTCapMbps = nonZero(cfg.OLTCapacityMbps, 10000)
+		}
 	}
 	if s.FUPTB <= 0 {
 		s.FUPTB = nonZero(cfg.FUPTB, 15)
@@ -73,6 +79,40 @@ func ApplyDefaults(cfg config.Config, s store.Site) store.Site {
 	}
 	return s
 }
+
+// OLTPortMbps is the link speed assumed for an OLT uplink port by its name:
+// sfp-sfpplus* and qsfp* 10000, sfp* (1G), ether* and combo* 1000; 0 when the
+// name says nothing.
+func OLTPortMbps(iface string) float64 {
+	n := strings.ToLower(strings.TrimSpace(iface))
+	switch {
+	case strings.HasPrefix(n, "sfp-sfpplus"), strings.HasPrefix(n, "sfpplus"), strings.HasPrefix(n, "qsfp"):
+		return 10000
+	case strings.HasPrefix(n, "sfp"), strings.HasPrefix(n, "ether"), strings.HasPrefix(n, "combo"):
+		return 1000
+	}
+	return 0
+}
+
+// IsPortName says whether an interface name is a physical port the OLT or a
+// customer device can be plugged into (ether, sfp, qsfp, combo).
+func IsPortName(iface string) bool { return OLTPortMbps(iface) > 0 }
+
+// FieldError is a validation error that belongs to one field of the router
+// form; Field is the API name of the field.
+type FieldError struct {
+	Field, Msg string
+	Also       []string // other fields the error is about too
+}
+
+func (e *FieldError) Error() string { return e.Msg }
+
+func fieldErr(field, format string, a ...any) error {
+	return &FieldError{Field: field, Msg: fmt.Sprintf(format, a...)}
+}
+
+// customerVLANName is the VLAN interface the bootstrap script builds on the OLT port.
+func customerVLANName(id int) string { return fmt.Sprintf("vlan%d-customers", id) }
 
 // SplitPorts splits a comma list of interface names, dropping blanks.
 func SplitPorts(list string) []string {
@@ -171,13 +211,14 @@ func ValidateNetMgmt(s store.Site, wgNet, mgmt netip.Prefix) error {
 	if HasControl(s.Name) {
 		return errors.New("the router name has a control character (a line break or tab) that cannot be used")
 	}
-	for _, f := range []struct{ label, v string }{{"WAN interface", s.WANInterface}, {"OLT interface", s.OLTInterface}} {
-		if !ValidIface(f.v) {
-			return fmt.Errorf("%s %q: use letters, digits, dot, dash and underscore only", f.label, f.v)
-		}
+	if !ValidIface(s.WANInterface) {
+		return fieldErr("wan_interface", "WAN interface %q: use letters, digits, dot, dash and underscore only", s.WANInterface)
+	}
+	if !ValidIface(s.OLTInterface) {
+		return fieldErr("olt_interface", "OLT uplink port %q: use letters, digits, dot, dash and underscore only", s.OLTInterface)
 	}
 	if s.BenchPort != "" && !ValidIface(s.BenchPort) {
-		return fmt.Errorf("bench port %q: use letters, digits, dot, dash and underscore only", s.BenchPort)
+		return fieldErr("bench_port", "customer port %q: use letters, digits, dot, dash and underscore only", s.BenchPort)
 	}
 	if s.VLANID < 0 || s.VLANID > 4094 {
 		return errors.New("VLAN ID must be 0 (none) to 4094")
@@ -222,19 +263,34 @@ func ValidateNetMgmt(s store.Site, wgNet, mgmt netip.Prefix) error {
 	if len(ports) == 0 {
 		return errors.New("the admin LAN needs at least one port")
 	}
-	seen := map[string]bool{s.WANInterface: true, s.OLTInterface: true}
-	if s.BenchPort != "" {
-		seen[s.BenchPort] = true
+	if s.WANInterface == s.OLTInterface {
+		return fieldErr("olt_interface", "OLT uplink port %s is also the WAN port: the OLT needs a port of its own", s.OLTInterface)
 	}
+	if s.BenchPort != "" {
+		switch s.BenchPort {
+		case s.WANInterface:
+			return fieldErr("bench_port", "%s is the WAN port, so it cannot also be the extra customer port", s.BenchPort)
+		case s.OLTInterface:
+			return &FieldError{Field: "bench_port", Also: []string{"olt_interface"},
+				Msg: fmt.Sprintf("%s is the OLT uplink port, so it cannot also be the extra customer port", s.BenchPort)}
+		}
+	}
+	lanSeen := map[string]bool{}
 	for _, p := range ports {
 		if !ValidIface(p) {
 			return fmt.Errorf("admin LAN port %q: use letters, digits, dot, dash and underscore only", p)
 		}
-		if seen[p] {
+		switch {
+		case p == s.OLTInterface:
+			return fieldErr("olt_interface", "OLT uplink port %s is an admin LAN port: pick a port that is not in the admin LAN list", p)
+		case s.BenchPort != "" && p == s.BenchPort:
+			return fieldErr("bench_port", "%s is an admin LAN port, so it cannot also be the extra customer port", p)
+		case p == s.WANInterface, lanSeen[p]:
 			return fmt.Errorf("port %s is used twice (WAN, fibre, bench and admin LAN ports must differ)", p)
 		}
-		seen[p] = true
+		lanSeen[p] = true
 	}
+
 	lan, err := PlanLAN(s.LANSubnet)
 	if err != nil {
 		return err

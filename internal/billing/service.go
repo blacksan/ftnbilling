@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ispbill/internal/store"
@@ -78,8 +79,9 @@ type Service struct {
 	policy  Policy
 	box     *Secretbox // national-ID encryption; nil = feature off
 
-	sites sync.Map // siteID -> *siteState
-	hook  func()   // called after a payment was applied (tenant messages)
+	sites sync.Map                                                 // siteID -> *siteState
+	hook  func()                                                   // called after a payment was applied (tenant messages)
+	sweep atomic.Pointer[func(ctx context.Context, siteID string)] // per-building work after each sweep pass (set once at start)
 	bg    sync.WaitGroup
 }
 
@@ -92,6 +94,11 @@ func NewService(st *store.Store, rs RouterSource, log *slog.Logger) *Service {
 	}
 	return svc
 }
+
+// SetSweepHook registers work the sweeper does for every runnable building
+// after its reconcile pass (the sites manager's customer-port self-heal and
+// automatic fixes). The hook keeps its own timing and backoff.
+func (s *Service) SetSweepHook(f func(ctx context.Context, siteID string)) { s.sweep.Store(&f) }
 
 // SetClock overrides the clock (tests).
 func (s *Service) SetClock(f func() time.Time) { s.now = f }

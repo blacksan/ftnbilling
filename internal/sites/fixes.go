@@ -18,7 +18,9 @@ import (
 //	/ip/dns                      one property (allow-remote-requests)
 //	/ip/traffic-flow             enabled and interfaces
 //	/ip/traffic-flow/target      the row aimed at the server's tunnel address (targets take no comment)
-//	/interface/bridge/port       rows of the building's OLT and bench ports
+//	/interface/bridge/port       the building's customer ports in br-customers (horizon=1, comment "ftn: customer port"),
+//	                             the server's own old membership of a dropped port, the OLT port's rows (fixOLT)
+//	/interface/vlan              the customer VLAN interface ("ftn: customer VLAN"): added, or moved to the OLT port
 //	/ip/firewall/filter, /nat    the customer DNS accepts, and the walled-garden rules
 //	/ip/dhcp-server              enabling ftn-dhcp
 //	/file                        removing ftn-setup.rsc and ftn-reset.rsc
@@ -78,7 +80,11 @@ type rowWriter interface {
 type fixWriter struct {
 	rt        rowWriter
 	insp      routeros.Inspector
-	ifaces    map[string]bool // the OLT and bench ports of this building
+	ifaces    map[string]bool // the OLT port of this building (fixOLT) and the customer bridge
+	custPorts map[string]bool // ports (and the customer VLAN interface) the server may put in br-customers
+	stale     map[string]bool // ports whose "ftn: customer port" membership of br-customers the server may remove
+	vlanName  string          // the customer VLAN interface the server may add or move
+	oltPort   string          // the interface that VLAN sits on
 	custIface string          // the customer interface, for the DNS accept rules
 	walled    map[string]bool // comments of the walled-garden rules a fix may write (set by fixWalled)
 	serverIP  string          // the server's tunnel address: the only traffic-flow target a fix may touch
@@ -116,8 +122,18 @@ func (w *fixWriter) call(ctx context.Context, path string, body map[string]strin
 func (w *fixWriter) allowedRow(path string, row routeros.Row) error {
 	switch path {
 	case "/interface/bridge/port":
-		if !w.ifaces[row["interface"]] || row["interface"] == "" {
-			return forbid("bridge port " + row["interface"] + " is not this building's OLT or bench port")
+		iface := row["interface"]
+		switch {
+		case iface == "":
+			return forbid("a bridge port row without an interface")
+		case w.ifaces[iface]:
+		case (w.custPorts[iface] || w.stale[iface]) && row["bridge"] == CustomerBridge:
+		default:
+			return forbid("bridge port " + iface + " (bridge " + row["bridge"] + ") is not a customer port of this building")
+		}
+	case "/interface/vlan":
+		if row["name"] != w.vlanName || w.vlanName == "" || row["comment"] != CustVLANComment {
+			return forbid("a VLAN interface that is not the customer VLAN the server made")
 		}
 	case "/ip/traffic-flow/target":
 		if w.serverIP == "" || row["dst-address"] != w.serverIP {
@@ -144,8 +160,15 @@ func (w *fixWriter) allowedRow(path string, row routeros.Row) error {
 func (w *fixWriter) addRow(ctx context.Context, path string, body map[string]string) error {
 	switch path {
 	case "/interface/bridge/port":
-		if !w.ifaces[body["interface"]] {
-			return forbid("bridge port " + body["interface"] + " is not this building's OLT or bench port")
+		if !w.custPorts[body["interface"]] || body["interface"] == "" {
+			return forbid("bridge port " + body["interface"] + " is not a customer port of this building")
+		}
+		if len(body) != 4 || body["bridge"] != CustomerBridge || body["horizon"] != "1" || body["comment"] != CustPortComment {
+			return forbid("a bridge port row that is not " + CustPortComment + " in " + CustomerBridge + " with horizon=1")
+		}
+	case "/interface/vlan":
+		if w.vlanName == "" || body["name"] != w.vlanName || body["interface"] != w.oltPort || body["comment"] != CustVLANComment || len(body) != 4 {
+			return forbid("a VLAN interface that is not the building's customer VLAN on its OLT port")
 		}
 	case "/ip/traffic-flow/target":
 		if w.serverIP == "" || body["dst-address"] != w.serverIP {
@@ -217,10 +240,19 @@ func (w *fixWriter) setRow(ctx context.Context, path string, row routeros.Row, d
 	}
 	switch path {
 	case "/interface/bridge/port":
-		for k := range diff {
-			if k != "bridge" {
-				return forbid("a bridge port may only change its bridge")
+		if row["bridge"] != CustomerBridge || !w.custPorts[row["interface"]] {
+			return forbid("only a customer port in " + CustomerBridge + " may be changed")
+		}
+		for k, v := range diff {
+			switch {
+			case k == "horizon" && v == "1", k == "comment" && v == CustPortComment, k == "disabled" && v == "no":
+			default:
+				return forbid("a customer port may only get horizon=1, the server's comment or be enabled")
 			}
+		}
+	case "/interface/vlan":
+		if len(diff) != 1 || diff["interface"] != w.oltPort || w.oltPort == "" {
+			return forbid("the customer VLAN may only move to the OLT port")
 		}
 	case "/ip/dhcp-server":
 		for k := range diff {
@@ -244,6 +276,9 @@ func (w *fixWriter) removeRow(ctx context.Context, path string, row routeros.Row
 	case "/interface/bridge/port", "/ip/traffic-flow/target", "/ip/firewall/filter", "/ip/firewall/nat", "/file":
 		if err := w.allowedRow(path, row); err != nil {
 			return err
+		}
+		if path == "/interface/bridge/port" && !w.ifaces[row["interface"]] && (!w.stale[row["interface"]] || !serverMade(row["comment"])) {
+			return forbid("only the server's own " + CustPortComment + " membership of a dropped port may be removed")
 		}
 	default:
 		return forbid(path)
@@ -270,7 +305,6 @@ var fixers = map[string]fixFunc{
 	CheckDNS:         fixDNS,
 	CheckCustDNS:     fixCustDNS,
 	CheckOLT:         fixOLT,
-	CheckBench:       fixBench,
 	CheckTrafficFlow: fixTrafficFlow,
 	CheckWalled:      fixWalled,
 	CheckDHCP:        fixDHCP,
@@ -406,60 +440,6 @@ func fixOLT(ctx context.Context, fe *fixEnv) error {
 	return nil
 }
 
-var benchTables = []string{"/interface/bridge/port", "/interface/bridge", "/interface", "/interface/vlan", "/interface/list/member",
-	"/ip/address", "/ip/dhcp-server", "/ip/dhcp-client", "/interface/bridge/host"}
-
-func fixBench(ctx context.Context, fe *fixEnv) error {
-	if fe.site.BenchPort == "" {
-		return changed("the building has no bench port")
-	}
-	sn, err := fe.freshRead(ctx, nil, benchTables)
-	if err != nil {
-		return err
-	}
-	plan, perr := PlanSubnet(fe.site.CustomerSubnet)
-	if perr != nil {
-		return changed("the customer network is not valid")
-	}
-	cust := detectCustomer(sn, plan)
-	if !cust.found || !cust.isBridge {
-		return changed("the customer bridge is not found")
-	}
-	b := assessBench(sn, fe.site, cust)
-	switch {
-	case b.noIface:
-		return changed("the router has no interface %s", fe.site.BenchPort)
-	case b.inCustomer:
-		return nil
-	case len(b.hard) > 0:
-		return changed("%s", strings.Join(b.hard, "; "))
-	case len(b.unknown) > 0:
-		return changed("%s", strings.Join(b.unknown, "; "))
-	case len(b.learned) > 0:
-		if !fe.confirm {
-			return fmt.Errorf("%w: devices are connected to %s (%s)", ErrConfirmRequired, b.iface, strings.Join(b.learned, ", "))
-		}
-		if fe.role != store.RoleOwner {
-			return ErrNeedsOwner
-		}
-	}
-	if b.inOther != "" {
-		if len(b.rows) != 1 {
-			return changed("the bench port has %d bridge rows", len(b.rows))
-		}
-		if err := fe.w.setRow(ctx, "/interface/bridge/port", b.rows[0], map[string]string{"bridge": cust.iface}); err != nil {
-			return err
-		}
-		fe.w.note("moved %s from bridge %s to %s", b.iface, b.inOther, cust.iface)
-		return nil
-	}
-	if err := fe.w.addRow(ctx, "/interface/bridge/port", map[string]string{"bridge": cust.iface, "interface": b.iface, "horizon": "1", "comment": "ftn: bench port"}); err != nil {
-		return err
-	}
-	fe.w.note("put %s on bridge %s", b.iface, cust.iface)
-	return nil
-}
-
 func fixTrafficFlow(ctx context.Context, fe *fixEnv) error {
 	sn, err := fe.freshRead(ctx, []string{"/ip/traffic-flow"}, []string{"/ip/traffic-flow/target", "/ip/address", "/ip/dhcp-server", "/interface/bridge"})
 	if err != nil {
@@ -592,13 +572,7 @@ func (m *Manager) applyFix(ctx context.Context, siteID, checkID string, confirm 
 	}
 	eff := m.Effective(site)
 	rt := m.Router(siteID)
-	insp, _ := rt.(routeros.Inspector)
-	w := &fixWriter{rt: rt, insp: insp, ifaces: map[string]bool{}, serverIP: ServerTunnelIP(m.pfx)}
-	for _, n := range []string{eff.OLTInterface, eff.BenchPort, CustomerBridge} {
-		if n != "" {
-			w.ifaces[n] = true
-		}
-	}
+	w := m.newFixWriter(rt, eff)
 	role := actor
 	if actor == ActorSystem {
 		role = store.RoleOperator
@@ -615,7 +589,7 @@ func (m *Manager) applyFix(ctx context.Context, siteID, checkID string, confirm 
 			}
 		}
 		_ = m.st.Update(func(d *store.Data) error {
-			d.AddEvent(store.Event{Time: m.now(), SiteID: siteID, Kind: "audit", Msg: msg})
+			d.AddEvent(store.Event{Time: m.now(), SiteID: siteID, Kind: "audit", Actor: actor, Msg: msg})
 			return nil
 		})
 	}

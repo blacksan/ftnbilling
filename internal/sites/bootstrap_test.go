@@ -39,8 +39,10 @@ func benchInput(s store.Site) BootstrapInput {
 
 func TestBootstrapGolden(t *testing.T) {
 	cases := map[string]func(*store.Site, *BootstrapInput){
-		"dhcp_vlan_bench": func(*store.Site, *BootstrapInput) {},
-		"dhcp_novlan":     func(s *store.Site, _ *BootstrapInput) { s.VLANID, s.BenchPort = 0, "" },
+		"dhcp_vlan_bench":        func(*store.Site, *BootstrapInput) {},
+		"ether_olt_vlan_bench":   func(s *store.Site, _ *BootstrapInput) { s.OLTInterface = "ether3" },
+		"ether_olt_novlan_bench": func(s *store.Site, _ *BootstrapInput) { s.OLTInterface, s.VLANID = "ether3", 0 },
+		"dhcp_novlan":            func(s *store.Site, _ *BootstrapInput) { s.VLANID, s.BenchPort = 0, "" },
 		"static_vlan": func(s *store.Site, _ *BootstrapInput) {
 			s.WANMode, s.WANAddress, s.WANGateway, s.WANDNS = WANStatic, "198.51.100.5/24", "198.51.100.1", "9.9.9.9"
 		},

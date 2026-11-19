@@ -197,6 +197,11 @@ func (s *Service) Sweep(ctx context.Context) {
 			} else if _, err := s.ReconcileSite(ctx, id); err != nil && !errors.Is(err, ErrNotSetUp) {
 				s.log.Warn("ipoe reconcile failed", "site", id, "err", err)
 			}
+			if h := s.sweep.Load(); h != nil && ctx.Err() == nil {
+				hc, cancel := context.WithTimeout(ctx, 90*time.Second)
+				defer cancel()
+				(*h)(hc, id)
+			}
 		}()
 	}
 	wg.Wait()

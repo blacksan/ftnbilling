@@ -64,9 +64,10 @@ type Manager struct {
 	chk          checksState   // cache of the setup checks (checks.go)
 	autoFixDelay time.Duration // wait after the first answer before the post-join fixes (runtime.go)
 
-	prov provMgr   // billing hooks and the reboot slot (provision.go)
-	live liveState // live router views (live.go)
-	box  *secretbox.Box
+	cport cpState   // customer-port and automatic-fix state per building (custport.go, autofix.go)
+	prov  provMgr   // billing hooks and the reboot slot (provision.go)
+	live  liveState // live router views (live.go)
+	box   *secretbox.Box
 }
 
 // SetForeignIPs lets the billing service tell the sites package which addresses
@@ -414,10 +415,12 @@ func (m *Manager) CreateSite(in SiteInput) (store.Site, error) {
 		if err != nil {
 			return err
 		}
+		raw := s.OLTCapMbps
 		s = ApplyDefaults(m.cfg, s)
 		if err := ValidateNetMgmt(s, m.pfx, m.mgmt); err != nil {
 			return err
 		}
+		s.OLTCapMbps = raw // not set stays not set: the OLT port's type decides
 		if nameTaken(d, s.Name, "") {
 			return fmt.Errorf("there is already a router called %q", s.Name)
 		}
@@ -437,7 +440,9 @@ func (m *Manager) CreateSite(in SiteInput) (store.Site, error) {
 
 // UpdateSite saves the editable fields and restarts the building's runtime.
 func (m *Manager) UpdateSite(id string, in SiteInput) error {
+	var portsChanged bool
 	err := m.st.Update(func(d *store.Data) error {
+		portsChanged = false
 		cur, ok := d.Sites[id]
 		if !ok || cur.Removed {
 			return billing.ErrNoSite
@@ -446,8 +451,16 @@ func (m *Manager) UpdateSite(id string, in SiteInput) error {
 		if err != nil {
 			return err
 		}
+		// A form that was filled from the effective values sends the default
+		// back: it stays "not set" so the port type keeps deciding.
+		if cur.OLTCapMbps == 0 && in.OLTCapMbps == m.Effective(cur).OLTCapMbps {
+			s.OLTCapMbps = 0
+		}
+
+		raw := s.OLTCapMbps
 		if s.Mode == store.SiteModeWG {
 			s = ApplyDefaults(m.cfg, s)
+			s.OLTCapMbps = raw // not set stays not set: the OLT port's type decides
 		}
 		if err := ValidateNetMgmt(ApplyDefaults(m.cfg, s), m.pfx, m.mgmt); err != nil {
 			return err
@@ -455,11 +468,16 @@ func (m *Manager) UpdateSite(id string, in SiteInput) error {
 		if nameTaken(d, s.Name, id) {
 			return fmt.Errorf("there is already a router called %q", s.Name)
 		}
+		was, now := m.Effective(cur), m.Effective(s)
+		portsChanged = now.BenchPort != was.BenchPort || now.OLTInterface != was.OLTInterface || now.VLANID != was.VLANID
 		d.Sites[id] = s
 		return nil
 	})
 	if err == nil {
 		m.Reload(id)
+		if portsChanged {
+			m.QueueCustomerPort(id)
+		}
 	}
 	return err
 }

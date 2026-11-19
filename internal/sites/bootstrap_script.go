@@ -280,7 +280,7 @@ func RenderBootstrap(in BootstrapInput) ([]byte, error) {
 	}
 	d.DNSServers = strings.Join(dns, ",")
 	if s.VLANID > 0 {
-		d.VLANName = fmt.Sprintf("vlan%d-customers", s.VLANID)
+		d.VLANName = customerVLANName(s.VLANID)
 		d.CustIface = d.VLANName
 	}
 	need := []string{s.WANInterface, s.OLTInterface}
