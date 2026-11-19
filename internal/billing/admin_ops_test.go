@@ -37,8 +37,9 @@ func TestChangePackageKeepAndFresh(t *testing.T) {
 	if err := e.svc.EndPlan(ctx, a.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := e.rt.GetUser(a.Code); ok {
-		t.Fatal("router user should be removed after EndPlan")
+	e.reconcile(t)
+	if len(rowsBy(rowsBy(e.rt.Table("/ip/firewall/address-list"), "list", SuspendedList), "address", e.get(a).IP)) != 1 {
+		t.Fatal("the flat should be suspended after EndPlan")
 	}
 	if err := e.svc.ChangePackage(ctx, a.ID, m40.ID, true); err == nil {
 		t.Fatal("keep with no time left should fail")
@@ -59,8 +60,9 @@ func TestDeleteAccount(t *testing.T) {
 	if _, ok := e.svc.GetAccount(a.ID); ok {
 		t.Fatal("account still there")
 	}
-	if _, ok := e.rt.GetUser(a.Code); ok {
-		t.Fatal("router user still there")
+	e.reconcile(t)
+	if got := rowsBy(e.rt.Table("/queue/simple"), "name", QueueName(a.Code)); len(got) != 0 {
+		t.Fatalf("queue still there: %v", got)
 	}
 	n := 0
 	e.st.View(func(d *store.Data) { n = len(d.Payments) })
@@ -83,8 +85,9 @@ func TestDeleteAccountRouterDownRetries(t *testing.T) {
 	e.rt.SetFail(nil)
 	e.now = e.now.Add(10 * time.Minute)
 	e.svc.Sweep(ctx)
-	if _, ok := e.rt.GetUser(a.Code); ok {
-		t.Fatal("router user not cleaned up after retry")
+	e.reconcile(t)
+	if got := rowsBy(e.rt.Table("/queue/simple"), "name", QueueName(a.Code)); len(got) != 0 {
+		t.Fatalf("queue not cleaned up after retry: %v", got)
 	}
 }
 
@@ -130,9 +133,6 @@ func TestDeletePackageRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.svc.Wait()
-	if _, ok := e.rt.GetProfile(m80.Profile()); ok {
-		t.Fatal("router profile not removed")
-	}
 	var listed bool
 	e.st.View(func(d *store.Data) {
 		for _, p := range d.PackageList() {

@@ -51,20 +51,12 @@ func arpOnline(r routeros.Row) bool {
 // pass, and refreshes "last seen" of the flats' own MACs. It writes nothing to
 // the router.
 func (s *Service) collectDevices(site store.Site, pl netplan.Plan, wants []wantAcct, leases, arp []routeros.Row, ps *provState) {
-	s.collectDevicesX(site, pl, true, wants, leases, arp, devExtra{}, ps)
+	s.collectDevicesX(site, pl, true, wants, leases, arp, ps)
 }
 
-// devExtra is what only refreshDevices reads: the hotspot host table and the
-// hotspot users, bindings and sessions that hold a MAC (nil users: unknown,
-// leave what the last refresh found).
-type devExtra struct {
-	hosts []routeros.Host
-	users map[string]string // normalised MAC -> who holds it on the router
-}
-
-// collectDevicesX is collectDevices with the hotspot hosts and router users.
+// collectDevicesX is collectDevices with hasPlan: it
 // hasPlan false (the plan could not be computed) turns the network filter off.
-func (s *Service) collectDevicesX(site store.Site, pl netplan.Plan, hasPlan bool, wants []wantAcct, leases, arp []routeros.Row, x devExtra, ps *provState) {
+func (s *Service) collectDevicesX(site store.Site, pl netplan.Plan, hasPlan bool, wants []wantAcct, leases, arp []routeros.Row, ps *provState) {
 	now := s.now()
 	byMAC := map[string]*devObs{}
 	order := []string{}
@@ -96,14 +88,6 @@ func (s *Service) collectDevicesX(site store.Site, pl netplan.Plan, hasPlan bool
 		}
 		o.online = o.online || online
 	}
-	// The hotspot's own host table first: a MAC seen only there keeps source
-	// "hotspot-host"; a lease or ARP row for it then names the better source.
-	// Hotspot hosts are not filtered by the customer network (the hotspot
-	// decides what is on it), and authorised or bypassed ones are listed too:
-	// noteDevices already ignores a MAC that has an open account.
-	for _, h := range x.hosts {
-		upsert(h.MAC, h.Address, h.HostName, "hotspot-host", true, true)
-	}
 	for _, r := range leases {
 		if isOurs(r) {
 			continue
@@ -122,9 +106,6 @@ func (s *Service) collectDevicesX(site store.Site, pl netplan.Plan, hasPlan bool
 		if o := byMAC[strings.ToUpper(w.a.MAC)]; o != nil && o.online {
 			ps.seen[w.a.Code] = now
 		}
-	}
-	if x.users != nil {
-		ps.routerUsers = x.users
 	}
 	ps.mu.Unlock()
 	obs := make([]devObs, 0, len(order))
@@ -165,7 +146,7 @@ func (s *Service) noteDevices(siteID string, obs []devObs) {
 				dev.HostName = o.host
 			}
 			dev.Vendor = Vendor(o.mac)
-			if dev.Source == "" || dev.Source == "hotspot-host" || dev.Source == "dhcp" || dev.Source == "arp" {
+			if dev.Source == "" || dev.Source == "dhcp" || dev.Source == "arp" {
 				dev.Source = o.source // portal and dismissed are kept
 			}
 			d.Devices[key] = dev
@@ -207,9 +188,6 @@ type UnregDevice struct {
 	SiteName  string
 	Online    bool // seen within the last few minutes
 	Suggested *SuggestedAccount
-	// RouterUser is who holds this MAC on the router itself (hotspot session,
-	// hotspot user or IP binding) although no server account does; "" if none.
-	RouterUser string
 }
 
 // Unregistered lists the devices that have no account, online first, then by
@@ -235,7 +213,7 @@ func (s *Service) Unregistered(siteID string, onlineOnly bool) []UnregDevice {
 		if dv.Vendor == "" {
 			dv.Vendor = Vendor(dv.MAC)
 		}
-		out = append(out, UnregDevice{Device: dv, SiteName: names[dv.SiteID], Online: online, RouterUser: s.RouterUser(dv.SiteID, dv.MAC)})
+		out = append(out, UnregDevice{Device: dv, SiteName: names[dv.SiteID], Online: online})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Online != out[j].Online {
@@ -266,8 +244,7 @@ func (s *Service) UnregisteredOnline(has func(siteID string) bool) int {
 // seen for a day (or that are flagged and need a MAC): where a new device
 // most likely belongs.
 func (s *Service) staleAccounts(siteID string, now time.Time) []store.Account {
-	site, ok := s.site(siteID)
-	if !ok || !IPoE(site) {
+	if _, ok := s.site(siteID); !ok {
 		return nil
 	}
 	ps := s.prov(siteID)
@@ -371,7 +348,7 @@ func (s *Service) StaleAccountIDs(siteID string) map[string]bool {
 // ---- refresh, attach, create, dismiss ----------------------------------
 
 // RefreshHosts brings the unregistered devices list up to date from the
-// building's router, in every access mode. It is read-only on the router.
+// building's router, It is read-only on the router.
 func (s *Service) RefreshHosts(ctx context.Context, siteID string) error {
 	site, ok := s.site(siteID)
 	if !ok {
@@ -381,19 +358,15 @@ func (s *Service) RefreshHosts(ctx context.Context, siteID string) error {
 }
 
 // refreshDevices reads what is connected to a building's router and records
-// every MAC that has no open account: the DHCP leases, the ARP table and the
-// hotspot host table (each best effort, an error only when none could be
-// read), plus the hotspot users, IP bindings and sessions that hold a MAC, so
-// the list can say "logged in on the router as test1". Authorised and
-// bypassed hotspot hosts are not skipped: noteDevices already ignores a MAC
-// that has an open account.
+// every MAC that has no open account: the DHCP leases and the ARP table (each
+// best effort, an error only when neither could be read). noteDevices already
+// ignores a MAC that has an open account.
 func (s *Service) refreshDevices(ctx context.Context, site store.Site) error {
 	pl, perr := s.PlanFor(site)
 	rt := s.router(site.ID)
 	leases, lerr := rt.Rows(ctx, pathLease, nil)
 	arp, aerr := rt.Rows(ctx, pathARP, nil)
-	hosts, herr := rt.Hosts(ctx)
-	if lerr != nil && aerr != nil && herr != nil {
+	if lerr != nil && aerr != nil {
 		return lerr
 	}
 	if lerr != nil {
@@ -402,10 +375,6 @@ func (s *Service) refreshDevices(ctx context.Context, site store.Site) error {
 	if aerr != nil {
 		arp = nil
 	}
-	if herr != nil {
-		hosts = nil
-	}
-	x := devExtra{hosts: hosts, users: s.routerUsers(ctx, rt)}
 	var wants []wantAcct
 	s.st.View(func(d *store.Data) {
 		for _, a := range d.Accounts {
@@ -414,56 +383,8 @@ func (s *Service) refreshDevices(ctx context.Context, site store.Site) error {
 			}
 		}
 	})
-	s.collectDevicesX(site, pl, perr == nil, wants, leases, arp, x, s.prov(site.ID))
+	s.collectDevicesX(site, pl, perr == nil, wants, leases, arp, s.prov(site.ID))
 	return nil
-}
-
-// routerUsers maps each MAC that a hotspot session, hotspot user or IP
-// binding holds on the router to a short description ("test1",
-// "ip-binding (bypassed)"). Each table is best effort; the answer is never nil.
-func (s *Service) routerUsers(ctx context.Context, rt routeros.Client) map[string]string {
-	out := map[string]string{}
-	put := func(mac, who string) {
-		if m, err := NormalizeMAC(mac); err == nil && who != "" {
-			if _, have := out[m]; !have {
-				out[m] = who
-			}
-		}
-	}
-	if rows, err := rt.Rows(ctx, "/ip/hotspot/active", nil); err == nil {
-		for _, r := range rows {
-			put(r["mac-address"], r["user"])
-		}
-	}
-	if rows, err := rt.Rows(ctx, "/ip/hotspot/user", nil); err == nil {
-		for _, r := range rows {
-			put(r["mac-address"], r["name"])
-		}
-	}
-	if rows, err := rt.Rows(ctx, "/ip/hotspot/ip-binding", nil); err == nil {
-		for _, r := range rows {
-			t := r["type"]
-			if t == "" {
-				t = "regular"
-			}
-			put(r["mac-address"], "ip-binding ("+t+")")
-		}
-	}
-	return out
-}
-
-// RouterUser says who holds the MAC on the building's router (a hotspot
-// session or user, or an IP binding) as of the last device refresh; "" if
-// nobody or not known.
-func (s *Service) RouterUser(siteID, mac string) string {
-	m, err := NormalizeMAC(mac)
-	if err != nil {
-		return ""
-	}
-	ps := s.prov(siteID)
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
-	return ps.routerUsers[m]
 }
 
 // AttachDevice makes an unregistered device the ONT of an existing flat. It
@@ -545,7 +466,7 @@ func (s *Service) CreateCustomer(ctx context.Context, in AddCustomerInput) (stor
 			}
 			cur.PackageID = in.PackageID
 			d.Accounts[a.ID] = cur
-			s.enqueueLocked(d, cur, false, "package set")
+			s.enqueueLocked(d, cur, "package set")
 			return nil
 		})
 		if err != nil {

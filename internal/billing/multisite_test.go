@@ -82,7 +82,7 @@ func TestSameFlatInTwoSitesButMACIsGlobal(t *testing.T) {
 	})
 }
 
-// blocking is a router whose EnsureUser hangs until released.
+// blocking is a router whose Rows call hangs until released.
 type blocking struct {
 	*routeros.Mock
 	release chan struct{}
@@ -90,14 +90,14 @@ type blocking struct {
 	once    sync.Once
 }
 
-func (b *blocking) EnsureUser(ctx context.Context, u routeros.User) error {
+func (b *blocking) Rows(ctx context.Context, path string, q map[string]string) ([]routeros.Row, error) {
 	b.once.Do(func() { close(b.entered) })
 	select {
 	case <-b.release:
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
-	return b.Mock.EnsureUser(ctx, u)
+	return b.Mock.Rows(ctx, path, q)
 }
 
 type routers map[string]routeros.Client
@@ -113,11 +113,11 @@ func TestSavePackageDoesNotBlockOnDeadRouter(t *testing.T) {
 	e := newEnv(t)
 	bID := store.NewSiteID()
 	e.st.Update(func(d *store.Data) error {
-		d.Sites[bID] = store.Site{ID: bID, Name: "B", Mode: store.SiteModeEnv}
+		d.Sites[bID] = store.Site{ID: bID, Name: "B", Mode: store.SiteModeWG, WGPublicKey: "PUBB", TunnelIP: "10.99.0.9", AccessMode: store.AccessIPoE}
 		return nil
 	})
 	slow := &blocking{Mock: routeros.NewMock(), release: make(chan struct{}), entered: make(chan struct{})}
-	e.svc = NewService(e.st, routers{e.site: e.rt, bID: &stuckProfiles{slow}}, quiet())
+	e.svc = NewService(e.st, routers{e.site: e.rt, bID: slow}, quiet())
 	p := e.pkg("1 Hour")
 	p.SpeedMbps = 9
 	start := time.Now()
@@ -129,17 +129,6 @@ func TestSavePackageDoesNotBlockOnDeadRouter(t *testing.T) {
 	}
 	close(slow.release)
 	e.svc.Wait()
-}
-
-type stuckProfiles struct{ *blocking }
-
-func (s *stuckProfiles) EnsureProfile(ctx context.Context, p routeros.Profile) error {
-	select {
-	case <-s.release:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	return s.Mock.EnsureProfile(ctx, p)
 }
 
 // ---- packages and prices ----------------------------------------------------
@@ -160,7 +149,6 @@ func (e *env) setOverride(t *testing.T, site, pkg string, o store.PkgOverride) e
 func TestHiddenPackagesAndPriceOverrides(t *testing.T) {
 	e := newEnv(t)
 	b, _ := e.addSite(t, "Block B")
-	e.svc.SyncProfiles(context.Background(), b)
 	day := e.pkg("1 Day")
 	if err := e.setOverride(t, b, "1 Day", store.PkgOverride{PriceKES: 80}); err != nil {
 		t.Fatal(err)
@@ -267,7 +255,6 @@ func TestPriceCollisionIsAnError(t *testing.T) {
 func TestVoucherSiteRestriction(t *testing.T) {
 	e := newEnv(t)
 	b, _ := e.addSite(t, "Block B")
-	e.svc.SyncProfiles(context.Background(), b)
 	a1 := e.flatAt(t, e.site, "Flat 1", mac1)
 	b1 := e.flatAt(t, b, "Flat 1", macB)
 	day := e.pkg("1 Day")

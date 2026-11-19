@@ -106,22 +106,12 @@ func TestSaveEquipmentRefusesADuplicateLiveMAC(t *testing.T) {
 	}
 }
 
-func TestPortalAccountPrefersThisBuildingsFlaggedFlat(t *testing.T) {
+func TestFlaggedMACIsNotAnUnregisteredDevice(t *testing.T) {
 	e := newEnv(t)
 	b, _ := e.addSite(t, "Block B")
-	owner := e.flat(t, "Flat 1", mac1)
+	e.flat(t, "Flat 1", mac1)
 	flagged := e.flatAt(t, b, "Flat 1", macB)
 	e.flag(t, flagged.ID, mac1)
-	if a, ok := e.svc.PortalAccount(e.site, mac1); !ok || a.ID != owner.ID {
-		t.Fatalf("owner's building: %+v", a)
-	}
-	if a, ok := e.svc.PortalAccount(b, mac1); !ok || a.ID != flagged.ID {
-		t.Fatalf("the flagged flat's own building must keep working: %+v", a)
-	}
-	third, _ := e.addSite(t, "Block C")
-	if _, ok := e.svc.PortalAccount(third, mac1); ok {
-		t.Fatal("a building with neither flat must not see them")
-	}
 	// A MAC held by a flagged account is not an unregistered device.
 	e.svc.NoteDevice(b, mac1, "10.0.0.9", "portal")
 	e.st.View(func(d *store.Data) {

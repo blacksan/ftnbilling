@@ -46,7 +46,7 @@ func (s *Service) ChangePackage(ctx context.Context, id, pkgID string, keepTime 
 		}
 		d.AddEvent(store.Event{Time: now, SiteID: a.SiteID, Kind: "info", AccountID: id,
 			Msg: fmt.Sprintf("%s: package changed by admin %s -> %s (%s)", a.Flat, nameOr(old.Name, "none"), pkg.Name, how)})
-		s.enqueueLocked(d, a, true, "package changed")
+		s.enqueueLocked(d, a, "package changed")
 		return nil
 	})
 	if err == nil {
@@ -71,7 +71,7 @@ func (s *Service) EndPlan(ctx context.Context, id string) error {
 		a.ExpiresAt = now
 		d.Accounts[id] = a
 		d.AddEvent(store.Event{Time: now, SiteID: a.SiteID, Kind: "info", AccountID: id, Msg: a.Flat + ": plan ended by admin"})
-		s.enqueueLocked(d, a, true, "plan ended")
+		s.enqueueLocked(d, a, "plan ended")
 		return nil
 	})
 	if err == nil {
@@ -95,7 +95,7 @@ func (s *Service) DeleteAccount(ctx context.Context, id, confirm string) error {
 			return fmt.Errorf("type the account code %s to confirm", a.Code)
 		}
 		// Queue the router cleanup before the account disappears.
-		s.enqueueLocked(d, a, true, "account deleted")
+		s.enqueueLocked(d, a, "account deleted")
 		// The flat is closed, not erased: it keeps its code, history and
 		// payments, and its ONT goes back to stock as "returned".
 		now := s.now()
@@ -132,12 +132,10 @@ func (s *Service) DeleteAccount(ctx context.Context, id, confirm string) error {
 	return err
 }
 
-// DeletePackage hides a package everywhere and removes its router profile
-// from every building's router (in the background).
+// DeletePackage hides a package everywhere.
 // It refuses while a flat still has time on it or unused vouchers exist;
 // disable it instead in that case. Past payments keep showing its name.
 func (s *Service) DeletePackage(_ context.Context, id string) error {
-	var prof string
 	err := s.st.Update(func(d *store.Data) error {
 		p, ok := d.Packages[id]
 		if !ok || p.Deleted {
@@ -160,21 +158,13 @@ func (s *Service) DeletePackage(_ context.Context, id string) error {
 		}
 		p.Deleted, p.Disabled = true, true
 		d.Packages[id] = p
-		prof = p.Profile()
 		d.AddEvent(store.Event{Time: now, Kind: "info", Msg: "package deleted: " + p.Name})
 		return nil
 	})
 	if err != nil {
 		return err
 	}
-	s.syncAllSites(func(ctx context.Context, siteID string) {
-		if rerr := s.router(siteID).RemoveProfile(ctx, prof); rerr != nil {
-			s.log.Warn("could not remove router profile (harmless, remove it by hand)", "site", siteID, "profile", prof, "err", rerr)
-		}
-		if err := s.SyncProfiles(ctx, siteID); err != nil {
-			s.log.Warn("profile push failed; will retry", "site", siteID, "err", err)
-		}
-	})
+	s.ResyncAll()
 	return nil
 }
 
@@ -209,19 +199,16 @@ func (s *Service) MoveAccount(ctx context.Context, id, toSiteID string) error {
 		}
 		from = a.SiteID
 		// Clean the old router, then the new one gets the user via its own task.
-		s.enqueueLocked(d, a, true, "account moved away")
+		s.enqueueLocked(d, a, "account moved away")
 		a.SiteID = toSiteID
 		a.IP = "" // an address belongs to one building; the new one allocates its own
-		if IPoE(to) {
-			pl, err := s.PlanFor(to)
-			if err != nil {
-				return err
-			}
-			if a.IP, err = FreeIPLocked(d, toSiteID, pl, s.foreignIPs(toSiteID)); err != nil {
-				return err
-			}
+		pl, err := s.PlanFor(to)
+		if err != nil {
+			return err
 		}
-		a.RouterActive = false
+		if a.IP, err = FreeIPLocked(d, toSiteID, pl, s.foreignIPs(toSiteID)); err != nil {
+			return err
+		}
 		d.Accounts[id] = a
 		delete(d.Devices, store.DeviceKey(toSiteID, a.MAC))
 		for k, o := range d.Orders {
@@ -230,7 +217,7 @@ func (s *Service) MoveAccount(ctx context.Context, id, toSiteID string) error {
 				d.Orders[k] = o
 			}
 		}
-		s.enqueueLocked(d, a, true, "account moved in")
+		s.enqueueLocked(d, a, "account moved in")
 		d.AddEvent(store.Event{Time: s.now(), SiteID: toSiteID, Kind: "info", AccountID: id,
 			Msg: fmt.Sprintf("%s (%s): moved from %s to %s", a.Flat, a.Code, d.Sites[from].Name, to.Name)})
 		return nil

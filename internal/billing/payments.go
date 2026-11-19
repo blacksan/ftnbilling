@@ -105,7 +105,7 @@ func (s *Service) creditLocked(d *store.Data, in CreditInput) (p store.Payment, 
 	}
 	a = applyPackage(a, pkg, now)
 	d.Accounts[a.ID] = a
-	s.enqueueLocked(d, a, false, "payment "+key)
+	s.enqueueLocked(d, a, "payment "+key)
 	p = store.Payment{
 		Key: key, SiteID: a.SiteID, Method: in.Method, Status: store.PayApplied, AmountKES: in.AmountKES,
 		Phone: in.Phone, Name: in.Name, BillRef: in.BillRef, AccountID: a.ID, CustomerID: a.CustomerID, PackageID: pkg.ID,
@@ -206,7 +206,7 @@ func (s *Service) AssignPayment(ctx context.Context, key, accountID, pkgID, note
 		now := s.now()
 		a = applyPackage(a, pkg, now)
 		d.Accounts[a.ID] = a
-		s.enqueueLocked(d, a, false, "assigned payment "+key)
+		s.enqueueLocked(d, a, "assigned payment "+key)
 		p.Status, p.AccountID, p.PackageID, p.ResolvedAt = store.PayApplied, a.ID, pkg.ID, now
 		p.CustomerID = a.CustomerID
 		p.SiteID = a.SiteID
@@ -334,15 +334,13 @@ func (s *Service) ExtendAccount(ctx context.Context, accountID, pkgID, note stri
 
 // ---- orders (portal checkout) --------------------------------------------
 
-// OrderInput describes a new pending order for the account behind a MAC.
+// OrderInput describes a new pending order for an account.
 type OrderInput struct {
 	AccountID   string
 	PackageID   string
 	Phone       string // M-Pesa payer, normalised; may be empty for vouchers/test
 	Method      string // test, mpesa, voucher
 	VoucherCode string
-	MAC, IP     string
-	Dst         string
 }
 
 // CreateOrder records a pending order priced from the package.
@@ -366,7 +364,7 @@ func (s *Service) CreateOrder(in OrderInput) (store.Order, error) {
 		o = store.Order{
 			ID: RandomID(), SiteID: a.SiteID, AccountID: a.ID, PackageID: p.ID, Phone: in.Phone, Method: in.Method,
 			AmountKES: p.PriceKES, Status: store.OrderPending, VoucherCode: in.VoucherCode,
-			MAC: in.MAC, IP: in.IP, Dst: in.Dst, CreatedAt: s.now(),
+			CreatedAt: s.now(),
 		}
 		d.Orders[o.ID] = o
 		return nil
@@ -477,16 +475,5 @@ func (s *Service) CompleteOrder(ctx context.Context, orderID, receipt string) er
 	s.log.Info("order paid", "order", o.ID, "method", o.Method, "amount", o.AmountKES, "code", acct.Code)
 	s.runSiteShort(ctx, acct.SiteID)
 	s.credited()
-	if o.IP != "" && strings.EqualFold(o.MAC, acct.MAC) {
-		cur, _ := s.GetAccount(acct.ID)
-		if s.AutoLogin(ctx, cur, o.IP) {
-			_ = s.st.Update(func(d *store.Data) error {
-				oo := d.Orders[o.ID]
-				oo.LoggedIn = true
-				d.Orders[o.ID] = oo
-				return nil
-			})
-		}
-	}
 	return nil
 }

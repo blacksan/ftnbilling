@@ -34,17 +34,16 @@ func backoff(attempts int) time.Duration {
 // Update). Merging resets the retry timer so a new change is tried at once.
 // Tasks merge per (account, building): moving an account queues one task for
 // the old router and one for the new.
-func (s *Service) enqueueLocked(d *store.Data, a store.Account, kick bool, reason string) {
+func (s *Service) enqueueLocked(d *store.Data, a store.Account, reason string) {
 	now := s.now()
 	for id, t := range d.Tasks {
 		if t.AccountID == a.ID && t.SiteID == a.SiteID {
-			t.Kick = t.Kick || kick
 			t.Reason, t.NextTry, t.Attempts, t.Rev = reason, now, 0, t.Rev+1
 			d.Tasks[id] = t
 			return
 		}
 	}
-	t := store.Task{ID: RandomID(), SiteID: a.SiteID, AccountID: a.ID, Code: a.Code, Kick: kick, Reason: reason, NextTry: now, CreatedAt: now, Rev: 1}
+	t := store.Task{ID: RandomID(), SiteID: a.SiteID, AccountID: a.ID, Code: a.Code, Reason: reason, NextTry: now, CreatedAt: now, Rev: 1}
 	d.Tasks[t.ID] = t
 }
 
@@ -105,29 +104,20 @@ func (s *Service) RunSiteTasks(ctx context.Context, siteID string) int {
 		}
 	})
 	ok := 0
-	// An IPoE building is reconciled as a whole: one pass over the router
+	// A building is reconciled as a whole: one pass over the router
 	// answers every due task (a hundred queued tasks after an outage cost one
 	// pass, not a hundred).
-	ipoe := false
-	if st, found := s.site(siteID); found && IPoE(st) {
-		ipoe = true
-	}
 	var batchErr error
 	batchDone := false
 	for _, t := range due {
 		if ctx.Err() != nil {
 			break
 		}
-		var err error
-		if ipoe {
-			if !batchDone {
-				_, batchErr = s.ReconcileSite(ctx, siteID)
-				batchDone = true
-			}
-			err = batchErr
-		} else {
-			err = s.reconcile(ctx, t)
+		if !batchDone {
+			_, batchErr = s.ReconcileSite(ctx, siteID)
+			batchDone = true
 		}
+		err := batchErr
 		_ = s.st.Update(func(d *store.Data) error {
 			cur, found := d.Tasks[t.ID]
 			if !found {
@@ -157,19 +147,11 @@ func (s *Service) RunSiteTasks(ctx context.Context, siteID string) int {
 	return ok
 }
 
-// reconcile makes the task's building router match the account's current state.
-// If the account is gone, or now lives in another building, the router user is
-// removed from this building's router.
-func (s *Service) reconcile(ctx context.Context, t store.Task) error {
-	_, err := s.ReconcileSite(ctx, t.SiteID) // IPoE: the table diff covers the task
-	return err
-}
-
 // ---- sweeper ------------------------------------------------------------
 
 // Sweep records state changes made by the clock (a plan that just expired,
-// reminder events), then, per building and in parallel, re-syncs profiles
-// after a failure and runs the task queue.
+// reminder events), then, per building and in parallel, reconciles the router
+// and runs the task queue.
 func (s *Service) Sweep(ctx context.Context) {
 	now := s.now()
 	_ = s.st.Update(func(d *store.Data) error {
@@ -249,22 +231,4 @@ func (s *Service) RunSweeper(ctx context.Context, every time.Duration) {
 			s.Sweep(ctx)
 		}
 	}
-}
-
-// ResyncAll forgets what the router was last told, so the next sweep rebuilds
-// every hotspot user. Called at start-up: the router may have been reset or
-// restored from a backup while this app was stopped.
-func (s *Service) ResyncAll() {
-	_ = s.st.Update(func(d *store.Data) error {
-		for id, a := range d.Accounts {
-			if IPoE(d.Sites[a.SiteID]) {
-				continue // IPoE rows are compared with the router by the diff, not forgotten
-			}
-			if a.RouterActive {
-				a.RouterActive = false
-				d.Accounts[id] = a
-			}
-		}
-		return nil
-	})
 }
