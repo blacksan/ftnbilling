@@ -260,9 +260,10 @@
 
 :put "ftn 11/12: traffic reporting"
 :onerror e in={
-  /ip/traffic-flow/target remove [find where comment="ftn: netflow"]
+  # Traffic-flow targets take no comment on RouterOS 7.25; the server's tunnel address marks ours.
+  /ip/traffic-flow/target remove [find where dst-address=10.99.0.1]
   /ip/traffic-flow set enabled=yes interfaces=br-customers
-  /ip/traffic-flow/target add dst-address=10.99.0.1 port=2055 version=5 comment="ftn: netflow"
+  /ip/traffic-flow/target add dst-address=10.99.0.1 port=2055 version=5
 } do={ :set report ($report . "11 traffic-flow: " . $e . "\n"); :set fails ($fails + 1); :put ("ftn: section 11 traffic-flow failed, continuing: " . $e) }
 
 :put "ftn 12/12: checking the internet and the billing server"

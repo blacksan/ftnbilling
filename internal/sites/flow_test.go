@@ -536,3 +536,22 @@ func TestFixWalledOrderRepairLeavesNoGap(t *testing.T) {
 		t.Fatalf("not repaired: %+v", d)
 	}
 }
+
+// Traffic-flow targets have no comment on RouterOS 7.25, so a fix may only touch the one aimed
+// at the server's tunnel address, and may not send a comment.
+func TestFixWriterTrafficFlowTargetIsTheServersOnly(t *testing.T) {
+	w := &fixWriter{serverIP: "10.99.0.1"}
+	if err := w.allowedRow("/ip/traffic-flow/target", routeros.Row{"dst-address": "10.99.0.1"}); err != nil {
+		t.Fatalf("the server's target must be allowed: %v", err)
+	}
+	if err := w.allowedRow("/ip/traffic-flow/target", routeros.Row{"dst-address": "192.0.2.9"}); !errors.Is(err, ErrFixNotAllowed) {
+		t.Fatalf("another target must be refused, got %v", err)
+	}
+	if err := (&fixWriter{}).allowedRow("/ip/traffic-flow/target", routeros.Row{"dst-address": ""}); !errors.Is(err, ErrFixNotAllowed) {
+		t.Fatalf("with no server address nothing is allowed, got %v", err)
+	}
+	ctx := context.Background()
+	if err := w.addRow(ctx, "/ip/traffic-flow/target", map[string]string{"dst-address": "10.99.0.1", "comment": "x"}); !errors.Is(err, ErrFixNotAllowed) {
+		t.Fatalf("a comment must be refused, got %v", err)
+	}
+}

@@ -17,7 +17,7 @@ import (
 //
 //	/ip/dns                      one property (allow-remote-requests)
 //	/ip/traffic-flow             enabled and interfaces
-//	/ip/traffic-flow/target      rows commented "ftn: netflow"
+//	/ip/traffic-flow/target      the row aimed at the server's tunnel address (targets take no comment)
 //	/interface/bridge/port       rows of the building's OLT and bench ports
 //	/ip/firewall/filter, /nat    the customer DNS accepts, and the walled-garden rules
 //	/ip/dhcp-server              enabling ftn-dhcp
@@ -81,6 +81,7 @@ type fixWriter struct {
 	ifaces    map[string]bool // the OLT and bench ports of this building
 	custIface string          // the customer interface, for the DNS accept rules
 	walled    map[string]bool // comments of the walled-garden rules a fix may write (set by fixWalled)
+	serverIP  string          // the server's tunnel address: the only traffic-flow target a fix may touch
 	applied   []string
 }
 
@@ -119,8 +120,8 @@ func (w *fixWriter) allowedRow(path string, row routeros.Row) error {
 			return forbid("bridge port " + row["interface"] + " is not this building's OLT or bench port")
 		}
 	case "/ip/traffic-flow/target":
-		if row["comment"] != netflowComment {
-			return forbid("a traffic-flow target the server did not make")
+		if w.serverIP == "" || row["dst-address"] != w.serverIP {
+			return forbid("a traffic-flow target that is not aimed at the server")
 		}
 	case "/ip/dhcp-server":
 		if row["name"] != billing.DHCPServerName {
@@ -147,8 +148,11 @@ func (w *fixWriter) addRow(ctx context.Context, path string, body map[string]str
 			return forbid("bridge port " + body["interface"] + " is not this building's OLT or bench port")
 		}
 	case "/ip/traffic-flow/target":
-		if body["comment"] != netflowComment {
-			return forbid("a traffic-flow target without the ftn: netflow comment")
+		if w.serverIP == "" || body["dst-address"] != w.serverIP {
+			return forbid("a traffic-flow target that is not aimed at the server")
+		}
+		if _, ok := body["comment"]; ok {
+			return forbid("traffic-flow targets take no comment")
 		}
 	case "/ip/firewall/filter", "/ip/firewall/nat":
 		if w.walled[body["comment"]] {
@@ -499,7 +503,6 @@ func fixTrafficFlow(ctx context.Context, fe *fixEnv) error {
 		fe.w.note("traffic-flow target set to %s:%s", want.dst, want.port)
 		return nil
 	}
-	body["comment"] = netflowComment
 	if err := fe.w.addRow(ctx, "/ip/traffic-flow/target", body); err != nil {
 		return err
 	}
@@ -590,7 +593,7 @@ func (m *Manager) applyFix(ctx context.Context, siteID, checkID string, confirm 
 	eff := m.Effective(site)
 	rt := m.Router(siteID)
 	insp, _ := rt.(routeros.Inspector)
-	w := &fixWriter{rt: rt, insp: insp, ifaces: map[string]bool{}}
+	w := &fixWriter{rt: rt, insp: insp, ifaces: map[string]bool{}, serverIP: ServerTunnelIP(m.pfx)}
 	for _, n := range []string{eff.OLTInterface, eff.BenchPort, CustomerBridge} {
 		if n != "" {
 			w.ifaces[n] = true

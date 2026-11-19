@@ -626,3 +626,39 @@ func TestBootstrapCreatesInterfacesBeforeRulesNameThem(t *testing.T) {
 		}
 	}
 }
+
+// RouterOS 7.25.1 refuses `comment` on /ip/traffic-flow/target ("bad parameter comment"),
+// so the script must neither set nor look up a comment there.
+func TestBootstrapTrafficFlowTargetHasNoComment(t *testing.T) {
+	for _, name := range []string{"bootstrap_dhcp_vlan_bench.rsc", "bootstrap_dhcp_novlan.rsc", "bootstrap_static_vlan.rsc", "bootstrap_pppoe_novlan.rsc", "bootstrap_old_ros.rsc"} {
+		b, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, l := range strings.Split(string(b), "\n") {
+			if strings.Contains(l, "/ip/traffic-flow/target") && strings.Contains(l, "comment") {
+				t.Errorf("%s:%d: traffic-flow target line uses a comment: %s", name, i+1, strings.TrimSpace(l))
+			}
+		}
+	}
+}
+
+// A router left without DNS servers (a half-built earlier attempt) could not fetch its setup.
+// The paste line gives it DNS servers first, and only when it has none of its own.
+func TestBootstrapCommandGivesDNSWhenNone(t *testing.T) {
+	c := BootstrapCommand("https://isp.example.co.ke/", "TOK", true)
+	dns := `/ip/dns/set servers=` + PasteLineDNS
+	i, f := strings.Index(c, dns), strings.Index(c, "/tool/fetch")
+	if i < 0 || f < 0 || i > f {
+		t.Fatalf("the DNS step must come before the first fetch: dns at %d, fetch at %d", i, f)
+	}
+	if !strings.Contains(c, `[:len [/ip/dns/get servers]] = 0`) || !strings.Contains(c, `[:len [/ip/dns/get dynamic-servers]] = 0`) {
+		t.Fatal("DNS servers must only be set when the router has neither static nor dynamic ones")
+	}
+	if !strings.Contains(c, ":resolve isp.example.co.ke") {
+		t.Fatal("the paste line should check that the server's name can be looked up")
+	}
+	if strings.ContainsAny(c, "\r\n") {
+		t.Fatal("the paste line must stay one line")
+	}
+}
