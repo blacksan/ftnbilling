@@ -2,6 +2,11 @@ package ke.co.ftw.ftnadmin.data.update
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -20,7 +25,9 @@ import org.junit.Test
 
 private class FakeSource(var next: () -> UpdateCheck = { UpdateCheck.UpToDate("0.1.0") }) : UpdateSource {
     var checks = 0
-    var downloads = 0
+    val downloadCount = AtomicInteger()
+    val downloads: Int get() = downloadCount.get()
+    var gate: CompletableDeferred<Unit>? = null
     var file: File? = null
     var failWith: Exception? = null
 
@@ -30,7 +37,8 @@ private class FakeSource(var next: () -> UpdateCheck = { UpdateCheck.UpToDate("0
     }
 
     override suspend fun download(update: AvailableUpdate, onProgress: (Long, Long) -> Unit): File {
-        downloads++
+        downloadCount.incrementAndGet()
+        gate?.await()
         failWith?.let { throw it }
         onProgress(update.size, update.size)
         return file!!
@@ -183,5 +191,47 @@ class UpdateManagerTest {
         assertEquals("The downloaded file does not match the SHA-256 published with the release.", m.state.value.error)
         assertNull(m.state.value.download)
         assertEquals(update, m.state.value.available)
+    }
+
+    @Test fun twoConcurrentInstallsStartOneDownload() = runBlocking {
+        source.next = { UpdateCheck.Available(update) }
+        source.file = File.createTempFile("ftn", ".apk")
+        source.gate = CompletableDeferred()
+        val m = manager()
+        m.check()
+        val both = listOf(async(Dispatchers.IO) { m.install() }, async(Dispatchers.IO) { m.install() })
+        withTimeout(5_000) { while (source.downloads == 0) delay(10) }
+        delay(200)
+        assertEquals(1, source.downloads)
+        source.gate!!.complete(Unit)
+        both.awaitAll()
+        assertEquals(1, source.downloads)
+        source.file!!.delete()
+        Unit
+    }
+
+    @Test fun checkIsRefusedWhileADownloadRuns() = runBlocking {
+        source.next = { UpdateCheck.Available(update) }
+        source.file = File.createTempFile("ftn", ".apk")
+        source.gate = CompletableDeferred()
+        val m = manager()
+        m.check()
+        val job = async(Dispatchers.IO) { m.install() }
+        withTimeout(5_000) { while (source.downloads == 0) delay(10) }
+        m.check()
+        assertEquals(1, source.checks)
+        source.gate!!.complete(Unit)
+        job.await()
+        source.file!!.delete()
+        Unit
+    }
+
+    @Test fun manualLinkIsKeptWhenTheSignerCannotBeChecked() = runBlocking {
+        source.next = { UpdateCheck.Available(update) }
+        val m = manager()
+        m.check()
+        source.failWith = UpdateException("cannot check", manualUrl = "https://github.com/blacksan/ftnbilling/releases/tag/android-v0.2.0")
+        m.install()
+        assertEquals("https://github.com/blacksan/ftnbilling/releases/tag/android-v0.2.0", m.state.value.manualUrl)
     }
 }

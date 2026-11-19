@@ -22,7 +22,16 @@ class AndroidApkInspector(private val context: Context) : ApkInspector {
         null
     }
 
-    override fun archive(file: File): ApkIdentity? = archiveInfo(file.path)?.let(::identity)
+    override fun archive(file: File): ApkIdentity? {
+        val id = archiveInfo(file.path)?.let(::identity) ?: return null
+        // Before Android 9 the platform often returns no signatures for an APK that is not installed:
+        // read them from the v1 (JAR) signature instead.
+        return if (id.signers.isEmpty() && Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            id.copy(signers = V1Signers.read(file))
+        } else {
+            id
+        }
+    }
 
     @Suppress("DEPRECATION")
     private fun packageInfo(name: String): PackageInfo =

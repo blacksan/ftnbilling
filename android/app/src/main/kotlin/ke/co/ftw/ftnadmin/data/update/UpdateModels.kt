@@ -55,8 +55,8 @@ sealed interface UpdateCheck {
     data class Available(val update: AvailableUpdate) : UpdateCheck
 }
 
-/** A failure whose [message] is already plain words for the user. */
-class UpdateException(message: String, cause: Throwable? = null) : Exception(message, cause)
+/** A failure whose [message] is already plain words for the user. [manualUrl] is a page to finish the update by hand. */
+class UpdateException(message: String, cause: Throwable? = null, val manualUrl: String? = null) : Exception(message, cause)
 
 /** Package name, version and signing certificates (SHA-256 hex) of an installed app or an APK file. */
 data class ApkIdentity(val packageName: String, val versionCode: Long, val signers: Set<String>)

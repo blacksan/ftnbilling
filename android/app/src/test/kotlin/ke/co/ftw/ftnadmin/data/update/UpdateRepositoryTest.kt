@@ -41,9 +41,10 @@ class UpdateRepositoryTest {
         server = MockWebServer()
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
-                val path = request.path.orEmpty().substringBefore('?')
+                val full = request.path.orEmpty()
+                val path = full.substringBefore('?')
                 requested += path
-                return routes[path]?.invoke() ?: MockResponse().setResponseCode(404)
+                return (routes[full] ?: routes[path])?.invoke() ?: MockResponse().setResponseCode(404)
             }
         }
         server.start()
@@ -119,6 +120,38 @@ class UpdateRepositoryTest {
         assertEquals(11L, u.versionCode)
         assertEquals(url("/dl/android-v0.2.0/ftn-admin-0.2.0.apk"), u.apkUrl)
         assertTrue(requested.none { it.contains("v1.9.0") || it.contains("0.3.0") || it.contains("0.2.5") })
+    }
+
+    @Test fun looksOnLaterPagesWhenServerReleasesFillTheFirstOne() = runBlocking {
+        val filler = (1..100).map { release("v1.$it.0", "2026-11-18T10:00:00Z") }
+        routes["/repos/blacksan/ftnbilling/releases?per_page=100&page=1"] = { MockResponse().setBody("[${filler.joinToString(",")}]") }
+        routes["/repos/blacksan/ftnbilling/releases?per_page=100&page=2"] = {
+            MockResponse().setBody("[${release("android-v0.2.0", "2026-10-10T10:00:00Z")}]")
+        }
+        serveInfo("android-v0.2.0", code = 11)
+        val result = repo().latest()
+        assertTrue(result is UpdateCheck.Available)
+        assertTrue(requested.count { it == "/repos/blacksan/ftnbilling/releases" } == 2)
+    }
+
+    @Test fun givesUpAfterThreePages() = runBlocking {
+        val filler = (1..100).map { release("v1.$it.0", "2026-11-18T10:00:00Z") }
+        routes["/repos/blacksan/ftnbilling/releases"] = { MockResponse().setBody("[${filler.joinToString(",")}]") }
+        assertEquals(UpdateCheck.NoRelease, repo().latest())
+        assertEquals(3, requested.count { it == "/repos/blacksan/ftnbilling/releases" })
+    }
+
+    @Test fun unreadableSignerOffersTheReleasePageInsteadOfAFalseKeyError() = runBlocking {
+        serveApk()
+        val inspector = FakeInspector(ApkIdentity(pkg, 11, setOf(signer)), ApkIdentity(pkg, 11, emptySet()))
+        try {
+            repo(inspector = inspector).download(available()) { _, _ -> }
+            fail("expected UpdateException")
+        } catch (e: UpdateException) {
+            assertFalse(e.message!!.contains("different key"))
+            assertEquals("https://github.com/blacksan/ftnbilling/releases/tag/android-v0.2.0", e.manualUrl)
+        }
+        assertEquals(0, dir.list()!!.size)
     }
 
     @Test fun noAndroidReleaseMeansNoRelease() = runBlocking {

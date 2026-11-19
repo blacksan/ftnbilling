@@ -24,6 +24,8 @@ data class UpdateState(
     val permissionNeeded: Boolean = false,
     /** Last problem, in words, from a check or a download. */
     val error: String? = null,
+    /** A page where the user can finish the update by hand when the app cannot verify the download. */
+    val manualUrl: String? = null,
 ) {
     val busy: Boolean get() = checking || download != null
 }
@@ -82,8 +84,8 @@ class UpdateManager(
 
     /** One check, regardless of the schedule. Records the time, the result in words and any update found. */
     suspend fun check() {
-        if (!enabled || _state.value.busy) return
-        _state.update { it.copy(checking = true, error = null) }
+        if (!enabled) return
+        if (!begin { it.copy(checking = true, error = null, manualUrl = null) }) return
         val now = clock()
         var found: AvailableUpdate? = _state.value.available
         var error: String? = null
@@ -119,12 +121,11 @@ class UpdateManager(
 
     suspend fun install() {
         val u = _state.value.available ?: return
-        if (_state.value.busy) return
         if (!installer.canInstall()) {
-            _state.update { it.copy(permissionNeeded = true, error = null) }
+            _state.update { if (it.busy) it else it.copy(permissionNeeded = true, error = null) }
             return
         }
-        _state.update { it.copy(permissionNeeded = false, error = null, download = DownloadProgress(0, u.size)) }
+        if (!begin { it.copy(permissionNeeded = false, error = null, manualUrl = null, download = DownloadProgress(0, u.size)) }) return
         try {
             var lastPercent = -1
             val file = source.download(u) { done, total ->
@@ -140,9 +141,18 @@ class UpdateManager(
             _state.update { it.copy(download = null) }
             throw e
         } catch (e: UpdateException) {
-            _state.update { it.copy(download = null, error = e.message ?: "The update failed.") }
+            _state.update { it.copy(download = null, error = e.message ?: "The update failed.", manualUrl = e.manualUrl) }
         } catch (e: Exception) {
             _state.update { it.copy(download = null, error = "The update failed (${e.javaClass.simpleName}). Try again.") }
+        }
+    }
+
+    /** Atomically moves to the next state unless a check or a download is already running. */
+    private fun begin(next: (UpdateState) -> UpdateState): Boolean {
+        while (true) {
+            val current = _state.value
+            if (current.busy) return false
+            if (_state.compareAndSet(current, next(current))) return true
         }
     }
 

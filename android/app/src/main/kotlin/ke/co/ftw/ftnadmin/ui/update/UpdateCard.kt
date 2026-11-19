@@ -15,11 +15,13 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -41,6 +43,7 @@ fun UpdateCard(state: UpdateState, manager: UpdateManager, modifier: Modifier = 
         onPauseOrDispose {}
     }
     val scheme = MaterialTheme.colorScheme
+    val uriHandler = LocalUriHandler.current
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.extraLarge,
@@ -88,6 +91,9 @@ fun UpdateCard(state: UpdateState, manager: UpdateManager, modifier: Modifier = 
                         Surface(shape = MaterialTheme.shapes.small, color = scheme.errorContainer, contentColor = scheme.onErrorContainer) {
                             Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(10.dp))
                         }
+                    }
+                    state.manualUrl?.let { link ->
+                        OutlinedButton(onClick = { uriHandler.openUri(link) }) { Text("Open release page") }
                     }
                     Button(onClick = manager::startUpdate) { Text(if (state.error != null) "Try again" else "Update") }
                 }

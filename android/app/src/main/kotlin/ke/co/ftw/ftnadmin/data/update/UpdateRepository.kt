@@ -40,30 +40,39 @@ class UpdateRepository(
     private val client = http.newBuilder().followRedirects(false).followSslRedirects(false).build()
 
     override suspend fun latest(): UpdateCheck {
-        val listUrl = apiBase.newBuilder().addPathSegments("repos/$repo/releases").addQueryParameter("per_page", "20").build()
-        val releasesText = fetchText(listUrl, trusted = true, accept = "application/vnd.github+json")
-        val releases = try {
-            UpdateJson.decodeFromString(ListSerializer(GhRelease.serializer()), releasesText)
-        } catch (e: SerializationException) {
-            throw UpdateException("GitHub sent a releases list the app cannot read.", e)
+        // Server releases (v*) can fill the first pages, so look further until an android-v* release shows up.
+        var release: GhRelease? = null
+        for (page in 1..MAX_PAGES) {
+            val listUrl = apiBase.newBuilder().addPathSegments("repos/$repo/releases")
+                .addQueryParameter("per_page", PER_PAGE.toString())
+                .addQueryParameter("page", page.toString())
+                .build()
+            val releasesText = fetchText(listUrl, trusted = true, accept = "application/vnd.github+json")
+            val releases = try {
+                UpdateJson.decodeFromString(ListSerializer(GhRelease.serializer()), releasesText)
+            } catch (e: SerializationException) {
+                throw UpdateException("GitHub sent a releases list the app cannot read.", e)
+            }
+            release = pickRelease(releases)
+            if (release != null || releases.size < PER_PAGE) break
         }
-        val release = pickRelease(releases) ?: return UpdateCheck.NoRelease
+        val newest = release ?: return UpdateCheck.NoRelease
 
-        val infoAsset = release.assets.firstOrNull { it.name == INFO_ASSET }
-            ?: throw UpdateException("The newest release (${release.tag}) has no $INFO_ASSET file, so the app cannot tell what it contains.")
+        val infoAsset = newest.assets.firstOrNull { it.name == INFO_ASSET }
+            ?: throw UpdateException("The newest release (${newest.tag}) has no $INFO_ASSET file, so the app cannot tell what it contains.")
         val infoUrl = infoAsset.url.toHttpUrlOrNull()
         if (infoUrl == null || !policy.allows(infoUrl)) throw refused(infoAsset.url)
         val info = try {
             UpdateJson.decodeFromString(UpdateInfo.serializer(), fetchText(infoUrl, trusted = false, accept = "application/json"))
         } catch (e: SerializationException) {
-            throw UpdateException("The $INFO_ASSET of ${release.tag} cannot be read.", e)
+            throw UpdateException("The $INFO_ASSET of ${newest.tag} cannot be read.", e)
         }
-        validate(info, release.tag)
+        validate(info, newest.tag)
 
         if (info.versionCode <= currentVersionCode) return UpdateCheck.UpToDate(info.version)
 
-        val apkAsset = release.assets.firstOrNull { it.name == info.apk }
-            ?: throw UpdateException("Release ${release.tag} lists ${info.apk} but the file is not attached to it.")
+        val apkAsset = newest.assets.firstOrNull { it.name == info.apk }
+            ?: throw UpdateException("Release ${newest.tag} lists ${info.apk} but the file is not attached to it.")
         val apkUrl = apkAsset.url.toHttpUrlOrNull()
         if (apkUrl == null || !policy.allows(apkUrl)) throw refused(apkAsset.url)
         return UpdateCheck.Available(
@@ -149,7 +158,15 @@ class UpdateRepository(
         if (apk.packageName != packageName) throw UpdateException("The downloaded file is a different app (${apk.packageName}). It was deleted.")
         if (apk.versionCode != update.versionCode) throw UpdateException("The downloaded app has version code ${apk.versionCode}, not ${update.versionCode}. It was deleted.")
         val installed = inspector.installed() ?: throw UpdateException("Android did not tell this app its own signing certificate, so the update cannot be checked.")
-        if (apk.signers.isEmpty() || apk.signers != installed.signers) {
+        if (apk.signers.isEmpty() || installed.signers.isEmpty()) {
+            // Not proof of a bad key: this phone just cannot read the signer. Offer the manual route.
+            throw UpdateException(
+                "This phone cannot check who signed the download, so the app will not install it. " +
+                    "Download the APK from the release page instead and install it by hand.",
+                manualUrl = "$RELEASES_PAGE/tag/android-v${update.version}",
+            )
+        }
+        if (apk.signers != installed.signers) {
             throw UpdateException("The update is signed with a different key than the installed app, so Android would refuse it. It was deleted and nothing was installed.")
         }
     }
@@ -232,6 +249,9 @@ class UpdateRepository(
     companion object {
         const val INFO_ASSET = "update.json"
         private const val MAX_REDIRECTS = 5
+        private const val PER_PAGE = 100
+        private const val MAX_PAGES = 3
+        private const val RELEASES_PAGE = "https://github.com/blacksan/ftnbilling/releases"
         private const val BUFFER = 64 * 1024
         private const val MAX_TEXT_BYTES = 2 * 1024 * 1024
         private const val MAX_APK_BYTES = 200L * 1024 * 1024
