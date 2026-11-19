@@ -70,8 +70,8 @@ func TestLoginPageServedSignedOutAndLinkedFromPortal(t *testing.T) {
 	if strings.Contains(strings.ToLower(body), "wireguard") {
 		t.Error("the login page talks about the VPN")
 	}
-	// The public portal carries an Admin login link.
-	_, page := r.req("GET", "/portal", nil, nil)
+	// The public payment page carries an Admin login link.
+	_, page := r.req("GET", "/pay", nil, nil)
 	if !strings.Contains(page, `href="/admin/login"`) || !strings.Contains(page, "Admin login") {
 		t.Fatalf("no Admin login link on the portal:\n%s", page)
 	}

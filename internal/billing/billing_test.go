@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -36,18 +37,29 @@ func (e *env) addSite(t *testing.T, name string) (id string, rt *routeros.Mock) 
 	id = store.NewSiteID()
 	rt = routeros.NewMock()
 	err := e.st.Update(func(d *store.Data) error {
-		d.Sites[id] = store.Site{ID: id, Name: name, Mode: store.SiteModeEnv, CreatedAt: e.now}
+		d.Sites[id] = store.Site{ID: id, Name: name, Mode: store.SiteModeWG, WGPublicKey: "PUB" + id, TunnelIP: "10.99.0." + fmt.Sprint(len(d.Sites)+2),
+			AccessMode: store.AccessIPoE, CreatedAt: e.now}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedRouter(rt)
 	e.routers[id] = rt
 	return id, rt
 }
 
+// seedRouter gives a mock what the bootstrap script builds: the ftn-dhcp
+// server on the customer bridge.
+func seedRouter(rt *routeros.Mock) {
+	rt.SeedRow("/ip/dhcp-server", routeros.Row{"name": DHCPServerName, "interface": "br-customers", "disabled": "false"})
+	rt.SeedRow("/interface/bridge", routeros.Row{"name": CustomerBridgeName, "comment": CustomerBridgeComment})
+	rt.ResetWrites()
+}
+
 // setRT swaps building A's router (a "wiped router").
 func (e *env) setRT(rt *routeros.Mock) {
+	seedRouter(rt)
 	e.rt = rt
 	e.routers[e.site] = rt
 }
@@ -60,11 +72,9 @@ func newEnv(t *testing.T) *env {
 	e.routers = MockRouters{}
 	e.open(t)
 	e.site, _ = e.addSite(t, "Block A")
+	seedRouter(e.rt)
 	e.routers[e.site] = e.rt
 	if err := e.svc.SeedPackages(); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.svc.SyncProfiles(context.Background(), e.site); err != nil {
 		t.Fatal(err)
 	}
 	return e
@@ -113,7 +123,7 @@ func (e *env) get(a store.Account) store.Account {
 // pay runs a test-payment order for the account (as the portal does).
 func (e *env) pay(t *testing.T, a store.Account, pkg, ip string) store.Order {
 	t.Helper()
-	o, err := e.svc.CreateOrder(OrderInput{AccountID: a.ID, PackageID: e.pkg(pkg).ID, Method: "test", MAC: a.MAC, IP: ip})
+	o, err := e.svc.CreateOrder(OrderInput{AccountID: a.ID, PackageID: e.pkg(pkg).ID, Method: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +186,7 @@ func TestCodes(t *testing.T) {
 	}
 }
 
-func TestSeededPackagesAndProfiles(t *testing.T) {
+func TestSeededPackages(t *testing.T) {
 	e := newEnv(t)
 	want := map[string]struct{ min, mbps, kes int }{
 		"1 Hour": {60, 5, 10}, "1 Day": {1440, 10, 50}, "1 Week": {10080, 10, 250},
@@ -186,10 +196,6 @@ func TestSeededPackagesAndProfiles(t *testing.T) {
 		p := e.pkg(name)
 		if p.ID == "" || p.DurationMin != w.min || p.SpeedMbps != w.mbps || p.PriceKES != w.kes {
 			t.Errorf("%s: %+v", name, p)
-		}
-		prof, ok := e.rt.GetProfile(p.Profile())
-		if !ok || prof.RateLimit != p.RateLimit() || prof.SharedUsers != 1 {
-			t.Errorf("profile %s: %+v", p.Profile(), prof)
 		}
 	}
 	e.st.View(func(d *store.Data) {
@@ -205,7 +211,7 @@ func TestCreateAccountRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Flat != "Flat 3B" || a.MAC != mac1 || len(a.Code) != 6 || a.Phone != "254712345678" || len(a.HSPass) < 16 || a.HSPass == a.Code {
+	if a.Flat != "Flat 3B" || a.MAC != mac1 || len(a.Code) != 6 || a.Phone != "254712345678" {
 		t.Fatalf("%+v", a)
 	}
 	if _, err := e.svc.CreateAccount(AccountInput{SiteID: e.site, Flat: "Flat 4A", MAC: mac1}); err == nil || !strings.Contains(err.Error(), "already belongs") {
@@ -250,55 +256,6 @@ func TestUnknownMACGetsNoAccountAndIsRecorded(t *testing.T) {
 			t.Fatalf("devices %v", d.Devices)
 		}
 	})
-	e.rt.AddHost("AA:BB:CC:DD:EE:55", "10.5.50.30")
-	if err := e.svc.RefreshHosts(context.Background(), e.site); err != nil {
-		t.Fatal(err)
-	}
-	e.st.View(func(d *store.Data) {
-		if d.Devices[store.DeviceKey(e.site, "AA:BB:CC:DD:EE:55")].Source != "hotspot-host" {
-			t.Fatalf("%v", d.Devices)
-		}
-	})
-}
-
-func TestPaidAccountGetsRouterUserWithMACAndAutoLogin(t *testing.T) {
-	e := newEnv(t)
-	a := e.flat(t, "Flat 3B", mac1)
-	if e.rt.IsActive(a.Code) {
-		t.Fatal("not active yet")
-	}
-	o := e.pay(t, a, "1 Hour", "10.5.50.20")
-	if o.Status != store.OrderPaid || !o.LoggedIn {
-		t.Fatalf("order: %+v", o)
-	}
-	cur := e.get(a)
-	if !cur.ExpiresAt.Equal(e.now.Add(time.Hour)) || !cur.RouterActive || AccountState(cur, e.now) != StateActive {
-		t.Fatalf("%+v", cur)
-	}
-	u, ok := e.rt.GetUser(a.Code)
-	if !ok || u.Profile != "ispbill-1-hour" || u.MAC != mac1 || u.Password != a.HSPass || u.Name != a.Code {
-		t.Fatalf("router user: %+v", u)
-	}
-	if !e.rt.IsActive(a.Code) {
-		t.Fatal("device not logged in")
-	}
-	// Opening the portal again while active does not kick and re-login.
-	e.rt.Kicks = nil
-	if !e.svc.AutoLogin(context.Background(), cur, "10.5.50.20") || len(e.rt.Kicks) != 0 {
-		t.Fatal("same IP should stay logged in without a kick")
-	}
-	// A new IP (ONT re-leased) replaces the old session.
-	if !e.svc.AutoLogin(context.Background(), cur, "10.5.50.21") || len(e.rt.Kicks) != 1 {
-		t.Fatal("new IP should replace the session")
-	}
-	// Paying twice with the same order is a no-op.
-	exp := e.get(a).ExpiresAt
-	if err := e.svc.CompleteOrder(context.Background(), o.ID, "OTHER"); err != nil {
-		t.Fatal(err)
-	}
-	if !e.get(a).ExpiresAt.Equal(exp) {
-		t.Fatal("not idempotent")
-	}
 }
 
 func TestExtendAndUpgrade(t *testing.T) {
@@ -317,41 +274,15 @@ func TestExtendAndUpgrade(t *testing.T) {
 	if cur.PackageID != e.pkg("Monthly 80 Mbps").ID || !cur.ExpiresAt.Equal(before.Add(30*24*time.Hour)) {
 		t.Fatalf("%+v", cur)
 	}
-	if u, _ := e.rt.GetUser(a.Code); u.Profile != "ispbill-monthly-80-mbps" {
-		t.Fatalf("router profile %q", u.Profile)
-	}
-}
-
-func TestSweepExpiresRemovesUserKicksAndReconnectsOnPayment(t *testing.T) {
-	e := newEnv(t)
-	a := e.flat(t, "Flat 3B", mac1)
-	e.pay(t, a, "1 Hour", "10.5.50.20")
-	ctx := context.Background()
-	e.svc.Sweep(ctx)
-	if _, ok := e.rt.GetUser(a.Code); !ok || !e.rt.IsActive(a.Code) {
-		t.Fatal("must not expire early")
-	}
-	e.now = e.now.Add(61 * time.Minute)
-	e.svc.Sweep(ctx)
-	if _, ok := e.rt.GetUser(a.Code); ok || e.rt.IsActive(a.Code) {
-		t.Fatal("expired account still on the router")
-	}
-	if AccountState(e.get(a), e.now) != StateExpired {
-		t.Fatal("state")
-	}
-	// Reconnection is automatic on payment, no fee: same account, same code.
-	e.pay(t, a, "1 Hour", "10.5.50.20")
-	if _, ok := e.rt.GetUser(a.Code); !ok || !e.rt.IsActive(a.Code) {
-		t.Fatal("not reconnected")
-	}
 }
 
 func TestRouterRetryQueueSurvivesOutageAndRestart(t *testing.T) {
 	e := newEnv(t)
+	e.ipoe(t, store.AccessIPoE)
 	a := e.flat(t, "Flat 3B", mac1)
 	e.rt.SetFail(context.DeadlineExceeded)
 	o := e.pay(t, a, "1 Day", "10.5.50.20")
-	if o.Status != store.OrderPaid || o.LoggedIn {
+	if o.Status != store.OrderPaid {
 		t.Fatalf("payment must succeed while the router is down: %+v", o)
 	}
 	tasks := e.svc.PendingTasks()
@@ -372,10 +303,7 @@ func TestRouterRetryQueueSurvivesOutageAndRestart(t *testing.T) {
 	if n := e.svc.RunTasks(context.Background()); n != 1 {
 		t.Fatalf("task not run after restart: %d", n)
 	}
-	if u, ok := e.rt.GetUser(a.Code); !ok || u.MAC != mac1 {
-		t.Fatal("router user not created after retry")
-	}
-	if len(e.svc.PendingTasks()) != 0 || !e.get(a).RouterActive {
+	if len(e.svc.PendingTasks()) != 0 {
 		t.Fatal("task not cleared")
 	}
 }
@@ -394,65 +322,6 @@ func TestBackoffGrowsAndCaps(t *testing.T) {
 	}
 }
 
-func TestChangeMACUpdatesRouterUserAndKicksOldSession(t *testing.T) {
-	e := newEnv(t)
-	a := e.flat(t, "Flat 3B", mac1)
-	e.flat(t, "Flat 4A", "AA:BB:CC:DD:EE:02")
-	e.pay(t, a, "1 Day", "10.5.50.20")
-	if !e.rt.IsActive(a.Code) {
-		t.Fatal("setup")
-	}
-	ctx := context.Background()
-	if err := e.svc.ChangeMAC(ctx, a.ID, "AA:BB:CC:DD:EE:02"); err == nil {
-		t.Fatal("MAC of another flat must be refused")
-	}
-	e.rt.Kicks = nil
-	if err := e.svc.ChangeMAC(ctx, a.ID, "aa:bb:cc:dd:ee:99"); err != nil {
-		t.Fatal(err)
-	}
-	if u, _ := e.rt.GetUser(a.Code); u.MAC != "AA:BB:CC:DD:EE:99" {
-		t.Fatalf("router MAC %q", u.MAC)
-	}
-	if e.rt.IsActive(a.Code) || len(e.rt.Kicks) == 0 {
-		t.Fatal("old session not kicked")
-	}
-	if e.get(a).MAC != "AA:BB:CC:DD:EE:99" || e.get(a).Code != a.Code {
-		t.Fatal("account not updated")
-	}
-	// The old ONT's MAC is now unregistered; the new one maps to the account.
-	if _, ok := e.svc.AccountByMAC(mac1); ok {
-		t.Fatal("old MAC still mapped")
-	}
-	if got, ok := e.svc.AccountByMAC("AA:BB:CC:DD:EE:99"); !ok || got.ID != a.ID {
-		t.Fatal("new MAC not mapped")
-	}
-}
-
-func TestSuspendRemovesAndUnsuspendRestores(t *testing.T) {
-	e := newEnv(t)
-	a := e.flat(t, "Flat 3B", mac1)
-	e.pay(t, a, "1 Day", "10.5.50.20")
-	ctx := context.Background()
-	if err := e.svc.SetSuspended(ctx, a.ID, true); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := e.rt.GetUser(a.Code); ok || e.rt.IsActive(a.Code) {
-		t.Fatal("suspended account still online")
-	}
-	if _, err := e.svc.CreateOrder(OrderInput{AccountID: a.ID, PackageID: e.pkg("1 Day").ID, Method: "test"}); err != ErrSuspended {
-		t.Fatalf("suspended account must not start orders: %v", err)
-	}
-	if e.svc.AutoLogin(ctx, e.get(a), "10.5.50.20") {
-		t.Fatal("suspended account must not log in")
-	}
-	if err := e.svc.SetSuspended(ctx, a.ID, false); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := e.rt.GetUser(a.Code); !ok {
-		t.Fatal("not restored")
-	}
-}
-
 func TestVoucherAppliesToMACsAccountAndIsSingleUse(t *testing.T) {
 	e := newEnv(t)
 	a := e.flat(t, "Flat 3B", mac1)
@@ -462,7 +331,7 @@ func TestVoucherAppliesToMACsAccountAndIsSingleUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	redeem := func(acct store.Account, code string) error {
-		o, err := e.svc.CreateOrder(OrderInput{AccountID: acct.ID, PackageID: vs[0].PackageID, Method: "voucher", VoucherCode: code, MAC: acct.MAC, IP: "10.5.50.9"})
+		o, err := e.svc.CreateOrder(OrderInput{AccountID: acct.ID, PackageID: vs[0].PackageID, Method: "voucher", VoucherCode: code})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -496,9 +365,6 @@ func TestManualMpesaAppliesAndRejectsDuplicates(t *testing.T) {
 	}
 	if want := e.now.Add(30 * 24 * time.Hour); !e.get(a).ExpiresAt.Equal(want) {
 		t.Fatalf("expiry %v", e.get(a).ExpiresAt)
-	}
-	if u, ok := e.rt.GetUser(a.Code); !ok || u.Profile != "ispbill-monthly-40-mbps" || u.MAC != mac1 {
-		t.Fatalf("router user %+v", u)
 	}
 	exp := e.get(a).ExpiresAt
 	if _, err := e.svc.RecordManual(ctx, ManualInput{AccountID: a.ID, TransCode: "SGL7K2M9XA", AmountKES: 3000}); err != ErrDuplicateKey {
@@ -619,16 +485,16 @@ func TestReminderEventsAndPolicy(t *testing.T) {
 	}
 }
 
-func TestSavePackageUpdatesProfile(t *testing.T) {
+func TestSavePackageUpdatesQueue(t *testing.T) {
 	e := newEnv(t)
 	p := e.pkg("1 Day")
 	p.SpeedMbps, p.PriceKES = 15, 60
 	if _, err := e.svc.SavePackage(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
-	e.svc.Wait() // profiles are pushed in the background
-	if pr, _ := e.rt.GetProfile("ispbill-1-day"); pr.RateLimit != "15M/15M" {
-		t.Fatalf("%+v", pr)
+	e.svc.Wait() // the reconcile runs in the background
+	if got := e.pkg("1 Day"); got.SpeedMbps != 15 || got.PriceKES != 60 {
+		t.Fatalf("%+v", got)
 	}
 }
 
@@ -654,12 +520,8 @@ func TestResyncAllRebuildsRouterAfterRouterReset(t *testing.T) {
 	e.pay(t, a, "1 Day", "")
 	e.setRT(routeros.NewMock()) // router wiped
 	e.open(t)
-	e.svc.SyncProfiles(context.Background(), e.site)
 	e.svc.ResyncAll()
 	e.svc.Sweep(context.Background())
-	if u, ok := e.rt.GetUser(a.Code); !ok || u.MAC != mac1 {
-		t.Fatal("user not rebuilt on the new router")
-	}
 }
 
 func TestUpgradeAllowedDowngradeRefusedWhileActive(t *testing.T) {
@@ -677,7 +539,7 @@ func TestUpgradeAllowedDowngradeRefusedWhileActive(t *testing.T) {
 	exp = e.get(a).ExpiresAt
 
 	// A slower package is refused at checkout, with the date.
-	_, err := e.svc.CreateOrder(OrderInput{AccountID: a.ID, PackageID: e.pkg("Monthly 20 Mbps").ID, Method: "test", MAC: a.MAC})
+	_, err := e.svc.CreateOrder(OrderInput{AccountID: a.ID, PackageID: e.pkg("Monthly 20 Mbps").ID, Method: "test"})
 	if err == nil || !strings.Contains(err.Error(), "current plan ends on") {
 		t.Fatalf("downgrade order: %v", err)
 	}
@@ -713,9 +575,6 @@ func TestUpgradeAllowedDowngradeRefusedWhileActive(t *testing.T) {
 	}
 	if cur := e.get(a); cur.PackageID != e.pkg("Monthly 20 Mbps").ID || !cur.ExpiresAt.Equal(exp.Add(30*24*time.Hour)) {
 		t.Fatalf("forced: %+v", cur)
-	}
-	if u, _ := e.rt.GetUser(a.Code); u.Profile != "ispbill-monthly-20-mbps" {
-		t.Fatalf("profile %q", u.Profile)
 	}
 	// Without force the admin grant is refused.
 	if err := e.svc.ExtendAccount(ctx, a.ID, e.pkg("1 Hour").ID, "", false); !errors.Is(err, ErrLowerPlan) {

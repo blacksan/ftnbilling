@@ -73,6 +73,6 @@ var (
 	ErrDuplicateUsername = errors.New("that user name is already taken")
 	// ErrDuplicateToken: an access or refresh token hash is already in use.
 	ErrDuplicateToken = errors.New("that token is already in use")
-	// ErrBadAccessMode: a building's access mode is not hotspot, ipoe_observe or ipoe.
-	ErrBadAccessMode = errors.New("the building access mode must be hotspot, ipoe_observe or ipoe")
+	// ErrBadAccessMode: a building's access mode is not ipoe.
+	ErrBadAccessMode = errors.New("the building access mode must be ipoe")
 )

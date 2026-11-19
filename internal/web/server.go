@@ -190,12 +190,12 @@ func itoa(n int) string { b, _ := json.Marshal(n); return string(b) }
 // Handler returns the full HTTP handler with middleware applied.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/portal", http.StatusFound) })
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/pay", http.StatusFound) })
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /j/{token}", s.joinScript)
+	mux.HandleFunc("GET /j/{token}/reset", s.joinReset)
 	mux.HandleFunc("POST /j/{token}/report", s.joinReport)
 	s.portalRoutes(mux)
-	s.routerFileRoutes(mux)
 	s.callbackRoutes(mux)
 	s.waRoutes(mux)
 	s.loginRoutes(mux)

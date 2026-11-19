@@ -59,26 +59,9 @@ const (
 	macC  = "AA:BB:CC:DD:EE:A3"
 )
 
-// ipoe puts building A in an IPoE mode and gives its router the ftn-dhcp
-// server the join script's cutover creates.
-func (e *env) ipoe(t *testing.T, mode string) {
-	t.Helper()
-	e.setMode(t, e.site, mode)
-	e.rt.SeedRow("/ip/dhcp-server", routeros.Row{"name": DHCPServerName, "interface": "br-hotspot", "disabled": "false"})
-	e.rt.ResetWrites()
-}
-
-func (e *env) setMode(t *testing.T, site, mode string) {
-	t.Helper()
-	if err := e.st.Update(func(d *store.Data) error {
-		s := d.Sites[site]
-		s.AccessMode = mode
-		d.Sites[site] = s
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
+// ipoe is kept so the tests read the same: every building is IPoE and addSite
+// already gave its router the ftn-dhcp server.
+func (e *env) ipoe(t *testing.T, _ string) { t.Helper() }
 
 func (e *env) reconcile(t *testing.T) ProvisionRun {
 	t.Helper()
@@ -295,34 +278,6 @@ func TestIPoEUnsuspendFirstAndSuspendLast(t *testing.T) {
 	}
 }
 
-func TestIPoEObserveNeverWritesSuspendedList(t *testing.T) {
-	e := newEnv(t)
-	e.ipoe(t, store.AccessIPoEObserve)
-	a1 := e.flat(t, "Flat 1", macA)
-	e.flat(t, "Flat 2", macB2)
-	e.payAt(t, a1, "1 Day")
-	// An old entry from an earlier ipoe run is cleaned: observe never cuts anyone.
-	e.rt.SeedRow("/ip/firewall/address-list", routeros.Row{"list": SuspendedList, "address": "10.5.50.61", "comment": "ftn:acct:XX Flat 2"})
-	e.rt.ResetWrites()
-	run := e.reconcile(t)
-	if run.Failed != 0 {
-		t.Fatalf("%+v", run)
-	}
-	if len(e.rt.Table("/ip/firewall/address-list")) != 0 {
-		t.Fatalf("observe mode left suspended entries: %v", e.rt.Table("/ip/firewall/address-list"))
-	}
-	if len(e.rt.Table("/ip/dhcp-server/lease")) != 2 || len(e.rt.Table("/queue/simple")) != 2 {
-		t.Fatal("observe mode still writes leases and queues")
-	}
-	ps := e.svc.ProvisionStatus(e.site)
-	if ps.WouldSuspend != 1 || ps.Mode != store.AccessIPoEObserve {
-		t.Fatalf("%+v", ps)
-	}
-	if n := e.pass(t); n != 0 {
-		t.Fatalf("%d writes", n)
-	}
-}
-
 func TestIPoEConflictFlaggedAccountsAreSkipped(t *testing.T) {
 	e := newEnv(t)
 	e.ipoe(t, store.AccessIPoE)
@@ -448,44 +403,21 @@ func TestIPoEEventsReachTheRouterInOneTaskRun(t *testing.T) {
 	}
 }
 
-func TestIPoEWaitsForCutover(t *testing.T) {
-	e := newEnv(t)
-	e.setMode(t, e.site, store.AccessIPoEObserve) // no ftn-dhcp on the router yet
-	e.flat(t, "Flat 1", macA)
-	e.rt.ResetWrites()
-	run := e.reconcile(t)
-	if !run.Waiting || e.rt.Writes() != 0 {
-		t.Fatalf("must not write before the cutover: %+v writes=%d", run, e.rt.Writes())
-	}
-	if ps := e.svc.ProvisionStatus(e.site); ps.InSync || !strings.Contains(ps.Note, "cutover") {
-		t.Fatalf("%+v", ps)
-	}
-}
-
-func TestHotspotSitesAreNotReconciled(t *testing.T) {
-	e := newEnv(t)
-	e.flat(t, "Flat 1", macA)
-	e.rt.ResetWrites()
-	run, err := e.svc.ReconcileSite(context.Background(), e.site)
-	if err != nil || run.Ops != 0 || e.rt.Writes() != 0 {
-		t.Fatalf("%+v %v", run, err)
-	}
-	if ps := e.svc.ProvisionStatus(e.site); !ps.InSync || ps.Mode != store.AccessHotspot {
-		t.Fatalf("%+v", ps)
-	}
-	// a hotspot flat has no fixed address
-	if a, _ := e.svc.AccountByMAC(macA); a.IP != "" {
-		t.Fatalf("hotspot flat got %q", a.IP)
-	}
-}
-
 func TestAdoptLeasesAndAddressReuse(t *testing.T) {
 	e := newEnv(t)
 	a := e.flat(t, "Flat 1", macA)
 	b := e.flat(t, "Flat 2", macB2)
 	e.flat(t, "Flat 3", macC)
+	// These flats were registered before the router was reachable: no address yet.
+	e.st.Update(func(d *store.Data) error {
+		for id, x := range d.Accounts {
+			x.IP = ""
+			d.Accounts[id] = x
+		}
+		return nil
+	})
 	// Flat 1 holds .23, inside the unregistered pool (.10-.59): it must not keep it.
-	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": macA, "active-address": "10.5.50.23", "address": "10.5.50.23", "status": "bound", "dynamic": "true", "server": "dhcp-hotspot"})
+	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": macA, "active-address": "10.5.50.23", "address": "10.5.50.23", "status": "bound", "dynamic": "true", "server": "dhcp-other"})
 	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": macB2, "active-address": "10.5.50.74", "address": "10.5.50.74", "status": "bound", "dynamic": "true"})
 	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": "00:11:22:33:44:99", "address": "10.5.50.80", "status": "bound", "dynamic": "true"})
 	res, err := e.svc.AdoptLeases(context.Background(), e.site)
@@ -550,8 +482,6 @@ func TestFreeIPAvoidsForeignStaticLeaseAddresses(t *testing.T) {
 func TestMoveAccountReallocatesAddress(t *testing.T) {
 	e := newEnv(t)
 	b, _ := e.addSite(t, "Block B")
-	e.setMode(t, e.site, store.AccessIPoE)
-	e.setMode(t, b, store.AccessIPoE)
 	a := e.flat(t, "Flat 1", macA)
 	other := e.flatAt(t, b, "Flat X", macC)
 	if a.IP != "10.5.50.60" || other.IP != "10.5.50.60" {

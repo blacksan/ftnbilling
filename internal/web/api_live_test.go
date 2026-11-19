@@ -2,23 +2,14 @@ package web_test
 
 import (
 	"context"
+	"ispbill/internal/store"
 	"regexp"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"ispbill/internal/routeros"
 )
-
-type fakeJobs struct {
-	mu      sync.Mutex
-	running map[string]bool
-	state   map[string]string
-}
-
-func (j *fakeJobs) Running(id string) bool { j.mu.Lock(); defer j.mu.Unlock(); return j.running[id] }
-func (j *fakeJobs) State(id string) string { j.mu.Lock(); defer j.mu.Unlock(); return j.state[id] }
 
 func liveRig(t *testing.T) (*apiRig, *routeros.Mock) {
 	t.Helper()
@@ -56,7 +47,7 @@ func TestAPILiveAndInterfaces(t *testing.T) {
 			t.Errorf("missing %s", k)
 		}
 	}
-	if j["setup_state"] != "" {
+	if j["setup_state"] != "online" && j["setup_state"] != "ready" {
 		t.Fatalf("setup_state %v", j["setup_state"])
 	}
 	if th := j["throughput"].(map[string]any); th["step_s"].(float64) != 300 || len(th["t"].([]any)) != 36 {
@@ -93,7 +84,7 @@ func TestAPILiveAndInterfaces(t *testing.T) {
 			t.Errorf("first read must have null rates: %v", m)
 		}
 	}
-	if roles["ether1"] != "wan" || roles["sfp-sfpplus1"] != "olt" || roles["br-hotspot"] != "customer" || roles["wg-ftn"] != "tunnel" || roles["ether5"] != "other" {
+	if roles["ether1"] != "wan" || roles["sfp-sfpplus1"] != "olt" || roles["br-customers"] != "customer" || roles["wg-ftn"] != "tunnel" || roles["ether5"] != "other" {
 		t.Fatalf("%v", roles)
 	}
 }
@@ -111,21 +102,33 @@ func TestAPILiveResponsesCarryNoSecrets(t *testing.T) {
 			t.Fatalf("%s: %d", p, res.Status)
 		}
 		s := string(res.Raw)
-		if secretKey.MatchString(s) || strings.Contains(s, "PRIVKEY-123") || strings.Contains(s, "PW-HUNTER2") || strings.Contains(s, "hs_pass") {
+		if secretKey.MatchString(s) || strings.Contains(s, "PRIVKEY-123") || strings.Contains(s, "PW-HUNTER2") {
 			t.Errorf("%s leaks: %s", p, s)
 		}
 	}
-	// the account's hotspot password never shows either
-	res := r.call(r.owner.Access, "GET", "/routers/"+r.A.ID+"/clients", nil, nil)
-	if strings.Contains(string(res.Raw), "hspass") {
-		t.Fatal("hs pass")
+
+}
+
+// pinCode gives an account a fixed code (the codes are random).
+func (r *apiRig) pinCode(t *testing.T, a store.Account, code string) store.Account {
+	t.Helper()
+	if err := r.st.Update(func(d *store.Data) error {
+		x := d.Accounts[a.ID]
+		x.Code = code
+		d.Accounts[a.ID] = x
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
+	a.Code = code
+	return a
 }
 
 func TestAPIClientsSearchAndFilters(t *testing.T) {
 	r, mk := liveRig(t)
-	a1 := r.acct(t, r.A, "Flat 3B", "AA:BB:CC:DD:EE:01")
-	r.acct(t, r.A, "Flat 10A", "AA:BB:CC:DD:EE:02")
+	// Account codes are random: pin them, so no search term below can match one by chance.
+	a1 := r.pinCode(t, r.acct(t, r.A, "Flat 3B", "AA:BB:CC:DD:EE:01"), "QX7KP2")
+	r.pinCode(t, r.acct(t, r.A, "Flat 10A", "AA:BB:CC:DD:EE:02"), "ZW8NR4")
 	for _, q := range mk.Table("/queue/simple") { // the seeded queue belongs to the first flat
 		if q["name"] == "ftn-K7Q2MX" {
 			mk.SetRow(context.Background(), "/queue/simple", q[routeros.RowID], map[string]string{"name": "ftn-" + a1.Code})
@@ -168,8 +171,6 @@ func TestAPIClientsSearchAndFilters(t *testing.T) {
 
 func TestAPIRebootGuards(t *testing.T) {
 	r, mk := liveRig(t)
-	jobs := &fakeJobs{running: map[string]bool{}, state: map[string]string{}}
-	r.mgr.SetJobs(jobs)
 	path := "/routers/" + r.A.ID + "/actions/reboot"
 	reboots := func() int {
 		n := 0
@@ -198,12 +199,6 @@ func TestAPIRebootGuards(t *testing.T) {
 	if reboots() != 0 {
 		t.Fatal("a refused call rebooted the router")
 	}
-	// refused while a provisioning job runs; a refused attempt does not use the 10-minute slot
-	jobs.running[r.A.ID] = true
-	if x := r.call(r.owner.Access, "POST", path, map[string]any{"confirm_name": "Alpha"}, nil); x.Status != 409 || x.errCode(t) != "bad_state" {
-		t.Fatalf("%d %s", x.Status, x.Raw)
-	}
-	jobs.running[r.A.ID] = false
 	// the router itself says no: 409 router_refused, slot not used
 	mk.SetPathFail("/system/reboot", &routeros.APIError{Status: 403, Message: "Forbidden", Detail: "not enough permissions (9)", Method: "POST", Path: "/system/reboot"})
 	if x := r.call(r.owner.Access, "POST", path, map[string]any{"confirm_name": "alpha"}, nil); x.Status != 409 || x.errCode(t) != "router_refused" {

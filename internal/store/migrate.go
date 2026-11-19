@@ -24,8 +24,7 @@ func (d *Data) migrateRows(now time.Time) {
 		d.Devices = map[string]Device{}
 		return
 	}
-	site := Site{ID: NewSiteID(), Name: "Main building", Mode: SiteModeEnv, HotspotServer: "hotspot1",
-		LegacyContainer: true, CreatedAt: now}
+	site := Site{ID: NewSiteID(), Name: "Main building", Mode: SiteModeEnv, CreatedAt: now}
 	d.Sites[site.ID] = site
 	for k, a := range d.Accounts {
 		a.SiteID = site.ID
@@ -375,3 +374,42 @@ func (d *Data) migrateEquipmentMACs(now time.Time) {
 }
 
 var macShape = regexp.MustCompile(`^([0-9A-F]{2}:){5}[0-9A-F]{2}$`)
+
+// obsoleteSiteSettings are the per-router settings of the old provisioning job
+// and the hotspot-to-IPoE cutover. They are deleted when data moves to format 7
+// (migration 0006 does the same in Postgres).
+var obsoleteSiteSettings = []string{"prov_job", "prov_lease", "serving_customers", "cutover_seen_at", "cutover_confirmed_at", "hotspot_bypass_at"}
+
+// migrateV6toV7 upgrades format 6 data in memory: every router becomes IPoE
+// and the settings of the old provisioning job are purged. The new Site fields
+// stay empty (they mean the defaults).
+func (d *Data) migrateV6toV7() {
+	for id, s := range d.Sites {
+		s.AccessMode = AccessIPoE
+		d.Sites[id] = s
+	}
+	for k := range d.Settings {
+		if IsObsoleteSiteSetting(k) {
+			delete(d.Settings, k)
+		}
+	}
+}
+
+// IsObsoleteSiteSetting reports whether a settings key is "site.<id>.<name>"
+// for one of the settings the bootstrap flow no longer uses.
+func IsObsoleteSiteSetting(key string) bool {
+	rest, ok := strings.CutPrefix(key, "site.")
+	if !ok {
+		return false
+	}
+	_, name, ok := strings.Cut(rest, ".")
+	if !ok {
+		return false
+	}
+	for _, o := range obsoleteSiteSettings {
+		if name == o {
+			return true
+		}
+	}
+	return false
+}

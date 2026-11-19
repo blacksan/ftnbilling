@@ -17,8 +17,7 @@ const (
 	codeRouterRefused     = "router_refused"
 )
 
-// setupRoutes registers the router setup API (docs/release-plan-routers.md
-// section 3 and docs/api/v4-w5c.md).
+// setupRoutes registers the router setup API (docs/api/v5-bootstrap.md).
 func (s *Server) setupRoutes(h func(pattern, role string, f apiFunc)) {
 	const (
 		viewer   = store.RoleViewer
@@ -28,27 +27,36 @@ func (s *Server) setupRoutes(h func(pattern, role string, f apiFunc)) {
 	h("POST /api/v1/routers", owner, s.apiRouterCreate)
 	h("PATCH /api/v1/routers/{id}", owner, s.apiRouterPatch)
 	h("GET /api/v1/routers/{id}/setup", viewer, s.apiSetup)
-	h("POST /api/v1/routers/{id}/setup/run", operator, s.apiSetupRun)
-	h("POST /api/v1/routers/{id}/setup/migrate", operator, s.apiSetupMigrate)
-	h("POST /api/v1/routers/{id}/setup/rollback", owner, s.apiSetupRollback)
+	h("POST /api/v1/routers/{id}/actions/reset", owner, s.apiRouterReset)
+	h("POST /api/v1/routers/{id}/script", owner, s.apiRouterScript)
 
-	// W5 endpoints, kept as thin views over the job (aliased under /routers by h).
 	h("GET /api/v1/sites/{id}/checks", viewer, s.apiChecks)
 	h("POST /api/v1/sites/{id}/checks/{check_id}/fix", operator, s.apiCheckFix)
-	h("PUT /api/v1/sites/{id}/mode", operator, s.apiSiteMode)
 	h("POST /api/v1/sites/{id}/join-command", owner, s.apiJoinCommand)
-	h("GET /api/v1/sites/{id}/cutover", viewer, s.apiCutover)
-	h("POST /api/v1/sites/{id}/cutover/start", operator, s.apiCutoverStart)
-	h("POST /api/v1/sites/{id}/cutover/confirm", operator, s.apiCutoverConfirm)
-	h("POST /api/v1/sites/{id}/cutover/rollback", owner, s.apiSetupRollback)
 	h("POST /api/v1/sites/{id}/bench/test-flat", operator, s.apiBenchTestFlat)
 	h("POST /api/v1/sites/{id}/bench/suspend-test", operator, s.apiBenchSuspend)
+
+	// Gone in v5 (answered 410 for one release): the set-up job, migration, rollback, access mode and cutover.
+	for _, p := range []string{
+		"POST /api/v1/routers/{id}/setup/run", "POST /api/v1/routers/{id}/setup/migrate", "POST /api/v1/routers/{id}/setup/rollback",
+		"PUT /api/v1/sites/{id}/mode", "GET /api/v1/sites/{id}/cutover", "POST /api/v1/sites/{id}/cutover/start",
+		"POST /api/v1/sites/{id}/cutover/confirm", "POST /api/v1/sites/{id}/cutover/rollback",
+	} {
+		h(p, viewer, s.apiGone)
+	}
+}
+
+const codeGone = "gone"
+
+// apiGone answers the endpoints v5 removed.
+func (s *Server) apiGone(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	apiErr(w, http.StatusGone, codeGone, "This call was removed in v5. A router is set up by pasting one line on it; see docs/api/v5-bootstrap.md.", nil)
 }
 
 // idemExempt: calls whose answer holds a one-time secret are never replayed from the Idempotency-Key cache.
 func idemExempt(r *http.Request) bool {
 	p := strings.TrimRight(r.URL.Path, "/")
-	return r.Method == http.MethodPost && (p == "/api/v1/routers" || strings.HasSuffix(p, "/join-command"))
+	return r.Method == http.MethodPost && (p == "/api/v1/routers" || strings.HasSuffix(p, "/join-command") || strings.HasSuffix(p, "/script"))
 }
 
 func (s *Server) routerFail(w http.ResponseWriter, err error) bool {
@@ -86,132 +94,97 @@ func (s *Server) apiSetup(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 	s.setupJSON(w, r, http.StatusOK, st.ID)
 }
 
-func (s *Server) jobStartErr(w http.ResponseWriter, err error) bool {
-	switch {
-	case err == nil:
-		return false
-	case errors.Is(err, sites.ErrJobRunning):
-		apiErr(w, http.StatusConflict, codeBadState, "A setup job is already running for this router.", nil)
-	case errors.Is(err, sites.ErrNotJoined):
-		apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
-	case errors.Is(err, sites.ErrNameMismatch):
-		validationErr(w, map[string]string{"confirm_name": "type the router name to confirm"})
-	default:
-		return s.routerFail(w, err)
-	}
-	return true
-}
-
-func (s *Server) apiSetupRun(w http.ResponseWriter, r *http.Request, c *apiCtx) {
-	st, ok := s.site404(w, r.PathValue("id"))
-	if !ok {
-		return
-	}
-	if s.jobStartErr(w, s.mgr.StartProvision(st.ID, sites.ProvOptions{Trigger: "run", Actor: c.user.Username})) {
-		return
-	}
-	c.audit(s, "router "+st.Name+" setup run")
-	s.setupJSON(w, r, http.StatusAccepted, st.ID)
-}
-
-func (s *Server) apiSetupMigrate(w http.ResponseWriter, r *http.Request, c *apiCtx) {
-	st, ok := s.site404(w, r.PathValue("id"))
-	if !ok {
-		return
-	}
-	var req struct {
-		ConfirmName string `json:"confirm_name"`
-		KeepUnknown bool   `json:"keep_unknown"`
-	}
-	if !decode(w, r, &req, false) {
-		return
-	}
-	if s.jobStartErr(w, s.mgr.StartMigration(st.ID, req.ConfirmName, req.KeepUnknown, c.user.Username)) {
-		return
-	}
-	c.audit(s, "router "+st.Name+" migration started")
-	s.setupJSON(w, r, http.StatusAccepted, st.ID)
-}
-
-func (s *Server) apiSetupRollback(w http.ResponseWriter, r *http.Request, c *apiCtx) {
-	st, ok := s.site404(w, r.PathValue("id"))
-	if !ok {
-		return
-	}
-	var req struct {
-		ConfirmName string `json:"confirm_name"`
-	}
-	if !decode(w, r, &req, false) {
-		return
-	}
-	if strings.TrimSpace(req.ConfirmName) != st.Name {
-		validationErr(w, map[string]string{"confirm_name": "type the router name to confirm"})
-		return
-	}
-	if err := s.mgr.RollbackNow(st.ID, c.user.Username); err != nil {
-		if errors.Is(err, sites.ErrNothingToRollBack) {
-			apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
-			return
-		}
-		if !s.routerFail(w, err) {
-			apiErr(w, http.StatusServiceUnavailable, codeRouterUnreachable, "The router does not answer, so it could not be told to roll back. Its own timer rolls it back if a change is waiting.", nil)
-		}
-		return
-	}
-	c.audit(s, "router "+st.Name+" rollback now")
-	s.setupJSON(w, r, http.StatusAccepted, st.ID)
-}
-
 // ---- add and edit a router -------------------------------------------------------------------
 
 type routerReq struct {
-	Name             *string  `json:"name"`
-	ServingCustomers *bool    `json:"serving_customers"`
-	WANInterface     *string  `json:"wan_interface"`
-	OLTInterface     *string  `json:"olt_interface"`
-	VLANID           *int     `json:"vlan_id"`
-	CustomerSubnet   *string  `json:"customer_subnet"`
-	WANCapMbps       *float64 `json:"wan_cap_mbps"`
-	SupportPhone     *string  `json:"support_phone"`
+	Name           *string  `json:"name"`
+	WANInterface   *string  `json:"wan_interface"`
+	WANMode        *string  `json:"wan_mode"`
+	WANAddress     *string  `json:"wan_address"`
+	WANGateway     *string  `json:"wan_gateway"`
+	WANDNS         *string  `json:"wan_dns"`
+	PPPoEUser      *string  `json:"pppoe_user"`
+	PPPoEPass      *string  `json:"pppoe_pass"`
+	PPPoEPassClear *bool    `json:"pppoe_pass_clear"`
+	LANPorts       *string  `json:"lan_ports"`
+	LANSubnet      *string  `json:"lan_subnet"`
+	OLTInterface   *string  `json:"olt_interface"`
+	VLANID         *int     `json:"vlan_id"`
+	CustomerSubnet *string  `json:"customer_subnet"`
+	BenchPort      *string  `json:"bench_port"`
+	WANCapMbps     *float64 `json:"wan_cap_mbps"`
+	OLTCapMbps     *float64 `json:"olt_cap_mbps"`
+	FUPTB          *float64 `json:"fup_tb"`
+	SupportPhone   *string  `json:"support_phone"`
 }
 
 func applyRouterReq(in sites.SiteInput, q routerReq) sites.SiteInput {
-	if q.Name != nil {
-		in.Name = *q.Name
+	str := func(dst *string, v *string) {
+		if v != nil {
+			*dst = *v
+		}
 	}
-	if q.WANInterface != nil {
-		in.WANInterface = *q.WANInterface
-	}
-	if q.OLTInterface != nil {
-		in.OLTInterface = *q.OLTInterface
+	str(&in.Name, q.Name)
+	str(&in.WANInterface, q.WANInterface)
+	str(&in.WANMode, q.WANMode)
+	str(&in.WANAddress, q.WANAddress)
+	str(&in.WANGateway, q.WANGateway)
+	str(&in.WANDNS, q.WANDNS)
+	str(&in.PPPoEUser, q.PPPoEUser)
+	str(&in.PPPoEPass, q.PPPoEPass)
+	str(&in.LANPorts, q.LANPorts)
+	str(&in.LANSubnet, q.LANSubnet)
+	str(&in.OLTInterface, q.OLTInterface)
+	str(&in.CustomerNet, q.CustomerSubnet)
+	str(&in.BenchPort, q.BenchPort)
+	str(&in.SupportPhone, q.SupportPhone)
+	if q.PPPoEPassClear != nil {
+		in.PPPoEPassClear = *q.PPPoEPassClear
 	}
 	if q.VLANID != nil {
 		in.VLANID = *q.VLANID
 	}
-	if q.CustomerSubnet != nil {
-		in.CustomerNet = *q.CustomerSubnet
-	}
 	if q.WANCapMbps != nil {
 		in.WANCapMbps = *q.WANCapMbps
 	}
-	if q.SupportPhone != nil {
-		in.SupportPhone = *q.SupportPhone
+	if q.OLTCapMbps != nil {
+		in.OLTCapMbps = *q.OLTCapMbps
+	}
+	if q.FUPTB != nil {
+		in.FUPTB = *q.FUPTB
 	}
 	return in
 }
 
+// joinBody mints a new one-time line for the router. It voids the earlier one.
 func (s *Server) joinBody(st store.Site) (map[string]any, error) {
 	tok, exp, err := s.mgr.MintJoin(st.ID)
 	if err != nil {
 		return nil, err
 	}
-	intent := s.mgr.JoinIntentOf(st.ID)
-	hs := intent == sites.IntentServing
 	return map[string]any{
-		"command":         sites.JoinCommandIntent(s.cfg.PublicBaseURL, tok, true, "", intent, hs),
-		"command_nocheck": sites.JoinCommandIntent(s.cfg.PublicBaseURL, tok, false, "", intent, hs),
+		"command":         sites.BootstrapCommand(s.cfg.PublicBaseURL, tok, true),
+		"command_nocheck": sites.BootstrapCommand(s.cfg.PublicBaseURL, tok, false),
 		"expires_at":      exp,
 	}, nil
+}
+
+// routerFieldErr turns a validation error of the router fields into a 422 on the field it is about.
+func routerFieldErr(w http.ResponseWriter, err error) {
+	field := "name"
+	msg := err.Error()
+	for _, f := range []struct{ key, word string }{
+		{"pppoe_pass", "PPPoE needs a password"}, {"pppoe_pass", "PPPoE password"}, {"pppoe_user", "PPPoE"}, {"wan_address", "WAN address"}, {"wan_gateway", "WAN gateway"},
+		{"wan_dns", "WAN DNS"}, {"wan_mode", "WAN type"}, {"wan_interface", "WAN interface"}, {"olt_interface", "OLT interface"}, {"bench_port", "bench port"},
+		{"lan_ports", "admin LAN port"}, {"lan_subnet", "admin LAN subnet"}, {"customer_subnet", "customer subnet"}, {"vlan_id", "VLAN"},
+		{"lan_subnet", "LAN and customer subnets"}, {"lan_ports", "is used twice"},
+	} {
+		if strings.Contains(msg, f.word) {
+			field = f.key
+			break
+		}
+	}
+	validationErr(w, map[string]string{field: msg})
 }
 
 func (s *Server) apiRouterCreate(w http.ResponseWriter, r *http.Request, c *apiCtx) {
@@ -223,18 +196,17 @@ func (s *Server) apiRouterCreate(w http.ResponseWriter, r *http.Request, c *apiC
 		validationErr(w, map[string]string{"name": "a router name is required"})
 		return
 	}
-	serving := req.ServingCustomers != nil && *req.ServingCustomers
-	st, err := s.mgr.CreateRouter(applyRouterReq(sites.SiteInput{}, req), serving)
+	st, err := s.mgr.CreateRouter(applyRouterReq(sites.SiteInput{}, req))
 	if err != nil {
 		if s.storeErr(w, err) {
 			return
 		}
-		validationErr(w, map[string]string{"name": err.Error()})
+		routerFieldErr(w, err)
 		return
 	}
 	join, err := s.joinBody(st)
 	if err != nil {
-		apiErr(w, http.StatusConflict, codeBadState, "The router was added but no join line could be made: "+err.Error(), map[string]any{"router_id": st.ID})
+		apiErr(w, http.StatusConflict, codeBadState, "The router was added but no line could be made: "+err.Error(), map[string]any{"router_id": st.ID})
 		return
 	}
 	c.audit(s, "router "+st.Name+" added")
@@ -252,34 +224,99 @@ func (s *Server) apiRouterPatch(w http.ResponseWriter, r *http.Request, c *apiCt
 	if !decode(w, r, &req, false) {
 		return
 	}
-	in := sites.SiteInput{Name: st.Name, Notes: st.Notes, SupportPhone: st.SupportPhone, HotspotServer: st.HotspotServer, WANInterface: st.WANInterface,
-		WANList: st.WANList, OLTInterface: st.OLTInterface, CustomerNet: st.CustomerSubnet, VLANID: st.VLANID, WANCapMbps: st.WANCapMbps,
-		OLTCapMbps: st.OLTCapMbps, FUPTB: st.FUPTB, Provision: st.Provision, LegacyContainer: st.LegacyContainer, BenchPort: st.BenchPort}
+	in := sites.SiteInputOf(st)
 	if err := s.mgr.UpdateSite(st.ID, applyRouterReq(in, req)); err != nil {
 		if !s.storeErr(w, err) {
-			validationErr(w, map[string]string{"name": err.Error()})
+			routerFieldErr(w, err)
 		}
 		return
-	}
-	if req.ServingCustomers != nil {
-		s.mgr.SetServingCustomers(st.ID, *req.ServingCustomers)
 	}
 	c.audit(s, "router "+st.Name+" edited")
 	st, _ = s.site404(w, st.ID)
 	h := s.siteHealths(r.Context(), []store.Site{st})[st.ID]
-	out := s.siteJSON(st, h, s.siteCounts()[st.ID])
-	out["serving_customers"] = s.mgr.ServingCustomers(st.ID)
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, s.siteJSON(st, h, s.siteCounts()[st.ID]))
 }
 
-// ---- W5 endpoints ------------------------------------------------------------------------------
+// apiRouterReset is POST /routers/{id}/actions/reset: forget the router on the
+// server and make a new line.
+func (s *Server) apiRouterReset(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	st, ok := s.site404(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	var req struct {
+		ConfirmName string `json:"confirm_name"`
+	}
+	if !decode(w, r, &req, false) {
+		return
+	}
+	if strings.TrimSpace(req.ConfirmName) != st.Name {
+		validationErr(w, map[string]string{"confirm_name": "type the router name to confirm"})
+		return
+	}
+	if err := s.mgr.ResetRouter(st.ID, req.ConfirmName, c.user.Username); err != nil {
+		if errors.Is(err, sites.ErrNameMismatch) {
+			validationErr(w, map[string]string{"confirm_name": "type the router name to confirm"})
+		} else if !s.storeErr(w, err) {
+			apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
+		}
+		return
+	}
+	c.audit(s, "router "+st.Name+" reset")
+	st, _ = s.site404(w, st.ID)
+	join, err := s.joinBody(st)
+	if err != nil {
+		apiErr(w, http.StatusConflict, codeBadState, "The router was reset but no line could be made: "+err.Error(), nil)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	h := s.siteHealths(r.Context(), []store.Site{st})[st.ID]
+	writeJSON(w, http.StatusOK, map[string]any{"router": s.siteJSON(st, h, s.siteCounts()[st.ID]), "join": join})
+}
+
+// apiRouterScript is POST /routers/{id}/script: the same script as the paste line fetches, as a file download
+// for a router that cannot take the line. It makes new keys, so it needs {confirm_name} and is refused (409)
+// for a router that is joined with its tunnel up unless {force: true}. API only: the web admin has no button.
+func (s *Server) apiRouterScript(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	st, ok := s.site404(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	var req struct {
+		ConfirmName string `json:"confirm_name"`
+		Force       bool   `json:"force"`
+	}
+	if !decode(w, r, &req, false) {
+		return
+	}
+	if strings.TrimSpace(req.ConfirmName) != st.Name {
+		validationErr(w, map[string]string{"confirm_name": "type the router name to confirm"})
+		return
+	}
+	script, err := s.mgr.DownloadScript(st.ID, "download:"+c.user.Username, req.Force)
+	if err != nil {
+		if errors.Is(err, sites.ErrCannotRender) || errors.Is(err, sites.ErrInsecureBase) || errors.Is(err, sites.ErrRouterLive) {
+			apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
+		} else if !s.storeErr(w, err) {
+			apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
+		}
+		return
+	}
+	c.audit(s, "router "+st.Name+" script downloaded"+map[bool]string{true: " (forced)", false: ""}[req.Force])
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+sites.SetupFile+`"`)
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(script)
+}
+
+// ---- checks ------------------------------------------------------------------------------
 
 func (s *Server) apiChecks(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 	st, ok := s.site404(w, r.PathValue("id"))
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 50*time.Second)
 	defer cancel()
 	ck, err := s.mgr.Checks(ctx, st.ID, r.URL.Query().Get("fresh") == "1" || r.URL.Query().Get("fresh") == "true")
 	if err != nil {
@@ -301,7 +338,7 @@ func (s *Server) apiCheckFix(w http.ResponseWriter, r *http.Request, c *apiCtx) 
 	if !decode(w, r, &req, true) {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	res, err := s.mgr.ApplyFix(ctx, st.ID, r.PathValue("check_id"), req.Confirm, c.user.Role)
 	switch {
@@ -321,41 +358,6 @@ func (s *Server) apiCheckFix(w http.ResponseWriter, r *http.Request, c *apiCtx) 
 	}
 }
 
-func (s *Server) apiSiteMode(w http.ResponseWriter, r *http.Request, c *apiCtx) {
-	st, ok := s.site404(w, r.PathValue("id"))
-	if !ok {
-		return
-	}
-	var req struct {
-		Mode     string `json:"mode"`
-		Override bool   `json:"override"`
-	}
-	if !decode(w, r, &req, false) {
-		return
-	}
-	if s.mgr.SetupBusy(st.ID) {
-		apiErr(w, http.StatusConflict, codeBadState, "A setup job is running for this router.", nil)
-		return
-	}
-	err := s.mgr.SetAccessModeForce(st.ID, req.Mode, req.Override)
-	switch {
-	case err == nil, errors.Is(err, store.ErrNoChange):
-	case errors.Is(err, store.ErrBadAccessMode):
-		validationErr(w, map[string]string{"mode": "must be hotspot, ipoe_observe or ipoe"})
-		return
-	case errors.Is(err, sites.ErrRouterIsIPoE), errors.Is(err, sites.ErrRouterUnknown):
-		apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
-		return
-	default:
-		apiErr(w, http.StatusBadRequest, codeBadRequest, err.Error(), nil)
-		return
-	}
-	c.audit(s, "router "+st.Name+" mode "+req.Mode)
-	st, _ = s.site404(w, st.ID)
-	h := s.siteHealths(r.Context(), []store.Site{st})[st.ID]
-	writeJSON(w, http.StatusOK, s.siteJSON(st, h, s.siteCounts()[st.ID]))
-}
-
 func (s *Server) apiJoinCommand(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 	st, ok := s.site404(w, r.PathValue("id"))
 	if !ok {
@@ -369,78 +371,6 @@ func (s *Server) apiJoinCommand(w http.ResponseWriter, r *http.Request, c *apiCt
 	c.audit(s, "router "+st.Name+" join command made")
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, join)
-}
-
-// cutoverView is the Cutover of the W5 contract, read off the job.
-func (s *Server) cutoverView(ctx context.Context, id string) map[string]any {
-	v, _ := s.mgr.SetupView(ctx, id)
-	state := "idle"
-	switch v.State {
-	case sites.JobArming, sites.JobSwitching, sites.JobStaging, sites.JobBuilding, sites.JobChecking, sites.JobFixing:
-		state = "running"
-	case sites.JobVerifying:
-		state = "awaiting_confirm" // the server decides by itself; nobody confirms
-	case sites.JobLive:
-		state = "confirmed"
-	case sites.JobRollingBack:
-		state = "rolling_back"
-	case sites.JobRolledBack:
-		state = "rolled_back"
-	case sites.JobFailed:
-		state = "failed"
-	}
-	return map[string]any{"state": state, "method": "server", "started_at": nil, "deadline_at": v.DeadlineAt, "seconds_left": v.SecondsLeft,
-		"steps": v.Steps, "can_confirm": false, "blockers": v.Blockers, "last_error": v.LastError,
-		"evidence": map[string]any{"tunnel_up": v.Evidence.TunnelUp, "flats_bound": v.Evidence.FlatsBound, "flats_entitled": v.Evidence.FlatsRequired, "internet_ok": v.Evidence.InternetOK},
-		"auto":     true}
-}
-
-func (s *Server) apiCutover(w http.ResponseWriter, r *http.Request, c *apiCtx) {
-	st, ok := s.site404(w, r.PathValue("id"))
-	if !ok {
-		return
-	}
-	writeJSON(w, http.StatusOK, s.cutoverView(r.Context(), st.ID))
-}
-
-func (s *Server) apiCutoverStart(w http.ResponseWriter, r *http.Request, c *apiCtx) {
-	st, ok := s.site404(w, r.PathValue("id"))
-	if !ok {
-		return
-	}
-	var req struct {
-		ConfirmName string `json:"confirm_name"`
-		KeepUnknown bool   `json:"keep_unknown"`
-	}
-	if !decode(w, r, &req, false) {
-		return
-	}
-	if s.jobStartErr(w, s.mgr.StartMigration(st.ID, req.ConfirmName, req.KeepUnknown, c.user.Username)) {
-		return
-	}
-	c.audit(s, "router "+st.Name+" migration started")
-	writeJSON(w, http.StatusAccepted, s.cutoverView(r.Context(), st.ID))
-}
-
-// apiCutoverConfirm: the server confirms by itself on evidence; this only returns the state. For the legacy
-// paste cutover (a router timer, or the kit's markers set by hand) it still confirms.
-func (s *Server) apiCutoverConfirm(w http.ResponseWriter, r *http.Request, c *apiCtx) {
-	st, ok := s.site404(w, r.PathValue("id"))
-	if !ok {
-		return
-	}
-	if !s.mgr.SetupBusy(st.ID) {
-		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-		defer cancel()
-		if pend, known := s.mgr.CutoverPending(ctx, st.ID); known && pend {
-			if err := s.mgr.ConfirmCutover(ctx, st.ID); err != nil && !s.routerFail(w, err) {
-				apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
-				return
-			}
-			c.audit(s, "router "+st.Name+" legacy cutover confirmed")
-		}
-	}
-	writeJSON(w, http.StatusOK, s.cutoverView(r.Context(), st.ID))
 }
 
 // ---- bench ------------------------------------------------------------------------------------
@@ -518,10 +448,6 @@ func (s *Server) apiBenchSuspend(w http.ResponseWriter, r *http.Request, c *apiC
 	}
 	if a.SiteID != st.ID {
 		apiErr(w, http.StatusNotFound, codeNotFound, "No such account on this router.", nil)
-		return
-	}
-	if st.AccessMode != store.AccessIPoE {
-		apiErr(w, http.StatusConflict, codeBadState, "The suspend test needs the router in IPoE mode: in hotspot and observe mode nobody is walled.", nil)
 		return
 	}
 	type step struct {

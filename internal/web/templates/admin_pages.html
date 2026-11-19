@@ -34,7 +34,7 @@
 </div></div>
 {{if $o.Tasks}}<section class="panel" aria-labelledby="h-tasks"><div class="panel-h"><h2 id="h-tasks">Pending router actions</h2></div>
 <div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>Flat code</th><th>What</th><th class="n">Tries</th><th>Next try</th><th>Last error</th></tr></thead><tbody>
-{{$d := .}}{{range $o.Tasks}}<tr>{{if $d.Data.ShowSite}}<td data-label="Router">{{index $d.Data.SiteNames .SiteID}}</td>{{end}}<td data-label="Flat code"><code>{{.Code}}</code></td><td data-label="What">{{.Reason}}{{if .Kick}} (and end the session){{end}}</td><td class="n" data-label="Tries">{{.Attempts}}</td><td data-label="Next try">{{eat .NextTry}}</td><td class="bad" data-label="Error">{{.LastErr}}</td></tr>{{end}}</tbody></table></div>
+{{$d := .}}{{range $o.Tasks}}<tr>{{if $d.Data.ShowSite}}<td data-label="Router">{{index $d.Data.SiteNames .SiteID}}</td>{{end}}<td data-label="Flat code"><code>{{.Code}}</code></td><td data-label="What">{{.Reason}}</td><td class="n" data-label="Tries">{{.Attempts}}</td><td data-label="Next try">{{eat .NextTry}}</td><td class="bad" data-label="Error">{{.LastErr}}</td></tr>{{end}}</tbody></table></div>
 <p class="muted" style="margin:10px 0 0">These retry on their own, from 5 seconds up to 5 minutes, and survive a restart.</p></section>{{end}}
 {{template "afoot" .}}{{end}}
 
@@ -86,7 +86,7 @@
 <p class="muted" style="margin:10px 0 0">The New devices page lists what the router sees: <a href="/admin/devices">pick a MAC there</a> and attach it to this flat.</p></section>
 <section class="panel"><h2>Actions</h2><div class="row" style="margin-top:12px">
 <form method="post" action="/admin/accounts/suspend"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}"><input type="hidden" name="suspend" value="{{if $A.Suspended}}0{{else}}1{{end}}"><button class="ghost">{{if $A.Suspended}}Unsuspend{{else}}Suspend{{end}}</button></form>
-<form method="post" action="/admin/accounts/kick"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}"><button class="ghost">End session</button></form></div>
+</div>
 <form method="post" action="/admin/accounts/extend" class="row" style="margin-top:14px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <label class="field">Free grant<select name="package">{{range .Data.Pkgs}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label><label class="field">Reason<input name="note" placeholder="optional"></label>
 <label class="ck"><input type="checkbox" name="force" value="1"> apply even if lower speed</label><button>Add time</button></form></section>
@@ -130,13 +130,13 @@
 </div>
 {{if .Data.HostErr}}<div class="banner" role="alert">Could not read the router: {{.Data.HostErr}}</div>{{end}}
 <nav class="tabs" aria-label="Which devices"><a class="tab" href="/admin/devices?online=1"{{if .Data.OnlineOnly}} aria-current="page"{{end}}>Online</a><a class="tab" href="/admin/devices"{{if not .Data.OnlineOnly}} aria-current="page"{{end}}>All<span class="n">{{.Data.Count}}</span></a></nav>
-{{if .Data.Rows}}<div class="tw tall"><table class="rs"><thead><tr><th>MAC</th><th>Vendor and host</th><th>IP</th>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>Source</th><th>Logged in as</th><th>Last seen</th><th>Actions</th></tr></thead><tbody>
+{{if .Data.Rows}}<div class="tw tall"><table class="rs"><thead><tr><th>MAC</th><th>Vendor and host</th><th>IP</th>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>Source</th><th>Last seen</th><th>Actions</th></tr></thead><tbody>
 {{range $i, $r := .Data.Rows}}<tr>
 <td class="who"><b class="mono" style="font-family:var(--f-mono);font-size:13px">{{$r.MAC}}</b><span><span class="pill {{if $r.Online}}online{{else}}offline{{end}}">{{if $r.Online}}online{{else}}offline{{end}}</span></span></td>
 <td data-label="Vendor">{{if $r.Vendor}}{{$r.Vendor}}{{else}}<span class="muted">unknown</span>{{end}}{{if $r.HostName}}<br><span class="muted">{{$r.HostName}}</span>{{end}}</td>
 <td data-label="IP" class="mono">{{$r.IP}}</td>{{if $d.Data.ShowSite}}<td data-label="Router">{{$r.SiteName}}</td>{{end}}
 <td data-label="Source">{{$r.Source}} <span class="muted">{{$r.Hits}}x</span></td>
-<td data-label="Logged in as">{{if $r.RouterUser}}<code>{{$r.RouterUser}}</code>{{else}}<span class="muted">nobody</span>{{end}}</td>
+
 <td data-label="Last seen">{{eats $r.LastSeen}}</td>
 <td><div class="row" style="gap:6px">{{if $d.CanWrite}}<button type="button" class="sm" data-open="addcustomer" data-mac="{{$r.MAC}}" data-site="{{$r.SiteID}}">Create customer</button>{{end}}
 <details style="position:relative"><summary class="btn ghost sm" style="display:inline-flex">Attach</summary><div class="card" style="position:absolute;right:0;z-index:5;min-width:280px">
@@ -210,7 +210,7 @@
 {{template "afoot" .}}{{end}}
 
 {{define "admin_orders"}}{{template "ahead" .}}{{$d := .}}
-<p class="muted" style="max-width:70ch">Checkouts started from the tenant portal. A pending or failed order can be marked paid by hand if you saw the money; it is then recorded as MANUAL-&lt;order&gt;. Prefer Record payment so the real transaction code is kept.</p>
+<p class="muted" style="max-width:70ch">Checkouts started from the payment page. A pending or failed order can be marked paid by hand if you saw the money; it is then recorded as MANUAL-&lt;order&gt;. Prefer Record payment so the real transaction code is kept.</p>
 {{if .Data.Orders}}<div class="tw tall"><table class="rs"><thead><tr>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>Time</th><th>Order</th><th>Flat</th><th>Payer</th><th>Plan</th><th class="n">KES</th><th>Method</th><th>Status</th><th>Receipt</th><th></th></tr></thead><tbody>
 {{range .Data.Orders}}<tr>{{if $d.Data.ShowSite}}<td data-label="Router">{{index $d.Data.SiteNames .SiteID}}</td>{{end}}<td data-label="Time">{{eat .CreatedAt}}</td><td data-label="Order" class="mono">{{.ID}}</td><td data-label="Flat">{{(acctOf $d.Data.AcctMap .AccountID).Flat}}</td><td data-label="Payer">{{.Phone}}</td><td data-label="Plan">{{(pkgOf $d.Data.PkgMap .PackageID).Name}}</td><td class="n" data-label="KES">{{.AmountKES}}</td><td data-label="Method">{{.Method}}</td><td data-label="Status"><span class="pill {{.Status}}">{{.Status}}</span>{{if .Reason}} <span class="muted">{{.Reason}}</span>{{end}}</td><td data-label="Receipt" class="mono">{{.Receipt}}</td>
 <td>{{if ne .Status "paid"}}<form class="i" method="post" action="/admin/orders/markpaid"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><button class="ghost sm">Mark paid</button></form>{{end}}</td></tr>{{end}}</tbody></table></div>
@@ -220,17 +220,17 @@
 {{define "admin_packages"}}{{template "ahead" .}}{{$d := .}}{{$n := index .Data.Cnt "all"}}
 <div class="stats">
 {{template "stat" (dict "K" "Plans" "V" $n "S" "in the catalogue" "Icon" "packages" "Feature" true)}}
-{{template "stat" (dict "K" "Active" "V" .Data.PActive "S" "visible on the portal" "Icon" "check" "Tone" "ok")}}
+{{template "stat" (dict "K" "Active" "V" .Data.PActive "S" "visible on the payment page" "Icon" "check" "Tone" "ok")}}
 {{template "stat" (dict "K" "Disabled" "V" .Data.PDisabled "S" "hidden from tenants" "Icon" "warn" "Tone" "warn")}}
 {{template "stat" (dict "K" "Subscribers" "V" .Data.PSubs "S" "on a plan now" "Icon" "accounts" "Tone" "info")}}
 </div>
 <nav class="tabs" aria-label="Plan filter">{{range $t := (seq "all|All" "quick|Quick passes" "monthly|Monthly" "disabled|Disabled")}}{{$k := index (split $t "|") 0}}{{$l := index (split $t "|") 1}}<a class="tab" href="/admin/packages?tab={{$k}}"{{if eq $k $d.Data.Tab}} aria-current="page"{{end}}>{{$l}}<span class="n">{{index $d.Data.Cnt $k}}</span></a>{{end}}</nav>
-<p class="muted" style="max-width:76ch">Changing a speed updates the router profile. Disabled plans are hidden from the portal; flats that have one keep it. Keep prices unique: Paybill payments are matched to a plan by amount. A plan can be deleted only when no flat has time left on it and no unused voucher exists; otherwise tick Disabled.</p>
-<div class="tw"><table><thead><tr><th>Name</th><th class="n">Minutes</th><th class="n">Mbps</th><th class="n">Price KES</th><th class="n">Subscribers</th><th>Disabled</th><th>Profile</th><th></th></tr></thead><tbody>
+<p class="muted" style="max-width:76ch">Changing a speed updates the flats' queues on the routers. Disabled plans are hidden from the payment page; flats that have one keep it. Keep prices unique: Paybill payments are matched to a plan by amount. A plan can be deleted only when no flat has time left on it and no unused voucher exists; otherwise tick Disabled.</p>
+<div class="tw"><table><thead><tr><th>Name</th><th class="n">Minutes</th><th class="n">Mbps</th><th class="n">Price KES</th><th class="n">Subscribers</th><th>Disabled</th><th></th></tr></thead><tbody>
 {{range .Data.Pkgs}}{{$f := printf "f%s" .ID}}<tr>
 <td><input form="{{$f}}" name="name" value="{{.Name}}" aria-label="Name"></td><td class="n"><input form="{{$f}}" name="duration" type="number" min="1" value="{{.DurationMin}}" style="width:96px" aria-label="Minutes"></td>
 <td class="n"><input form="{{$f}}" name="speed" type="number" min="1" value="{{.SpeedMbps}}" style="width:80px" aria-label="Mbps"></td><td class="n"><input form="{{$f}}" name="price" type="number" min="0" value="{{.PriceKES}}" style="width:100px" aria-label="Price"></td>
-<td class="n">{{index $d.Data.PSubMap .ID}}</td><td><input form="{{$f}}" type="checkbox" name="disabled" value="1"{{if .Disabled}} checked{{end}} aria-label="Disabled"></td><td class="mono">{{.Profile}}</td>
+<td class="n">{{index $d.Data.PSubMap .ID}}</td><td><input form="{{$f}}" type="checkbox" name="disabled" value="1"{{if .Disabled}} checked{{end}} aria-label="Disabled"></td>
 <td><form id="{{$f}}" method="post" action="/admin/packages/save" style="display:inline"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><button class="sm">Save</button></form>
 <form method="post" action="/admin/packages/delete" style="display:inline" data-confirm="Delete {{.Name}}?"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><button class="ghost sm">Delete</button></form></td></tr>
 {{else}}<tr><td colspan="8" class="empty-row">{{template "empty" (dict "Title" "No plans here" "Text" "Add a plan below: a name, how long it lasts, its speed and its price.")}}</td></tr>{{end}}</tbody></table></div>
@@ -283,13 +283,6 @@
 <tr><td>Join command lifetime</td><td>{{.Data.JoinTTL}} <code>JOIN_TOKEN_TTL</code></td></tr>
 <tr><td>NetFlow listener</td><td>{{.Data.Cfg.NetflowAddr}}{{if .Data.Stray}}, {{.Data.Stray}} packets from unknown sources dropped{{end}}</td></tr>
 <tr><td>Ping targets</td><td>{{range .Data.Cfg.PingTargets}}{{.}} {{end}}</td></tr></table></section>
-{{with .Data.Env}}<section class="panel"><h2>Legacy router: {{.Name}}</h2><p class="muted" style="margin:6px 0">Connected by this server's environment variables (ROUTER_URL, ROUTER_USER, ...). Its layout comes from them too.</p><table>
-<tr><td>Router API</td><td>{{if $.Data.Cfg.RouterMock}}fake router (ROUTER_MOCK){{else}}{{$.Data.Cfg.RouterURL}}{{end}}</td></tr>
-<tr><td>Hotspot server</td><td>{{.HotspotServer}}</td></tr>
-<tr><td>WAN / OLT interface</td><td>{{.WANInterface}} / {{.OLTInterface}}</td></tr>
-<tr><td>WAN capacity</td><td>{{f0 .WANCapMbps}} Mbps</td></tr>
-<tr><td>Fair-use limit (FUP_TB)</td><td>{{f0 .FUPTB}} TB per month</td></tr>
-<tr><td>Customer subnet</td><td>{{.CustomerSubnet}}</td></tr></table></section>{{end}}
 </div>
 {{template "afoot" .}}{{end}}
 

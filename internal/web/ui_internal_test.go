@@ -43,15 +43,6 @@ func TestNoBuildingWordInAdminTemplates(t *testing.T) {
 			t.Errorf("%s: user-facing \"building\" near %q", n, text[max(0, i-30):min(len(text), i+30)])
 		}
 	}
-	// The tenant portal keeps exactly its three phrases (D9).
-	b, _ := fs.ReadFile(tplFS, "templates/portal.html")
-	text := actionRE.ReplaceAllString(string(b), "")
-	if got := strings.Count(strings.ToLower(text), "uilding"); got != 3 {
-		t.Errorf("portal.html has %d uses of building, want the 3 kept by D9", got)
-	}
-	if !strings.Contains(string(b), "the building WiFi") || strings.Count(string(b), "the building manager") != 2 {
-		t.Error("portal.html lost one of its three D9 phrases")
-	}
 }
 
 var extURL = regexp.MustCompile(`(?i)(https?:)?//[a-z0-9][a-z0-9-]*\.[a-z]{2,}`)

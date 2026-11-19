@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"ispbill/internal/billing"
 	"ispbill/internal/metrics"
+	"ispbill/internal/routeros"
 	"ispbill/internal/sites"
 	"ispbill/internal/store"
 )
@@ -24,60 +24,42 @@ func wantsJSON(r *http.Request) bool {
 
 // ---- join line ----------------------------------------------------------------------------------
 
-// servingIntent is what the operator said when adding the router; the one
-// store of it is the sites manager's (site.<id>.serving_customers), the same
-// one POST /routers writes.
-func (s *Server) servingIntent(st store.Site) bool { return s.mgr.ServingIntent(st) }
-
-// joinLines mints a one-time join line for the router. A router in the
-// server-driven mode gets the same line as POST /routers (the server builds
-// the rest, the intent decides which device-mode features it asks for).
-// Hotspot routers keep the all-in-one script.
+// joinLines mints a one-time bootstrap one-liner for the router (the same
+// line as POST /routers and the join-command endpoint).
 func (s *Server) joinLines(st store.Site) (cmd, nocheck string, exp time.Time, err error) {
-	base := s.cfg.PublicBaseURL
-	if billing.IPoE(st) {
-		j, err := s.joinBody(st)
-		if err != nil {
-			return "", "", time.Time{}, err
-		}
-		return j["command"].(string), j["command_nocheck"].(string), j["expires_at"].(time.Time), nil
-	}
-	if st.AccessMode == store.AccessIPoEObserve {
-		tok, e, err := s.mgr.MintJoinStage(st.ID, sites.StageJoin)
-		if err != nil {
-			return "", "", time.Time{}, err
-		}
-		intent := s.mgr.JoinIntentOf(st.ID)
-		return sites.JoinCommandIntent(base, tok, true, sites.StageJoin, intent, false), sites.JoinCommandIntent(base, tok, false, sites.StageJoin, intent, false), e, nil
-	}
-	tok, e, err := s.mgr.MintJoin(st.ID)
+	j, err := s.joinBody(st)
 	if err != nil {
 		return "", "", time.Time{}, err
 	}
-	return sites.JoinCommand(base, tok, true), sites.JoinCommand(base, tok, false), e, nil
+	return j["command"].(string), j["command_nocheck"].(string), j["expires_at"].(time.Time), nil
 }
 
 // ---- list -----------------------------------------------------------------------------------
 
 type rtRow struct {
-	S                      store.Site
-	State                  string // up | down | paused | waiting
-	Mode, Setup, SetupTone string
-	Flats, Active, Online  int
-	WAN, Tunnel, Seen      string
-	WANPct                 float64
-	Attention              bool
-	Detail                 string
+	S                     store.Site
+	State                 string // up | down | paused | waiting
+	Setup, SetupTone      string // the setup view's state: not_started, waiting_router, online, ready (or paused)
+	Flats, Active, Online int
+	WAN, Tunnel, Seen     string
+	WANPct                float64
+	Attention             bool
+	Detail                string
 }
 
-func modeLabel(st store.Site) string {
-	switch st.AccessMode {
-	case store.AccessIPoE:
-		return "Server-driven"
-	case store.AccessIPoEObserve:
-		return "Observing"
+// setupLabel is how the setup view's state reads in the router list.
+func setupLabel(state string) (label, tone string) {
+	switch state {
+	case sites.StateReady:
+		return "Ready", "live"
+	case sites.StateOnline:
+		return "Checking", "waiting"
+	case sites.StateWaitingRouter:
+		return "Setting up", "waiting"
+	case sites.StateStalled:
+		return "Needs a new line", "drift"
 	}
-	return "Hotspot"
+	return "Waiting for the line", "waiting"
 }
 
 func (s *Server) routerRows(ctx context.Context, sc scope) []rtRow {
@@ -103,7 +85,7 @@ func (s *Server) routerRows(ctx context.Context, sc scope) []rtRow {
 	var out []rtRow
 	for _, st := range list {
 		b := base[st.ID]
-		r := rtRow{S: st, State: states[st.ID], Mode: modeLabel(st), Flats: b.Accounts, Active: b.Active, Online: onl[st.ID], Detail: b.Detail}
+		r := rtRow{S: st, State: states[st.ID], Flats: b.Accounts, Active: b.Active, Online: onl[st.ID], Detail: b.Detail}
 		if col := s.mgr.Collector(st.ID); col != nil {
 			cfg, snap := col.Config(), col.Snapshot()
 			if pt, ok := snap.Ports[cfg.WAN]; ok {
@@ -133,20 +115,12 @@ func (s *Server) routerRows(ctx context.Context, sc scope) []rtRow {
 		switch {
 		case r.State == "paused":
 			r.Setup, r.SetupTone = "Paused", "paused"
-		case r.State == "waiting":
-			r.Setup, r.SetupTone = "Waiting to join", "waiting"
-		case billing.IPoE(st):
-			ps := s.svc.ProvisionStatus(st.ID)
-			if ps.InSync {
-				r.Setup, r.SetupTone = "Live", "live"
-			} else {
-				r.Setup, r.SetupTone = fmt.Sprintf("Drift %d", ps.Drift), "drift"
+		default:
+			r.Setup, r.SetupTone = setupLabel(s.mgr.SetupStateOf(st.ID))
+			if r.Setup == "Ready" && !s.svc.ProvisionStatus(st.ID).InSync {
+				r.Setup, r.SetupTone = "Out of sync", "drift"
 				r.Attention = true
 			}
-		case st.AccessMode == store.AccessIPoEObserve:
-			r.Setup, r.SetupTone = "Observing", "info"
-		default:
-			r.Setup, r.SetupTone = "Hotspot", "info"
 		}
 		if r.State == "down" {
 			r.Attention = true
@@ -171,7 +145,7 @@ func shortAge(d time.Duration) string {
 func (s *Server) adminSites(w http.ResponseWriter, r *http.Request) {
 	p := s.page(r, "sites")
 	sc := scope{All: true, Sites: s.scopeOf(r).Sites} // the router list always shows every router
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 	defer cancel()
 	all := s.routerRows(ctx, sc)
 	tab := r.URL.Query().Get("tab")
@@ -237,15 +211,12 @@ func (s *Server) adminSiteCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		s.back(w, r, "/admin/routers?add=1", "Error: "+msg)
 	}
-	serving := r.PostFormValue("serving") == "1"
 	in := siteInput(r)
 	if strings.TrimSpace(in.Name) == "" {
 		fail("a router name is required")
 		return
 	}
-	// The same call as POST /routers: IPoE mode, provision off, the serving
-	// intent stored once in site.<id>.serving_customers.
-	st, err := s.mgr.CreateRouter(in, serving)
+	st, err := s.mgr.CreateRouter(in)
 	if err != nil {
 		fail(err.Error())
 		return
@@ -264,7 +235,7 @@ func (s *Server) adminSiteCreate(w http.ResponseWriter, r *http.Request) {
 			"note": "Router created, but no join line could be made: " + jerr.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": st.ID, "name": st.Name, "serving_customers": serving, "command": cmd, "command_nocheck": noCheck, "expires_at": exp, "url": dest})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": st.ID, "name": st.Name, "command": cmd, "command_nocheck": noCheck, "expires_at": exp, "url": dest})
 }
 
 func (s *Server) siteByID(id string) (store.Site, bool) {
@@ -282,7 +253,7 @@ var routerTabs = []tabDef{{"overview", "Overview"}, {"setup", "Setup"}, {"client
 
 // siteView builds the router page; cmd and noCheck are set only in the
 // response to a join request, which is the one time the line is shown.
-func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site, cmd, cmdNoCheck string, exp time.Time, stage string, extra ...map[string]any) {
+func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site, cmd, cmdNoCheck string, exp time.Time, extra ...map[string]any) {
 	p := s.page(r, "sites")
 	tab := r.URL.Query().Get("tab")
 	valid := false
@@ -296,37 +267,23 @@ func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site,
 		tab = "setup"
 	}
 	eff := s.mgr.Effective(st)
-	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 	defer cancel()
 	status, _ := s.mgr.Status(ctx, st.ID)
 	p.Data["Site"], p.Data["Eff"], p.Data["Status"] = st, eff, status
-	p.Data["Env"] = st.Mode == store.SiteModeEnv
 	for _, m := range extra {
 		for k, v := range m {
 			p.Data[k] = v
 		}
 	}
-	p.Data["Cmd"], p.Data["CmdNoCheck"], p.Data["CmdExpires"], p.Data["CmdStage"] = cmd, cmdNoCheck, exp, stage
-	mode := st.AccessMode
-	if mode == "" {
-		mode = store.AccessHotspot
-	}
-	p.Data["Mode"], p.Data["IPoE"] = mode, billing.IPoE(st)
-	p.Data["ModeLabel"] = modeLabel(st)
-	p.Data["Serving"] = s.servingIntent(st)
-	if billing.IPoE(st) {
-		p.Data["Prov"] = s.svc.ProvisionStatus(st.ID)
-		if pend, ok := s.mgr.CutoverPending(ctx, st.ID); ok {
-			p.Data["CutoverPending"] = pend
-		}
-	}
+	p.Data["Cmd"], p.Data["CmdNoCheck"], p.Data["CmdExpires"] = cmd, cmdNoCheck, exp
 	if jr, ok := s.mgr.JoinReport(st.ID); ok {
 		p.Data["JoinReport"] = jr
 	}
 	p.Data["Insecure"] = !strings.HasPrefix(s.cfg.PublicBaseURL, "https://")
 	p.Data["AllowInsecure"] = s.cfg.AllowInsecureJoin
 	p.Data["TTL"] = int(s.cfg.JoinTokenTTL.Minutes())
-	p.Data["Portal"] = s.portalBase(r) + "/portal?site=" + url.QueryEscape(st.ID)
+	p.Data["Portal"] = strings.TrimRight(s.cfg.PublicBaseURL, "/") + "/pay"
 	var pkgs []store.Package
 	var accts int
 	s.st.View(func(d *store.Data) {
@@ -338,6 +295,11 @@ func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site,
 		}
 	})
 	p.Data["Pkgs"], p.Data["Accounts"] = pkgs, accts
+	if tab == "setup" {
+		if v, ok := s.mgr.SetupView(ctx, st.ID); ok {
+			p.Data["SetupView"] = v
+		}
+	}
 	if rep, ok := s.svc.Building(st.ID); ok {
 		p.Data["Rep"] = rep
 	}
@@ -364,7 +326,7 @@ func (s *Server) adminSiteView(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.siteView(w, r, st, "", "", time.Time{}, "")
+	s.siteView(w, r, st, "", "", time.Time{})
 }
 
 // ---- checklist and fixes (W5a), as session JSON ---------------------------------------------------

@@ -224,7 +224,7 @@ func TestCodecRoundTripEveryField(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback(ctx)
-	roundTrip(t, ctx, tx, sitesC, func(v *store.Site) { v.Mode = "wg"; v.Lat, v.Lng = 12.5, 40.25; v.AccessMode = store.AccessIPoEObserve }, store.Site.Norm)
+	roundTrip(t, ctx, tx, sitesC, func(v *store.Site) { v.Mode = "wg"; v.Lat, v.Lng = 12.5, 40.25; v.AccessMode = store.AccessIPoE }, store.Site.Norm)
 	roundTrip(t, ctx, tx, packagesC, nil, store.Package.Norm)
 	roundTrip(t, ctx, tx, customersC, nil, store.Customer.Norm)
 	roundTrip(t, ctx, tx, equipmentC, func(v *store.Equipment) { v.Kind, v.Status = "ont", "installed" }, store.Equipment.Norm)

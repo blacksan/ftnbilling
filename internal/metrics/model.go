@@ -1,5 +1,5 @@
 // Package metrics collects usage and quality-of-experience data from the
-// router (hotspot sessions, interface counters, NetFlow v5, ping) into small
+// router (per-flat queue counters, interface counters, NetFlow v5, ping) into small
 // time-bucketed series, stores them in one file per building and builds the admin report.
 package metrics
 

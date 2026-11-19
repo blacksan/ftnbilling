@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
+	"ispbill/internal/routeros"
 	"ispbill/internal/store"
 )
 
@@ -38,7 +38,7 @@ func (s *Server) siteStates(ctx context.Context, list []store.Site) map[string]s
 		switch {
 		case st.Disabled:
 			out[st.ID] = "paused"
-		case st.Mode != store.SiteModeEnv && st.WGPublicKey == "":
+		case st.WGPublicKey == "":
 			out[st.ID] = "waiting"
 		case !st.Runnable():
 			out[st.ID] = "waiting"
@@ -63,7 +63,7 @@ func (s *Server) siteStates(ctx context.Context, list []store.Site) map[string]s
 func (s *Server) adminMap(w http.ResponseWriter, r *http.Request) {
 	p := s.page(r, "map")
 	sc := s.scopeOf(r)
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 	defer cancel()
 	var list []store.Site
 	for _, st := range sc.Sites {

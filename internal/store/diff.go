@@ -22,7 +22,7 @@ func (x Site) norm() Site {
 		x.PkgOverrides = nil
 	}
 	if x.AccessMode == "" {
-		x.AccessMode = AccessHotspot
+		x.AccessMode = AccessIPoE
 	}
 	return x
 }

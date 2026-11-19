@@ -18,7 +18,7 @@ func (s *Service) QueueReconcile(accountID, reason string) error {
 		if !ok {
 			return ErrNotFound
 		}
-		s.enqueueLocked(d, a, false, reason)
+		s.enqueueLocked(d, a, reason)
 		site = a.SiteID
 		return nil
 	})

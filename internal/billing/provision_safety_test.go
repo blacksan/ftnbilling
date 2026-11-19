@@ -2,94 +2,50 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"ispbill/internal/routeros"
 	"ispbill/internal/store"
 )
 
 // B4: with ftn-dhcp disabled (not switched yet, or rolled back) the reconciler
-// writes nothing and leaves the hotspot's dynamic leases alone.
+// writes nothing and leaves the dynamic leases alone.
 func TestIPoEWritesNothingWhileFtnDHCPIsDisabled(t *testing.T) {
 	e := newEnv(t)
 	e.ipoe(t, store.AccessIPoE)
 	e.flat(t, "Flat 1", macA)
-	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": macA, "address": "10.5.50.60", "status": "bound", "dynamic": "true", "server": "dhcp-hotspot"})
+	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": macA, "address": "10.5.50.60", "status": "bound", "dynamic": "true", "server": "dhcp-other"})
 	for _, r := range e.rt.Table("/ip/dhcp-server") {
-		e.rt.SetRow(context.Background(), "/ip/dhcp-server", r[".id"], map[string]string{"disabled": "true"})
+		e.rt.RemoveRow(context.Background(), "/ip/dhcp-server", r[".id"])
 	}
 	e.rt.ResetWrites()
-	run := e.reconcile(t)
-	if !run.Waiting || e.rt.Writes() != 0 {
-		t.Fatalf("%+v writes=%d", run, e.rt.Writes())
+	run, err := e.svc.ReconcileSite(context.Background(), e.site)
+	if !errors.Is(err, ErrNotSetUp) || !run.Waiting || e.rt.Writes() != 0 {
+		t.Fatalf("%+v err=%v writes=%d", run, err, e.rt.Writes())
 	}
-	if got := rowsBy(e.rt.Table("/ip/dhcp-server/lease"), "server", "dhcp-hotspot"); len(got) != 1 {
-		t.Fatal("the hotspot's dynamic lease was removed")
+	if got := rowsBy(e.rt.Table("/ip/dhcp-server/lease"), "server", "dhcp-other"); len(got) != 1 {
+		t.Fatal("the other server's dynamic lease was removed")
 	}
-	if ps := e.svc.ProvisionStatus(e.site); ps.InSync || ps.RolledBack {
+	if ps := e.svc.ProvisionStatus(e.site); ps.InSync {
 		t.Fatalf("never seen enabled: waiting, not rolled back: %+v", ps)
 	}
-	if e.site != "" && siteMode(e, e.site) != store.AccessIPoE {
-		t.Fatal("mode must not change before a rollback was seen")
-	}
-}
-
-func siteMode(e *env, id string) (m string) {
-	e.st.View(func(d *store.Data) { m = d.Sites[id].AccessMode })
-	return
-}
-
-// A router that was serving from ftn-dhcp and then rolled back is detected: the
-// building goes back to hotspot mode and nothing is written.
-func TestIPoERollbackIsDetectedAndStopsIPoE(t *testing.T) {
-	e := newEnv(t)
-	e.ipoe(t, store.AccessIPoE)
-	e.flat(t, "Flat 1", macA)
-	e.reconcile(t) // enabled: converges, remembers it saw ftn-dhcp on
-	for _, r := range e.rt.Table("/ip/dhcp-server") {
-		e.rt.SetRow(context.Background(), "/ip/dhcp-server", r[".id"], map[string]string{"disabled": "true"})
-	}
-	e.rt.ResetWrites()
-	// ftn-dhcp is off but no hotspot is back on: that is not (yet) a rollback.
-	e.reconcile(t)
-	if got := siteMode(e, e.site); got != store.AccessIPoE || e.svc.ProvisionStatus(e.site).RolledBack {
-		t.Fatal("off without a hotspot back is only waiting")
-	}
-	// The mark survives a restart of this server: it is in the store, not in memory.
-	e.svc.prov(e.site).sawOn = false
-	e.rt.SeedRow("/ip/hotspot", routeros.Row{"name": "hotspot1", "interface": "br-hotspot", "disabled": "false"})
-	e.rt.ResetWrites()
-	e.reconcile(t)
-	if e.rt.Writes() != 0 {
-		t.Fatal("wrote after a rollback")
-	}
-	ps := e.svc.ProvisionStatus(e.site)
-	if !ps.RolledBack || !strings.Contains(ps.Note, "rolled back") {
-		t.Fatalf("%+v", ps)
-	}
-	if got := siteMode(e, e.site); got != store.AccessHotspot {
-		t.Fatalf("mode after rollback: %s", got)
-	}
-	e.st.View(func(d *store.Data) {
-		if SiteMark(d, e.site, MarkCutoverSeen) {
-			t.Fatal("the rollout marks are cleared by the revert")
-		}
-	})
 }
 
 // Only dynamic leases on ftn-dhcp are removed to make room for a static one.
 func TestIPoEOnlyRemovesDynamicLeasesOfFtnDHCP(t *testing.T) {
 	e := newEnv(t)
 	e.ipoe(t, store.AccessIPoE)
-	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": macA, "address": "10.5.50.70", "status": "bound", "dynamic": "true", "server": "dhcp-hotspot"})
+	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": macA, "address": "10.5.50.70", "status": "bound", "dynamic": "true", "server": "dhcp-other"})
 	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": macB2, "address": "10.5.50.71", "status": "bound", "dynamic": "true", "server": DHCPServerName})
 	e.flat(t, "Flat 1", macA)
 	e.flat(t, "Flat 2", macB2)
 	e.reconcile(t)
 	dyn := e.rt.Table("/ip/dhcp-server/lease")
-	if len(rowsBy(dyn, "server", "dhcp-hotspot")) != 1 {
-		t.Fatalf("hotspot lease touched: %v", dyn)
+	if len(rowsBy(dyn, "server", "dhcp-other")) != 1 {
+		t.Fatalf("foreign lease touched: %v", dyn)
 	}
 	for _, r := range dyn {
 		if r["dynamic"] == "true" && r["server"] == DHCPServerName {
@@ -132,27 +88,6 @@ func TestIPoEEnablesDisabledSuspendedEntries(t *testing.T) {
 	}
 }
 
-// The ftn-unreg entry the cutover made follows the mode: on in ipoe, off in observe.
-func TestIPoEUnregRangeFollowsMode(t *testing.T) {
-	e := newEnv(t)
-	e.ipoe(t, store.AccessIPoEObserve)
-	e.rt.SeedRow("/ip/firewall/address-list", routeros.Row{"list": UnregList, "address": "10.5.50.10-10.5.50.59", "comment": "ftn: unregistered range", "disabled": "true"})
-	e.reconcile(t)
-	if r := find(t, e.rt.Table("/ip/firewall/address-list"), "list", UnregList); r["disabled"] != "true" {
-		t.Fatalf("observe must keep it off: %v", r)
-	}
-	e.setMode(t, e.site, store.AccessIPoE)
-	e.reconcile(t)
-	if r := find(t, e.rt.Table("/ip/firewall/address-list"), "list", UnregList); r["disabled"] == "true" || r["disabled"] == "yes" {
-		t.Fatalf("ipoe must wall it: %v", r)
-	}
-	e.setMode(t, e.site, store.AccessIPoEObserve)
-	e.reconcile(t)
-	if r := find(t, e.rt.Table("/ip/firewall/address-list"), "list", UnregList); r["disabled"] != "yes" && r["disabled"] != "true" {
-		t.Fatalf("back to observe must unwall it: %v", r)
-	}
-}
-
 // Static ARP rows follow the flats, so an interface on reply-only still reaches them.
 func TestIPoEManagesStaticARP(t *testing.T) {
 	e := newEnv(t)
@@ -160,7 +95,7 @@ func TestIPoEManagesStaticARP(t *testing.T) {
 	a := e.flat(t, "Flat 1", macA)
 	e.reconcile(t)
 	r := find(t, e.rt.Table("/ip/arp"), "address", a.IP)
-	if r["mac-address"] != macA || r["interface"] != "br-hotspot" || r["comment"] != AcctComment(a.Code, a.Flat) {
+	if r["mac-address"] != macA || r["interface"] != "br-customers" || r["comment"] != AcctComment(a.Code, a.Flat) {
 		t.Fatalf("%v", r)
 	}
 	if n := e.pass(t); n != 0 {
@@ -193,5 +128,150 @@ func TestHostNameIsCapped(t *testing.T) {
 		if len(d.HostName) > 64 {
 			t.Fatalf("host name of %d bytes", len(d.HostName))
 		}
+	}
+}
+
+// Static leases are written with a one-hour lease time (the customer DHCP
+// server's own lease time is a minute, for the unregistered devices).
+func TestIPoEStaticLeasesGetOneHourLeaseTime(t *testing.T) {
+	e := newEnv(t)
+	e.ipoe(t, store.AccessIPoE)
+	e.flat(t, "Flat 1", macA)
+	e.reconcile(t)
+	var n int
+	for _, r := range e.rt.Table("/ip/dhcp-server/lease") {
+		if r["mac-address"] == macA {
+			n++
+			if r["lease-time"] != "1h" {
+				t.Fatalf("lease-time %q", r["lease-time"])
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d leases", n)
+	}
+}
+
+// A building whose router fails keeps its tasks queued with a backoff, and does
+// not stall the other buildings' reconcile.
+func TestFailingSiteBacksOffAndDoesNotStallOthers(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	bID, brt := e.addSite(t, "Block B")
+	a := e.flat(t, "Flat 1", mac1)
+	b := e.flatAt(t, bID, "Flat 1", macB)
+	e.rt.SetFail(errors.New("router down"))
+	e.payAt(t, a, "1 Day")
+	e.payAt(t, b, "1 Day")
+	e.svc.RunTasks(ctx)
+	if len(rowsBy(brt.Table("/queue/simple"), "name", QueueName(b.Code))) != 1 {
+		t.Fatal("the healthy building was not reconciled")
+	}
+	var pending []store.Task
+	for _, tk := range e.svc.PendingTasks() {
+		if tk.SiteID == e.site {
+			pending = append(pending, tk)
+		}
+	}
+	if len(pending) != 1 || pending[0].Attempts < 1 || pending[0].LastErr == "" || !pending[0].NextTry.After(e.now) {
+		t.Fatalf("A's task must wait with a backoff: %+v", pending)
+	}
+	for _, tk := range e.svc.PendingTasks() {
+		if tk.SiteID == bID {
+			t.Fatalf("B's task must be done: %+v", tk)
+		}
+	}
+	// Before the backoff elapses nothing is retried; after it, A converges.
+	e.rt.SetFail(nil)
+	if n := e.svc.RunTasks(ctx); n != 0 {
+		t.Fatalf("retried inside the backoff: %d", n)
+	}
+	e.now = e.now.Add(backoffMax + time.Second)
+	if n := e.svc.RunTasks(ctx); n != 1 {
+		t.Fatalf("A not retried after the backoff: %d", n)
+	}
+	if len(rowsBy(e.rt.Table("/queue/simple"), "name", QueueName(a.Code))) != 1 || len(e.svc.PendingTasks()) != 0 {
+		t.Fatal("A did not converge")
+	}
+}
+
+// A paused building keeps its tasks queued and spends no attempts; resuming
+// runs them.
+func TestPausedSiteKeepsTasksQueuedWithoutAttempts(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	a := e.flat(t, "Flat 1", mac1)
+	e.rt.SetFail(errors.New("router down"))
+	e.payAt(t, a, "1 Day")
+	e.rt.SetFail(nil)
+	before := e.svc.PendingTasks()
+	if len(before) != 1 {
+		t.Fatalf("%+v", before)
+	}
+	e.st.Update(func(d *store.Data) error {
+		s := d.Sites[e.site]
+		s.Disabled = true
+		d.Sites[e.site] = s
+		return nil
+	})
+	e.now = e.now.Add(backoffMax + time.Second)
+	e.rt.ResetWrites()
+	if n := e.svc.RunTasks(ctx); n != 0 || e.rt.Writes() != 0 {
+		t.Fatalf("a paused building must not be touched: %d, %d writes", n, e.rt.Writes())
+	}
+	after := e.svc.PendingTasks()
+	if len(after) != 1 || after[0].Attempts != before[0].Attempts {
+		t.Fatalf("a paused building spends no attempts: %+v -> %+v", before, after)
+	}
+	e.st.Update(func(d *store.Data) error {
+		s := d.Sites[e.site]
+		s.Disabled = false
+		d.Sites[e.site] = s
+		return nil
+	})
+	if n := e.svc.RunTasks(ctx); n != 1 || len(e.svc.PendingTasks()) != 0 {
+		t.Fatalf("resumed building must catch up: %d", n)
+	}
+}
+
+// The gate is the v5 layout marker (the customer bridge the script makes): a router with an ftn-dhcp server but
+// no such bridge (an older build) gets no writes, the reconcile says so with ErrNotSetUp, and the queued tasks
+// stay queued instead of being deleted as done.
+func TestIPoEWritesNothingWithoutTheV5LayoutAndKeepsTasksQueued(t *testing.T) {
+	e := newEnv(t)
+	e.ipoe(t, store.AccessIPoE)
+	e.flat(t, "Flat 1", macA)
+	for _, r := range e.rt.Table("/interface/bridge") {
+		e.rt.RemoveRow(context.Background(), "/interface/bridge", r[".id"])
+	}
+	// a bridge of the same name without the script's comment is not the marker either
+	e.rt.SeedRow("/interface/bridge", routeros.Row{"name": CustomerBridgeName, "comment": "made by hand"})
+	e.rt.ResetWrites()
+	e.svc.EnqueueSite(e.site, "test")
+	queued := func() int {
+		n := 0
+		e.st.View(func(d *store.Data) {
+			for _, tk := range d.TaskList() {
+				if tk.SiteID == e.site {
+					n++
+				}
+			}
+		})
+		return n
+	}
+	before := queued()
+	if before == 0 {
+		t.Fatal("nothing was queued")
+	}
+	run, err := e.svc.ReconcileSite(context.Background(), e.site)
+	if !errors.Is(err, ErrNotSetUp) || !run.Waiting {
+		t.Fatalf("run %+v err %v", run, err)
+	}
+	e.svc.RunSiteTasks(context.Background(), e.site)
+	if e.rt.Writes() != 0 {
+		t.Fatalf("%d writes to a router without the v5 layout", e.rt.Writes())
+	}
+	if queued() != before {
+		t.Fatalf("tasks were deleted for a router that was never written: %d of %d left", queued(), before)
 	}
 }

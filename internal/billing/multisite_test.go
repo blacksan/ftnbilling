@@ -82,42 +82,7 @@ func TestSameFlatInTwoSitesButMACIsGlobal(t *testing.T) {
 	})
 }
 
-func TestPaymentsTouchOnlyTheirSitesRouter(t *testing.T) {
-	e := newEnv(t)
-	b, rtB := e.addSite(t, "Block B")
-	ctx := context.Background()
-	if err := e.svc.SyncProfiles(ctx, b); err != nil {
-		t.Fatal(err)
-	}
-	a1 := e.flatAt(t, e.site, "Flat 1", mac1)
-	b1 := e.flatAt(t, b, "Flat 1", macB)
-	e.payAt(t, a1, "1 Day")
-	if _, ok := e.rt.GetUser(a1.Code); !ok {
-		t.Fatal("site A router must hold the user")
-	}
-	if _, ok := rtB.GetUser(a1.Code); ok {
-		t.Fatal("site A's user leaked to site B's router")
-	}
-	if _, ok := rtB.GetUser(b1.Code); ok {
-		t.Fatal("unpaid B flat has a router user")
-	}
-	e.payAt(t, b1, "1 Day")
-	if _, ok := rtB.GetUser(b1.Code); !ok {
-		t.Fatal("site B router must hold B's user")
-	}
-	if _, ok := e.rt.GetUser(b1.Code); ok {
-		t.Fatal("site B's user leaked to site A's router")
-	}
-	e.st.View(func(d *store.Data) {
-		for _, p := range d.Payments {
-			if want := d.Accounts[p.AccountID].SiteID; p.SiteID != want {
-				t.Fatalf("payment %s has site %q want %q", p.Key, p.SiteID, want)
-			}
-		}
-	})
-}
-
-// blocking is a router whose EnsureUser hangs until released.
+// blocking is a router whose Rows call hangs until released.
 type blocking struct {
 	*routeros.Mock
 	release chan struct{}
@@ -125,14 +90,14 @@ type blocking struct {
 	once    sync.Once
 }
 
-func (b *blocking) EnsureUser(ctx context.Context, u routeros.User) error {
+func (b *blocking) Rows(ctx context.Context, path string, q map[string]string) ([]routeros.Row, error) {
 	b.once.Do(func() { close(b.entered) })
 	select {
 	case <-b.release:
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
-	return b.Mock.EnsureUser(ctx, u)
+	return b.Mock.Rows(ctx, path, q)
 }
 
 type routers map[string]routeros.Client
@@ -144,247 +109,15 @@ func (r routers) Router(id string) routeros.Client {
 	return routeros.NoRouter()
 }
 
-func TestSlowSiteDoesNotDelayAnother(t *testing.T) {
-	e := newEnv(t)
-	bID := store.NewSiteID()
-	e.st.Update(func(d *store.Data) error {
-		d.Sites[bID] = store.Site{ID: bID, Name: "Block B", Mode: store.SiteModeEnv}
-		return nil
-	})
-	slow := &blocking{Mock: routeros.NewMock(), release: make(chan struct{}), entered: make(chan struct{})}
-	e.svc = NewService(e.st, routers{e.site: e.rt, bID: slow}, quiet())
-	e.svc.SetClock(func() time.Time { return e.now })
-	ctx := context.Background()
-	e.svc.SyncProfiles(ctx, e.site)
-	e.svc.SyncProfiles(ctx, bID)
-	a1 := e.flatAt(t, e.site, "Flat 1", mac1)
-	b1 := e.flatAt(t, bID, "Flat 1", macB)
-	// Queue work on both (suspend/unsuspend does not need payment: use credit directly in the store).
-	dayID := e.pkg("1 Day").ID
-	e.st.Update(func(d *store.Data) error {
-		for _, id := range []string{a1.ID, b1.ID} {
-			a := d.Accounts[id]
-			a.PackageID, a.ExpiresAt = dayID, e.now.Add(24*time.Hour)
-			d.Accounts[id] = a
-			e.svc.enqueueLocked(d, a, false, "test")
-		}
-		return nil
-	})
-	done := make(chan int, 1)
-	go func() { done <- e.svc.RunTasks(ctx) }()
-	<-slow.entered // B is now stuck
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		if _, ok := e.rt.GetUser(a1.Code); ok {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("site A was held up by the stuck site B")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	select {
-	case <-done:
-		t.Fatal("RunTasks should still be waiting for B")
-	default:
-	}
-	close(slow.release)
-	if n := <-done; n != 2 {
-		t.Fatalf("both tasks should finish, got %d", n)
-	}
-}
-
-func TestFailingSiteKeepsItsTasksAndOthersSucceed(t *testing.T) {
-	e := newEnv(t)
-	b, rtB := e.addSite(t, "Block B")
-	e.svc.SyncProfiles(context.Background(), b)
-	rtB.SetFail(errors.New("tunnel down"))
-	a1 := e.flatAt(t, e.site, "Flat 1", mac1)
-	b1 := e.flatAt(t, b, "Flat 1", macB)
-	e.payAt(t, a1, "1 Day")
-	e.payAt(t, b1, "1 Day") // router fails; the payment still counts
-	if _, ok := e.rt.GetUser(a1.Code); !ok {
-		t.Fatal("A must be served")
-	}
-	tasks := e.svc.PendingTasks()
-	if len(tasks) != 1 || tasks[0].SiteID != b || tasks[0].LastErr == "" {
-		t.Fatalf("%+v", tasks)
-	}
-	rtB.SetFail(nil)
-	e.now = e.now.Add(10 * time.Minute)
-	e.svc.Sweep(context.Background())
-	if _, ok := rtB.GetUser(b1.Code); !ok || len(e.svc.PendingTasks()) != 0 {
-		t.Fatal("B recovers by itself")
-	}
-}
-
-func TestTasksOfPausedOrUnjoinedSiteWaitWithoutAttempts(t *testing.T) {
-	e := newEnv(t)
-	b, rtB := e.addSite(t, "Block B")
-	e.svc.SyncProfiles(context.Background(), b)
-	b1 := e.flatAt(t, b, "Flat 1", macB)
-	e.st.Update(func(d *store.Data) error {
-		s := d.Sites[b]
-		s.Disabled = true
-		d.Sites[b] = s
-		return nil
-	})
-	e.payAt(t, b1, "1 Day")
-	e.svc.RunTasks(context.Background())
-	ts := e.svc.PendingTasks()
-	if len(ts) != 1 || ts[0].Attempts != 0 || ts[0].LastErr != "" {
-		t.Fatalf("%+v", ts)
-	}
-	if _, ok := rtB.GetUser(b1.Code); ok {
-		t.Fatal("paused site was touched")
-	}
-	// Not joined yet (wg mode without a key) behaves the same.
-	e.st.Update(func(d *store.Data) error {
-		s := d.Sites[b]
-		s.Disabled, s.Mode = false, store.SiteModeWG
-		d.Sites[b] = s
-		return nil
-	})
-	e.svc.RunTasks(context.Background())
-	if ts = e.svc.PendingTasks(); len(ts) != 1 || ts[0].Attempts != 0 {
-		t.Fatalf("%+v", ts)
-	}
-	e.st.Update(func(d *store.Data) error {
-		s := d.Sites[b]
-		s.WGPublicKey = strings.Repeat("A", 43) + "="
-		d.Sites[b] = s
-		return nil
-	})
-	e.svc.RunTasks(context.Background())
-	if _, ok := rtB.GetUser(b1.Code); !ok || len(e.svc.PendingTasks()) != 0 {
-		t.Fatal("task must run once the site is joined")
-	}
-}
-
-func TestMoveAccount(t *testing.T) {
-	e := newEnv(t)
-	b, rtB := e.addSite(t, "Block B")
-	ctx := context.Background()
-	e.svc.SyncProfiles(ctx, b)
-	a1 := e.flatAt(t, e.site, "Flat 1", mac1)
-	e.payAt(t, a1, "1 Week")
-	if _, ok := e.rt.GetUser(a1.Code); !ok {
-		t.Fatal("setup")
-	}
-	before := e.get(a1)
-	if err := e.svc.MoveAccount(ctx, a1.ID, b); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := e.rt.GetUser(a1.Code); ok {
-		t.Fatal("old router still holds the user")
-	}
-	if _, ok := rtB.GetUser(a1.Code); !ok {
-		t.Fatal("new router lacks the user")
-	}
-	after := e.get(a1)
-	if after.SiteID != b || after.Code != before.Code || !after.ExpiresAt.Equal(before.ExpiresAt) || after.PackageID != before.PackageID || !after.RouterActive {
-		t.Fatalf("%+v", after)
-	}
-	if len(e.svc.PendingTasks()) != 0 {
-		t.Fatalf("%+v", e.svc.PendingTasks())
-	}
-	// Refused when the target already has the MAC or the label.
-	a2 := e.flatAt(t, e.site, "Flat 2", "AA:BB:CC:DD:EE:02")
-	e.flatAt(t, b, "Flat 2", "AA:BB:CC:DD:EE:22")
-	if err := e.svc.MoveAccount(ctx, a2.ID, b); err == nil || !strings.Contains(err.Error(), "already has an account") {
-		t.Fatalf("label clash: %v", err)
-	}
-	a3 := e.flatAt(t, e.site, "Flat 3", "AA:BB:CC:DD:EE:03")
-	// The MAC rule is global, so a building can never already hold a move's MAC.
-	if _, err := e.svc.CreateAccount(AccountInput{SiteID: b, Flat: "Flat 9", MAC: "AA:BB:CC:DD:EE:03"}); !errors.Is(err, ErrDuplicateMAC) {
-		t.Fatalf("mac clash: %v", err)
-	}
-	if err := e.svc.MoveAccount(ctx, a3.ID, "nope"); !errors.Is(err, ErrNoSite) {
-		t.Fatal(err)
-	}
-	if err := e.svc.MoveAccount(ctx, "nope", b); !errors.Is(err, ErrNotFound) {
-		t.Fatal(err)
-	}
-	// Moving while the old router is down still ends up consistent.
-	e.payAt(t, a3, "1 Day")
-	e.rt.SetFail(errors.New("down"))
-	e.flatAt(t, e.site, "Flat 4", "AA:BB:CC:DD:EE:04")
-	a4 := e.flatAt(t, e.site, "Flat 5", "AA:BB:CC:DD:EE:05")
-	e.payAt(t, a4, "1 Day")
-	e.rt.SetFail(nil)
-	e.now = e.now.Add(time.Minute)
-	e.svc.Sweep(ctx)
-	e.rt.SetFail(errors.New("down"))
-	if err := e.svc.MoveAccount(ctx, a4.ID, b); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := rtB.GetUser(a4.Code); !ok {
-		t.Fatal("new site served despite the old router being down")
-	}
-	e.rt.SetFail(nil)
-	e.now = e.now.Add(10 * time.Minute)
-	e.svc.Sweep(ctx)
-	if _, ok := e.rt.GetUser(a4.Code); ok {
-		t.Fatal("old router user must be removed when it comes back")
-	}
-}
-
-func TestProfilesOKIsPerSite(t *testing.T) {
-	e := newEnv(t)
-	b, rtB := e.addSite(t, "Block B")
-	ctx := context.Background()
-	if !e.svc.ProfilesOK(e.site) || e.svc.ProfilesOK(b) {
-		t.Fatal("A synced in newEnv, B not yet")
-	}
-	if err := e.svc.SyncProfiles(ctx, b); err != nil {
-		t.Fatal(err)
-	}
-	rtB.SetFail(errors.New("down"))
-	if err := e.svc.SyncProfiles(ctx, b); err == nil || e.svc.ProfilesOK(b) {
-		t.Fatal("failed sync must clear the flag")
-	}
-	if !e.svc.ProfilesOK(e.site) {
-		t.Fatal("B's failure changed A's state")
-	}
-	// A package change marks every site dirty and re-syncs each in the background.
-	rtB.SetFail(nil)
-	p := e.pkg("1 Hour")
-	p.SpeedMbps = 7
-	if _, err := e.svc.SavePackage(ctx, p); err != nil {
-		t.Fatal(err)
-	}
-	e.svc.Wait()
-	if !e.svc.ProfilesOK(e.site) || !e.svc.ProfilesOK(b) {
-		t.Fatal("both sites resync")
-	}
-	if pr, _ := rtB.GetProfile(p.Profile()); pr.RateLimit != "7M/7M" {
-		t.Fatalf("%+v", pr)
-	}
-	// With B down, only B stays dirty.
-	rtB.SetFail(errors.New("down"))
-	p.SpeedMbps = 8
-	e.svc.SavePackage(ctx, p)
-	e.svc.Wait()
-	if !e.svc.ProfilesOK(e.site) || e.svc.ProfilesOK(b) {
-		t.Fatal("only B must be dirty")
-	}
-	rtB.SetFail(nil)
-	e.now = e.now.Add(time.Minute)
-	e.svc.Sweep(ctx)
-	if !e.svc.ProfilesOK(b) {
-		t.Fatal("sweep re-syncs B")
-	}
-}
-
 func TestSavePackageDoesNotBlockOnDeadRouter(t *testing.T) {
 	e := newEnv(t)
 	bID := store.NewSiteID()
 	e.st.Update(func(d *store.Data) error {
-		d.Sites[bID] = store.Site{ID: bID, Name: "B", Mode: store.SiteModeEnv}
+		d.Sites[bID] = store.Site{ID: bID, Name: "B", Mode: store.SiteModeWG, WGPublicKey: "PUBB", TunnelIP: "10.99.0.9", AccessMode: store.AccessIPoE}
 		return nil
 	})
 	slow := &blocking{Mock: routeros.NewMock(), release: make(chan struct{}), entered: make(chan struct{})}
-	e.svc = NewService(e.st, routers{e.site: e.rt, bID: &stuckProfiles{slow}}, quiet())
+	e.svc = NewService(e.st, routers{e.site: e.rt, bID: slow}, quiet())
 	p := e.pkg("1 Hour")
 	p.SpeedMbps = 9
 	start := time.Now()
@@ -396,17 +129,6 @@ func TestSavePackageDoesNotBlockOnDeadRouter(t *testing.T) {
 	}
 	close(slow.release)
 	e.svc.Wait()
-}
-
-type stuckProfiles struct{ *blocking }
-
-func (s *stuckProfiles) EnsureProfile(ctx context.Context, p routeros.Profile) error {
-	select {
-	case <-s.release:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	return s.Mock.EnsureProfile(ctx, p)
 }
 
 // ---- packages and prices ----------------------------------------------------
@@ -427,7 +149,6 @@ func (e *env) setOverride(t *testing.T, site, pkg string, o store.PkgOverride) e
 func TestHiddenPackagesAndPriceOverrides(t *testing.T) {
 	e := newEnv(t)
 	b, _ := e.addSite(t, "Block B")
-	e.svc.SyncProfiles(context.Background(), b)
 	day := e.pkg("1 Day")
 	if err := e.setOverride(t, b, "1 Day", store.PkgOverride{PriceKES: 80}); err != nil {
 		t.Fatal(err)
@@ -534,7 +255,6 @@ func TestPriceCollisionIsAnError(t *testing.T) {
 func TestVoucherSiteRestriction(t *testing.T) {
 	e := newEnv(t)
 	b, _ := e.addSite(t, "Block B")
-	e.svc.SyncProfiles(context.Background(), b)
 	a1 := e.flatAt(t, e.site, "Flat 1", mac1)
 	b1 := e.flatAt(t, b, "Flat 1", macB)
 	day := e.pkg("1 Day")

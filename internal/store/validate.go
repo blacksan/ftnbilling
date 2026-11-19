@@ -253,7 +253,7 @@ func Validate(d *Data) []string {
 	}
 	for _, s := range d.Sites {
 		switch s.AccessMode {
-		case "", AccessHotspot, AccessIPoEObserve, AccessIPoE:
+		case "", AccessIPoE:
 		default:
 			add("Building %q has access mode %q.", s.Name, s.AccessMode)
 		}

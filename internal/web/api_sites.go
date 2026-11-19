@@ -111,10 +111,7 @@ func (s *Server) siteCounts() map[string]*siteCounts {
 }
 
 func accessMode(st store.Site) string {
-	if st.AccessMode == "" {
-		return "hotspot"
-	}
-	return st.AccessMode
+	return store.AccessIPoE
 }
 
 func (s *Server) siteJSON(st store.Site, h siteHealth, cnt *siteCounts) map[string]any {
@@ -132,6 +129,8 @@ func (s *Server) siteJSON(st store.Site, h siteHealth, cnt *siteCounts) map[stri
 	}
 	return map[string]any{
 		"id": st.ID, "name": st.Name, "access_mode": accessMode(st), "online": h.online, "cause": h.cause,
+		"wan_mode": st.WANMode, "wan_address": st.WANAddress, "wan_gateway": st.WANGateway, "wan_dns": st.WANDNS,
+		"pppoe_user": st.PPPoEUser, "pppoe_pass_set": st.PPPoEPassEnc != "", "lan_ports": st.LANPorts, "lan_subnet": st.LANSubnet,
 		"tunnel":      map[string]any{"handshake_age_s": h.handshake},
 		"accounts":    map[string]any{"total": cnt.Total, "active": cnt.Active, "expired": cnt.Expired, "suspended": cnt.Suspended},
 		"open_alerts": alertsOpen,

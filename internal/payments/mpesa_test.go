@@ -103,14 +103,13 @@ func newRig(t *testing.T) *rig {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	site := store.NewSiteID()
 	st.Update(func(d *store.Data) error {
-		d.Sites[site] = store.Site{ID: site, Name: "Block A", Mode: store.SiteModeEnv}
+		d.Sites[site] = store.Site{ID: site, Name: "Block A", Mode: store.SiteModeWG, WGPublicKey: "PUB", TunnelIP: "10.99.0.2", AccessMode: store.AccessIPoE}
 		return nil
 	})
 	svc := billing.NewService(st, billing.MockRouters{site: rt}, log)
 	r := &rig{svc: svc, st: st, h: h, site: site, rt: rt, fd: fd, now: time.Date(2026, 11, 17, 21, 30, 5, 0, time.UTC)}
 	svc.SetClock(func() time.Time { return r.now })
 	svc.SeedPackages()
-	svc.SyncProfiles(context.Background(), site)
 	a, err := svc.CreateAccount(billing.AccountInput{SiteID: site, Flat: "Flat 3B", MAC: ontMAC})
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +152,7 @@ func (r *rig) countStatus(status string) (n int) {
 }
 
 func (r *rig) order(t *testing.T, pkg string) store.Order {
-	o, err := r.svc.CreateOrder(billing.OrderInput{AccountID: r.acct.ID, PackageID: r.pkg(pkg).ID, Phone: "254712345678", Method: "mpesa", MAC: ontMAC, IP: "10.5.50.20"})
+	o, err := r.svc.CreateOrder(billing.OrderInput{AccountID: r.acct.ID, PackageID: r.pkg(pkg).ID, Phone: "254712345678", Method: "mpesa"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +231,7 @@ func TestSTKCallbackPaidIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := r.svc.GetOrder(o.ID)
-	if got.Status != store.OrderPaid || got.Receipt != "RKT1ABCDEF" || !got.LoggedIn {
+	if got.Status != store.OrderPaid || got.Receipt != "RKT1ABCDEF" {
 		t.Fatalf("%+v", got)
 	}
 	exp := r.expiry()
@@ -292,9 +291,6 @@ func TestC2BValidationAndConfirmation(t *testing.T) {
 	want := r.now.Add(30 * 24 * time.Hour)
 	if !r.expiry().Equal(want) {
 		t.Fatalf("expiry %v want %v", r.expiry(), want)
-	}
-	if u, _ := r.rt.GetUser(code); u.Profile != "ispbill-monthly-40-mbps" || u.MAC != ontMAC {
-		t.Errorf("router user %+v", u)
 	}
 	// Redelivery is a no-op.
 	r.mp.HandleC2BConfirmation(ctx, c2b("TRN1ABCDEF", code, "3000.00"))
@@ -375,9 +371,6 @@ func TestC2BLowerPlanWhileActiveGoesToUnmatched(t *testing.T) {
 	if !r.expiry().Equal(exp) {
 		t.Fatal("lower plan must not be applied")
 	}
-	if u, _ := r.rt.GetUser(code); u.Profile != "ispbill-monthly-40-mbps" {
-		t.Fatalf("profile changed to %q", u.Profile)
-	}
 	var row store.Payment
 	r.st.View(func(d *store.Data) { row = d.Payments["LOW1ABCDEF"] })
 	if row.Status != store.PayUnmatched || !strings.Contains(row.Note, "lower plan while active") || row.AccountID != r.acct.ID {
@@ -403,7 +396,6 @@ func TestC2BAmountMatchesTheAccountsOwnSitePrices(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	svc := billing.NewService(r.st, billing.MockRouters{r.site: r.rt, siteB: rtB}, log)
 	svc.SetClock(func() time.Time { return r.now })
-	svc.SyncProfiles(ctx, siteB)
 	mp := payments.NewMpesa(payments.MpesaConfig{PublicBaseURL: "https://example.org", Enabled: true}, svc, r.st, log)
 	mp.SetClock(func() time.Time { return r.now })
 	bAcct, err := svc.CreateAccount(billing.AccountInput{SiteID: siteB, Flat: "Flat 3B", MAC: "AA:BB:CC:DD:EE:0B"})
@@ -415,12 +407,6 @@ func TestC2BAmountMatchesTheAccountsOwnSitePrices(t *testing.T) {
 	r.st.View(func(d *store.Data) { pay = d.Payments["BBB1ABCDEF"] })
 	if pay.Status != store.PayApplied || pay.SiteID != siteB || pay.AccountID != bAcct.ID {
 		t.Fatalf("site B account must be credited: %+v", pay)
-	}
-	if _, ok := rtB.GetUser(bAcct.Code); !ok {
-		t.Fatal("site B router user missing")
-	}
-	if _, ok := r.rt.GetUser(bAcct.Code); ok {
-		t.Fatal("site A router touched")
 	}
 	// The same amount for the site A account does not match any package there.
 	mp.HandleC2BConfirmation(ctx, c2b("AAA1ABCDEF", r.acct.Code, "80.00"))

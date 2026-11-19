@@ -1,12 +1,10 @@
 package web_test
 
 import (
-	"net/url"
 	"strings"
 	"testing"
+	"time"
 
-	"ispbill/internal/routeros"
-	"ispbill/internal/sites"
 	"ispbill/internal/store"
 )
 
@@ -22,15 +20,12 @@ func TestAPISetupRoles(t *testing.T) {
 	const F, OK = 403, 0
 	for _, c := range []tc{
 		{"GET", "/routers/" + id + "/setup", nil, OK, OK, OK},
-		{"POST", "/routers/" + id + "/setup/run", nil, F, OK, OK},
-		{"POST", "/routers/" + id + "/setup/migrate", map[string]any{}, F, OK, OK},
-		{"POST", "/routers/" + id + "/setup/rollback", nil, F, F, OK},
 		{"POST", "/routers", map[string]any{}, F, F, OK},
 		{"PATCH", "/routers/" + id, map[string]any{}, F, F, OK},
 		{"GET", "/routers/" + id + "/checks", nil, OK, OK, OK},
 		{"POST", "/routers/" + id + "/join-command", nil, F, F, OK},
-		{"GET", "/routers/" + id + "/cutover", nil, OK, OK, OK},
-		{"POST", "/routers/" + id + "/cutover/rollback", nil, F, F, OK},
+		{"POST", "/routers/" + id + "/actions/reset", map[string]any{"confirm_name": "nope"}, F, F, OK},
+		{"POST", "/routers/" + id + "/script", map[string]any{"confirm_name": "nope"}, F, F, OK},
 	} {
 		for who, want := range map[string]int{r.view.Access: c.viewer, r.oper.Access: c.oper, r.owner.Access: c.owner} {
 			got := r.call(who, c.method, c.path, c.body, nil)
@@ -73,15 +68,12 @@ func TestAPICreateRouterReturnsTheJoinLineAndIsNeverReplayed(t *testing.T) {
 	if b.Status != 201 || b.Header.Get("Idempotent-Replayed") != "" || str(b.JSON(t)["join"].(map[string]any), "command") == str(join, "command") {
 		t.Fatalf("the second call was replayed: %d %s", b.Status, b.Raw)
 	}
-	if !r.mgr.ServingCustomers(str(rt, "id")) {
-		t.Fatal("serving intent not stored")
-	}
 	if x := r.call(r.owner.Access, "POST", "/routers", map[string]any{"name": " "}, nil); x.Status != 422 && x.Status != 400 {
 		t.Fatalf("empty name: %d %s", x.Status, x.Raw)
 	}
 }
 
-func TestAPISetupViewRunAndGuards(t *testing.T) {
+func TestAPISetupViewAndGuards(t *testing.T) {
 	r := newAPIRig(t)
 	c := r.call(r.owner.Access, "POST", "/routers", map[string]any{"name": "Delta"}, nil)
 	id := str(c.JSON(t)["router"].(map[string]any), "id")
@@ -90,55 +82,143 @@ func TestAPISetupViewRunAndGuards(t *testing.T) {
 		t.Fatalf("%d %s", v.Status, v.Raw)
 	}
 	j := v.JSON(t)
-	for _, k := range []string{"router_id", "state", "kind", "serving_customers", "auto_start", "join", "next_action", "steps", "checks", "blockers", "live_devices", "evidence", "last_error"} {
+	for _, k := range []string{"router_id", "state", "join", "next_action", "steps", "checks", "blockers", "last_error"} {
 		if _, ok := j[k]; !ok {
 			t.Errorf("setup lacks %q: %s", k, v.Raw)
 		}
 	}
-	if j["join"].(map[string]any)["state"] != "waiting" || j["next_action"].(map[string]any)["kind"] != "paste_join" {
-		t.Fatalf("a new router waits for its join line: %s", v.Raw)
+	if j["state"] != "not_started" || j["join"].(map[string]any)["state"] != "waiting" || j["next_action"].(map[string]any)["kind"] != "paste_line" {
+		t.Fatalf("a new router waits for its line: %s", v.Raw)
 	}
-	if got := r.call(r.oper.Access, "POST", "/routers/"+id+"/setup/run", nil, nil); got.Status != 409 || got.errCode(t) != "bad_state" {
-		t.Fatalf("run before the join: %d %s", got.Status, got.Raw)
+}
+
+func TestAPIRemovedEndpointsAnswer410(t *testing.T) {
+	r := newAPIRig(t)
+	id := r.A.ID
+	for _, c := range [][2]string{
+		{"POST", "/routers/" + id + "/setup/run"}, {"POST", "/routers/" + id + "/setup/migrate"}, {"POST", "/routers/" + id + "/setup/rollback"},
+		{"PUT", "/sites/" + id + "/mode"}, {"GET", "/sites/" + id + "/cutover"}, {"POST", "/sites/" + id + "/cutover/start"},
+		{"POST", "/sites/" + id + "/cutover/confirm"}, {"POST", "/sites/" + id + "/cutover/rollback"},
+	} {
+		x := r.call(r.owner.Access, c[0], c[1], map[string]any{}, nil)
+		if x.Status != 410 || x.errCode(t) != "gone" {
+			t.Errorf("%s %s: %d %s", c[0], c[1], x.Status, x.Raw)
+		}
 	}
-	if got := r.call(r.oper.Access, "POST", "/routers/"+id+"/setup/migrate", map[string]any{"confirm_name": "Delta"}, nil); got.Status != 409 {
-		t.Fatalf("migrate before the join: %d %s", got.Status, got.Raw)
+}
+
+func TestAPICreateAndPatchTheLayout(t *testing.T) {
+	r := newAPIRig(t)
+	c := r.call(r.owner.Access, "POST", "/routers", map[string]any{"name": "Layout", "wan_mode": "static", "wan_address": "198.51.100.5/24", "wan_gateway": "198.51.100.1",
+		"lan_ports": "ether2,ether3", "lan_subnet": "192.168.77.0/24", "vlan_id": 100, "bench_port": "ether5"}, nil)
+	if c.Status != 201 {
+		t.Fatalf("%d %s", c.Status, c.Raw)
 	}
-	if got := r.call(r.oper.Access, "GET", "/routers/nope/setup", nil, nil); got.Status != 404 {
-		t.Fatalf("%d", got.Status)
+	id := str(c.JSON(t)["router"].(map[string]any), "id")
+	var st store.Site
+	r.st.View(func(d *store.Data) { st = d.Sites[id] })
+	if st.WANMode != "static" || st.LANPorts != "ether2,ether3" || st.LANSubnet != "192.168.77.0/24" || st.VLANID != 100 || st.AccessMode != store.AccessIPoE {
+		t.Fatalf("%+v", st)
 	}
-	// edit
-	p := r.call(r.owner.Access, "PATCH", "/routers/"+id, map[string]any{"name": "Delta 2", "serving_customers": true}, nil)
-	if p.Status != 200 || str(p.JSON(t), "name") != "Delta 2" || p.JSON(t)["serving_customers"] != true {
+	// field errors name the field
+	for name, body := range map[string]map[string]any{
+		"static without address": {"wan_mode": "static"},
+		"lan overlaps customers": {"lan_subnet": "10.5.50.0/24"},
+		"unknown wan mode":       {"wan_mode": "carrier-pigeon"},
+		"lan port is the wan":    {"lan_ports": "ether1"},
+	} {
+		body["name"] = "Bad " + name
+		x := r.call(r.owner.Access, "POST", "/routers", body, nil)
+		if x.Status != 400 {
+			t.Errorf("%s: %d %s", name, x.Status, x.Raw)
+		}
+	}
+	// a PPPoE password needs DATA_KEY on the server; it is never echoed
+	p := r.call(r.owner.Access, "PATCH", "/routers/"+id, map[string]any{"wan_mode": "dhcp", "support_phone": "0700000000"}, nil)
+	if p.Status != 200 || strings.Contains(string(p.Raw), "pppoe_pass\":") {
 		t.Fatalf("%d %s", p.Status, p.Raw)
 	}
 }
 
-func TestAPICreateAccountWithAPackageAndActivation(t *testing.T) {
+func TestAPIResetNeedsTheNameAndGivesANewLine(t *testing.T) {
 	r := newAPIRig(t)
-	pk := r.pkgID(t, "1 Week")
-	ok := r.call(r.oper.Access, "POST", "/accounts", map[string]any{"site_id": r.A.ID, "flat": "Flat 9", "mac": "AA:BB:CC:00:60:09", "package_id": pk, "activate": true, "note": "cash"}, nil)
-	if ok.Status != 201 {
-		t.Fatalf("%d %s", ok.Status, ok.Raw)
+	id := r.A.ID
+	if x := r.call(r.owner.Access, "POST", "/routers/"+id+"/actions/reset", map[string]any{}, nil); x.Status != 400 {
+		t.Fatalf("no name: %d %s", x.Status, x.Raw)
 	}
-	var got store.Account
-	r.st.View(func(d *store.Data) {
-		for _, a := range d.Accounts {
-			if a.Flat == "Flat 9" {
-				got = a
-			}
-		}
+	if x := r.call(r.owner.Access, "POST", "/routers/"+id+"/actions/reset", map[string]any{"confirm_name": "Beta"}, nil); x.Status != 400 {
+		t.Fatalf("other name: %d %s", x.Status, x.Raw)
+	}
+	x := r.call(r.owner.Access, "POST", "/routers/"+id+"/actions/reset", map[string]any{"confirm_name": "Alpha"}, nil)
+	if x.Status != 200 || !strings.Contains(string(x.Raw), "/import ftn-reset.rsc") || !strings.Contains(x.Header.Get("Cache-Control"), "no-store") {
+		t.Fatalf("%d %s", x.Status, x.Raw)
+	}
+	var st store.Site
+	r.st.View(func(d *store.Data) { st = d.Sites[id] })
+	if st.WGPublicKey != "" || !st.JoinedAt.IsZero() {
+		t.Fatalf("not reset: %+v", st)
+	}
+}
+
+func TestAPIScriptDownloadIsPostOwnerOnlyConfirmedAndNotCached(t *testing.T) {
+	r := newAPIRig(t)
+	id := r.A.ID
+	// the old GET is gone: a download changes keys, so it is never a plain link
+	if x := r.call(r.owner.Access, "GET", "/routers/"+id+"/script", nil, nil); x.Status == 200 {
+		t.Fatalf("GET still serves the script: %d", x.Status)
+	}
+	// make the router a not-yet-joined one first
+	r.st.Update(func(d *store.Data) error {
+		s := d.Sites[id]
+		s.JoinedAt = time.Time{}
+		d.Sites[id] = s
+		return nil
 	})
-	if got.PackageID != pk || got.ExpiresAt.IsZero() {
-		t.Fatalf("%+v", got)
+	for _, bad := range []any{nil, map[string]any{}, map[string]any{"confirm_name": "nope"}} {
+		x := r.call(r.owner.Access, "POST", "/routers/"+id+"/script", bad, nil)
+		if x.Status != 422 && x.Status != 400 {
+			t.Fatalf("without the router name: %d %.200s", x.Status, x.Raw)
+		}
 	}
-	bad := r.call(r.oper.Access, "POST", "/accounts", map[string]any{"site_id": r.A.ID, "flat": "Flat 10", "mac": "AA:BB:CC:00:60:10", "activate": true}, nil)
-	if bad.Status != 422 && bad.Status != 400 {
-		t.Fatalf("activate without a package: %d %s", bad.Status, bad.Raw)
+	x := r.call(r.owner.Access, "POST", "/routers/"+id+"/script", map[string]any{"confirm_name": r.A.Name}, nil)
+	if x.Status != 200 || !strings.Contains(string(x.Raw), "ftn: ") || !strings.Contains(x.Header.Get("Cache-Control"), "no-store") {
+		t.Fatalf("%d %.200s", x.Status, x.Raw)
 	}
-	dup := r.call(r.oper.Access, "POST", "/accounts", map[string]any{"site_id": r.A.ID, "flat": "Flat 11", "mac": "AA:BB:CC:00:60:09", "package_id": pk}, nil)
-	if dup.Status != 409 || dup.errCode(t) != "mac_in_use" {
-		t.Fatalf("%d %s", dup.Status, dup.Raw)
+	if !strings.Contains(string(x.Raw), "/system/reset-configuration") && !strings.Contains(string(x.Raw), "ftn-setup.rsc") {
+		t.Fatalf("not the bootstrap script: %.200s", x.Raw)
+	}
+}
+
+// A router that is joined with its tunnel up keeps its keys: the download is refused with 409 unless force is set.
+func TestAPIScriptDownloadRefusesALiveRouterUnlessForced(t *testing.T) {
+	r := newAPIRig(t)
+	id := r.A.ID
+	var before store.Site
+	r.st.Update(func(d *store.Data) error {
+		s := d.Sites[id]
+		s.JoinedAt = time.Now()
+		d.Sites[id] = s
+		before = s
+		return nil
+	})
+	body := map[string]any{"confirm_name": r.A.Name}
+	x := r.call(r.owner.Access, "POST", "/routers/"+id+"/script", body, nil)
+	if x.Status != 409 {
+		t.Fatalf("live router: %d %.200s", x.Status, x.Raw)
+	}
+	var after store.Site
+	r.st.View(func(d *store.Data) { after = d.Sites[id] })
+	if after.WGPublicKey != before.WGPublicKey || after.RESTPass != before.RESTPass {
+		t.Fatal("a refused download still rotated the router's keys")
+	}
+	body["force"] = true
+	x = r.call(r.owner.Access, "POST", "/routers/"+id+"/script", body, nil)
+	if x.Status != 200 || !strings.Contains(string(x.Raw), "ftn-setup.rsc") {
+		t.Fatalf("forced: %d %.200s", x.Status, x.Raw)
+	}
+	// the operator never gets it, forced or not
+	if x := r.call(r.oper.Access, "POST", "/routers/"+id+"/script", body, nil); x.Status != 403 {
+		t.Fatalf("operator: %d", x.Status)
 	}
 }
 
@@ -151,62 +231,7 @@ func TestSessionSetupJSON(t *testing.T) {
 	if b := body(t, resp); !strings.Contains(b, `"router_id":"`+r.A.ID+`"`) {
 		t.Fatalf("%s", b)
 	}
-	post := r.admin("POST", "/admin/routers/setup/run", url.Values{"id": {r.A.ID}})
-	if b := body(t, post); post.StatusCode != 202 || !strings.Contains(b, `"router_id"`) {
-		t.Fatalf("%d %s", post.StatusCode, b)
-	}
-	fresh, err := r.mgr.CreateRouter(sites.SiteInput{Name: "Epsilon"}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	post = r.admin("POST", "/admin/routers/setup/run", url.Values{"id": {fresh.ID}})
-	if b := body(t, post); post.StatusCode != 409 || !strings.Contains(b, `"error"`) {
-		t.Fatalf("a router that never joined: %d %s", post.StatusCode, b)
-	}
 	if g := r.admin("GET", "/admin/routers/setup.json?id=nope", nil); g.StatusCode != 404 {
 		t.Fatalf("%d", g.StatusCode)
-	}
-}
-
-func TestAPIRollbackNeedsTheNameAndSomethingToRollBack(t *testing.T) {
-	r := newAPIRig(t)
-	id := r.A.ID
-	for _, path := range []string{"/routers/" + id + "/setup/rollback", "/routers/" + id + "/cutover/rollback"} {
-		if x := r.call(r.owner.Access, "POST", path, map[string]any{}, nil); x.Status != 422 && x.Status != 400 {
-			t.Fatalf("%s without the name: %d %s", path, x.Status, x.Raw)
-		}
-		if x := r.call(r.owner.Access, "POST", path, map[string]any{"confirm_name": "Beta"}, nil); x.Status != 422 && x.Status != 400 {
-			t.Fatalf("%s with another name: %d %s", path, x.Status, x.Raw)
-		}
-		// a live router holds no markers: there is nothing to roll back, and nothing may be written
-		r.mock(id).ResetWrites()
-		x := r.call(r.owner.Access, "POST", path, map[string]any{"confirm_name": "Alpha"}, nil)
-		if x.Status != 409 || x.errCode(t) != "bad_state" {
-			t.Fatalf("%s: %d %s", path, x.Status, x.Raw)
-		}
-		if r.mock(id).Writes() != 0 {
-			t.Fatal("the rollback request wrote to a router with nothing armed")
-		}
-	}
-	for _, row := range r.mock(id).Table("/ip/firewall/address-list") {
-		if row["list"] == "ftn-armed" {
-			t.Fatalf("a marker was created: %v", row)
-		}
-	}
-	// with a pending change the request is accepted and the marker says now
-	r.mock(id).SeedRow("/ip/firewall/address-list", routeros.Row{"list": "ftn-armed", "address": "127.0.0.2", "comment": "5"})
-	r.mock(id).SeedRow("/ip/firewall/address-list", routeros.Row{"list": "ftn-undo", "address": "127.0.1.1", "comment": "hotspot|hotspot1"})
-	x := r.call(r.owner.Access, "POST", "/routers/"+id+"/setup/rollback", map[string]any{"confirm_name": "Alpha"}, nil)
-	if x.Status != 202 {
-		t.Fatalf("%d %s", x.Status, x.Raw)
-	}
-	found := false
-	for _, row := range r.mock(id).Table("/ip/firewall/address-list") {
-		if row["list"] == "ftn-armed" && row["comment"] == "now" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("the armed marker must say now")
 	}
 }

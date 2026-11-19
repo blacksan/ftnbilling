@@ -39,8 +39,6 @@
 #   NO_POSTGRES=1 keep the JSON-file store; do not install PostgreSQL.
 #   NO_FIREWALL=1 do not touch ufw.
 #   DRY_RUN=1     print what would be done; change nothing (works without root).
-#   ROUTER_PASS   only for a legacy single-router install that still uses
-#                 ROUTER_URL/ROUTER_PASS (kept on upgrade, never added on a new one).
 #   ADMIN_PASS    a random one is generated on first install.
 #   CADDY_MPESA_IPS  optional: space- or comma-separated IPs/CIDRs. When set, Caddy
 #                 answers /pay/cb/* (the M-Pesa callbacks) only to those source
@@ -373,7 +371,7 @@ acquire_program() {
   fi
   ASSETS=$BUNDLE/deploy
   local f
-  for f in $APP-wg-sync $APP-backup $APP-admin-reset $APP-doctor $APP-backup.service $APP-backup.timer $APP-dump.service $APP-dump.timer $APP-drill.service $APP-drill.timer; do
+  for f in $APP-wg-sync $APP-backup $APP-admin-reset $APP-wipe $APP-doctor $APP-backup.service $APP-backup.timer $APP-dump.service $APP-dump.timer $APP-drill.service $APP-drill.timer; do
     [ -f "$ASSETS/$f" ] || die "$ASSETS/$f is missing: incomplete bundle or source tree"
   done
   [ -f "$BIN_SRC" ] || die "program binary not found at $BIN_SRC"
@@ -397,7 +395,7 @@ users_and_tools() {
   install -d -o root -g $APP -m 750 "$ETC"
   install -d -o root -g root -m 700 "$BACKUPS"
   local t
-  for t in wg-sync backup admin-reset doctor; do install -m 0755 "$ASSETS/$APP-$t" "$SBIN/$APP-$t"; done
+  for t in wg-sync backup admin-reset wipe doctor; do install -m 0755 "$ASSETS/$APP-$t" "$SBIN/$APP-$t"; done
   printf '%s\n' "$PROG_VERSION" >"$ETC/VERSION"; chmod 644 "$ETC/VERSION"
 }
 
@@ -596,7 +594,6 @@ EOF
     # The app is only reached through Caddy (older installs listened on every address).
     setkv LISTEN_ADDR "127.0.0.1:8080"
     [ -z "${DOMAIN:-}" ] || setkv PUBLIC_BASE_URL "$BASE"
-    [ -z "${ROUTER_PASS:-}" ] || setkv ROUTER_PASS "$ROUTER_PASS"
     # The app refuses to start with M-Pesa set in this file but no callback
     # token. (Settings > M-Pesa makes its own token when you save there.)
     if [ -n "$(envget MPESA_CONSUMER_KEY)" ] && [ -z "$(envget MPESA_CALLBACK_TOKEN)" ]; then
@@ -1040,7 +1037,7 @@ EOF
 EOF
   case "$BASE" in https://*) ;; *) echo " NOTE: join commands need HTTPS. Re-run this installer with DOMAIN=your.domain first." ;; esac
   if grep -q '^ROUTER_URL=' "$ENVF"; then
-    echo " NOTE: this server still has a legacy ROUTER_URL router. It keeps working as the building \"Main building\"."
+    echo " NOTE: ROUTER_URL in $ENVF is no longer used. Add that router in the admin (Routers, Add router) and paste its line on it."
   fi
   echo " ${BK_MSG:-}"
   echo " Health check any time:  sudo $APP-doctor"

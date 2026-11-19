@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"ispbill/internal/metrics"
-	"ispbill/internal/routeros"
 	"ispbill/internal/store"
 	"ispbill/internal/wg"
 )
@@ -46,7 +45,6 @@ const (
 
 // Net is what the prober needs from the building manager.
 type Net interface {
-	Router(siteID string) routeros.Client
 	PeerStatus(siteID string) (ps wg.PeerStatus, found, known bool)
 }
 
@@ -162,7 +160,7 @@ func New(o Options) *Prober {
 
 type target struct {
 	site store.Site
-	addr string // "" = env site, probed with Client.Ping
+	addr string // host:port of the router's REST service inside the tunnel
 }
 
 // targets lists the buildings that can be probed right now.
@@ -171,10 +169,6 @@ func (p *Prober) targets() []target {
 	p.o.Store.View(func(d *store.Data) {
 		for _, s := range d.SiteList() {
 			if !s.Runnable() {
-				continue
-			}
-			if s.Mode == store.SiteModeEnv {
-				out = append(out, target{site: s})
 				continue
 			}
 			if s.TunnelIP == "" {
@@ -212,11 +206,7 @@ func (p *Prober) Tick(ctx context.Context) {
 			defer cancel()
 			start := time.Now()
 			var err error
-			if t.addr == "" {
-				err = p.o.Net.Router(t.site.ID).Ping(pc)
-			} else {
-				err = p.o.Dial(pc, t.addr)
-			}
+			err = p.o.Dial(pc, t.addr)
 			r := result{id: t.site.ID, ok: err == nil, rtt: time.Since(start)}
 			if err != nil {
 				r.err = err.Error()
@@ -275,9 +265,6 @@ func (p *Prober) reconcileLocked(live map[string]bool, now time.Time) {
 }
 
 func (p *Prober) refreshWGLocked(t target, now time.Time) {
-	if t.addr == "" {
-		return
-	}
 	st, had := p.d.State[t.site.ID]
 	if !had {
 		st.Status = Unknown

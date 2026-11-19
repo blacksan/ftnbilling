@@ -130,7 +130,7 @@ func (s *Service) changeMACLocked(d *store.Data, id, mac string) error {
 	a.MAC, a.MACConflict = mac, false // back under the uniqueness rule
 	d.Accounts[id] = a
 	delete(d.Devices, store.DeviceKey(a.SiteID, mac))
-	s.enqueueLocked(d, a, true, "MAC changed")
+	s.enqueueLocked(d, a, "MAC changed")
 	return nil
 }
 

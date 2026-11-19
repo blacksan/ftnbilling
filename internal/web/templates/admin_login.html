@@ -13,7 +13,7 @@ img.logo{height:40px;margin-bottom:12px}img.qr{display:block;margin:10px auto;wi
 code{background:var(--input);padding:2px 6px;border-radius:5px;word-break:break-all}.codes{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:10px 0;font:600 15px ui-monospace,monospace}
 a{color:var(--accent)}summary{cursor:pointer;color:var(--muted);margin-top:14px;font-size:13px}
 </style></head><body><main><div class="card"><img class="logo" src="/brand/logo-white-text.svg" alt="{{.Brand}}">{{end}}
-{{define "authfoot"}}</div><p class="muted" style="text-align:center"><a href="/portal">Back to the customer portal</a></p></main></body></html>{{end}}
+{{define "authfoot"}}</div><p class="muted" style="text-align:center"><a href="/pay">Back to the payment page</a></p></main></body></html>{{end}}
 
 {{define "admin_login"}}{{template "authhead" .}}
 <h1>Admin sign-in</h1><p class="muted">For {{.Brand}} staff.</p>

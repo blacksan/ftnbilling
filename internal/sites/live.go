@@ -41,51 +41,32 @@ var LiveReadPaths = []string{
 	"/queue/simple",
 }
 
-// liveTimeout cuts one read of a router (a variable so a test can shorten it).
-var liveTimeout = 3 * time.Second
+// liveTimeout cuts one read of a router when the configuration gives none (a
+// variable so a test can shorten it; production uses Config.RouterReadTimeout).
+var liveTimeout = 8 * time.Second
+
+func (m *Manager) liveReadTimeout() time.Duration {
+	if liveTimeout != defaultLiveTimeout {
+		return liveTimeout // a test shortened it
+	}
+	if m.cfg.RouterReadTimeout > 0 {
+		return m.cfg.RouterReadTimeout
+	}
+	return liveTimeout
+}
+
+const defaultLiveTimeout = 8 * time.Second
 
 const (
-	liveTTL = 5 * time.Second
+	liveTTL = 10 * time.Second
 
-	liveStaleMax = 60 * time.Second
+	liveStaleMax = 120 * time.Second
 	liveMaxRows  = 5000
 	liveSeries   = 36 // five-minute buckets of the throughput series (3 hours)
 
 	// ClientOnlineWindow is how recent a sign of life must be for a flat to be online.
 	ClientOnlineWindow = 3 * time.Minute
 )
-
-// ProvisionJobs is the hook W5c's provisioning job implements and installs with
-// Manager.SetJobs. Until then no job exists (nil = no job ever runs).
-type ProvisionJobs interface {
-	// Running is true while a provisioning job (fresh or migrate) is working
-	// on the router: reboot is refused during it.
-	Running(siteID string) bool
-	// State is the job's state name ("live", "needs_action", ...), "" if none.
-	State(siteID string) string
-}
-
-type noJobs struct{}
-
-func (noJobs) Running(string) bool { return false }
-func (noJobs) State(string) string { return "" }
-
-// SetJobs installs the provisioning job hook (nil restores "no job").
-func (m *Manager) SetJobs(j ProvisionJobs) {
-	m.live.mu.Lock()
-	m.live.jobs = j
-	m.live.mu.Unlock()
-}
-
-// Jobs returns the provisioning job hook; never nil.
-func (m *Manager) Jobs() ProvisionJobs {
-	m.live.mu.Lock()
-	defer m.live.mu.Unlock()
-	if m.live.jobs == nil {
-		return m.ProvJobsView() // the server's own provisioning jobs
-	}
-	return m.live.jobs
-}
 
 // ---- types (the API shapes, docs/api-v1.md addendum L) ------------------------------------------------
 
@@ -260,7 +241,6 @@ type liveState struct {
 	mu   sync.Mutex
 	ent  map[string]*liveEntry
 	prev map[string]map[string]ifSample // site -> interface -> last counters
-	jobs ProvisionJobs
 }
 
 type ifSample struct {
@@ -325,8 +305,8 @@ func (m *Manager) liveGet(ctx context.Context, siteID, view string, fetch func(c
 		e.flight = f
 		m.live.mu.Unlock()
 
-		// The read outlives the caller that started it (others wait on it) but not 3 s.
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), liveTimeout)
+		// The read outlives the caller that started it (others wait on it) but not longer than the read timeout.
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.liveReadTimeout())
 		v, ferr := fetch(rctx)
 		cancel()
 
@@ -581,7 +561,7 @@ func (m *Manager) readInterfaces(ctx context.Context, site store.Site, rt router
 		}
 	}
 	if customer == "" {
-		customer = HotspotBridge
+		customer = CustomerBridge
 	}
 
 	m.live.mu.Lock()
@@ -764,7 +744,6 @@ type Client struct {
 	UsageMonthBytes   uint64  `json:"usage_month_bytes"`
 	SuspendedOnRouter bool    `json:"suspended_on_router"`
 	InSync            bool    `json:"in_sync"`
-	RouterUser        string  `json:"router_user"`
 }
 
 // ClientCounts are the totals of the whole list, before q/kind/online filters.
@@ -780,7 +759,6 @@ type ClientAccount struct {
 	LeaseStatus                            string
 	LastSeen                               time.Time
 	SuspendedOnRouter, InSync              bool
-	RouterUser                             string
 	UsageToday, UsageMonth                 uint64
 	LiveDown, LiveUp                       float64 // bit/s from the collector
 	LiveAt                                 time.Time
@@ -788,9 +766,9 @@ type ClientAccount struct {
 
 // ClientDevice is a device that has no account (billing.UnregDevice, trimmed).
 type ClientDevice struct {
-	MAC, IP, HostName, Vendor, RouterUser string
-	Online                                bool
-	LastSeen                              time.Time
+	MAC, IP, HostName, Vendor string
+	Online                    bool
+	LastSeen                  time.Time
 }
 
 // ClientInput is everything MergeClients needs.
@@ -848,7 +826,7 @@ func MergeClients(in ClientInput) []Client {
 		}
 		c := Client{Kind: "flat", AccountID: a.ID, Code: a.Code, Flat: a.Flat, Tenant: a.Tenant, State: a.State, MAC: mac,
 			Vendor: billing.Vendor(mac), IP: a.IP, LeaseStatus: a.LeaseStatus, SuspendedOnRouter: a.SuspendedOnRouter, InSync: a.InSync,
-			RouterUser: a.RouterUser, UsageTodayBytes: a.UsageToday, UsageMonthBytes: a.UsageMonth}
+			UsageTodayBytes: a.UsageToday, UsageMonthBytes: a.UsageMonth}
 		if c.LeaseStatus == "" {
 			c.LeaseStatus = "none"
 		}
@@ -896,7 +874,7 @@ func MergeClients(in ClientInput) []Client {
 		}
 		macs[mac] = true
 		c := Client{Kind: "unregistered", MAC: mac, Vendor: firstNonEmpty(d.Vendor, billing.Vendor(mac)), HostName: d.HostName, IP: d.IP,
-			LeaseStatus: "none", InSync: true, RouterUser: d.RouterUser}
+			LeaseStatus: "none", InSync: true}
 		if l, ok := leaseByMAC[mac]; ok {
 			c.HostName = firstNonEmpty(c.HostName, l.Host)
 			c.IP = firstNonEmpty(l.IP, c.IP)

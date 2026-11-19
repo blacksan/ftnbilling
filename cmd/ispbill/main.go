@@ -1,5 +1,6 @@
-// Command ispbill is a small internet-billing server with a captive portal
-// for a MikroTik hotspot.
+// Command ispbill is a small internet-billing server for ISPs that serve
+// flats over IPoE behind MikroTik routers: it runs the payment page, the admin
+// and the router reconciler.
 package main
 
 import (
@@ -66,15 +67,10 @@ func run(log *slog.Logger) error {
 	if cfg.RouterMock {
 		log.Warn("ROUTER_MOCK=true: using an in-memory fake router")
 	}
-	if _, err := sites.Bootstrap(cfg, st, log); err != nil {
-		return err
-	}
-
 	var svc *billing.Service
 	mgr := sites.New(sites.Options{
-		Cfg: cfg, Store: st, Log: log,
-		Dir:      func(siteID string) metrics.Directory { return svc.Directory(siteID) },
-		OnJoined: func(siteID string) { svc.MarkProfilesDirty(siteID) },
+		Cfg: cfg, Store: st, Log: log, DataKey: cfg.DataKey,
+		Dir: func(siteID string) metrics.Directory { return svc.Directory(siteID) },
 	})
 	svc = billing.NewService(st, mgr, log)
 	mgr.SetProvisioner(svc)
@@ -90,20 +86,7 @@ func run(log *slog.Logger) error {
 	defer stop()
 
 	mgr.Start(ctx)
-	// Push the speed profiles to every building's router in the background, so
-	// one unreachable building does not delay start-up. The sweeper retries.
 	var wg sync.WaitGroup
-	for _, id := range runnableSites(st) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			syncCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			defer cancel()
-			if err := svc.SyncProfiles(syncCtx, id); err != nil {
-				log.Warn("router profile sync failed; the sweeper will retry", "site", id, "err", err)
-			}
-		}()
-	}
 
 	// Settings saved in the admin pages lie over the environment file.
 	setm, err := settings.New(st, cfg.DataKey, cfg, os.Getenv)
@@ -145,6 +128,8 @@ func run(log *slog.Logger) error {
 	log.Info("starting", "listen", cfg.ListenAddr, "data", cfg.DataDir, "router_mock", cfg.RouterMock,
 		"test_mode", cfg.TestMode, "mpesa_enabled", setm.Effective().MpesaEnabled(), "mpesa_env", setm.Effective().MpesaEnv)
 
+	// Reconcile every runnable building in the background, so one unreachable
+	// router does not delay start-up. The sweeper retries.
 	svc.ResyncAll()
 	wg.Add(1)
 	go func() { defer wg.Done(); svc.RunSweeper(ctx, 60*time.Second) }()
@@ -235,17 +220,4 @@ func seedOwner(au *authn.Service, st *store.Store, cfg config.Config, log *slog.
 		log.Info("admin owner created; sign in and enrol the authenticator app (ispbill admin-reset-password -setup-code prints the setup code)", "user", cfg.AdminUser)
 	}
 	return nil
-}
-
-// runnableSites lists the buildings whose router can be reached right now.
-func runnableSites(st *store.Store) []string {
-	var ids []string
-	st.View(func(d *store.Data) {
-		for _, s := range d.SiteList() {
-			if s.Runnable() {
-				ids = append(ids, s.ID)
-			}
-		}
-	})
-	return ids
 }

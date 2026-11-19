@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"ispbill/internal/billing"
+	"ispbill/internal/routeros"
 	"ispbill/internal/store"
 )
 
@@ -33,26 +34,25 @@ func (s *Server) adminRouterDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{}
-	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 	defer cancel()
 	if err := s.svc.RefreshHosts(ctx, st.ID); err != nil {
 		out["error"] = err.Error()
 	}
 	type item struct {
-		MAC        string `json:"mac"`
-		Vendor     string `json:"vendor"`
-		HostName   string `json:"host_name"`
-		IP         string `json:"ip"`
-		Online     bool   `json:"online"`
-		Seen       string `json:"seen"`
-		RouterUser string `json:"router_user"`
+		MAC      string `json:"mac"`
+		Vendor   string `json:"vendor"`
+		HostName string `json:"host_name"`
+		IP       string `json:"ip"`
+		Online   bool   `json:"online"`
+		Seen     string `json:"seen"`
 	}
 	items := []item{}
 	for _, u := range s.svc.Unregistered(st.ID, false) {
 		if len(items) >= 40 {
 			break
 		}
-		items = append(items, item{MAC: u.MAC, Vendor: u.Vendor, HostName: u.HostName, IP: u.IP, Online: u.Online, Seen: shortAge(s.svc.Now().Sub(u.LastSeen)) + " ago", RouterUser: u.RouterUser})
+		items = append(items, item{MAC: u.MAC, Vendor: u.Vendor, HostName: u.HostName, IP: u.IP, Online: u.Online, Seen: shortAge(s.svc.Now().Sub(u.LastSeen)) + " ago"})
 	}
 	out["items"] = items
 	writeJSON(w, http.StatusOK, out)
@@ -73,7 +73,7 @@ type devRow struct {
 func (s *Server) adminDevices(w http.ResponseWriter, r *http.Request) {
 	p := s.page(r, "devices")
 	sc := s.scopeOf(r)
-	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 	defer cancel()
 	if !sc.All { // refreshing asks one router; "all routers" shows what is already known
 		if err := s.svc.RefreshHosts(ctx, sc.ID); err != nil {
@@ -167,7 +167,7 @@ func (s *Server) adminDeviceCreate(w http.ResponseWriter, r *http.Request) {
 		s.back(w, r, "/admin/devices", "Error: "+err.Error())
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 	defer cancel()
 	msg := "Account created: " + a.Flat + " (" + a.Code + "). " + routerStateText(s.routerStateJSON(ctx, a, rs))
 	if err != nil {

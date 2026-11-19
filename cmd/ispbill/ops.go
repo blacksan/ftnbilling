@@ -32,7 +32,7 @@ func (a alertInputs) Sites() []store.Site {
 	var out []store.Site
 	a.st.View(func(d *store.Data) {
 		for _, s := range d.SiteList() {
-			if s.Runnable() && (s.Mode == store.SiteModeEnv || s.TunnelIP != "") {
+			if s.Runnable() && s.TunnelIP != "" {
 				out = append(out, s)
 			}
 		}

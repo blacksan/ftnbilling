@@ -212,7 +212,7 @@ func (c *Collector) BuildReport(p Period, now time.Time) Report {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	r := Report{Period: p, From: from, To: to, Tier: tier, WANCapMbps: c.cfg.WANCapMbps, TotalFlats: len(accts)}
-	for _, k := range []string{"sessions", "ports", "ping", "system"} {
+	for _, k := range []string{"queues", "ports", "ping", "system"} {
 		if e := c.L.Err[k]; e != "" {
 			r.RouterErr = e
 			break

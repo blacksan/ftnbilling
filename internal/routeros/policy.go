@@ -100,7 +100,6 @@ var deniedPaths = []struct {
 	{[]string{"certificate"}, false, "certificates are not managed here"},
 	{[]string{"interface", "wireguard"}, true, "WireGuard interfaces and peers can be listed but not changed here"},
 	{[]string{"ppp", "secret"}, false, "PPP secrets are not managed here"},
-	{[]string{"ip", "hotspot", "user"}, true, "hotspot users can be listed but not changed here"},
 	{[]string{"interface", "wireless", "security-profiles"}, false, "wireless security profiles are not managed here"},
 	{[]string{"interface", "wifi", "security"}, false, "Wi-Fi security settings are not managed here"},
 	{[]string{"interface", "wifi", "security-profiles"}, false, "Wi-Fi security settings are not managed here"},

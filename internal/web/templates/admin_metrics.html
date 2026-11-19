@@ -51,8 +51,8 @@
 
 <h3>How to read this</h3>
 <div class="card muted">
-<p><b>Download</b> is traffic to the flat, <b>upload</b> is from it. Per-flat bytes come from the router's hotspot sessions once a minute; a restart of this app can lose up to a minute. <b>Time at cap</b> is the share of the flat's online time in which its download averaged 90% or more of its package speed. Flats above {{f0 (index .Data.C "CapShare")}}% (after at least {{index .Data.C "MinOnline"}} minutes online) are upgrade candidates.</p>
-<p><b>Services</b> come from the router's traffic-flow export and are guessed from DNS names, then from ports. They are a good guide, not an exact count: devices that use their own encrypted DNS (DNS-over-HTTPS) show up as "HTTPS (other)", and the router must not fast-track the hotspot traffic or it is invisible to traffic-flow.</p>
+<p><b>Download</b> is traffic to the flat, <b>upload</b> is from it. Per-flat bytes come from the router's per-flat queue counters once a minute; a restart of this app can lose up to a minute. <b>Time at cap</b> is the share of the flat's online time in which its download averaged 90% or more of its package speed. Flats above {{f0 (index .Data.C "CapShare")}}% (after at least {{index .Data.C "MinOnline"}} minutes online) are upgrade candidates.</p>
+<p><b>Services</b> come from the router's traffic-flow export and are guessed from DNS names, then from ports. They are a good guide, not an exact count: devices that use their own encrypted DNS (DNS-over-HTTPS) show up as "HTTPS (other)", and the router must not fast-track customer traffic or it is invisible to traffic-flow.</p>
 <p><b>Fair-use limit</b> counts WAN download plus upload for the calendar month (EAT) since this app began collecting; it turns amber above {{f0 (index .Data.C "FUPWarn")}}%. The projection assumes the average pace so far continues.</p>
 <p>Flag thresholds: WAN above {{f0 (index .Data.C "WANUtil")}}% for {{index .Data.C "WANHours"}} or more hours in 7 days; flats above {{f0 (index .Data.C "CapShare")}}% of time at cap; loss above {{f0 (index .Data.C "Loss")}}%.</p></div>
 {{template "afoot" .}}{{end}}

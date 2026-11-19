@@ -19,11 +19,13 @@ import (
 //	/ip/traffic-flow             enabled and interfaces
 //	/ip/traffic-flow/target      rows commented "ftn: netflow"
 //	/interface/bridge/port       rows of the building's OLT and bench ports
-//	/ip/hotspot/user, /ip/hotspot/ip-binding   removal of leftover rows
+//	/ip/firewall/filter, /nat    the customer DNS accepts, and the walled-garden rules
+//	/ip/dhcp-server              enabling ftn-dhcp
+//	/file                        removing ftn-setup.rsc and ftn-reset.rsc
 //
 // and nothing else: never /user, /ip/service, /system/*, /interface/wireguard,
-// routes, the WAN, or a firewall rule. Each fix re-reads what it depends on
-// right before writing and refuses when the precondition no longer holds.
+// routes, the WAN or any other firewall rule. Each fix re-reads what it depends
+// on right before writing and refuses when the precondition no longer holds.
 
 // Errors of ApplyFix.
 var (
@@ -78,9 +80,8 @@ type fixWriter struct {
 	insp      routeros.Inspector
 	ifaces    map[string]bool // the OLT and bench ports of this building
 	custIface string          // the customer interface, for the DNS accept rules
-	// orphans judges a hotspot row at the moment of removal (nil: removal refused).
-	orphans func(path string, row routeros.Row) bool
-	applied []string
+	walled    map[string]bool // comments of the walled-garden rules a fix may write (set by fixWalled)
+	applied   []string
 }
 
 func (w *fixWriter) note(format string, a ...any) {
@@ -121,6 +122,18 @@ func (w *fixWriter) allowedRow(path string, row routeros.Row) error {
 		if row["comment"] != netflowComment {
 			return forbid("a traffic-flow target the server did not make")
 		}
+	case "/ip/dhcp-server":
+		if row["name"] != billing.DHCPServerName {
+			return forbid("a DHCP server the server did not make")
+		}
+	case "/ip/firewall/filter", "/ip/firewall/nat":
+		if !w.walled[row["comment"]] && !strings.HasPrefix(row["comment"], "ftn: ipoe") {
+			return forbid("a firewall rule that is not part of the walled garden")
+		}
+	case "/file":
+		if row["name"] != SetupFile && row["name"] != ResetFile {
+			return forbid("a file the server did not make")
+		}
 	default:
 		return forbid(path)
 	}
@@ -137,8 +150,19 @@ func (w *fixWriter) addRow(ctx context.Context, path string, body map[string]str
 		if body["comment"] != netflowComment {
 			return forbid("a traffic-flow target without the ftn: netflow comment")
 		}
-	case "/ip/firewall/filter":
-		// Only the permanent "let customers ask the router for DNS" accepts.
+	case "/ip/firewall/filter", "/ip/firewall/nat":
+		if w.walled[body["comment"]] {
+			for k := range body {
+				if !ruleProp(k) {
+					return forbid("firewall rule property " + k)
+				}
+			}
+			break
+		}
+		if path == "/ip/firewall/nat" {
+			return forbid("a NAT rule that is not part of the walled garden")
+		}
+		// Otherwise only the permanent "let customers ask the router for DNS" accepts.
 		if body["comment"] != custDNSComment || body["chain"] != "input" || body["action"] != "accept" ||
 			body["dst-port"] != "53" || (body["protocol"] != "udp" && body["protocol"] != "tcp") ||
 			w.custIface == "" || body["in-interface"] != w.custIface {
@@ -158,15 +182,52 @@ func (w *fixWriter) addRow(ctx context.Context, path string, body map[string]str
 	return err
 }
 
+// addRowID is addRow for the walled-garden rules: it returns the new row's id
+// (the next rule goes above it).
+func (w *fixWriter) addRowID(ctx context.Context, path string, body map[string]string) (string, error) {
+	if !w.walled[body["comment"]] || (path != "/ip/firewall/filter" && path != "/ip/firewall/nat") {
+		return "", forbid("a rule that is not part of the walled garden")
+	}
+	for k := range body {
+		if !ruleProp(k) {
+			return "", forbid("firewall rule property " + k)
+		}
+	}
+	return w.rt.AddRow(ctx, path, body)
+}
+
+// ruleProp: the properties a walled-garden rule uses.
+func ruleProp(k string) bool {
+	switch k {
+	case "chain", "action", "protocol", "dst-port", "dst-address", "src-address", "src-address-list", "in-interface", "out-interface",
+		"in-interface-list", "out-interface-list", "connection-state", "reject-with", "to-addresses", "to-ports", "comment", "place-before":
+		return true
+	}
+	return false
+}
+
 // setRow changes one existing row; row is the row as just read.
 func (w *fixWriter) setRow(ctx context.Context, path string, row routeros.Row, diff map[string]string) error {
 	if err := w.allowedRow(path, row); err != nil {
 		return err
 	}
-	if path == "/interface/bridge/port" {
+	switch path {
+	case "/interface/bridge/port":
 		for k := range diff {
 			if k != "bridge" {
 				return forbid("a bridge port may only change its bridge")
+			}
+		}
+	case "/ip/dhcp-server":
+		for k := range diff {
+			if k != "disabled" {
+				return forbid("a DHCP server may only be switched on")
+			}
+		}
+	case "/ip/firewall/filter", "/ip/firewall/nat":
+		for k := range diff {
+			if !ruleProp(k) {
+				return forbid("firewall rule property " + k)
 			}
 		}
 	}
@@ -176,16 +237,9 @@ func (w *fixWriter) setRow(ctx context.Context, path string, row routeros.Row, d
 // removeRow deletes one existing row; row is the row as just read.
 func (w *fixWriter) removeRow(ctx context.Context, path string, row routeros.Row) error {
 	switch path {
-	case "/interface/bridge/port", "/ip/traffic-flow/target":
+	case "/interface/bridge/port", "/ip/traffic-flow/target", "/ip/firewall/filter", "/ip/firewall/nat", "/file":
 		if err := w.allowedRow(path, row); err != nil {
 			return err
-		}
-	case "/ip/hotspot/user", "/ip/hotspot/ip-binding":
-		if strings.HasPrefix(row["comment"], "ftn:") {
-			return forbid("a row the server made")
-		}
-		if w.orphans == nil || !w.orphans(path, row) {
-			return forbid("a hotspot row that is not a leftover (an account holds it)")
 		}
 	default:
 		return forbid(path)
@@ -213,8 +267,10 @@ var fixers = map[string]fixFunc{
 	CheckCustDNS:     fixCustDNS,
 	CheckOLT:         fixOLT,
 	CheckBench:       fixBench,
-	CheckOrphans:     fixOrphans,
 	CheckTrafficFlow: fixTrafficFlow,
+	CheckWalled:      fixWalled,
+	CheckDHCP:        fixDHCP,
+	CheckBootFile:    fixBootFile,
 }
 
 // freshRead re-reads what a fix depends on and fails (router unreachable)
@@ -233,7 +289,7 @@ func changed(format string, a ...any) error {
 	return fmt.Errorf("%w: %s", ErrPreconditionChanged, fmt.Sprintf(format, a...))
 }
 
-var dnsTables = []string{"/ip/firewall/filter", "/ip/firewall/raw", "/interface/list/member", "/ip/route", "/ip/dhcp-client", "/ip/address", "/ip/hotspot", "/ip/dhcp-server"}
+var dnsTables = []string{"/ip/firewall/filter", "/ip/firewall/raw", "/interface/list/member", "/ip/route", "/ip/dhcp-client", "/ip/address", "/ip/dhcp-server"}
 
 // readTolerant reads tables whose failure is acceptable (the packages may be absent).
 func (fe *fixEnv) readTolerant(ctx context.Context, singles, tables []string, into *snapshot) {
@@ -278,7 +334,7 @@ func fixDNS(ctx context.Context, fe *fixEnv) error {
 }
 
 func fixCustDNS(ctx context.Context, fe *fixEnv) error {
-	sn, err := fe.freshRead(ctx, nil, []string{"/ip/firewall/filter", "/interface/list/member", "/ip/address", "/ip/hotspot", "/ip/dhcp-server", "/interface/bridge"})
+	sn, err := fe.freshRead(ctx, nil, []string{"/ip/firewall/filter", "/interface/list/member", "/ip/address", "/ip/dhcp-server", "/interface/bridge"})
 	if err != nil {
 		return err
 	}
@@ -311,7 +367,7 @@ func fixCustDNS(ctx context.Context, fe *fixEnv) error {
 }
 
 var oltTables = []string{"/interface/bridge/port", "/interface/vlan", "/interface/list/member", "/ip/address",
-	"/ip/dhcp-server", "/ip/dhcp-client", "/ip/hotspot", "/interface/bridge/host", "/interface/bridge"}
+	"/ip/dhcp-server", "/ip/dhcp-client", "/interface/bridge/host", "/interface/bridge"}
 
 func fixOLT(ctx context.Context, fe *fixEnv) error {
 	sn, err := fe.freshRead(ctx, nil, oltTables)
@@ -347,7 +403,7 @@ func fixOLT(ctx context.Context, fe *fixEnv) error {
 }
 
 var benchTables = []string{"/interface/bridge/port", "/interface/bridge", "/interface", "/interface/vlan", "/interface/list/member",
-	"/ip/address", "/ip/dhcp-server", "/ip/dhcp-client", "/ip/hotspot", "/interface/bridge/host"}
+	"/ip/address", "/ip/dhcp-server", "/ip/dhcp-client", "/interface/bridge/host"}
 
 func fixBench(ctx context.Context, fe *fixEnv) error {
 	if fe.site.BenchPort == "" {
@@ -393,7 +449,7 @@ func fixBench(ctx context.Context, fe *fixEnv) error {
 		fe.w.note("moved %s from bridge %s to %s", b.iface, b.inOther, cust.iface)
 		return nil
 	}
-	if err := fe.w.addRow(ctx, "/interface/bridge/port", map[string]string{"bridge": cust.iface, "interface": b.iface, "comment": "ftn: bench port"}); err != nil {
+	if err := fe.w.addRow(ctx, "/interface/bridge/port", map[string]string{"bridge": cust.iface, "interface": b.iface, "horizon": "1", "comment": "ftn: bench port"}); err != nil {
 		return err
 	}
 	fe.w.note("put %s on bridge %s", b.iface, cust.iface)
@@ -401,7 +457,7 @@ func fixBench(ctx context.Context, fe *fixEnv) error {
 }
 
 func fixTrafficFlow(ctx context.Context, fe *fixEnv) error {
-	sn, err := fe.freshRead(ctx, []string{"/ip/traffic-flow"}, []string{"/ip/traffic-flow/target", "/ip/address", "/ip/hotspot", "/ip/dhcp-server", "/interface/bridge"})
+	sn, err := fe.freshRead(ctx, []string{"/ip/traffic-flow"}, []string{"/ip/traffic-flow/target", "/ip/address", "/ip/dhcp-server", "/interface/bridge"})
 	if err != nil {
 		return err
 	}
@@ -448,37 +504,6 @@ func fixTrafficFlow(ctx context.Context, fe *fixEnv) error {
 		return err
 	}
 	fe.w.note("traffic-flow target added: %s:%s", want.dst, want.port)
-	return nil
-}
-
-func fixOrphans(ctx context.Context, fe *fixEnv) error {
-	sn, err := fe.freshRead(ctx, nil, []string{"/ip/hotspot/user", "/ip/hotspot/ip-binding"})
-	if err != nil {
-		return err
-	}
-	skipped := 0
-	for _, o := range findOrphans(sn, fe.m.accountIndex()) {
-		if !o.serverMade && !(fe.confirm && !fe.partial) {
-			skipped++
-			continue
-		}
-		var row routeros.Row
-		for _, r := range sn.tbl(o.path) {
-			if r[routeros.RowID] == o.id {
-				row = r
-			}
-		}
-		if row == nil {
-			continue
-		}
-		if err := fe.w.removeRow(ctx, o.path, row); err != nil {
-			return err
-		}
-		fe.w.note("removed %s", o)
-	}
-	if skipped > 0 {
-		fe.w.note("left %d login(s) the server did not make (needs confirmation)", skipped)
-	}
 	return nil
 }
 
@@ -530,6 +555,13 @@ func (m *Manager) applyFix(ctx context.Context, siteID, checkID string, confirm 
 	if !c.Router.Reachable {
 		return res, ErrRouterUnreachable
 	}
+	switch c.Layout {
+	case LayoutV5:
+	case LayoutOld:
+		return res, ErrRebuildRequired
+	default:
+		return res, ErrRouterUnreachable
+	}
 	if item.Status == StatusOK || item.Status == StatusInfo {
 		return res, nil // nothing to fix
 	}
@@ -537,9 +569,6 @@ func (m *Manager) applyFix(ctx context.Context, siteID, checkID string, confirm 
 	switch item.Fix.Kind {
 	case FixAuto, FixConfirm:
 	default:
-		if item.Fix.Command != "" {
-			return res, fmt.Errorf("%w: run this on the router: %s", ErrNoFix, item.Fix.Command)
-		}
 		return res, ErrNoFix
 	}
 	if !hasFixer {
@@ -562,11 +591,7 @@ func (m *Manager) applyFix(ctx context.Context, siteID, checkID string, confirm 
 	rt := m.Router(siteID)
 	insp, _ := rt.(routeros.Inspector)
 	w := &fixWriter{rt: rt, insp: insp, ifaces: map[string]bool{}}
-	w.orphans = func(path string, row routeros.Row) bool {
-		_, ok := orphanOf(path, row, m.accountIndex()) // judged now, on the row itself
-		return ok
-	}
-	for _, n := range []string{eff.OLTInterface, eff.BenchPort} {
+	for _, n := range []string{eff.OLTInterface, eff.BenchPort, CustomerBridge} {
 		if n != "" {
 			w.ifaces[n] = true
 		}
@@ -632,7 +657,7 @@ type AutoFixOutcome struct {
 }
 
 // ApplyAutoFixes runs once every fix of kind auto that the checklist asks
-// for (and the automatic part of the hotspot-leftovers fix), each audited as
+// for each audited as
 // by "system". Fixes that need confirmation are not run. W5c / the join hook
 // call it after a successful join; it is safe to call again.
 func (m *Manager) ApplyAutoFixes(ctx context.Context, siteID string) ([]AutoFixOutcome, error) {
@@ -651,11 +676,10 @@ func (m *Manager) ApplyAutoFixes(ctx context.Context, siteID string) ([]AutoFixO
 		if _, ok := fixers[it.ID]; !ok {
 			continue
 		}
-		partial := it.ID == CheckOrphans && it.Fix.Kind == FixConfirm
-		if it.Fix.Kind != FixAuto && !partial {
+		if it.Fix.Kind != FixAuto {
 			continue
 		}
-		res, err := m.applyFix(ctx, siteID, it.ID, false, ActorSystem, partial)
+		res, err := m.applyFix(ctx, siteID, it.ID, false, ActorSystem, false)
 		o := AutoFixOutcome{ID: it.ID, Applied: res.Applied}
 		if err != nil {
 			o.Err = err.Error()

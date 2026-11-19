@@ -1,19 +1,24 @@
 {{define "sitefields"}}<div class="two"><label class="field">Router name<input name="name" value="{{.Name}}" required maxlength="60" placeholder="Riverside Apartments"></label>
 <label class="field">Support phone (shown to tenants)<input name="support" value="{{.SupportPhone}}" placeholder="optional"></label></div>
 <label class="field">Notes<input name="notes" value="{{.Notes}}" maxlength="300"></label>{{end}}
-{{define "sitelayout"}}<div class="two">
-<label class="field">Hotspot server<input name="hotspot" value="{{.HotspotServer}}"></label>
+{{define "sitelayout"}}<div class="two" data-wan-form>
+<label class="field">How the router gets its internet (WAN mode)<select name="wanmode" data-wan-mode>{{range seq "dhcp" "static" "pppoe"}}<option{{if eq . $.WANMode}} selected{{end}}>{{.}}</option>{{end}}</select></label>
 <label class="field">WAN port<input name="wan" value="{{.WANInterface}}"></label>
-<label class="field">WAN interface list<input name="wanlist" value="{{.WANList}}"></label>
+<label class="field" data-wan-only="static">Static address (CIDR)<input name="wanaddr" value="{{.WANAddress}}" placeholder="198.51.100.5/24"></label>
+<label class="field" data-wan-only="static">Static gateway<input name="wangw" value="{{.WANGateway}}"></label>
+<label class="field" data-wan-only="static">Static DNS<input name="wandns" value="{{.WANDNS}}"></label>
+<label class="field" data-wan-only="pppoe">PPPoE user<input name="pppoeuser" value="{{.PPPoEUser}}" autocomplete="off"></label>
+<label class="field" data-wan-only="pppoe">PPPoE password (write-only){{if .PPPoEPassEnc}} <span class="pill online" data-pppoe-set>set</span>{{end}}<input name="pppoepass" type="password" value="" autocomplete="new-password" placeholder="{{if .PPPoEPassEnc}}leave blank to keep it{{end}}"></label>
+{{if .PPPoEPassEnc}}<label class="ck" data-wan-only="pppoe"><input type="checkbox" name="pppoeclear" value="1"> clear the stored PPPoE password</label>{{end}}
+<label class="field">Admin LAN ports<input name="lanports" value="{{.LANPorts}}" placeholder="ether2"></label>
+<label class="field">Admin LAN subnet<input name="lansubnet" value="{{.LANSubnet}}" placeholder="192.168.88.0/24"></label>
 <label class="field">OLT port<input name="olt" value="{{.OLTInterface}}"></label>
 <label class="field">Customer subnet<input name="subnet" value="{{.CustomerSubnet}}" placeholder="10.5.50.0/24"></label>
 <label class="field">VLAN (0 = none)<input name="vlan" type="number" min="0" max="4094" value="{{.VLANID}}"></label>
 <label class="field">WAN capacity (Mbps)<input name="wancap" value="{{f0 .WANCapMbps}}"></label>
 <label class="field">OLT capacity (Mbps)<input name="oltcap" value="{{f0 .OLTCapMbps}}"></label>
 <label class="field">Fair-use limit (TB/month)<input name="fup" value="{{f0 .FUPTB}}"></label>
-<label class="field">Bench port (optional)<input name="bench" value="{{.BenchPort}}"></label></div>
-<label class="ck"><input type="checkbox" name="provision" value="1"{{if .Provision}} checked{{end}}> script builds the bridge, DHCP and hotspot</label>
-<label class="ck"><input type="checkbox" name="legacy" value="1"{{if .LegacyContainer}} checked{{end}}> router had the old container (script removes it)</label>{{end}}
+<label class="field">Bench port (optional)<input name="bench" value="{{.BenchPort}}"></label></div>{{end}}
 
 {{define "admin_sites"}}{{template "ahead" .}}{{$d := .}}{{$c := .Data.Cnt}}
 <div class="stats">
@@ -25,7 +30,7 @@
 </div>
 <nav class="tabs" aria-label="Filter routers">{{range $t := (seq "all|All" "online|Online" "offline|Offline" "setting|Setting up")}}{{$k := index (split $t "|") 0}}{{$l := index (split $t "|") 1}}<a class="tab" href="/admin/routers?tab={{$k}}"{{if eq $k $d.Data.Tab}} aria-current="page"{{end}}>{{$l}}<span class="n">{{index $c $k}}</span></a>{{end}}</nav>
 {{if .Data.Rows}}<div class="tw"><table class="rs"><thead><tr><th>Router</th><th>State</th><th>Setup</th><th class="n">Flats</th><th class="n">Online</th><th>WAN</th><th>Tunnel</th><th>Seen</th><th></th></tr></thead><tbody>
-{{range .Data.Rows}}<tr><td class="who"><b><a href="/admin/routers/view?id={{.S.ID}}">{{.S.Name}}</a></b><span>{{.Mode}}{{if eq .S.Mode "env"}} &middot; legacy{{end}}</span></td>
+{{range .Data.Rows}}<tr><td class="who"><b><a href="/admin/routers/view?id={{.S.ID}}">{{.S.Name}}</a></b><span>{{.Detail}}</span></td>
 <td data-label="State"><span class="pill {{.State}}">{{.State}}</span></td><td data-label="Setup"><span class="pill {{.SetupTone}}">{{.Setup}}</span></td>
 <td class="n" data-label="Flats">{{.Flats}}</td><td class="n" data-label="Online">{{.Online}}</td>
 <td data-label="WAN">{{if .WAN}}{{.WAN}}{{if .WANPct}}<div class="meter" role="img" aria-label="{{f0 .WANPct}} percent of capacity"><i style="width:{{f0 .WANPct}}%"></i></div>{{end}}{{else}}<span class="muted">none yet</span>{{end}}</td>
