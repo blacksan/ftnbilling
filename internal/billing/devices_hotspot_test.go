@@ -84,15 +84,6 @@ func TestRefreshDevicesHotspotReadsLeasesAndARPToo(t *testing.T) {
 	}
 }
 
-func TestSweepRefreshesDevicesOfJoinedHotspotBuildings(t *testing.T) {
-	e := newEnv(t)
-	e.rt.AddHostRow(routeros.Host{MAC: "3C:97:0E:11:22:33", Address: "10.5.50.31", Authorized: true})
-	e.svc.Sweep(context.Background())
-	if got := e.svc.Unregistered(e.site, false); len(got) != 1 {
-		t.Fatalf("the sweep should have listed the host: %+v", got)
-	}
-}
-
 func TestSweepDoesNotRefreshDevicesOfIPoEBuildings(t *testing.T) {
 	e := newEnv(t)
 	e.ipoe(t, "ipoe_observe")

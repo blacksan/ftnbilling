@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"ispbill/internal/routeros"
@@ -44,6 +43,9 @@ const (
 
 	// walledRate is the queue of a flat that has no package yet.
 	walledRate = "2M/2M"
+
+	// staticLeaseTime is the lease time of a flat's static lease.
+	staticLeaseTime = "1h"
 )
 
 // AcctComment is the comment every row of a flat carries on the router. The
@@ -95,11 +97,9 @@ type ProvisionStatus struct {
 	// MAC is flagged; they are reported, never touched.
 	ForeignConflicts []string `json:"foreign_conflicts"`
 	// Additive fields (the first four keys above are the frozen contract).
-	Mode         string `json:"mode,omitempty"`          // hotspot | ipoe_observe | ipoe
-	Note         string `json:"note,omitempty"`          // e.g. waiting for the cutover
-	Repaired     int    `json:"repaired,omitempty"`      // rows changed by the last pass
-	WouldSuspend int    `json:"would_suspend,omitempty"` // observe mode: flats that ipoe mode would suspend
-	RolledBack   bool   `json:"rolled_back,omitempty"`   // the router went back to the hotspot by itself
+	Mode     string `json:"mode,omitempty"`     // always ipoe
+	Note     string `json:"note,omitempty"`     // e.g. router not set up
+	Repaired int    `json:"repaired,omitempty"` // rows changed by the last pass
 }
 
 // AccountRouterState is what the router side looks like for one account. It
@@ -127,8 +127,7 @@ type provState struct {
 	// routerUsers: normalised MAC -> the hotspot session, user or binding that
 	// holds it on the router, from the last refreshDevices.
 	routerUsers map[string]string
-	run         sync.Mutex  // one pass at a time per building
-	held        atomic.Bool // a provisioning job holds run (HoldSite): passes are refused, not queued
+	run         sync.Mutex // one pass at a time per building
 }
 
 type acctSnap struct {
@@ -156,10 +155,7 @@ func (s *Service) ProvisionStatus(siteID string) ProvisionStatus {
 	if out.ForeignConflicts == nil {
 		out.ForeignConflicts = []string{}
 	}
-	out.Mode = site.AccessMode
-	if out.Mode == "" {
-		out.Mode = store.AccessHotspot
-	}
+	out.Mode = store.AccessIPoE
 	if !IPoE(site) {
 		out.InSync = true // nothing to reconcile
 	}
@@ -253,15 +249,10 @@ func (s *Service) ReconcileSite(ctx context.Context, siteID string) (ProvisionRu
 	if !ok || !site.Runnable() {
 		return run, nil
 	}
-	ps := s.prov(siteID)
-	if ps.held.Load() {
-		return run, ErrSiteHeld // a provisioning job is working on the router: writes would race it
-	}
 	if !IPoE(site) {
-		ps.run.Lock()
-		defer ps.run.Unlock()
-		return run, s.reconcileBypass(ctx, site)
+		return run, nil
 	}
+	ps := s.prov(siteID)
 	ps.run.Lock()
 	defer ps.run.Unlock()
 	run, err := s.reconcileSite(ctx, site, ps)
@@ -269,151 +260,11 @@ func (s *Service) ReconcileSite(ctx context.Context, siteID string) (ProvisionRu
 		ps.mu.Lock()
 		ps.status.LastRunAt, ps.status.LastError, ps.status.InSync = s.now(), err.Error(), false
 		ps.mu.Unlock()
-	} else if !run.Waiting {
-		s.dropBypass(ctx, site) // the site is on IPoE again: hotspot bypass rows have no purpose
 	}
 	return run, err
 }
 
-// ErrSiteHeld is returned by ReconcileSite while a provisioning job holds the
-// building (HoldSite). The caller's task is retried later; nothing was written.
-var ErrSiteHeld = errors.New("a router setup job is running for this router; the reconcile pass is skipped for now")
-
-// HoldSite takes the building's reconcile lock for a provisioning job: it waits
-// for a pass that is running, and until release is called every ReconcileSite
-// of the building returns ErrSiteHeld without touching the router.
-func (s *Service) HoldSite(siteID string) (release func()) {
-	ps := s.prov(siteID)
-	ps.run.Lock()
-	ps.held.Store(true)
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			ps.held.Store(false)
-			ps.run.Unlock()
-		})
-	}
-}
-
-// SiteHeld reports whether a provisioning job holds the building.
-func (s *Service) SiteHeld(siteID string) bool { return s.prov(siteID).held.Load() }
-
 // ---- hotspot bypass after an automatic rollback (release plan A1) -------------------------------
-
-// MarkHotspotBypass is the building's flag "after a rollback, entitled flats
-// are bypassed on the hotspot". Set by the setup job and by rollback detection;
-// cleared when the building is on IPoE again.
-const MarkHotspotBypass = "hotspot_bypass_at"
-
-const pathBinding = "/ip/hotspot/ip-binding"
-
-// SetHotspotBypass sets or clears the flag; the next ReconcileSite pass writes
-// (or removes) the ip-binding rows.
-func (s *Service) SetHotspotBypass(siteID string, on bool) {
-	_ = s.st.Update(func(d *store.Data) error {
-		if SiteMark(d, siteID, MarkHotspotBypass) == on {
-			return store.ErrNoChange
-		}
-		SetSiteMarkLocked(d, siteID, MarkHotspotBypass, on, s.now())
-		return nil
-	})
-}
-
-// HotspotBypassOn reports the flag.
-func (s *Service) HotspotBypassOn(siteID string) (on bool) {
-	s.st.View(func(d *store.Data) { on = SiteMark(d, siteID, MarkHotspotBypass) })
-	return
-}
-
-// bypassWant is an entitled flat: a MAC, not flagged, with paid time and not suspended.
-func (s *Service) bypassWants(siteID string) map[string]store.Account {
-	now := s.now()
-	out := map[string]store.Account{}
-	s.st.View(func(d *store.Data) {
-		for _, a := range d.AccountList() {
-			if a.SiteID == siteID && a.MAC != "" && !a.MACConflict && AccountState(a, now) == StateActive {
-				out[a.Code] = a
-			}
-		}
-	})
-	return out
-}
-
-// reconcileBypass makes the hotspot ip-binding rows "ftn:acct:<code>" (type
-// bypassed) match the flag and the accounts: one per entitled flat while the
-// flag is on, none otherwise. It only touches rows whose comment starts "ftn:acct:".
-func (s *Service) reconcileBypass(ctx context.Context, site store.Site) error {
-	rt := s.router(site.ID)
-	on := s.HotspotBypassOn(site.ID)
-	rows, err := rt.Rows(ctx, pathBinding, nil)
-	if err != nil {
-		if !on {
-			return nil // nothing to remove and the table may not exist (no hotspot package)
-		}
-		return fmt.Errorf("reading hotspot bindings: %w", err)
-	}
-	var wants map[string]store.Account
-	if on {
-		wants = s.bypassWants(site.ID)
-	}
-	seen := map[string]bool{}
-	var firstErr error
-	note := func(e error) {
-		if e != nil && firstErr == nil {
-			firstErr = e
-		}
-	}
-	for _, r := range rows {
-		if !isOurs(r) {
-			continue
-		}
-		code := codeOfComment(r["comment"])
-		a, want := wants[code]
-		if !want || seen[code] {
-			note(rt.RemoveRow(ctx, pathBinding, r[routeros.RowID]))
-			continue
-		}
-		seen[code] = true
-		w := bypassBody(a)
-		if diff := rowDiff(r, w); len(diff) > 0 {
-			note(rt.SetRow(ctx, pathBinding, r[routeros.RowID], diff))
-		}
-	}
-	codes := make([]string, 0, len(wants))
-	for c := range wants {
-		codes = append(codes, c)
-	}
-	sort.Strings(codes)
-	for _, c := range codes {
-		if !seen[c] {
-			_, e := rt.AddRow(ctx, pathBinding, bypassBody(wants[c]))
-			note(e)
-		}
-	}
-	return firstErr
-}
-
-func bypassBody(a store.Account) map[string]string {
-	return map[string]string{"mac-address": a.MAC, "type": "bypassed", "comment": AcctComment(a.Code, a.Flat)}
-}
-
-// dropBypass removes the bypass rows and the flag once the building serves from ftn-dhcp (best effort).
-func (s *Service) dropBypass(ctx context.Context, site store.Site) {
-	if !s.HotspotBypassOn(site.ID) {
-		rows, err := s.router(site.ID).Rows(ctx, pathBinding, nil)
-		if err != nil {
-			return
-		}
-		for _, r := range rows {
-			if isOurs(r) {
-				_ = s.router(site.ID).RemoveRow(ctx, pathBinding, r[routeros.RowID])
-			}
-		}
-		return
-	}
-	s.SetHotspotBypass(site.ID, false)
-	_ = s.reconcileBypass(ctx, site)
-}
 
 func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provState) (ProvisionRun, error) {
 	var run ProvisionRun
@@ -471,8 +322,7 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	if err != nil {
 		return run, fmt.Errorf("reading DHCP servers: %w", err)
 	}
-	hotspots, _ := rt.Rows(ctx, "/ip/hotspot", nil) // best effort: tells a rollback from a cutover that has not happened yet
-	arp, arpErr := rt.Rows(ctx, pathARP, nil)       // best effort: only feeds the device list
+	arp, arpErr := rt.Rows(ctx, pathARP, nil) // best effort: only feeds the device list
 	if arpErr != nil {
 		arp = nil
 	}
@@ -507,48 +357,16 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	run.Conflicts = append(pd.conflicts, skipped...)
 	run.Ops = len(pd.ops)
 
+	// The one gate: a router with no ftn-dhcp has not been set up yet, so
+	// nothing is written (the set-up script builds it).
 	note := ""
-	rolledBack := false
-	switch {
-	case ftn == nil:
-		// Before the cutover the router still runs the hotspot: write nothing.
-		run.Waiting, note = true, "waiting for the cutover: the router has no "+DHCPServerName+" DHCP server yet, nothing was written"
+	if ftn == nil {
+		run.Waiting, note = true, "router not set up: it has no "+DHCPServerName+" DHCP server yet, nothing was written"
 		pd.ops = nil
-	case ftn["disabled"] == "true" || ftn["disabled"] == "yes":
-		// Disabled: the cutover has not switched yet, or the router rolled
-		// back to the hotspot. Either way the hotspot's own rows are live, so
-		// nothing is written (writes could disturb the flats' working leases).
-		run.Waiting, pd.ops = true, nil
-		note = DHCPServerName + " is disabled on the router: waiting for the cutover (or the router rolled back); nothing was written"
-		// A rollback is: this server saw ftn-dhcp serving, it is off now, and a
-		// hotspot server on its interface is on again. (Off before the cutover,
-		// or off with no hotspot back, is only waiting.)
-		seen := false
-		s.st.View(func(d *store.Data) { seen = SiteMark(d, siteID, MarkCutoverSeen) })
-		hsOn := false
-		for _, h := range hotspots {
-			if h["interface"] == ftn["interface"] && h["disabled"] != "true" && h["disabled"] != "yes" {
-				hsOn = true
-			}
-		}
-		rolledBack = seen && hsOn
-		if rolledBack {
-			note = "the router rolled back to the hotspot (" + DHCPServerName + " is disabled); IPoE handling was switched off for this building"
-		}
-	default:
+	} else {
 		ps.mu.Lock()
-		first := !ps.sawOn
 		ps.sawOn = true
 		ps.mu.Unlock()
-		if first {
-			_ = s.st.Update(func(d *store.Data) error {
-				if SiteMark(d, siteID, MarkCutoverSeen) {
-					return store.ErrNoChange
-				}
-				SetSiteMarkLocked(d, siteID, MarkCutoverSeen, true, now)
-				return nil
-			})
-		}
 	}
 
 	var firstErr error
@@ -590,7 +408,7 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 		snap[code] = sn
 	}
 	if len(pd.ops) > 0 {
-		s.log.Info("ipoe reconcile", "site", siteID, "mode", site.AccessMode, "changes", len(pd.ops), "failed", run.Failed)
+		s.log.Info("ipoe reconcile", "site", siteID, "changes", len(pd.ops), "failed", run.Failed)
 	}
 
 	ps.mu.Lock()
@@ -598,8 +416,8 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 		ps.started = now
 	}
 	ps.accts = snap
-	st := ProvisionStatus{LastRunAt: now, Mode: site.AccessMode, Note: note, ForeignConflicts: append([]string{}, run.Conflicts...),
-		WouldSuspend: pd.would, Repaired: len(pd.ops) - run.Failed}
+	st := ProvisionStatus{LastRunAt: now, Mode: store.AccessIPoE, Note: note, ForeignConflicts: append([]string{}, run.Conflicts...),
+		Repaired: len(pd.ops) - run.Failed}
 	st.Drift = run.Failed + len(run.Conflicts)
 	if run.Waiting {
 		st.Drift = run.Ops + len(run.Conflicts)
@@ -609,12 +427,8 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 		st.LastError = firstErr.Error()
 	}
 	st.InSync = firstErr == nil && !run.Waiting && st.Drift == 0
-	st.RolledBack = rolledBack
 	ps.status = st
 	ps.mu.Unlock()
-	if rolledBack {
-		s.revertToHotspot(siteID)
-	}
 	return run, firstErr
 }
 
@@ -630,14 +444,12 @@ type opSet struct {
 	foreignIPs []string // addresses held by the router's own static leases
 	ops        []provOp
 	conflicts  []string
-	would      int // flats observe mode would suspend
 }
 
 // planOps compares the three tables with the wanted state. It is pure: it
 // reads rows, it writes nothing.
 func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases, queues, suspended []routeros.Row, snap map[string]acctSnap, now time.Time, x planExtra) opSet {
 	var out opSet
-	enforce := site.AccessMode == store.AccessIPoE
 	byCode := map[string]*wantAcct{}
 	for i := range wants {
 		byCode[wants[i].a.Code] = &wants[i]
@@ -720,7 +532,9 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 				}
 			}
 		}
-		want := map[string]string{"mac-address": a.MAC, "address": a.IP, "server": DHCPServerName, "comment": w.comment}
+		// A flat's static lease lasts an hour; unregistered devices renew every minute (the script's server default),
+		// so a newly registered flat moves to its fixed address within about a minute.
+		want := map[string]string{"mac-address": a.MAC, "address": a.IP, "server": DHCPServerName, "lease-time": staticLeaseTime, "comment": w.comment}
 		var mine []routeros.Row
 		for _, r := range ourLeases[a.Code] {
 			if evicted[r[routeros.RowID]] {
@@ -827,10 +641,6 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 		sn := snap[a.Code]
 		mine := ourList[a.Code]
 		wantIn := !w.entitled
-		if !w.entitled && !enforce {
-			out.would++
-			wantIn = false // observe mode never writes the list
-		}
 		var keep *routeros.Row
 		for i, r := range mine {
 			if wantIn && keep == nil && r["address"] == a.IP {
@@ -864,16 +674,10 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 		}
 	}
 
-	// --- the unregistered range is walled in ipoe mode only; observe keeps it off
+	// --- the unregistered range is always walled: the script makes the entry; a disabled one is turned on
 	for _, r := range x.unreg {
-		if r["comment"] != unregComment {
-			continue
-		}
-		off := r["disabled"] == "true" || r["disabled"] == "yes"
-		if enforce && off {
+		if r["comment"] == unregComment && (r["disabled"] == "true" || r["disabled"] == "yes") {
 			add(provOp{phase: phaseSuspend, kind: "set", path: pathList, id: r[routeros.RowID], body: map[string]string{"disabled": "no"}, desc: "wall the unregistered range"})
-		} else if !enforce && !off {
-			add(provOp{phase: phaseUnsuspend, kind: "set", path: pathList, id: r[routeros.RowID], body: map[string]string{"disabled": "yes"}, desc: "unwall the unregistered range (observe mode)"})
 		}
 	}
 
@@ -943,40 +747,6 @@ func sameProp(key, cur, want string) bool {
 		return strings.TrimSuffix(cur, "/32") == strings.TrimSuffix(want, "/32")
 	}
 	return routeros.SameValue(key, cur, want)
-}
-
-// reloader is implemented by *sites.Manager: it rebuilds a building's runtime
-// (its collector reads queue counters only in IPoE modes).
-type reloader interface{ Reload(siteID string) }
-
-// revertToHotspot sets a building back to the hotspot access mode after its
-// router rolled back (ftn-dhcp was on and is now off). From then on the
-// hotspot loop, the portal and the sweep treat it as a hotspot building again.
-func (s *Service) revertToHotspot(siteID string) {
-	changed := false
-	_ = s.st.Update(func(d *store.Data) error {
-		st, ok := d.Sites[siteID]
-		if !ok || !IPoE(st) {
-			return store.ErrNoChange
-		}
-		st.AccessMode = store.AccessHotspot
-		d.Sites[siteID] = st
-		ClearCutoverMarks(d, siteID)
-		SetSiteMarkLocked(d, siteID, MarkHotspotBypass, true, s.now()) // entitled flats must not meet a hotspot login
-		d.AddEvent(store.Event{Time: s.now(), SiteID: siteID, Kind: "audit", Msg: "the router rolled back to the hotspot (" + DHCPServerName + " is disabled): access mode set back to hotspot"})
-		changed = true
-		return nil
-	})
-	if changed {
-		s.log.Warn("ipoe rollback detected, building set back to hotspot", "site", siteID)
-		if r, ok := s.routers.(reloader); ok {
-			r.Reload(siteID)
-		}
-		ps := s.prov(siteID)
-		ps.mu.Lock()
-		ps.sawOn = false
-		ps.mu.Unlock()
-	}
 }
 
 // RouterRows reads rows of a building's router (read only; the setup tests and the bench helper use it).

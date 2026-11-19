@@ -17,7 +17,7 @@ func TestIPoEWritesNothingWhileFtnDHCPIsDisabled(t *testing.T) {
 	e.flat(t, "Flat 1", macA)
 	e.rt.SeedRow("/ip/dhcp-server/lease", routeros.Row{"mac-address": macA, "address": "10.5.50.60", "status": "bound", "dynamic": "true", "server": "dhcp-hotspot"})
 	for _, r := range e.rt.Table("/ip/dhcp-server") {
-		e.rt.SetRow(context.Background(), "/ip/dhcp-server", r[".id"], map[string]string{"disabled": "true"})
+		e.rt.RemoveRow(context.Background(), "/ip/dhcp-server", r[".id"])
 	}
 	e.rt.ResetWrites()
 	run := e.reconcile(t)
@@ -27,55 +27,9 @@ func TestIPoEWritesNothingWhileFtnDHCPIsDisabled(t *testing.T) {
 	if got := rowsBy(e.rt.Table("/ip/dhcp-server/lease"), "server", "dhcp-hotspot"); len(got) != 1 {
 		t.Fatal("the hotspot's dynamic lease was removed")
 	}
-	if ps := e.svc.ProvisionStatus(e.site); ps.InSync || ps.RolledBack {
+	if ps := e.svc.ProvisionStatus(e.site); ps.InSync {
 		t.Fatalf("never seen enabled: waiting, not rolled back: %+v", ps)
 	}
-	if e.site != "" && siteMode(e, e.site) != store.AccessIPoE {
-		t.Fatal("mode must not change before a rollback was seen")
-	}
-}
-
-func siteMode(e *env, id string) (m string) {
-	e.st.View(func(d *store.Data) { m = d.Sites[id].AccessMode })
-	return
-}
-
-// A router that was serving from ftn-dhcp and then rolled back is detected: the
-// building goes back to hotspot mode and nothing is written.
-func TestIPoERollbackIsDetectedAndStopsIPoE(t *testing.T) {
-	e := newEnv(t)
-	e.ipoe(t, store.AccessIPoE)
-	e.flat(t, "Flat 1", macA)
-	e.reconcile(t) // enabled: converges, remembers it saw ftn-dhcp on
-	for _, r := range e.rt.Table("/ip/dhcp-server") {
-		e.rt.SetRow(context.Background(), "/ip/dhcp-server", r[".id"], map[string]string{"disabled": "true"})
-	}
-	e.rt.ResetWrites()
-	// ftn-dhcp is off but no hotspot is back on: that is not (yet) a rollback.
-	e.reconcile(t)
-	if got := siteMode(e, e.site); got != store.AccessIPoE || e.svc.ProvisionStatus(e.site).RolledBack {
-		t.Fatal("off without a hotspot back is only waiting")
-	}
-	// The mark survives a restart of this server: it is in the store, not in memory.
-	e.svc.prov(e.site).sawOn = false
-	e.rt.SeedRow("/ip/hotspot", routeros.Row{"name": "hotspot1", "interface": "br-hotspot", "disabled": "false"})
-	e.rt.ResetWrites()
-	e.reconcile(t)
-	if e.rt.Writes() != 0 {
-		t.Fatal("wrote after a rollback")
-	}
-	ps := e.svc.ProvisionStatus(e.site)
-	if !ps.RolledBack || !strings.Contains(ps.Note, "rolled back") {
-		t.Fatalf("%+v", ps)
-	}
-	if got := siteMode(e, e.site); got != store.AccessHotspot {
-		t.Fatalf("mode after rollback: %s", got)
-	}
-	e.st.View(func(d *store.Data) {
-		if SiteMark(d, e.site, MarkCutoverSeen) {
-			t.Fatal("the rollout marks are cleared by the revert")
-		}
-	})
 }
 
 // Only dynamic leases on ftn-dhcp are removed to make room for a static one.
@@ -132,27 +86,6 @@ func TestIPoEEnablesDisabledSuspendedEntries(t *testing.T) {
 	}
 }
 
-// The ftn-unreg entry the cutover made follows the mode: on in ipoe, off in observe.
-func TestIPoEUnregRangeFollowsMode(t *testing.T) {
-	e := newEnv(t)
-	e.ipoe(t, store.AccessIPoEObserve)
-	e.rt.SeedRow("/ip/firewall/address-list", routeros.Row{"list": UnregList, "address": "10.5.50.10-10.5.50.59", "comment": "ftn: unregistered range", "disabled": "true"})
-	e.reconcile(t)
-	if r := find(t, e.rt.Table("/ip/firewall/address-list"), "list", UnregList); r["disabled"] != "true" {
-		t.Fatalf("observe must keep it off: %v", r)
-	}
-	e.setMode(t, e.site, store.AccessIPoE)
-	e.reconcile(t)
-	if r := find(t, e.rt.Table("/ip/firewall/address-list"), "list", UnregList); r["disabled"] == "true" || r["disabled"] == "yes" {
-		t.Fatalf("ipoe must wall it: %v", r)
-	}
-	e.setMode(t, e.site, store.AccessIPoEObserve)
-	e.reconcile(t)
-	if r := find(t, e.rt.Table("/ip/firewall/address-list"), "list", UnregList); r["disabled"] != "yes" && r["disabled"] != "true" {
-		t.Fatalf("back to observe must unwall it: %v", r)
-	}
-}
-
 // Static ARP rows follow the flats, so an interface on reply-only still reaches them.
 func TestIPoEManagesStaticARP(t *testing.T) {
 	e := newEnv(t)
@@ -193,5 +126,26 @@ func TestHostNameIsCapped(t *testing.T) {
 		if len(d.HostName) > 64 {
 			t.Fatalf("host name of %d bytes", len(d.HostName))
 		}
+	}
+}
+
+// Static leases are written with a one-hour lease time (the customer DHCP
+// server's own lease time is a minute, for the unregistered devices).
+func TestIPoEStaticLeasesGetOneHourLeaseTime(t *testing.T) {
+	e := newEnv(t)
+	e.ipoe(t, store.AccessIPoE)
+	e.flat(t, "Flat 1", macA)
+	e.reconcile(t)
+	var n int
+	for _, r := range e.rt.Table("/ip/dhcp-server/lease") {
+		if r["mac-address"] == macA {
+			n++
+			if r["lease-time"] != "1h" {
+				t.Fatalf("lease-time %q", r["lease-time"])
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d leases", n)
 	}
 }

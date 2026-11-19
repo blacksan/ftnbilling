@@ -295,34 +295,6 @@ func TestIPoEUnsuspendFirstAndSuspendLast(t *testing.T) {
 	}
 }
 
-func TestIPoEObserveNeverWritesSuspendedList(t *testing.T) {
-	e := newEnv(t)
-	e.ipoe(t, store.AccessIPoEObserve)
-	a1 := e.flat(t, "Flat 1", macA)
-	e.flat(t, "Flat 2", macB2)
-	e.payAt(t, a1, "1 Day")
-	// An old entry from an earlier ipoe run is cleaned: observe never cuts anyone.
-	e.rt.SeedRow("/ip/firewall/address-list", routeros.Row{"list": SuspendedList, "address": "10.5.50.61", "comment": "ftn:acct:XX Flat 2"})
-	e.rt.ResetWrites()
-	run := e.reconcile(t)
-	if run.Failed != 0 {
-		t.Fatalf("%+v", run)
-	}
-	if len(e.rt.Table("/ip/firewall/address-list")) != 0 {
-		t.Fatalf("observe mode left suspended entries: %v", e.rt.Table("/ip/firewall/address-list"))
-	}
-	if len(e.rt.Table("/ip/dhcp-server/lease")) != 2 || len(e.rt.Table("/queue/simple")) != 2 {
-		t.Fatal("observe mode still writes leases and queues")
-	}
-	ps := e.svc.ProvisionStatus(e.site)
-	if ps.WouldSuspend != 1 || ps.Mode != store.AccessIPoEObserve {
-		t.Fatalf("%+v", ps)
-	}
-	if n := e.pass(t); n != 0 {
-		t.Fatalf("%d writes", n)
-	}
-}
-
 func TestIPoEConflictFlaggedAccountsAreSkipped(t *testing.T) {
 	e := newEnv(t)
 	e.ipoe(t, store.AccessIPoE)
@@ -445,37 +417,6 @@ func TestIPoEEventsReachTheRouterInOneTaskRun(t *testing.T) {
 	c := e.flat(t, "Flat 3", macC)
 	if c.IP != "10.5.50.60" {
 		t.Fatalf("freed address not reused: %s", c.IP)
-	}
-}
-
-func TestIPoEWaitsForCutover(t *testing.T) {
-	e := newEnv(t)
-	e.setMode(t, e.site, store.AccessIPoEObserve) // no ftn-dhcp on the router yet
-	e.flat(t, "Flat 1", macA)
-	e.rt.ResetWrites()
-	run := e.reconcile(t)
-	if !run.Waiting || e.rt.Writes() != 0 {
-		t.Fatalf("must not write before the cutover: %+v writes=%d", run, e.rt.Writes())
-	}
-	if ps := e.svc.ProvisionStatus(e.site); ps.InSync || !strings.Contains(ps.Note, "cutover") {
-		t.Fatalf("%+v", ps)
-	}
-}
-
-func TestHotspotSitesAreNotReconciled(t *testing.T) {
-	e := newEnv(t)
-	e.flat(t, "Flat 1", macA)
-	e.rt.ResetWrites()
-	run, err := e.svc.ReconcileSite(context.Background(), e.site)
-	if err != nil || run.Ops != 0 || e.rt.Writes() != 0 {
-		t.Fatalf("%+v %v", run, err)
-	}
-	if ps := e.svc.ProvisionStatus(e.site); !ps.InSync || ps.Mode != store.AccessHotspot {
-		t.Fatalf("%+v", ps)
-	}
-	// a hotspot flat has no fixed address
-	if a, _ := e.svc.AccountByMAC(macA); a.IP != "" {
-		t.Fatalf("hotspot flat got %q", a.IP)
 	}
 }
 

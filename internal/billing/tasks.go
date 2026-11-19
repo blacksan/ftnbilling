@@ -2,13 +2,11 @@ package billing
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"ispbill/internal/routeros"
 	"ispbill/internal/store"
 )
 
@@ -163,71 +161,8 @@ func (s *Service) RunSiteTasks(ctx context.Context, siteID string) int {
 // If the account is gone, or now lives in another building, the router user is
 // removed from this building's router.
 func (s *Service) reconcile(ctx context.Context, t store.Task) error {
-	if st, ok := s.site(t.SiteID); ok && IPoE(st) {
-		_, err := s.ReconcileSite(ctx, t.SiteID) // IPoE: the table diff covers the task
-		return err
-	}
-	if err := s.reconcileHotspotTask(ctx, t); err != nil {
-		return err
-	}
-	// after a rollback the entitled flats are bypassed on the hotspot: a flat that expired or was
-	// suspended loses its bypass row in the same task (release review S3)
-	if s.HotspotBypassOn(t.SiteID) {
-		_, err := s.ReconcileSite(ctx, t.SiteID)
-		return err
-	}
-	return nil
-}
-
-func (s *Service) reconcileHotspotTask(ctx context.Context, t store.Task) error {
-	var a store.Account
-	var pkg store.Package
-	var found bool
-	s.st.View(func(d *store.Data) {
-		a, found = d.Accounts[t.AccountID]
-		pkg = d.Packages[a.PackageID]
-	})
-	rt := s.router(t.SiteID)
-	if !found || a.SiteID != t.SiteID {
-		if err := rt.KickUser(ctx, t.Code); err != nil {
-			return err
-		}
-		return rt.RemoveUser(ctx, t.Code)
-	}
-	want := wantUser(a, s.now())
-	if want {
-		if !s.state(t.SiteID).profilesOK.Load() {
-			if err := s.SyncProfiles(ctx, t.SiteID); err != nil {
-				return fmt.Errorf("profile sync: %w", err)
-			}
-		}
-		if err := rt.EnsureUser(ctx, routeros.User{
-			Name: a.Code, Password: a.HSPass, Profile: pkg.Profile(), MAC: a.MAC, Comment: "ispbill:" + a.Flat,
-		}); err != nil {
-			return err
-		}
-		if t.Kick {
-			if err := rt.KickUser(ctx, a.Code); err != nil {
-				return err
-			}
-		}
-	} else {
-		if err := rt.KickUser(ctx, a.Code); err != nil {
-			return err
-		}
-		if err := rt.RemoveUser(ctx, a.Code); err != nil {
-			return err
-		}
-	}
-	return s.st.Update(func(d *store.Data) error {
-		cur, ok := d.Accounts[a.ID]
-		if !ok || cur.RouterActive == want {
-			return store.ErrNoChange
-		}
-		cur.RouterActive = want
-		d.Accounts[a.ID] = cur
-		return nil
-	})
+	_, err := s.ReconcileSite(ctx, t.SiteID) // IPoE: the table diff covers the task
+	return err
 }
 
 // ---- sweeper ------------------------------------------------------------
@@ -239,18 +174,10 @@ func (s *Service) Sweep(ctx context.Context) {
 	now := s.now()
 	_ = s.st.Update(func(d *store.Data) error {
 		changed := false
-		queued := map[string]bool{}
-		for _, t := range d.Tasks {
-			queued[t.SiteID+"|"+t.AccountID] = true
-		}
 		remind := time.Duration(s.policy.ReminderDays) * 24 * time.Hour
 		for _, a := range d.AccountList() {
-			// IPoE: the router holds no per-user session; the per-site diff
-			// below turns a plan that just ended into a suspended-list entry.
-			if !IPoE(d.Sites[a.SiteID]) && wantUser(a, now) != a.RouterActive && !queued[a.SiteID+"|"+a.ID] {
-				s.enqueueLocked(d, a, false, "state changed by clock")
-				changed = true
-			}
+			// The router holds no per-user session; the per-site diff below turns
+			// a plan that just ended into a suspended-list entry.
 			if a.Suspended || a.ExpiresAt.IsZero() {
 				continue
 			}
@@ -281,34 +208,11 @@ func (s *Service) Sweep(ctx context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if st, ok := s.site(id); ok && IPoE(st) {
-				// Full per-site diff every sweep; due tasks ride on the same pass.
-				if s.hasDueTasks(id) {
-					s.RunSiteTasks(ctx, id)
-				} else if _, err := s.ReconcileSite(ctx, id); err != nil {
-					s.log.Warn("ipoe reconcile failed", "site", id, "err", err)
-				}
-				return
-			}
-			if !s.state(id).profilesOK.Load() {
-				if err := s.SyncProfiles(ctx, id); err != nil {
-					s.log.Warn("profile sync retry failed", "site", id, "err", err)
-				}
-			}
-			s.RunSiteTasks(ctx, id)
-			if s.HotspotBypassOn(id) { // expiry and suspension take the bypass rows away
-				if _, err := s.ReconcileSite(ctx, id); err != nil && !errors.Is(err, ErrSiteHeld) {
-					s.log.Warn("hotspot bypass sweep failed", "site", id, "err", err)
-				}
-			}
-			// A hotspot building has no reconcile pass: read its devices here
-			// (best effort, read only) so the unregistered list stays current.
-			if st, ok := s.site(id); ok && !IPoE(st) && (st.Mode == store.SiteModeEnv || !st.JoinedAt.IsZero()) {
-				dctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-				defer cancel()
-				if err := s.refreshDevices(dctx, st); err != nil {
-					s.log.Debug("device refresh failed", "site", id, "err", err)
-				}
+			// Full per-site diff every sweep; due tasks ride on the same pass.
+			if s.hasDueTasks(id) {
+				s.RunSiteTasks(ctx, id)
+			} else if _, err := s.ReconcileSite(ctx, id); err != nil {
+				s.log.Warn("ipoe reconcile failed", "site", id, "err", err)
 			}
 		}()
 	}

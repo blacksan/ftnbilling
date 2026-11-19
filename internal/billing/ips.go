@@ -28,10 +28,12 @@ type layoutSource interface {
 	Effective(store.Site) store.Site
 }
 
-// IPoE reports whether the building serves customers by IPoE (observing or
-// enforcing), which means the reconciler owns its router.
+// IPoE reports whether the reconciler owns the building's router. From v5
+// every router joined over WireGuard is IPoE (the Hotspot is gone); the access
+// mode column only keeps the single value "ipoe". This function goes away with
+// the last hotspot code.
 func IPoE(s store.Site) bool {
-	return s.AccessMode == store.AccessIPoE || s.AccessMode == store.AccessIPoEObserve
+	return s.Mode == store.SiteModeWG || s.AccessMode == store.AccessIPoE || s.AccessMode == store.AccessIPoEObserve
 }
 
 // PlanFor is the address plan of a building's customer subnet.
@@ -263,36 +265,36 @@ func (s *Service) foreignIPs(siteID string) map[string]bool {
 	return out
 }
 
-// Per-building marks of the IPoE rollout live in the settings table
-// (key "site.<id>.<name>"), so no schema change is needed:
-//
-//	cutover_seen_at       this server saw ftn-dhcp enabled on the router
-//	cutover_confirmed_at  the admin pressed Confirm cutover
-const (
-	MarkCutoverSeen      = "cutover_seen_at"
-	MarkCutoverConfirmed = "cutover_confirmed_at"
-)
-
-func markKey(siteID, name string) string { return "site." + siteID + "." + name }
-
-// SiteMark reports whether a mark is set. Call it inside View or Update.
-func SiteMark(d *store.Data, siteID, name string) bool {
-	_, ok := d.Settings[markKey(siteID, name)]
-	return ok
+// EnqueueSite queues a router task for every open flat of the building (after a
+// router was set up or reset: it must be told about all of them again).
+func (s *Service) EnqueueSite(siteID, reason string) {
+	_ = s.st.Update(func(d *store.Data) error {
+		n := 0
+		for _, a := range d.AccountList() {
+			if a.SiteID == siteID {
+				s.enqueueLocked(d, a, false, reason)
+				n++
+			}
+		}
+		if n == 0 {
+			return store.ErrNoChange
+		}
+		return nil
+	})
 }
 
-// SetSiteMarkLocked sets or clears a mark. Call it inside Update.
-func SetSiteMarkLocked(d *store.Data, siteID, name string, on bool, now time.Time) {
-	k := markKey(siteID, name)
-	if !on {
-		delete(d.Settings, k)
-		return
-	}
-	d.Settings[k] = store.Setting{Key: k, Value: now.UTC().Format(time.RFC3339), UpdatedAt: now}
-}
-
-// ClearCutoverMarks forgets the rollout marks of a building (it went back to the hotspot).
-func ClearCutoverMarks(d *store.Data, siteID string) {
-	SetSiteMarkLocked(d, siteID, MarkCutoverSeen, false, time.Time{})
-	SetSiteMarkLocked(d, siteID, MarkCutoverConfirmed, false, time.Time{})
+// ForgetSite drops what the reconciler remembers of a building's router (its
+// last pass, the addresses of the router's own leases, devices seen): the
+// router was reset and the next pass starts from nothing.
+func (s *Service) ForgetSite(siteID string) {
+	ps := s.prov(siteID)
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	ps.status = ProvisionStatus{}
+	ps.accts = map[string]acctSnap{}
+	ps.seen = map[string]time.Time{}
+	ps.started = time.Time{}
+	ps.foreign = nil
+	ps.sawOn = false
+	ps.routerUsers = nil
 }
