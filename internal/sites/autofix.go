@@ -80,9 +80,9 @@ func (m *Manager) SweepSite(ctx context.Context, siteID string) {
 		e.mu.Unlock()
 		return
 	}
-	st, busy := m.ensureCustomerPort(ctx, siteID, false)
+	_, busy := m.ensureCustomerPort(ctx, siteID, false)
 	out := m.AutoMaintain(ctx, siteID)
-	if len(out) > 0 || st.State == PortError || st.OLTMessage != "" {
+	if len(out) > 0 {
 		busy = true
 	}
 	next := sweepCleanEvery

@@ -213,6 +213,8 @@ data class Site(
     @SerialName("bench_port") val benchPort: String = "",
     /** What the server did with the extra customer port; null from an older server. */
     @SerialName("customer_port") val customerPort: CustomerPortStatus? = null,
+    /** Whether the server's automatic fixes of this router are paused; null from an older server. */
+    @SerialName("auto_fixes") val autoFixes: AutoFixesPause? = null,
     @SerialName("wan_cap_mbps") val wanCapMbps: Int = 0,
     @SerialName("support_phone") val supportPhone: String = "",
     val online: Boolean = false,
@@ -347,6 +349,10 @@ data class NewDevice(
     val routerKey: String get() = routerId.ifBlank { siteId }
     val routerLabel: String get() = routerName.ifBlank { siteName }
 }
+
+/** The pause of a router's automatic fixes as the router JSON carries it. */
+@Serializable
+data class AutoFixesPause(val paused: Boolean = false, val until: String? = null)
 
 /** The server's apply status of the router's extra customer port (`customer_port` of a router). */
 @Serializable

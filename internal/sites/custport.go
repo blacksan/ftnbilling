@@ -80,6 +80,9 @@ type cpEntry struct {
 	fails int
 	next  time.Time
 	last  string // the last event text written (an unchanged error is recorded once)
+	// problem is the last trouble the pass reported (state, message, OLT message). The sweep counts a pass as busy
+	// only when it wrote something or the trouble is new or different; an unchanged problem keeps the slow cadence.
+	problem string
 	// nextSweep: SweepSite does nothing before this time (5 minutes after a clean pass, 1 minute after a change or failure).
 	nextSweep time.Time
 	auto      map[string]*autoState
@@ -202,7 +205,8 @@ func (m *Manager) EnsureCustomerPort(ctx context.Context, siteID string, force b
 	return st
 }
 
-// ensureCustomerPort is EnsureCustomerPort that also says whether the pass wrote or failed.
+// ensureCustomerPort is EnsureCustomerPort that also says whether the pass is "busy": it wrote something, or it
+// found trouble that is new or different from the last pass. An unchanged problem is not busy.
 // A background pass (not force) leaves a router with paused automatic fixes alone; a save is an explicit action and runs.
 func (m *Manager) ensureCustomerPort(ctx context.Context, siteID string, force bool) (CustomerPortStatus, bool) {
 	e := m.cport.entry(siteID)
@@ -255,6 +259,12 @@ func (m *Manager) ensureCustomerPort(ctx context.Context, siteID string, force b
 	} else if res.state == PortOK && res.oltMsg == "" {
 		e.last = ""
 	}
+	problem := ""
+	if res.failed || res.state == PortError || res.oltMsg != "" {
+		problem = string(res.state) + "|" + res.msg + "|" + res.oltMsg
+	}
+	changedProblem := problem != e.problem
+	e.problem = problem
 	st := e.st
 	e.mu.Unlock()
 	if ev != "" {
@@ -266,7 +276,7 @@ func (m *Manager) ensureCustomerPort(ctx context.Context, siteID string, force b
 	if len(res.applied) > 0 {
 		m.chk.drop(siteID)
 	}
-	return st, len(res.applied) > 0 || res.failed || res.state == PortError
+	return st, len(res.applied) > 0 || (problem != "" && changedProblem)
 }
 
 var cpTables = []string{"/interface/bridge/port", "/interface", "/interface/vlan", "/interface/list/member", "/ip/address", "/ip/dhcp-server", "/ip/dhcp-client"}
@@ -453,7 +463,7 @@ func portProblems(sn *snapshot, site store.Site, iface, role string) []string {
 	if role == "bench" || (role == "olt" && site.VLANID == 0) {
 		for _, r := range sn.tbl("/interface/vlan") {
 			if r["interface"] == iface && r["comment"] != CustVLANComment {
-				out = append(out, "a VLAN interface ("+r["name"]+") sits on "+iface+"; the server will not put it in the customer bridge")
+				out = append(out, "a VLAN interface ("+r["name"]+") sits on "+iface+"; it is left as it is, and the server will not put "+iface+" in the customer bridge. The old customer port membership stays until this is fixed")
 				break
 			}
 		}
@@ -583,23 +593,32 @@ func (m *Manager) newFixWriter(rt routeros.Client, eff store.Site) *fixWriter {
 	return w
 }
 
-// PortChoices lists the router's real Ethernet, SFP and combo ports for the
-// pickers of the OLT uplink port and the customer port; typed entry stays
-// possible. It reads over REST within the usual budget; an unreachable router
-// gives an empty list.
+// PortChoices lists the interfaces the OLT uplink port and the customer port may be: every interface the
+// router lists that is not a bridge, WireGuard, VLAN, PPPoE or the WAN (so a bonding/LACP uplink works).
+// Physical ports (Ethernet, SFP, combo) come first, then the rest. It reads over REST within the usual
+// budget; an unreachable router gives an empty list.
 func (m *Manager) PortChoices(ctx context.Context, siteID string) []string {
 	iv, err := m.LiveInterfaces(ctx, siteID)
 	if err != nil {
 		return nil
 	}
-	var out []string
+	var site store.Site
+	m.st.View(func(d *store.Data) { site = d.Sites[siteID] })
+	wan := m.Effective(site).WANInterface
+	var phys, other []string
 	for _, it := range iv.Items {
-		if it.Type == "vlan" || it.Type == "bridge" || it.Type == "wg" || it.Type == "wireguard" {
+		t := strings.ToLower(it.Type)
+		if it.Name == wan || it.Name == "" {
 			continue
 		}
-		if it.Type == "ether" || IsPortName(it.Name) {
-			out = append(out, it.Name)
+		switch {
+		case t == "bridge" || t == "vlan" || t == "wg" || t == "wireguard" || strings.HasPrefix(t, "pppoe"):
+			continue
+		case t == "ether" || IsPortName(it.Name):
+			phys = append(phys, it.Name)
+		default:
+			other = append(other, it.Name)
 		}
 	}
-	return out
+	return append(phys, other...)
 }

@@ -479,7 +479,7 @@ func (m *Manager) UpdateSite(id string, in SiteInput) error {
 		}
 		was, now := m.Effective(cur), m.Effective(s)
 		portsChanged = now.BenchPort != was.BenchPort || now.OLTInterface != was.OLTInterface || now.VLANID != was.VLANID
-		if (now.OLTInterface != was.OLTInterface || now.VLANID != was.VLANID) && cur.Runnable() && !in.Confirm {
+		if (now.OLTInterface != was.OLTInterface || now.VLANID != was.VLANID) && siteIsSetUp(cur) && !in.Confirm {
 			return ErrOLTConfirmRequired
 		}
 		d.Sites[id] = s
@@ -494,6 +494,10 @@ func (m *Manager) UpdateSite(id string, in SiteInput) error {
 	return err
 }
 
+// siteIsSetUp: the router has joined (its key is known and it has answered), whether or not billing has
+// paused it. Changing its OLT port or VLAN cuts customers off, so it asks for a confirm.
+func siteIsSetUp(s store.Site) bool { return s.WGPublicKey != "" && !s.JoinedAt.IsZero() }
+
 // checkPortsExist refuses a new OLT port or customer port the router does not have (a typo would
 // otherwise move the old port's membership away from working customers). It needs the router to
 // answer; when it does not, or the router is not set up yet, the layout validation alone decides.
@@ -501,7 +505,7 @@ func (m *Manager) checkPortsExist(id string, in SiteInput) error {
 	var cur store.Site
 	var ok bool
 	m.st.View(func(d *store.Data) { cur, ok = d.Sites[id] })
-	if !ok || !cur.Runnable() {
+	if !ok || !siteIsSetUp(cur) {
 		return nil
 	}
 	was := m.Effective(cur)
@@ -520,10 +524,11 @@ func (m *Manager) checkPortsExist(id string, in SiteInput) error {
 	for _, c := range choices {
 		has[c] = true
 	}
-	if olt != was.OLTInterface && !has[olt] {
+	// the WAN, the admin LAN port and the like are refused by the layout rules with their own words
+	if olt != was.OLTInterface && !has[olt] && olt != was.WANInterface {
 		return fieldErr("olt_interface", "The router has no port called %s. Its ports: %s.", olt, strings.Join(choices, ", "))
 	}
-	if bench != "" && bench != was.BenchPort && !has[bench] {
+	if bench != "" && bench != was.BenchPort && !has[bench] && bench != was.WANInterface {
 		return fieldErr("bench_port", "The router has no port called %s. Its ports: %s.", bench, strings.Join(choices, ", "))
 	}
 	return nil

@@ -128,9 +128,12 @@
     if (!f.hasAttribute || !f.hasAttribute("data-plumb") || f.__plumbOK) return;
     var olt = $("input[name=olt]", f), vlan = $("input[name=vlan]", f), ok = $("input[name=confirm]", f);
     if (!olt || !vlan || !ok) return;
-    if (olt.value.trim() === f.getAttribute("data-olt") && String(parseInt(vlan.value || "0", 10) || 0) === f.getAttribute("data-vlan")) return;
+    /* effective values: a blank OLT port means the default port, so typing the default changes nothing */
+    var dflt = f.getAttribute("data-olt-default") || "sfp-sfpplus1";
+    if ((olt.value.trim() || dflt) === (f.getAttribute("data-olt") || dflt) && String(parseInt(vlan.value || "0", 10) || 0) === f.getAttribute("data-vlan")) return;
     e.preventDefault();
-    ask("Change the OLT setting?", "Customers on the OLT lose service until the OLT uses the new setting. The server moves the port and the VLAN on the router by itself as soon as you confirm.", "Change it").then(function (yes) {
+    var paused = f.hasAttribute("data-paused") ? " Automatic fixes are paused; this change is still applied now." : "";
+    ask("Change the OLT setting?", "Customers on the OLT lose service until the OLT uses the new setting. The server moves the port and the VLAN on the router by itself as soon as you confirm." + paused, "Change it").then(function (yes) {
       if (!yes) return; ok.value = "1"; f.__plumbOK = true; f.submit();
     });
   }, true);

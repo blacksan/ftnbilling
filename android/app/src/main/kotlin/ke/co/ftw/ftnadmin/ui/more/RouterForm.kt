@@ -50,6 +50,9 @@ object RouterField {
 /** Labels and hints of the port fields (one place, so the form and its test agree). */
 object RouterFormCopy {
     const val OLT_CONFIRM = "Customers on the OLT lose service until the OLT uses the new setting."
+    const val PAUSED_NOTE = "Automatic fixes are paused; this change is still applied now."
+    /** The OLT port a blank field means on the server. */
+    const val DEFAULT_OLT = "sfp-sfpplus1"
     const val OLT_LABEL = "OLT uplink port"
     const val OLT_HINT = "The port the OLT is plugged into: an SFP port (sfp-sfpplus1) or an Ethernet port (for example ether3)."
     const val CUSTOMER_PORT_LABEL = "Customer port (extra)"
@@ -91,7 +94,7 @@ data class RouterForm(
 ) {
     /** True when the OLT port or the VLAN differs from [original]: the server then needs a confirm on a set-up router. */
     fun changesOlt(original: RouterForm): Boolean =
-        oltInterface.trim() != original.oltInterface.trim() || (vlan.toIntOrNull() ?: 0) != (original.vlan.toIntOrNull() ?: 0)
+        oltInterface.trim().ifEmpty { RouterFormCopy.DEFAULT_OLT } != original.oltInterface.trim().ifEmpty { RouterFormCopy.DEFAULT_OLT } || (vlan.toIntOrNull() ?: 0) != (original.vlan.toIntOrNull() ?: 0)
 
     fun toInput(confirm: Boolean = false) = RouterInput(
         name = name,

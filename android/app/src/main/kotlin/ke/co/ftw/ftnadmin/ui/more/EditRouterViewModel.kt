@@ -29,6 +29,8 @@ data class EditRouterUiState(
     val original: RouterForm? = null,
     /** The confirm dialog for an OLT port or VLAN change is open. */
     val confirmOlt: Boolean = false,
+    /** The router's automatic fixes are paused (the confirm dialog says a change is still applied). */
+    val autoFixesPaused: Boolean = false,
 ) {
     val canSave: Boolean get() = !busy && !saved && form != null && form.name.isNotBlank()
 }
@@ -53,7 +55,7 @@ class EditRouterViewModel(
             val r = apiResult { sites.site(routerId) }
             r.fold(
                 { s ->
-                    _state.update { it.copy(form = RouterForm.from(s), original = RouterForm.from(s), customerPort = s.customerPort) }
+                    _state.update { it.copy(form = RouterForm.from(s), original = RouterForm.from(s), customerPort = s.customerPort, autoFixesPaused = s.autoFixes?.paused == true) }
                     loadPorts()
                 },
                 { e -> _state.update { it.copy(loadError = e.userMessage()) } },
