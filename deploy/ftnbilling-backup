@@ -41,6 +41,7 @@ DATA=$ROOT/var/lib/$APP
 ETC=$ROOT/etc/$APP
 ENVF=$ETC/$APP.env
 WGCONF=$ROOT/etc/wireguard/wg0.conf
+WGMGMTCONF=$ROOT/etc/wireguard/wg-mgmt.conf   # remote WinBox (server key and devices); absent on an older install
 CADDYF=$ROOT/etc/caddy/Caddyfile
 SRC=$ROOT/opt/$APP/src
 LOCALDIR=$ROOT/var/backups/$APP/weekly
@@ -456,6 +457,10 @@ cmd_run() {
   done
   [ -d "$ETC" ] && cp -a "$ETC/." "$top/etc-$APP/"
   [ -f "$WGCONF" ] && cp -a "$WGCONF" "$top/wireguard/"
+  if [ -f "$WGMGMTCONF" ]; then
+    cp -a "$WGMGMTCONF" "$top/wireguard/"
+    chmod 600 "$top/wireguard/wg-mgmt.conf"   # it holds the interface's private key
+  fi
   [ -f "$CADDYF" ] && cp -a "$CADDYF" "$top/caddy/"
 
   dburl=$(envval DATABASE_URL)
@@ -569,6 +574,10 @@ Nothing on this server was changed. To put it back, step by step:
   4. WireGuard (same key, so the routers keep working):
                             sudo cp -a $dir/wireguard/wg0.conf /etc/wireguard/wg0.conf
                             sudo systemctl restart wg-quick@wg0
+     Remote WinBox devices (only if $dir/wireguard/wg-mgmt.conf exists):
+                            sudo cp -a $dir/wireguard/wg-mgmt.conf /etc/wireguard/wg-mgmt.conf
+                            sudo chmod 600 /etc/wireguard/wg-mgmt.conf
+                            sudo systemctl restart wg-quick@wg-mgmt
   5. Caddy (optional):      sudo cp -a $dir/caddy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
   6. PostgreSQL (only if the folder contains database.dump; the installer has
      already made the empty database and role, DATABASE_URL is in the env file):

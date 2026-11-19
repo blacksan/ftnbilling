@@ -22,6 +22,10 @@ var bootstrapTmplSrc string
 
 // File names on the router.
 const (
+	// MgmtWinboxComment and MgmtICMPComment mark the input accepts of the remote-WinBox subnet.
+	MgmtWinboxComment = "ftn: mgmt winbox"
+	MgmtICMPComment   = "ftn: mgmt icmp"
+
 	SetupFile = "ftn-setup.rsc"
 	ResetFile = "ftn-reset.rsc"
 
@@ -39,6 +43,9 @@ type BootstrapInput struct {
 	ServerPub  string // the server's WireGuard public key
 	Endpoint   string // host:port the router dials
 	WGSubnet   netip.Prefix
+	// MgmtSubnet is the remote-WinBox subnet (the server's wg-mgmt interface):
+	// the router accepts WinBox from it through the tunnel. Zero means DefaultMgmtRange.
+	MgmtSubnet netip.Prefix
 	PublicBase string // https://billing.example.co.ke
 	PublicIP   string // the server's public address (walled flats are sent here)
 	Generated  time.Time
@@ -67,6 +74,7 @@ type bootstrapData struct {
 	MTU                              int
 	PrivateKey, ServerPublicKey      string
 	TunnelIP, ServerIP               string
+	MgmtSubnet                       string // remote-WinBox subnet, e.g. 10.98.0.0/24
 	EndpointHost                     string
 	EndpointPort                     int
 	RESTUser, RESTPass               string
@@ -142,7 +150,7 @@ func (r ipoeRule) line() string {
 // bootstrapFirewall is the whole firewall of the router, top to bottom. The
 // script owns the tables: nothing is opened on the WAN (the router dials the
 // tunnel itself) and there is no FastTrack, so the flats' queues see traffic.
-func bootstrapFirewall(plan SubnetPlan, lan LANPlan, serverIP, publicIP string, restPort int) (filter, nat []string) {
+func bootstrapFirewall(plan SubnetPlan, lan LANPlan, serverIP, mgmt, publicIP string, restPort int) (filter, nat []string) {
 	w := walledRules(plan, publicIP, restPort)
 	f := func(args, comment string) { filter = append(filter, ruleLine("filter", args, comment)) }
 	// Forward.
@@ -164,6 +172,10 @@ func bootstrapFirewall(plan SubnetPlan, lan LANPlan, serverIP, publicIP string, 
 	f("chain=input action=drop protocol=tcp dst-port=53 in-interface-list=WAN", "ftn: no WAN DNS")
 	f(fmt.Sprintf("chain=input action=accept protocol=tcp in-interface=%s src-address=%s dst-port=%d", WGInterface, serverIP, restPort), "ftn: wg rest")
 	f(fmt.Sprintf("chain=input action=accept protocol=icmp in-interface=%s src-address=%s", WGInterface, serverIP), "ftn: wg icmp")
+	// Remote WinBox: admin devices of the server's wg-mgmt interface arrive through the tunnel with their own
+	// addresses (the server does not NAT them). Only WinBox (and ping) from that subnet; it sits before the drop.
+	f(fmt.Sprintf("chain=input action=accept protocol=tcp dst-port=8291 src-address=%s in-interface=%s", mgmt, WGInterface), MgmtWinboxComment)
+	f(fmt.Sprintf("chain=input action=accept protocol=icmp src-address=%s in-interface=%s", mgmt, WGInterface), MgmtICMPComment)
 	f("chain=input action=drop in-interface="+WGInterface, "ftn: wg drop other input")
 	f("chain=input action=accept in-interface-list=LAN", "ftn: lan input")
 	f("chain=input action=accept protocol=udp dst-port=53 in-interface="+CustomerBridge, custDNSComment)
@@ -206,7 +218,12 @@ func RenderBootstrap(in BootstrapInput) ([]byte, error) {
 	if ap, err := netip.ParseAddr(s.TunnelIP); err != nil || !in.WGSubnet.Contains(ap) {
 		return nil, fmt.Errorf("bootstrap script: tunnel address %s is outside %s", s.TunnelIP, in.WGSubnet)
 	}
-	if err := ValidateNet(s, in.WGSubnet); err != nil {
+	mgmt := in.MgmtSubnet
+	if !mgmt.IsValid() {
+		mgmt = DefaultMgmtRange
+	}
+	mgmt = mgmt.Masked()
+	if err := ValidateNetMgmt(s, in.WGSubnet, mgmt); err != nil {
 		return nil, fmt.Errorf("bootstrap script: %w", err)
 	}
 	host, port, err := splitEndpoint(in.Endpoint)
@@ -241,7 +258,7 @@ func RenderBootstrap(in BootstrapInput) ([]byte, error) {
 	d := bootstrapData{
 		SiteID: s.ID, SiteName: s.Name, Generated: in.Generated.UTC().Format("2006-01-02 15:04 UTC"), Identity: identityOf(s.Name), ROSVersion: in.ROSVersion,
 		WGIface: WGInterface, MTU: TunnelMTU, PrivateKey: in.PrivateKey, ServerPublicKey: in.ServerPub,
-		TunnelIP: s.TunnelIP, ServerIP: serverIP, EndpointHost: host, EndpointPort: port,
+		TunnelIP: s.TunnelIP, ServerIP: serverIP, MgmtSubnet: mgmt.String(), EndpointHost: host, EndpointPort: port,
 		RESTUser: s.RESTUser, RESTPass: in.RESTPass, RESTPort: s.RESTPort,
 		WANIface: s.WANInterface, WANMode: s.WANMode, WANAddress: s.WANAddress, WANGateway: s.WANGateway,
 		PPPoEUser: s.PPPoEUser, PPPoEPass: in.PPPoEPass, PPPoEIface: "pppoe-wan",
@@ -283,7 +300,7 @@ func RenderBootstrap(in BootstrapInput) ([]byte, error) {
 	httpsBase := u.Scheme == "https"
 	base := strings.TrimRight(in.PublicBase, "/")
 	d.ReportPost = reportPostLine(base, in.Token, httpsBase, in.NoCheck)
-	d.Filter, d.NAT = bootstrapFirewall(plan, lan, serverIP, in.PublicIP, s.RESTPort)
+	d.Filter, d.NAT = bootstrapFirewall(plan, lan, serverIP, mgmt.String(), in.PublicIP, s.RESTPort)
 	out, err := execScript(bootstrapTmpl, in.ROSVersion, d)
 	if err != nil {
 		return nil, err

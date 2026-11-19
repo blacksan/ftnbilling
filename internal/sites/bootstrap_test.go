@@ -458,3 +458,134 @@ func TestSanitizeReportMasksThePPPoEPasswordToo(t *testing.T) {
 		t.Fatal("a too short secret must not mangle the text")
 	}
 }
+
+// Remote WinBox over the server's wg-mgmt interface: the router accepts WinBox
+// from the management subnet through the tunnel, before the final input drop;
+// the tunnel peer carries the subnet; MAC-WinBox stays LAN-only.
+func TestBootstrapMgmtWinbox(t *testing.T) {
+	render := func(mgmt netip.Prefix) string {
+		in := benchInput(benchSite())
+		in.MgmtSubnet = mgmt
+		out, err := RenderBootstrap(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	for _, c := range []struct {
+		name string
+		p    netip.Prefix
+		want string
+	}{{"default", netip.Prefix{}, "10.98.0.0/24"}, {"custom", netip.MustParsePrefix("172.20.9.0/24"), "172.20.9.0/24"}} {
+		out := render(c.p)
+		lines := strings.Split(out, "\n")
+		idx := func(sub string) int {
+			for i, l := range lines {
+				if strings.Contains(l, sub) {
+					return i
+				}
+			}
+			t.Fatalf("%s: no line with %q", c.name, sub)
+			return -1
+		}
+		accept := idx(`comment="ftn: mgmt winbox"`)
+		if l := lines[accept]; !strings.Contains(l, "chain=input action=accept protocol=tcp dst-port=8291 src-address="+c.want+" in-interface=wg-ftn") {
+			t.Errorf("%s: mgmt accept rule is wrong: %s", c.name, l)
+		}
+		if drop := idx(`comment="ftn: input drop rest"`); accept >= drop {
+			t.Errorf("%s: the mgmt accept (line %d) must come before the final input drop (line %d)", c.name, accept, drop)
+		}
+		// It must also come before the rule that drops everything else from the tunnel, and after the hold stays at the top.
+		if wgdrop := idx(`comment="ftn: wg drop other input"`); accept >= wgdrop {
+			t.Errorf("%s: the mgmt accept must precede 'wg drop other input'", c.name)
+		}
+		if hold := idx(`comment="ftn: hold"`); hold >= accept {
+			t.Errorf("%s: the hold must stay ahead of the mgmt accept", c.name)
+		}
+		if peer := lines[idx(`peers add interface=wg-ftn`)]; !strings.Contains(peer, "allowed-address=10.99.0.1/32,"+c.want+" ") {
+			t.Errorf("%s: peer allowed-address lacks the mgmt subnet: %s", c.name, peer)
+		}
+		if svc := lines[idx("/ip/service set winbox ")]; !strings.Contains(svc, "address=192.168.88.0/24,"+c.want+" ") {
+			t.Errorf("%s: winbox service address: %s", c.name, svc)
+		}
+		if route := lines[idx("/ip/route add dst-address=")]; !strings.Contains(route, "dst-address="+c.want+" gateway=wg-ftn") {
+			t.Errorf("%s: mgmt route: %s", c.name, route)
+		}
+		// MAC-WinBox stays on the LAN list only.
+		if mac := lines[idx("/tool/mac-server/mac-winbox set")]; !strings.Contains(mac, "allowed-interface-list=LAN") || strings.Contains(mac, c.want) {
+			t.Errorf("%s: mac-winbox must stay LAN only: %s", c.name, mac)
+		}
+		// Nothing else opens WinBox: the only 8291 rule is the mgmt one, and it never names the WAN.
+		if n := strings.Count(out, "dst-port=8291"); n != 1 {
+			t.Errorf("%s: %d rules mention port 8291, want 1", c.name, n)
+		}
+	}
+}
+
+func TestValidateNetMgmtOverlap(t *testing.T) {
+	wg := netip.MustParsePrefix("10.99.0.0/22")
+	mgmt := netip.MustParsePrefix("10.98.0.0/24")
+	ok := ApplyDefaults(config.Config{}, benchSite())
+	ok.RESTUser = "ispbill"
+	if err := ValidateNetMgmt(ok, wg, mgmt); err != nil {
+		t.Fatal(err)
+	}
+	for name, mut := range map[string]func(*store.Site){
+		"lan overlaps mgmt":      func(s *store.Site) { s.LANSubnet = "10.98.0.0/25" },
+		"lan contains mgmt":      func(s *store.Site) { s.LANSubnet = "10.98.0.0/16" },
+		"customer overlaps mgmt": func(s *store.Site) { s.CustomerSubnet = "10.98.0.0/24" },
+		"static wan in mgmt": func(s *store.Site) {
+			s.WANMode, s.WANAddress, s.WANGateway = WANStatic, "10.98.0.20/24", "10.98.0.1"
+		},
+	} {
+		s := ok
+		mut(&s)
+		if err := ValidateNetMgmt(s, wg, mgmt); err == nil || !strings.Contains(err.Error(), "management subnet") {
+			t.Errorf("%s: want an overlap error naming the management subnet, got %v", name, err)
+		}
+		// the default subnet applies when none is passed
+		if err := ValidateNet(s, wg); err == nil {
+			t.Errorf("%s: accepted with the default management subnet", name)
+		}
+	}
+	// the tunnel and the management subnet must be separate, and the subnet must be private IPv4
+	if err := ValidateNetMgmt(ok, netip.MustParsePrefix("10.98.0.0/22"), mgmt); err == nil {
+		t.Error("tunnel overlapping the management subnet was accepted")
+	}
+	for _, bad := range []string{"8.8.8.0/24", "10.98.0.0/8", "10.98.0.0/30", "fd00::/64"} {
+		if err := ValidateNetMgmt(ok, wg, netip.MustParsePrefix(bad)); err == nil {
+			t.Errorf("management subnet %s was accepted", bad)
+		}
+	}
+	// a changed management subnet moves the check with it
+	s := ok
+	s.LANSubnet = "10.98.0.0/24"
+	if err := ValidateNetMgmt(s, wg, netip.MustParsePrefix("172.20.9.0/24")); err != nil {
+		t.Errorf("LAN on the old default is fine when the management subnet is elsewhere: %v", err)
+	}
+}
+
+// The router's report carries the management subnet it was built with; only a
+// real private IPv4 prefix is kept, and it survives the stored text.
+func TestJoinReportMgmtField(t *testing.T) {
+	at := time.Now()
+	for line, want := range map[string]string{
+		"result ok ros 7.25.1 mgmt 10.98.0.0/24":   "10.98.0.0/24",
+		"result ok ros 7.25.1 mgmt 10.98.0.77/24":  "10.98.0.0/24",
+		"result ok ros 7.25.1 mgmt ":               "",
+		"result ok ros 7.25.1 mgmt":                "",
+		"result ok ros 7.25.1":                     "",
+		"result fail ros 7.25.1 mgmt not-a-subnet": "",
+		"result ok ros 7.25.1 mgmt fd00::/64":      "",
+		"result ok ros 7.25.1 mgmt 10.98.0.0/24 x": "10.98.0.0/24",
+	} {
+		r := parseReport(line+"\n1 problem", at)
+		if r.Mgmt != want || len(r.Lines) != 1 {
+			t.Errorf("%q: mgmt %q (want %q), lines %v", line, r.Mgmt, want, r.Lines)
+		}
+		back, ok := parseStoredReport(formatStoredReport(r))
+		if !ok || back.Mgmt != want || back.ROS != "7.25.1" {
+			t.Errorf("%q: stored round trip %+v", line, back)
+		}
+	}
+}

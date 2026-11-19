@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+# Remote WinBox devices of the Fast Tech Net billing server.
+# Installed as /usr/local/sbin/ftnbilling-mgmt by deploy/install.sh.
+#
+#   sudo ftnbilling-mgmt add <name>      make a WireGuard profile for a laptop or phone and
+#                                        print it ONCE, with a QR code for the WireGuard
+#                                        phone app. The device's private key is made here,
+#                                        shown once and never stored on the server
+#   sudo ftnbilling-mgmt list            name, address and last handshake of every device
+#   sudo ftnbilling-mgmt remove <name>   cut a device off and forget it
+#
+# <name> is 1 to 32 characters of a-z, 0-9 and dash.
+#
+# Devices are peers of the server's wg-mgmt interface (a separate tunnel from
+# the routers' wg0). Their profile reaches only the routers' tunnel addresses
+# (split tunnel: the rest of the device's traffic is not touched) and the server
+# lets them through to WinBox (tcp/8291) and ping, nothing else. See
+# deploy/README.md, "Remote WinBox".
+#
+# Settings come from /etc/ftnbilling/mgmt.env (written by the installer):
+# MGMT_IF, MGMT_SUBNET, MGMT_PORT, MGMT_ENDPOINT_HOST (the domain, or the
+# server's address), WG_SUBNET. Peers are saved in /etc/wireguard/wg-mgmt.conf and
+# applied to the running interface at once.
+#
+# Test/override variables (all optional): FTN_MGMT_ENV, FTN_MGMT_CONF,
+# FTN_MGMT_LOCK, WG_BIN, QRENCODE_BIN, FTN_MGMT_NOROOT=1.
+set -euo pipefail
+umask 077
+
+SETTINGS=${FTN_MGMT_ENV:-/etc/ftnbilling/mgmt.env}
+MGMT_IF=wg-mgmt
+MGMT_SUBNET=10.98.0.0/24
+MGMT_PORT=51821
+MGMT_ENDPOINT_HOST=
+WG_SUBNET=10.99.0.0/22
+# shellcheck disable=SC1090
+[ ! -r "$SETTINGS" ] || . "$SETTINGS"
+CONF=${FTN_MGMT_CONF:-/etc/wireguard/$MGMT_IF.conf}
+LOCK=${FTN_MGMT_LOCK:-/run/lock/ftnbilling-mgmt.lock}
+WG=${WG_BIN:-wg}
+QR=${QRENCODE_BIN:-qrencode}
+
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; }
+
+ip2int() {
+  local a b c d
+  IFS=. read -r a b c d <<<"$1"
+  echo $(((a << 24) | (b << 16) | (c << 8) | d))
+}
+int2ip() { echo "$((($1 >> 24) & 255)).$((($1 >> 16) & 255)).$((($1 >> 8) & 255)).$(($1 & 255))"; }
+
+valid_name() { [[ $1 =~ ^[a-z0-9-]{1,32}$ ]]; }
+
+# Peers saved in the config: one line per peer, "name<TAB>public key<TAB>address".
+peers_tsv() {
+  awk '
+    /^# ftn-mgmt peer: / { name = $4 }
+    /^\[Peer\]/ { if (name == "") name = "-" }
+    /^PublicKey *=/ { pub = $3 }
+    /^AllowedIPs *=/ { ip = $3; sub(/\/32.*/, "", ip); print name "\t" pub "\t" ip; name = ""; pub = "" }
+  ' "$CONF"
+}
+
+# Atomic replace of the config (same directory, mode 600).
+write_conf() {
+  local tmp
+  tmp=$(mktemp "$CONF.XXXXXX")
+  cat >"$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$CONF"
+}
+
+iface_up() { "$WG" show "$MGMT_IF" >/dev/null 2>&1; }
+
+setup_checks() {
+  [ "${FTN_MGMT_NOROOT:-0}" = 1 ] || [ "$(id -u)" = 0 ] || die "run as root (sudo ftnbilling-mgmt ...)"
+  [ -f "$CONF" ] || die "$CONF not found: remote WinBox is not set up. Run the installer again (it creates $MGMT_IF)."
+  local net=${MGMT_SUBNET%/*} bits=${MGMT_SUBNET#*/}
+  [[ $net =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ $bits =~ ^[0-9]+$ ]] && [ "$bits" -ge 16 ] && [ "$bits" -le 29 ] \
+    || die "MGMT_SUBNET in $SETTINGS is not a valid IPv4 prefix"
+  [[ $MGMT_PORT =~ ^[0-9]+$ ]] && [ "$MGMT_PORT" -ge 1 ] && [ "$MGMT_PORT" -le 65535 ] || die "MGMT_PORT in $SETTINGS is not a port"
+  [ -n "$MGMT_ENDPOINT_HOST" ] || die "MGMT_ENDPOINT_HOST is empty in $SETTINGS (the domain or public address devices connect to)"
+  [[ $MGMT_ENDPOINT_HOST =~ ^[A-Za-z0-9.-]+$ ]] || die "MGMT_ENDPOINT_HOST in $SETTINGS has characters that cannot be used"
+  mkdir -p "$(dirname "$LOCK")"
+  exec 9>"$LOCK"
+  flock -w 20 9 || die "another ftnbilling-mgmt is running"
+}
+
+# The lowest free host address of the management subnet after the server's .1.
+next_free_ip() {
+  local net=${MGMT_SUBNET%/*} bits=${MGMT_SUBNET#*/} base mask size n a
+  mask=$(((0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF))
+  base=$(($(ip2int "$net") & mask))
+  size=$((1 << (32 - bits)))
+  local -A used=()
+  while IFS=$'\t' read -r _ _ a; do
+    [ -z "$a" ] || used[$a]=1
+  done < <(peers_tsv)
+  if iface_up; then
+    while read -r a; do
+      [ -z "$a" ] || used[${a%/*}]=1
+    done < <("$WG" show "$MGMT_IF" allowed-ips 2>/dev/null | cut -f2 | tr ' ' '\n')
+  fi
+  for ((n = 2; n < size - 1; n++)); do
+    a=$(int2ip $((base + n)))
+    [ -z "${used[$a]:-}" ] || continue
+    echo "$a"
+    return 0
+  done
+  die "no free address left in $MGMT_SUBNET"
+}
+
+cmd_add() {
+  local name=${1:-}
+  [ -n "$name" ] || { usage >&2; exit 2; }
+  valid_name "$name" || die "the name must be 1 to 32 characters: a-z, 0-9 and dash"
+  setup_checks
+  local known
+  known=$(peers_tsv | cut -f1)
+  if grep -qx -- "$name" <<<"$known"; then die "a device called '$name' already exists (ftnbilling-mgmt list)"; fi
+  local server_priv server_pub priv pub addr profile
+  server_priv=$(awk '/^PrivateKey *=/{print $3; exit}' "$CONF")
+  [ -n "$server_priv" ] || die "no PrivateKey in $CONF"
+  server_pub=$(printf '%s' "$server_priv" | "$WG" pubkey) || die "could not read the server key"
+  server_priv=""
+  addr=$(next_free_ip)
+  # The device's private key lives in this shell variable only: it is piped,
+  # never put on a command line or in a file, and goes out once, below.
+  priv=$("$WG" genkey) || die "wg genkey failed"
+  pub=$(printf '%s' "$priv" | "$WG" pubkey) || die "wg pubkey failed"
+  # Saved first, then applied: a failure leaves no half-added device behind.
+  {
+    cat "$CONF"
+    printf '\n# ftn-mgmt peer: %s (added %s)\n[Peer]\nPublicKey = %s\nAllowedIPs = %s/32\n' "$name" "$(date +%F)" "$pub" "$addr"
+  } | write_conf
+  if iface_up; then
+    "$WG" set "$MGMT_IF" peer "$pub" allowed-ips "$addr/32" || {
+      cmd_drop "$name"
+      die "could not add the device to the running $MGMT_IF; nothing was saved"
+    }
+  else
+    printf 'NOTE: %s is not up; the device is saved and takes effect when it starts (systemctl start wg-quick@%s)\n' "$MGMT_IF" "$MGMT_IF" >&2
+  fi
+  profile=$(printf '[Interface]\nPrivateKey = %s\nAddress = %s/32\nMTU = 1380\n\n[Peer]\nPublicKey = %s\nAllowedIPs = %s\nEndpoint = %s:%s\nPersistentKeepalive = 25\n' \
+    "$priv" "$addr" "$server_pub" "$WG_SUBNET" "$MGMT_ENDPOINT_HOST" "$MGMT_PORT")
+  priv=""
+  printf '\n== Device "%s" (%s). Shown ONCE: the server does not keep its private key. ==\n\n' "$name" "$addr"
+  printf '%s\n' "$profile"
+  if command -v "$QR" >/dev/null 2>&1; then
+    printf '\nScan this with the WireGuard phone app (Add tunnel, Create from QR code):\n\n'
+    printf '%s' "$profile" | "$QR" -t ansiutf8 || printf '(the QR code could not be drawn; import the profile above instead)\n'
+  else
+    printf '\n(qrencode is not installed, so there is no QR code: apt install qrencode)\n'
+  fi
+  profile=""
+  printf '\nSave it as %s.conf and import it in WireGuard, connect, then open WinBox to a router'"'"'s tunnel address (Admin > Routers).\n' "$name"
+  printf 'Lost the device? sudo ftnbilling-mgmt remove %s\n' "$name"
+}
+
+# Takes a device out of the saved config (used by remove, and to undo a failed add).
+cmd_drop() {
+  local name=$1
+  awk -v n="$name" '
+    skip && /^[[:space:]]*$/ { skip = 0; next }
+    skip { next }
+    /^# ftn-mgmt peer: / && $4 == n { skip = 1; next }
+    { print }
+  ' "$CONF" | write_conf
+}
+
+cmd_remove() {
+  local name=${1:-} pub
+  [ -n "$name" ] || { usage >&2; exit 2; }
+  valid_name "$name" || die "the name must be 1 to 32 characters: a-z, 0-9 and dash"
+  setup_checks
+  pub=$(peers_tsv | awk -F'\t' -v n="$name" '$1 == n {print $2}')
+  [ -n "$pub" ] || die "no device called '$name' (ftnbilling-mgmt list)"
+  if iface_up; then "$WG" set "$MGMT_IF" peer "$pub" remove || die "could not remove the device from the running $MGMT_IF"; fi
+  cmd_drop "$name"
+  printf 'Removed "%s". Its profile no longer connects.\n' "$name"
+}
+
+ago() { # seconds -> "5 s ago", "3 min ago", ...
+  local s=$1
+  if [ "$s" -lt 120 ]; then echo "$s s ago"
+  elif [ "$s" -lt 7200 ]; then echo "$((s / 60)) min ago"
+  elif [ "$s" -lt 172800 ]; then echo "$((s / 3600)) h ago"
+  else echo "$((s / 86400)) days ago"; fi
+}
+
+cmd_list() {
+  setup_checks
+  local -A hs=()
+  local k v now name pub addr when n=0
+  if iface_up; then
+    while IFS=$'\t' read -r k v; do hs[$k]=$v; done < <("$WG" show "$MGMT_IF" latest-handshakes 2>/dev/null)
+  fi
+  now=$(date +%s)
+  printf '%-34s %-16s %s\n' NAME ADDRESS "LAST HANDSHAKE"
+  while IFS=$'\t' read -r name pub addr; do
+    [ -n "$name" ] || continue
+    v=${hs[$pub]:-0}
+    if [ "$v" = 0 ]; then when=never; else when=$(ago $((now - v))); fi
+    printf '%-34s %-16s %s\n' "$name" "$addr" "$when"
+    n=$((n + 1))
+  done < <(peers_tsv | sort -t. -k4,4n)
+  [ "$n" -gt 0 ] || echo "(no devices yet: sudo ftnbilling-mgmt add <your-device>)"
+}
+
+case "${1:-}" in
+  add) shift; cmd_add "${1:-}" ;;
+  list) cmd_list ;;
+  remove) shift; cmd_remove "${1:-}" ;;
+  -h | --help | help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac

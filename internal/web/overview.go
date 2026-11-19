@@ -76,10 +76,15 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
 		AtRisk: ov.Health.AtRisk, Churned: ov.Health.Churned, Expiring7: ov.Health.Expiring7d,
 		Done: ov.Setup.Done, Total: ov.Setup.Total, Pct: ov.Setup.Pct}
 	spark := make([]float64, len(ov.Revenue.Spark7d))
+	paid := false
 	for i, v := range ov.Revenue.Spark7d {
 		spark[i] = float64(v)
+		paid = paid || v != 0
 	}
-	o.Spark = metrics.Spark(spark, 120, 32, "Revenue, last 7 days")
+	// A week with no money draws nothing: a flat line on the card reads as a stray rule.
+	if paid {
+		o.Spark = metrics.Spark(spark, 120, 32, "Revenue, last 7 days")
+	}
 	modal := map[string]string{"router_joined": "addrouter", "first_customer": "addcustomer"}
 	for _, st := range ov.Setup.Steps {
 		o.Steps = append(o.Steps, ovStep{Key: st.Key, Title: st.Title, Href: st.Href, Modal: modal[st.Key], Done: st.Done})

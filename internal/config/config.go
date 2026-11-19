@@ -57,6 +57,7 @@ type Config struct {
 	WGPublicKey           string
 	WGEndpoint            string // host:port the routers dial; defaults to PUBLIC_IP:51820
 	WGSubnet              string // tunnel subnet, server at .1
+	MgmtSubnet            string // remote-WinBox subnet (the wg-mgmt interface, server at .1); routers accept WinBox from it
 	WGDumpPath            string // written by the root status timer
 	JoinTokenTTL          time.Duration
 	AllowInsecureJoin     bool // permit minting join links when PUBLIC_BASE_URL is not https (bench only)
@@ -173,6 +174,7 @@ func Load(getenv func(string) string) (Config, error) {
 		c.WGEndpoint = c.PublicIP + ":51820"
 	}
 	c.WGSubnet = get("WG_SUBNET", "10.99.0.0/22")
+	c.MgmtSubnet = get("MGMT_SUBNET", "10.98.0.0/24")
 	// ADMIN_ALLOW_CIDR (the old wg-admin network) is no longer read: the admin
 	// pages are public and protected by sign-in, so old env lines are ignored.
 	c.WGDumpPath = get("WG_DUMP_PATH", "/run/ftnbilling/wg0.dump")
@@ -181,6 +183,11 @@ func Load(getenv func(string) string) (Config, error) {
 	c.JoinRequireMikrotikUA = get("JOIN_REQUIRE_MIKROTIK_UA", "true") != "false"
 	if p, err := netip.ParsePrefix(c.WGSubnet); err != nil || !p.Addr().Is4() || p.Bits() > 29 {
 		errs = append(errs, errors.New("WG_SUBNET must be an IPv4 CIDR no smaller than /29, e.g. 10.99.0.0/22"))
+	}
+	if mp, err := netip.ParsePrefix(c.MgmtSubnet); err != nil || !mp.Addr().Is4() || !mp.Addr().IsPrivate() || mp.Bits() < 16 || mp.Bits() > 29 {
+		errs = append(errs, errors.New("MGMT_SUBNET must be a private IPv4 prefix from /16 to /29 (10/8, 172.16/12 or 192.168/16), e.g. 10.98.0.0/24"))
+	} else if wp, err := netip.ParsePrefix(c.WGSubnet); err == nil && wp.Overlaps(mp) {
+		errs = append(errs, errors.New("MGMT_SUBNET must not overlap WG_SUBNET: they are separate WireGuard networks"))
 	}
 	if c.WGPublicKey != "" {
 		if b, err := base64.StdEncoding.DecodeString(c.WGPublicKey); err != nil || len(b) != 32 {

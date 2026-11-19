@@ -44,15 +44,17 @@ jobs:
       - uses: actions/checkout@v4
       - name: bash -n
         run: |
-          for f in deploy/install.sh deploy/ftnbilling-backup deploy/ftnbilling-wg-sync deploy/ftnbilling-admin-reset deploy/ftnbilling-wipe deploy/ftnbilling-doctor build.sh; do
+          for f in deploy/install.sh deploy/ftnbilling-backup deploy/ftnbilling-wg-sync deploy/ftnbilling-admin-reset deploy/ftnbilling-wipe deploy/ftnbilling-doctor deploy/ftnbilling-mgmt build.sh; do
             echo "bash -n $f"; bash -n "$f"
           done
       - name: shellcheck
-        run: shellcheck -S warning deploy/install.sh deploy/ftnbilling-backup deploy/ftnbilling-wg-sync deploy/ftnbilling-admin-reset deploy/ftnbilling-wipe deploy/ftnbilling-doctor build.sh
+        run: shellcheck -S warning deploy/install.sh deploy/ftnbilling-backup deploy/ftnbilling-wg-sync deploy/ftnbilling-admin-reset deploy/ftnbilling-wipe deploy/ftnbilling-doctor deploy/ftnbilling-mgmt build.sh
       - name: installer dry run
         run: |
           DRY_RUN=1 DOMAIN=billing.example.co.ke bash deploy/install.sh | tee /tmp/dry.txt
-          if grep -Ei 'wg-admin|51821|10\.98\.' /tmp/dry.txt; then echo "the installer must not create the admin VPN"; exit 1; fi
+          # udp/51821 and 10.98.0.0/24 are wg-mgmt's (remote WinBox) defaults now; the retired admin VPN is still not allowed.
+          if grep -Ei 'wg-admin|admin-peer' /tmp/dry.txt; then echo "the installer must not create the admin VPN"; exit 1; fi
+          grep -q 'wg-mgmt' /tmp/dry.txt
       - name: systemd calendar expressions
         run: |
           for f in deploy/*.timer; do grep -H '^OnCalendar' "$f"; done

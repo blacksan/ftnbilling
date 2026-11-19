@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"ispbill/internal/billing"
+	"ispbill/internal/store"
 )
 
 // uiRig is a two-router install with a customer on each, so every admin page
@@ -277,4 +278,27 @@ func newJSONReq(u string, f url.Values) (*http.Request, error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	return req, nil
+}
+
+// The router page names the tunnel address and how to reach WinBox through the
+// management WireGuard profile; it never shows key material.
+func TestRouterPageShowsRemoteWinbox(t *testing.T) {
+	m, site, _ := uiRig(t)
+	m.st.Update(func(d *store.Data) error {
+		x := d.Sites[site]
+		x.TunnelIP = "10.99.0.7"
+		d.Sites[site] = x
+		return nil
+	})
+	h := m.adminGet(t, "/admin/routers/view?id="+site+"&tab=overview")
+	for _, want := range []string{"Tunnel address", "Remote WinBox", "Built without remote WinBox: reset the router and paste a new line to add it.", "10.99.0.7"} {
+		if !strings.Contains(h, want) {
+			t.Errorf("router page lacks %q", want)
+		}
+	}
+	for _, bad := range []string{"PrivateKey", "private-key", "private_key"} {
+		if strings.Contains(h, bad) {
+			t.Errorf("router page shows %q", bad)
+		}
+	}
 }
