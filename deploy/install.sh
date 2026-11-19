@@ -13,10 +13,18 @@
 #   tar xzf ftnbilling-*.tar.gz && cd ftnbilling-*/ && sudo DOMAIN=... ./install.sh
 # (the bundled program is used; apt still needs the distro and Caddy mirrors).
 #
-# What it sets up: PostgreSQL (local socket only), Caddy (HTTPS), WireGuard wg0
-# for the routers and wg-admin for you, ufw, rclone (Google Drive backup),
-# unattended security upgrades, a swap file on small servers, 6-hourly database
-# dumps and a monthly restore drill. See deploy/README.md.
+# What it sets up: PostgreSQL (local socket only), Caddy (HTTPS; /admin and /api
+# are public, protected by the app's own login with a second factor), WireGuard
+# wg0 for the routers, ufw, rclone (Google Drive backup), unattended security
+# upgrades, a swap file on small servers, 6-hourly database dumps and a monthly
+# restore drill. See deploy/README.md.
+#
+# Upgrading an older server in place (one that still has the admin VPN): the
+# installer takes a database dump first, moves the old admin VPN config and
+# device files to /root/ftnbilling-removed-<date>/, stops and disables that VPN,
+# closes its firewall rules, runs the database migrations, prints the report of
+# flats that share a MAC address, and prints a one-time admin setup code. The
+# router tunnel (wg0) is not touched.
 #
 # Settings (environment variables), all optional except where noted:
 #   DOMAIN        e.g. billing.fasttech.co.ke (DNS A record -> this VPS). HTTPS is
@@ -42,7 +50,7 @@
 #                 here, because a wrong list would silently drop real payments.
 #                 Unset = no IP filter (the callback token still protects them).
 #   SUPPORT_PHONE, BRAND_NAME, PUBLIC_IP (skip auto-detection of this VPS's IPv4).
-#   WG_PORT (51820), WG_SUBNET (10.99.0.0/22), ADMIN_WG_PORT (51821),
+#   WG_PORT (51820), WG_SUBNET (10.99.0.0/22),
 #   REPO (blacksan/ftnbilling), BRANCH (main), SWAP_MB (1024).
 set -Eeuo pipefail
 
@@ -68,13 +76,8 @@ WG_SUBNET="${WG_SUBNET:-10.99.0.0/22}"
 WG_NET=${WG_SUBNET%/*}
 WG_SERVER_IP=${WG_NET%.*}.1
 WG_CONF=/etc/wireguard/$WG_IF.conf
-ADM_IF=wg-admin
-ADM_PORT="${ADMIN_WG_PORT:-51821}"
-ADM_SUBNET=10.98.0.0/24
-ADM_SERVER_IP=10.98.0.1
-ADM_CONF=/etc/wireguard/$ADM_IF.conf
 SWAP_MB="${SWAP_MB:-1024}"
-TOTAL=15
+TOTAL=14
 STEPN=0
 STEPNAME=starting
 WROTE=0
@@ -139,6 +142,16 @@ addkv() {
   echo "$1=$2" >>"$ENVF"
 }
 
+# fillkv gives KEY a value when the file has the line but it is empty (KEY=,
+# KEY="" or KEY='' with nothing else). A non-empty value is never replaced.
+fillkv() {
+  local cur
+  cur=$(envget "$1")
+  case "$cur" in "" | '""' | "''") ;; *) return 0 ;; esac
+  grep -qs "^$1=" "$ENVF" || return 0
+  setkv "$1" "$2"
+}
+
 PGSU() { run runuser -u postgres -- "$@"; }
 
 # ---------------------------------------------------------------------------
@@ -146,6 +159,8 @@ preflight() {
   step "checking this server"
   if [ "$DRY" = 1 ]; then note "DRY_RUN=1: nothing below is executed, only printed"; fi
   if [ "$DRY" != 1 ] && [ "$(id -u)" != 0 ]; then die "run as root (pipe into: sudo ... bash)"; fi
+  # An existing settings file means this run upgrades a server that is already installed.
+  if [ -f "$ENVF" ]; then UPGRADE=1; note "existing install found: this run is an in-place upgrade"; fi
   local ID ID_LIKE VERSION_ID PRETTY_NAME
   eval "$( (. /etc/os-release 2>/dev/null; printf 'ID=%q ID_LIKE=%q VERSION_ID=%q PRETTY_NAME=%q' "${ID:-}" "${ID_LIKE:-}" "${VERSION_ID:-}" "${PRETTY_NAME:-}") || true)"
   case "${ID:-}${ID_LIKE:-}" in
@@ -153,8 +168,8 @@ preflight() {
     *) if [ "$DRY" = 1 ]; then warn "not Debian/Ubuntu (${PRETTY_NAME:-unknown}); a real run would stop here"; else die "Debian or Ubuntu is required (found ${PRETTY_NAME:-unknown})"; fi ;;
   esac
   case "${ID:-} ${VERSION_ID:-}" in
-    "ubuntu 22.04" | "ubuntu 24.04" | "debian 12") note "OS: ${PRETTY_NAME:-}" ;;
-    *) warn "tested on Ubuntu 22.04/24.04 and Debian 12; this is ${PRETTY_NAME:-unknown}. Continuing." ;;
+    "ubuntu 22.04" | "ubuntu 24.04" | "ubuntu 26.04" | "debian 12") note "OS: ${PRETTY_NAME:-}" ;;
+    *) warn "tested on Ubuntu 22.04/24.04/26.04 and Debian 12; this is ${PRETTY_NAME:-unknown}. Continuing." ;;
   esac
   case "$(uname -m)" in x86_64) GOARCH=amd64 ;; aarch64 | arm64) GOARCH=arm64 ;; *) die "unsupported CPU $(uname -m)" ;; esac
   MEM_MB=$(awk '/^MemTotal:/{print int($2/1024)}' /proc/meminfo)
@@ -185,7 +200,7 @@ packages() {
   step "system packages (apt)"
   apt_get update -qq
   apt_install curl ca-certificates gnupg git tar xz-utils unzip jq ufw qrencode wireguard-tools \
-    debian-keyring debian-archive-keyring apt-transport-https unattended-upgrades cron
+    debian-keyring debian-archive-keyring apt-transport-https unattended-upgrades cron iputils-ping traceroute
 }
 
 # ---------------------------------------------------------------------------
@@ -358,7 +373,7 @@ acquire_program() {
   fi
   ASSETS=$BUNDLE/deploy
   local f
-  for f in $APP-wg-sync $APP-backup $APP-admin-peer $APP-doctor $APP-backup.service $APP-backup.timer $APP-dump.service $APP-dump.timer $APP-drill.service $APP-drill.timer; do
+  for f in $APP-wg-sync $APP-backup $APP-admin-reset $APP-doctor $APP-backup.service $APP-backup.timer $APP-dump.service $APP-dump.timer $APP-drill.service $APP-drill.timer; do
     [ -f "$ASSETS/$f" ] || die "$ASSETS/$f is missing: incomplete bundle or source tree"
   done
   [ -f "$BIN_SRC" ] || die "program binary not found at $BIN_SRC"
@@ -382,7 +397,7 @@ users_and_tools() {
   install -d -o root -g $APP -m 750 "$ETC"
   install -d -o root -g root -m 700 "$BACKUPS"
   local t
-  for t in wg-sync backup admin-peer doctor; do install -m 0755 "$ASSETS/$APP-$t" "$SBIN/$APP-$t"; done
+  for t in wg-sync backup admin-reset doctor; do install -m 0755 "$ASSETS/$APP-$t" "$SBIN/$APP-$t"; done
   printf '%s\n' "$PROG_VERSION" >"$ETC/VERSION"; chmod 644 "$ETC/VERSION"
 }
 
@@ -482,37 +497,53 @@ WGEOF
 }
 
 # ---------------------------------------------------------------------------
-wireguard_admin() {
-  step "WireGuard $ADM_IF for you ($ADM_SUBNET, udp/$ADM_PORT)"
-  # A second, separate interface with its own key. Your phone/laptop gets
-  # AllowedIPs=10.98.0.1/32 only, so it reaches the admin and nothing else.
-  if [ ! -f "$ADM_CONF" ]; then
-    if [ "$DRY" = 1 ]; then printf '    [dry-run] generate %s key, write %s\n' "$ADM_IF" "$ADM_CONF"
-    else
-      ( umask 077
-        cat >"$ADM_CONF" <<WGEOF
-[Interface]
-Address = $ADM_SERVER_IP/${ADM_SUBNET#*/}
-ListenPort = $ADM_PORT
-MTU = 1380
-PrivateKey = $(wg genkey)
-WGEOF
-      )
-    fi
+# Older installs had a second WireGuard interface for the admin pages. It is
+# gone: /admin and /api are public behind the app's own login. Nothing here
+# creates it; on an upgrade this retires it and keeps its files, for a while,
+# in a dated folder. Does nothing (and prints nothing) on a server without it.
+remove_legacy_admin_vpn() {
+  local old=wg-admin conf=/etc/wireguard/wg-admin.conf dir f found=0
+  local -a devs=()
+  [ ! -f "$conf" ] || found=1
+  for f in /root/ftnbilling-admin-*.conf; do [ -e "$f" ] && devs+=("$f"); done
+  [ "${#devs[@]}" -eq 0 ] || found=1
+  if [ "$DRY" != 1 ]; then
+    if systemctl is-enabled --quiet "wg-quick@$old" 2>/dev/null; then found=1; fi
+    if systemctl is-active --quiet "wg-quick@$old" 2>/dev/null; then found=1; fi
   fi
-  run chmod 600 "$ADM_CONF"
-  try systemctl enable wg-quick@$ADM_IF
-  if [ "$DRY" = 1 ]; then printf '    [dry-run] systemctl start wg-quick@%s\n' "$ADM_IF"
+  [ ! -e "$SBIN/$APP-admin-peer" ] || found=1
+  if [ "$DRY" != 1 ] && ip link show "$old" >/dev/null 2>&1; then found=1; fi
+  [ "$found" = 1 ] || return 0
+  dir=/root/ftnbilling-removed-$(date +%F)
+  note "retiring the old admin VPN ($old); the router tunnel $WG_IF is not touched"
+  # Stop it while its config still exists: wg-quick needs the file to take the
+  # interface down. If that fails (or the file is already gone), delete the link.
+  try systemctl disable --now "wg-quick@$old"
+  if [ "$DRY" != 1 ] && ip link show "$old" >/dev/null 2>&1; then
+    try ip link delete "$old"
+  fi
+  if [ "$DRY" = 1 ]; then
+    printf '    [dry-run] archive the old admin VPN config and device files to %s (mode 700)\n' "$dir"
   else
-    systemctl is-active --quiet wg-quick@$ADM_IF || systemctl start wg-quick@$ADM_IF || die "could not start $ADM_IF (see: journalctl -u wg-quick@$ADM_IF)"
+    install -d -m 700 "$dir"
+    for f in "$conf" "${devs[@]}"; do
+      [ -f "$f" ] || continue
+      mv -f "$f" "$dir/"
+      note "archived $f -> $dir/"
+    done
   fi
+  run rm -rf "/etc/systemd/system/wg-quick@$old.service.d"
+  run rm -f "$SBIN/$APP-admin-peer"
+  run systemctl daemon-reload
+  REMOVED_NOTE="The old admin VPN ($old) was turned off and removed. Its config and device files are in $dir (delete them when you are sure). Open the admin at $BASE/admin instead."
+  # The firewall rules (udp/51821 and everything "on $old") are removed in the firewall step.
 }
 
 # ---------------------------------------------------------------------------
 settings() {
   step "settings ($ENVF)"
   if [ "$DRY" = 1 ] && [ ! -f "$ENVF" ]; then
-    printf '    [dry-run] create %s (random ADMIN_PASS, MPESA_CALLBACK_TOKEN; WG_PUBLIC_KEY)\n' "$ENVF"
+    printf '    [dry-run] create %s (random ADMIN_PASS, DATA_KEY; WG_PUBLIC_KEY)\n' "$ENVF"
     return 0
   fi
   if [ ! -f "$ENVF" ]; then
@@ -521,22 +552,22 @@ settings() {
       cat >"$ENVF" <<EOF
 # Fast Tech Net billing server settings. Edit, then: systemctl restart $APP
 BRAND_NAME=${BRAND_NAME:-Fast Tech Net}
-LISTEN_ADDR=:8080
+LISTEN_ADDR=127.0.0.1:8080
 DATA_DIR=$DATA
 TEST_MODE=false
 
-# Admin: not published. Reach it over the admin VPN (WireGuard, wg-admin):
-# http://$ADM_SERVER_IP:8080/admin   (add devices: sudo ftnbilling-admin-peer add <name>)
+# Admin: https://<your domain>/admin, signed in with a password and an
+# authenticator code. The app listens on loopback only; Caddy is the public side.
+# First sign-in: this password plus the one-time setup code the installer prints.
 ADMIN_USER=admin
 ADMIN_PASS=$pass
-# ADMIN_ALLOW_CIDR defaults to 10.98.0.0/24 (the admin VPN); set it only to change that.
 
 # Public portal
 PUBLIC_BASE_URL=$BASE
 PUBLIC_IP=$PUBIP
 SUPPORT_PHONE=${SUPPORT_PHONE:-}
 
-# Routers connect over WireGuard. Add each building in Admin > Buildings.
+# Routers connect over WireGuard. Add each router in Admin > Routers.
 WG_PUBLIC_KEY=$WG_PUB
 WG_ENDPOINT=$PUBIP:$WG_PORT
 WG_SUBNET=$WG_SUBNET
@@ -544,26 +575,33 @@ WG_SUBNET=$WG_SUBNET
 # Metrics: routers send NetFlow to the tunnel address only
 NETFLOW_ADDR=$WG_SERVER_IP:2055
 
-# M-Pesa (Daraja) - fill in when the Paybill is ready; callbacks need DOMAIN (HTTPS)
-MPESA_ENV=sandbox
-MPESA_CONSUMER_KEY=
-MPESA_CONSUMER_SECRET=
-MPESA_SHORTCODE=
-MPESA_PASSKEY=
-MPESA_CALLBACK_TOKEN=$(rand 24)
+# M-Pesa, WhatsApp and email are set in the admin: Settings > M-Pesa, WhatsApp, Email.
+# What you save there wins over the lines below. The lines are a fallback only
+# (leave them commented, or fill them in once and manage the rest in the admin).
+# Daraja callbacks need DOMAIN (HTTPS).
+#MPESA_ENV=sandbox
+#MPESA_CONSUMER_KEY=
+#MPESA_CONSUMER_SECRET=
+#MPESA_SHORTCODE=
+#MPESA_PASSKEY=
+#MPESA_CALLBACK_TOKEN=
+#WA_TOKEN=
+#WA_PHONE_NUMBER_ID=
+#SMTP_HOST=
 EOF
     )
   else
     # Upgrade: keep settings, refresh what the installer owns.
     setkv PUBLIC_IP "$PUBIP"
+    # The app is only reached through Caddy (older installs listened on every address).
+    setkv LISTEN_ADDR "127.0.0.1:8080"
     [ -z "${DOMAIN:-}" ] || setkv PUBLIC_BASE_URL "$BASE"
     [ -z "${ROUTER_PASS:-}" ] || setkv ROUTER_PASS "$ROUTER_PASS"
-    # The app refuses to start with M-Pesa configured and no callback token, so
-    # an older env file without one gets one now (blank, or missing entirely).
-    # Re-register the three Daraja callback URLs with ?t=<token> afterwards.
-    if [ -z "$(envget MPESA_CALLBACK_TOKEN)" ]; then
+    # The app refuses to start with M-Pesa set in this file but no callback
+    # token. (Settings > M-Pesa makes its own token when you save there.)
+    if [ -n "$(envget MPESA_CONSUMER_KEY)" ] && [ -z "$(envget MPESA_CALLBACK_TOKEN)" ]; then
       setkv MPESA_CALLBACK_TOKEN "$(rand 24)"
-      warn "MPESA_CALLBACK_TOKEN was empty and has been generated; if M-Pesa is in use, re-register the callback URLs with ?t=<token> (Admin > Settings shows them)"
+      warn "MPESA_CALLBACK_TOKEN was empty and has been generated; register the C2B URLs again in Admin > Settings > M-Pesa (Register the C2B URLs)"
     fi
     # Added once and then left alone (the key never changes; the rest is yours to edit).
     addkv WG_PUBLIC_KEY "$WG_PUB"
@@ -572,6 +610,13 @@ EOF
     [ -z "${ADMIN_PASS:-}" ] || setkv ADMIN_PASS "$ADMIN_PASS"
     BASE=$(envget PUBLIC_BASE_URL)
   fi
+  # DATA_KEY encrypts the secrets saved in Settings and national IDs. Every
+  # install gets one. Losing it makes both unreadable: it is in the Drive
+  # backup, and must be restored together with the database.
+  addkv DATA_KEY "$(head -c 32 /dev/urandom | base64 -w0)"
+  # An existing but empty "DATA_KEY=" line (a file edited by hand, or an older
+  # template) would otherwise stay empty and refuse every secret setting.
+  fillkv DATA_KEY "$(head -c 32 /dev/urandom | base64 -w0)"
   if [ "$DRY" != 1 ]; then chown root:$APP "$ENVF"; chmod 640 "$ENVF"; fi
 }
 
@@ -700,8 +745,6 @@ SQL
       setkv DATABASE_URL "$(printf '%s' "$dburl" | sed -E 's/([?&])pool_max_conns=[0-9]+&?/\1/; s/[?&]$//')" ;;
     esac
   fi
-  # DATA_KEY encrypts national IDs. Losing it makes stored IDs unreadable: it is in the Drive backup.
-  addkv DATA_KEY "$(head -c 32 /dev/urandom | base64 -w0)"
   if [ "$DRY" != 1 ]; then
     dburl=$(envget DATABASE_URL)
     runuser -u $APP -- psql "$dburl" -Atc 'select 1' >/dev/null || die "the app role cannot connect to PostgreSQL (check pg_hba.conf and $ENVF)"
@@ -709,10 +752,35 @@ SQL
   fi
 }
 
+# The public Caddyfile, from CF_SITE (the domain, or :80), CF_CB (the optional
+# M-Pesa callback filter) and CF_CATCHALL (the plain-HTTP redirect, domain installs only).
+render_caddyfile() {
+  cat <<EOF
+# Public side of the billing server. /admin and /api are published: the app
+# protects them with its own sign-in (password plus authenticator code) and
+# refuses them from the routers' tunnel. The app listens on 127.0.0.1:8080.
+#
+# IMPORTANT: Caddy must be the ONLY reverse proxy in front of the app. The app
+# believes the last X-Forwarded-For entry when the connection comes from
+# loopback, and Caddy (v2 default) discards any X-Forwarded-For sent by the
+# internet and writes the real client address. Do not add another local proxy
+# (nginx, a tunnel agent, a second Caddy) that forwards to 127.0.0.1:8080, and
+# do not add header_up / trusted_proxies settings here: a request that reaches
+# the app from loopback without a trustworthy X-Forwarded-For would look like
+# it came from this machine, and be treated as trusted.
+$CF_SITE {
+	encode gzip
+$CF_CB
+	reverse_proxy 127.0.0.1:8080
+}
+$CF_CATCHALL
+EOF
+}
+
 # ---------------------------------------------------------------------------
 app_and_caddy() {
   step "app service and Caddy"
-  local after="network-online.target wg-quick@$WG_IF.service wg-quick@$ADM_IF.service" pgdep=""
+  local after="network-online.target wg-quick@$WG_IF.service" pgdep=""
   if [ -n "$(envget DATABASE_URL)" ] || { [ "$DRY" = 1 ] && [ "${NO_POSTGRES:-0}" != 1 ]; }; then
     after="$after postgresql.service"; pgdep="postgresql.service"
   fi
@@ -720,7 +788,7 @@ app_and_caddy() {
 [Unit]
 Description=Fast Tech Net billing server
 After=$after
-Wants=network-online.target wg-quick@$WG_IF.service wg-quick@$ADM_IF.service${pgdep:+ $pgdep}
+Wants=network-online.target wg-quick@$WG_IF.service${pgdep:+ $pgdep}
 
 [Service]
 User=$APP
@@ -751,60 +819,59 @@ EOF
     esac
     cbblock=$(printf '\t# M-Pesa callbacks only from the addresses in CADDY_MPESA_IPS (confirm them with Safaricom).\n\t@mpesa_cb_other {\n\t\tpath /pay/cb/*\n\t\tnot remote_ip %s\n\t}\n\trespond @mpesa_cb_other "Forbidden" 403\n' "$cbips")
   fi
-  writef 644 root:root /etc/caddy/Caddyfile <<EOF
-# Public side of the billing server. The admin pages are NOT published here:
-# open them over the admin VPN (WireGuard wg-admin, http://$ADM_SERVER_IP:8080/admin).
-#
-# IMPORTANT: Caddy must be the ONLY reverse proxy in front of the app. The app
-# believes the last X-Forwarded-For entry when the connection comes from
-# loopback, and Caddy (v2 default) discards any X-Forwarded-For sent by the
-# internet and writes the real client address. Do not add another local proxy
-# (nginx, a tunnel agent, a second Caddy) that forwards to 127.0.0.1:8080, and
-# do not add header_up / trusted_proxies settings here: a request that reaches
-# the app from loopback without a trustworthy X-Forwarded-For would look like
-# it came from this machine, and be treated as trusted.
-$site {
-	encode gzip
-	@admin path /admin /admin/*
-	respond @admin "Admin is not published" 403
-$cbblock
-	reverse_proxy 127.0.0.1:8080
-}
-EOF
+  local catchall=""
+  if [ -n "${DOMAIN:-}" ]; then
+    # Customers suspended on their router have their plain-HTTP
+    # requests redirected to this server's public IP, whatever site they asked
+    # for. Send them to the payment page. (Caddy already redirects http to https
+    # for $DOMAIN itself; this only catches every other host name.)
+    catchall=$(printf '\n# Any other plain-HTTP host (customers suspended on the router): to the payment page.\nhttp:// {\n\tredir https://%s/pay 302\n}\n' "$DOMAIN")
+  fi
+  CF_SITE=$site; CF_CB=$cbblock; CF_CATCHALL=$catchall
+  render_caddyfile | writef 644 root:root /etc/caddy/Caddyfile
+  if [ "$DRY" != 1 ]; then
+    caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1 || die "the new Caddyfile is not valid (check: caddy validate --config /etc/caddy/Caddyfile)"
+  fi
   runq systemctl enable caddy
   if [ "$DRY" = 1 ]; then printf '    [dry-run] systemctl reload caddy\n'; else systemctl reload caddy 2>/dev/null || systemctl restart caddy; fi
+}
+
+# Reads "ufw status numbered" on stdin; prints the numbers of the rules that
+# belong to the retired admin VPN (udp/51821, anything on wg-admin), highest first.
+legacy_rule_numbers() {
+  awk '/wg-admin|51821/ && match($0, /^\[ *[0-9]+\]/) {n=substr($0, 2, RLENGTH-2); gsub(/ /, "", n); print n}' | sort -rn
 }
 
 # ---------------------------------------------------------------------------
 firewall() {
   step "firewall (ufw)"
   if [ "${NO_FIREWALL:-0}" = 1 ]; then note "NO_FIREWALL=1: skipped"; return 0; fi
-  local sshp i
+  local sshp i nums
   sshp=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}' || true); sshp=${sshp:-22}
   runq ufw allow "$sshp"/tcp
   runq ufw allow 80/tcp
   runq ufw allow 443/tcp
   runq ufw allow "$WG_PORT"/udp          # routers (wg0)
-  runq ufw allow "$ADM_PORT"/udp         # you (wg-admin)
   # NetFlow arrives only through the tunnel. A legacy install that still has a
   # router on ROUTER_URL sends it over the internet, so keep that rule there.
   if ! grep -qs '^ROUTER_URL=' "$ENVF"; then
     if [ "$DRY" = 1 ]; then printf '    [dry-run] ufw delete allow 2055/udp (public)\n'; else ufw delete allow 2055/udp >/dev/null 2>&1 || true; fi
   fi
   runq ufw allow in on $WG_IF to "$WG_SERVER_IP" port 2055 proto udp
-  # Admin: only on wg-admin, only to the server's admin address.
-  runq ufw allow in on $ADM_IF to $ADM_SERVER_IP port 8080 proto tcp
-  runq ufw allow in on $ADM_IF to $ADM_SERVER_IP port "$sshp" proto tcp
-  # Routers and admin devices get nothing else: no routing to other peers or the LAN.
-  # Re-added last so they stay below the allow rules on upgrades.
-  for i in $WG_IF $ADM_IF; do
-    if [ "$DRY" = 1 ]; then printf '    [dry-run] ufw deny in on %s; ufw route deny in on %s\n' "$i" "$i"
-    else
-      ufw delete deny in on $i >/dev/null 2>&1 || true
-      ufw delete deny route in on $i >/dev/null 2>&1 || true
-      ufw deny in on $i >/dev/null
-      ufw route deny in on $i >/dev/null
-    fi
+  # Routers get nothing but NetFlow: no routing to other peers or the LAN.
+  # Re-added last so the deny rules stay below the allow rules on upgrades.
+  if [ "$DRY" = 1 ]; then printf '    [dry-run] ufw deny in on %s; ufw route deny in on %s\n' "$WG_IF" "$WG_IF"
+  else
+    ufw delete deny in on $WG_IF >/dev/null 2>&1 || true
+    ufw delete deny route in on $WG_IF >/dev/null 2>&1 || true
+    ufw deny in on $WG_IF >/dev/null
+    ufw route deny in on $WG_IF >/dev/null
+  fi
+  # Rules of the retired admin VPN (udp/51821, anything "on wg-admin"). Highest
+  # rule number first, so the numbers do not shift while deleting.
+  nums=$(ufw status numbered 2>/dev/null | legacy_rule_numbers || true)
+  for i in $nums; do
+    if [ "$DRY" = 1 ]; then printf '    [dry-run] ufw --force delete %s (a rule of the retired admin VPN)\n' "$i"; else ufw --force delete "$i" >/dev/null || true; fi
   done
   # Rules left by older installs that exposed the admin on another interface.
   if [ "$DRY" != 1 ]; then
@@ -845,15 +912,54 @@ backups() {
 }
 
 # ---------------------------------------------------------------------------
+# app_cli ARGS...: run the program's own command line as the service user with
+# the few settings the database commands need.
+app_cli() {
+  runuser -u $APP -- env DATABASE_URL="$(envget DATABASE_URL)" DATA_DIR="$DATA" "$BIN" "$@"
+}
+
+# On an upgrade with PostgreSQL: a verified dump first (kept outside the
+# rotation), then the migrations, before the service is restarted on the new
+# program. A failure stops the installer with the old data untouched.
+pre_upgrade_database() {
+  local dump keep
+  if [ "$UPGRADE" != 1 ] || [ -z "$(envget DATABASE_URL)" ]; then return 0; fi
+  note "taking a database dump before the upgrade"
+  "$SBIN/$APP-backup" dump || die "the pre-upgrade database dump failed, so nothing was changed in the database (see: journalctl -u $APP-dump)"
+  dump=$(ls -1t "$BACKUPS"/db/*.dump 2>/dev/null | head -1 || true)
+  [ -n "$dump" ] || die "no database dump found in $BACKUPS/db after the pre-upgrade dump"
+  keep="$BACKUPS/pre-upgrade-$(date +%F-%H%M%S).dump"
+  ( umask 077; cp -a "$dump" "$keep" )
+  note "pre-upgrade dump kept at $keep"
+  note "running the database migrations"
+  app_cli migrate || die "the database migration failed. Restore the dump above (deploy/BACKUP.md) and report the error."
+}
+
+# A one-time admin setup code (the wrapper stops the service while it runs and starts it again), for signing in until the authenticator is set up.
+# Guarded: a program without the -setup-code option (before the sign-in rebuild)
+# must not make the installer fail.
+make_setup_code() {
+  SETUP_OUT=""
+  local out rc=0
+  out=$("$SBIN/$APP-admin-reset" --setup-code 2>&1) || rc=$?
+  if [ "$rc" = 0 ]; then SETUP_OUT=$out
+  else
+    SETUP_OUT=""
+    warn "no admin setup code was made ($(printf '%s' "$out" | tail -1)). If this program is older than the new sign-in, update it; then run: sudo $APP-admin-reset --setup-code"
+  fi
+}
+
 start_and_check() {
   step "start, first dump, health check"
-  ADMIN_PEER_OUT=""
   if [ "$DRY" = 1 ]; then
+    printf '    [dry-run] upgrade only: %s-backup dump, keep it as %s/pre-upgrade-<time>.dump, then: %s migrate\n' "$APP" "$BACKUPS" "$APP"
     printf '    [dry-run] systemctl enable + restart %s; wait for /healthz\n' "$APP"
-    printf '    [dry-run] %s-admin-peer add owner (only when %s has no devices yet); QR is shown in the final banner\n' "$APP" "$ADM_IF"
+    printf '    [dry-run] %s db-check (row counts and the report of flats sharing a MAC address)\n' "$APP"
+    printf '    [dry-run] %s-admin-reset --setup-code (one-time admin setup code, printed in the final banner)\n' "$APP"
     printf '    [dry-run] %s-backup dump; %s-backup drill; %s-doctor\n' "$APP" "$APP" "$APP"
     return 0
   fi
+  pre_upgrade_database
   systemctl daemon-reload
   systemctl enable $APP >/dev/null
   systemctl restart $APP
@@ -866,13 +972,13 @@ start_and_check() {
   done
   [ -n "$hz" ] || { journalctl -u $APP -n 30 --no-pager; die "the service did not answer /healthz (settings in $ENVF)"; }
   HEALTH=$hz
-  # The first admin device, on a new server only.
-  if [ -z "$(wg show $ADM_IF peers 2>/dev/null)" ]; then
-    ADMIN_PEER_OUT=$("$SBIN/$APP-admin-peer" add owner) || die "could not create the admin device 'owner'"
-  fi
   if [ -n "$(envget DATABASE_URL)" ]; then
-    DB_COUNTS=$(runuser -u $APP -- env DATABASE_URL="$(envget DATABASE_URL)" DATA_DIR="$DATA" "$BIN" db-check 2>&1 | tr -s ' ' | head -12 || true)
+    local chk
+    chk=$(app_cli db-check 2>&1 || true)
+    DB_COUNTS=$(printf '%s\n' "$chk" | sed -n '1,/^applied payments/p' | tr -s ' ')
+    MAC_REPORT=$(printf '%s\n' "$chk" | sed -n '/^MAC conflicts:/,$p')
   fi
+  make_setup_code
   "$SBIN/$APP-backup" dump || warn "the first database dump failed (see: journalctl -u $APP-dump)"
   if [ -n "$(envget DATABASE_URL)" ]; then "$SBIN/$APP-backup" drill >/dev/null 2>&1 || warn "the first restore drill failed: sudo $APP-backup drill"; fi
 }
@@ -883,12 +989,13 @@ doctor_and_banner() {
   else
     "$SBIN/$APP-doctor" && DOC_RC=0 || DOC_RC=$?
   fi
-  local apass backend="JSON file"
+  local backend="JSON file"
   if [ "$DRY" = 1 ]; then
     printf '\n    [dry-run] finished: nothing was changed.\n'
     return 0
   fi
-  apass=$(envget ADMIN_PASS)
+  local pwtext="your existing admin password"
+  if [ "$UPGRADE" != 1 ]; then pwtext="the password $(envget ADMIN_PASS)"; fi
   if [ -n "$(envget DATABASE_URL)" ]; then backend="PostgreSQL (local socket)"; fi
   cat <<EOF
 
@@ -896,41 +1003,40 @@ doctor_and_banner() {
  Fast Tech Net billing is running ($PROG_VERSION)
 
  Portal (public):   $BASE/portal
- Admin login:       admin / $apass
+ Admin (public):    $BASE/admin    (password + authenticator code)
  Storage:           $backend
- Settings:          $ENVF   (then: systemctl restart $APP)
+ Settings:          Admin > Settings (M-Pesa, WhatsApp, Email; no restart needed)
+                    $ENVF   (restart-only values, then: systemctl restart $APP)
+ Locked out?        sudo $APP-admin-reset   (--generate, --setup-code, --reset-totp)
  Logs:              journalctl -u $APP -f
  Health:            ${HEALTH:-}
  WireGuard:         $WG_IF (routers) udp/$WG_PORT, server key $WG_PUB
-                    $ADM_IF (you)    udp/$ADM_PORT
 EOF
+  if [ -n "$MAC_REPORT" ]; then
+    printf '\n ATTENTION, flats that share a MAC address (not provisioned until fixed in Admin):\n%s\n' "$(printf '%s\n' "$MAC_REPORT" | sed 's/^/   /')"
+  elif printf '%s' "${DB_COUNTS:-}" | grep -q 'applied payments'; then
+    echo " MAC conflicts:     none"
+  elif [ -n "$(envget DATABASE_URL)" ]; then
+    warn "db-check gave no answer, so the MAC-conflict report is missing: run  sudo -u $APP $BIN db-check" 
+  fi
   if [ -n "${DB_COUNTS:-}" ]; then printf ' Database:\n%s\n' "$(printf '%s\n' "$DB_COUNTS" | sed 's/^/                    /')"; fi
-  if [ -n "$ADMIN_PEER_OUT" ]; then
+  if [ -n "$SETUP_OUT" ]; then
     cat <<EOF
 
- OPEN THE ADMIN (not on the internet; only through the admin VPN):
-   1. Install the WireGuard app on your phone or laptop.
-   2. Scan the QR code below (or import /root/ftnbilling-admin-owner.conf), then switch the tunnel on.
-   3. Open http://$ADM_SERVER_IP:8080/admin
-   More devices later:  sudo $APP-admin-peer add <name>   (list / remove too)
-   The private key below is shown ONCE; it is also in the file above (delete it after use).
+ FIRST SIGN-IN (shown once; run  sudo $APP-admin-reset --setup-code  for a new one):
+   1. Open $BASE/admin
+   2. Sign in as $(envget ADMIN_USER) with $pwtext
+      and the setup code below.
+   3. Scan the QR code with an authenticator app and save the recovery codes offline.
 
-$ADMIN_PEER_OUT
-EOF
-  else
-    cat <<EOF
-
- Admin: over the admin VPN, http://$ADM_SERVER_IP:8080/admin
-        (new device: sudo $APP-admin-peer add <name>; devices: sudo $APP-admin-peer list)
+$(printf '%s\n' "$SETUP_OUT" | sed 's/^/   /')
 EOF
   fi
+  if [ -n "$REMOVED_NOTE" ]; then printf '\n %s\n' "$REMOVED_NOTE"; fi
   cat <<EOF
 
- Fallback if the VPN is unavailable (SSH tunnel), run on your laptop:
-   ssh -L 8080:127.0.0.1:8080 <you>@$PUBIP     then open http://127.0.0.1:8080/admin
-
- Next: in the admin, Buildings -> Add building. It gives you one command to
- paste into the building's MikroTik terminal; the router then joins the tunnel.
+ Next: in the admin, Routers -> Add router. It gives you one command to
+ paste into the router's MikroTik terminal; the router then joins the tunnel.
 EOF
   case "$BASE" in https://*) ;; *) echo " NOTE: join commands need HTTPS. Re-run this installer with DOMAIN=your.domain first." ;; esac
   if grep -q '^ROUTER_URL=' "$ENVF"; then
@@ -946,7 +1052,8 @@ main() {
   cd /
   # Everything below was already read; never let a command swallow the rest of a piped script.
   exec </dev/null
-  PROG_VERSION=""; BUNDLE=""; BIN_SRC=""; ASSETS=""; BK_MSG=""; HEALTH=""; DB_COUNTS=""; ADMIN_PEER_OUT=""; DOC_RC=0
+  PROG_VERSION=""; BUNDLE=""; BIN_SRC=""; ASSETS=""; BK_MSG=""; HEALTH=""; DB_COUNTS=""; DOC_RC=0
+  MAC_REPORT=""; SETUP_OUT=""; REMOVED_NOTE=""; UPGRADE=0
   WG_PUB=""; PUBIP=""; BASE=""; MEM_MB=0; GOARCH=amd64
   preflight
   packages
@@ -955,7 +1062,7 @@ main() {
   acquire_program
   users_and_tools
   wireguard_routers
-  wireguard_admin
+  remove_legacy_admin_vpn
   settings
   postgres_setup
   app_and_caddy

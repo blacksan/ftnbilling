@@ -48,6 +48,26 @@ type Tenant struct {
 	now  func() time.Time
 	kick chan struct{}
 	mu   sync.Mutex
+
+	cfgMu      sync.RWMutex // guards the live-changeable options below
+	lang       string
+	payHint    string
+	minConfirm int
+}
+
+// SetLang changes the template language of new tenant messages.
+func (t *Tenant) SetLang(l string) { t.cfgMu.Lock(); t.lang = l; t.cfgMu.Unlock() }
+
+// SetPayHint changes how tenants are told to pay ("M-Pesa Paybill 123456").
+func (t *Tenant) SetPayHint(h string) { t.cfgMu.Lock(); t.payHint = h; t.cfgMu.Unlock() }
+
+// SetMinConfirmKES changes the smallest payment that gets a confirmation.
+func (t *Tenant) SetMinConfirmKES(n int) { t.cfgMu.Lock(); t.minConfirm = n; t.cfgMu.Unlock() }
+
+func (t *Tenant) opts() (lang, payHint string, minConfirm int) {
+	t.cfgMu.RLock()
+	defer t.cfgMu.RUnlock()
+	return t.lang, t.payHint, t.minConfirm
 }
 
 // NewTenant builds the scanners and installs the outbox Validate hook.
@@ -67,7 +87,7 @@ func NewTenant(o TenantOptions) *Tenant {
 	if o.AutoAfter == nil {
 		o.AutoAfter = func() time.Duration { return 30 * time.Minute }
 	}
-	t := &Tenant{o: o, now: o.Now, kick: make(chan struct{}, 1)}
+	t := &Tenant{o: o, now: o.Now, kick: make(chan struct{}, 1), lang: o.Lang, payHint: o.PayHint, minConfirm: o.MinConfirmKES}
 	o.Box.SetValidate(t.Validate)
 	return t
 }
@@ -107,8 +127,14 @@ func reachable(a store.Account) bool { return a.WhatsApp != "" && !a.WAOptOut }
 
 // Scan runs every scanner once.
 func (t *Tenant) Scan() {
+	// Always running, but with no WhatsApp channel configured there is
+	// nobody to send to: do nothing (and queue nothing) until one is set up.
+	if !t.o.Box.HasSender(ChanWhatsApp) {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	lang, payHint, minConfirm := t.opts()
 	now := t.now()
 	pol := t.o.Policy()
 	var out []Message
@@ -120,7 +146,7 @@ func (t *Tenant) Scan() {
 		flatAt := func(a store.Account) string { return a.Flat + ", " + siteName[a.SiteID] }
 		base := func(a store.Account, kind, tpl string, ref int64, key string, params ...string) Message {
 			return Message{Channel: ChanWhatsApp, Kind: kind, To: a.WhatsApp, SiteID: a.SiteID, AccountID: a.ID,
-				Template: tpl, Lang: t.o.Lang, Params: params, Ref: ref, DedupeKey: key}
+				Template: tpl, Lang: lang, Params: params, Ref: ref, DedupeKey: key}
 		}
 		for _, a := range d.Accounts {
 			if !reachable(a) || a.Suspended || a.ExpiresAt.IsZero() {
@@ -134,22 +160,22 @@ func (t *Tenant) Scan() {
 			// Expiry reminder: the sweeper stamped RemindedFor for this expiry.
 			if pol.ReminderDays > 0 && a.RemindedFor.Equal(exp) && exp.After(now) {
 				m := base(a, KindExpiryReminder, TplExpiryReminder, exp.Unix(), fmt.Sprintf("rem:%s:%d", a.ID, exp.Unix()),
-					pkg.Name, flatAt(a), eatText(exp), fmt.Sprint(pkg.PriceKES), t.o.PayHint, a.Code)
-				m.Text = fmt.Sprintf("Your %s plan for %s ends on %s. Pay KES %d via %s, account number %s.", pkg.Name, flatAt(a), eatText(exp), pkg.PriceKES, t.o.PayHint, a.Code)
+					pkg.Name, flatAt(a), eatText(exp), fmt.Sprint(pkg.PriceKES), payHint, a.Code)
+				m.Text = fmt.Sprintf("Your %s plan for %s ends on %s. Pay KES %d via %s, account number %s.", pkg.Name, flatAt(a), eatText(exp), pkg.PriceKES, payHint, a.Code)
 				out = append(out, m)
 			}
 			// Plan ended (plans of 7 days or longer; not for something long ago).
 			if pol.ReminderOnExpiry && a.ExpiredFor.Equal(exp) && !exp.After(now) && now.Sub(exp) <= 48*time.Hour &&
 				time.Duration(pkg.DurationMin)*time.Minute >= 7*24*time.Hour {
 				m := base(a, KindPlanExpired, TplPlanExpired, exp.Unix(), fmt.Sprintf("exp:%s:%d", a.ID, exp.Unix()),
-					flatAt(a), eatText(exp), t.o.PayHint, a.Code)
-				m.Text = fmt.Sprintf("The internet plan for %s ended on %s. Pay via %s, account number %s.", flatAt(a), eatText(exp), t.o.PayHint, a.Code)
+					flatAt(a), eatText(exp), payHint, a.Code)
+				m.Text = fmt.Sprintf("The internet plan for %s ended on %s. Pay via %s, account number %s.", flatAt(a), eatText(exp), payHint, a.Code)
 				out = append(out, m)
 			}
 		}
 		// Payment received: applied recently, real money, big enough.
 		for _, p := range d.Payments {
-			if p.Status != store.PayApplied || p.AccountID == "" || p.Method == "admin" || p.Method == "voucher" || p.AmountKES < t.o.MinConfirmKES {
+			if p.Status != store.PayApplied || p.AccountID == "" || p.Method == "admin" || p.Method == "voucher" || p.AmountKES < minConfirm {
 				continue
 			}
 			at := p.CreatedAt
@@ -181,6 +207,7 @@ func (t *Tenant) Scan() {
 
 // scanOutages sends the automatic notices and the "restored" messages.
 func (t *Tenant) scanOutages(now time.Time) {
+	lang, _, _ := t.opts()
 	if t.o.Mode() == "auto" && t.o.OfflineFiredAt != nil {
 		var ids []string
 		t.o.Store.View(func(d *store.Data) {
@@ -207,7 +234,7 @@ func (t *Tenant) scanOutages(now time.Time) {
 		var name string
 		t.o.Store.View(func(d *store.Data) { name = d.Sites[n.SiteID].Name })
 		m := Message{Channel: ChanWhatsApp, Kind: KindOutageResolved, To: n.To, SiteID: n.SiteID, AccountID: n.AccountID, Template: TplOutageResolved,
-			Lang: t.o.Lang, Params: []string{name, eatText(end)}, Ref: n.Ref, Priority: 5,
+			Lang: lang, Params: []string{name, eatText(end)}, Ref: n.Ref, Priority: 5,
 			DedupeKey: fmt.Sprintf("outok:%s:%d:%s", n.SiteID, n.Ref, n.AccountID),
 			Text:      fmt.Sprintf("Internet service at %s was restored at %s.", name, eatText(end))}
 		t.o.Box.Enqueue(m)
@@ -218,6 +245,7 @@ func (t *Tenant) scanOutages(now time.Time) {
 // building. start is the outage start (its dedupe key, so a second press does
 // nothing); it returns how many messages were queued.
 func (t *Tenant) SendOutageNotice(siteID string, start time.Time) int {
+	lang, _, _ := t.opts()
 	var msgs []Message
 	t.o.Store.View(func(d *store.Data) {
 		name := d.Sites[siteID].Name
@@ -230,7 +258,7 @@ func (t *Tenant) SendOutageNotice(siteID string, start time.Time) int {
 		sort.Slice(accts, func(i, j int) bool { return accts[i].Code < accts[j].Code })
 		for _, a := range accts {
 			msgs = append(msgs, Message{Channel: ChanWhatsApp, Kind: KindOutageNotice, To: a.WhatsApp, SiteID: siteID, AccountID: a.ID,
-				Template: TplOutageNotice, Lang: t.o.Lang, Params: []string{name, eatText(start)}, Ref: start.Unix(), Priority: 5,
+				Template: TplOutageNotice, Lang: lang, Params: []string{name, eatText(start)}, Ref: start.Unix(), Priority: 5,
 				DedupeKey: fmt.Sprintf("out:%s:%d:%s", siteID, start.Unix(), a.ID),
 				Text:      fmt.Sprintf("We are aware of an internet outage at %s since %s.", name, eatText(start))})
 		}

@@ -89,7 +89,7 @@ func (s *Server) adminSearch(w http.ResponseWriter, r *http.Request) {
 		case "payment":
 			to = "/admin/payments?q=" + url.QueryEscape(id)
 		case "building":
-			to = "/admin/sites/view?id=" + url.QueryEscape(id)
+			to = "/admin/routers/view?id=" + url.QueryEscape(id)
 		}
 		http.Redirect(w, r, to, http.StatusSeeOther)
 		return
@@ -419,14 +419,14 @@ func (s *Server) adminEquipmentSave(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminEquipmentImport(w http.ResponseWriter, r *http.Request) {
 	res, err := s.svc.ImportEquipment(r.PostFormValue("lines"))
 	if err != nil {
-		s.back(w, r, "/admin/equipment", "Error: "+err.Error())
+		s.back(w, r, nextOr(r, "/admin/equipment"), "Error: "+err.Error())
 		return
 	}
 	msg := "Imported " + strconv.Itoa(res.Added) + " items"
 	if len(res.Skipped) > 0 {
 		msg += ". Skipped: " + strings.Join(res.Skipped, "; ")
 	}
-	s.back(w, r, "/admin/equipment", msg)
+	s.back(w, r, nextOr(r, "/admin/equipment"), msg)
 }
 
 func (s *Server) adminEquipmentAssign(w http.ResponseWriter, r *http.Request) {
@@ -468,7 +468,7 @@ func (s *Server) adminSiteProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.svc.SaveSiteProfile(billing.SiteProfileInput{SiteID: id, Address: r.PostFormValue("address"), Lat: lat, Lng: lng, GoLive: gl})
-	s.back(w, r, to, msgOr(err, "Building profile saved"))
+	s.back(w, r, to, msgOr(err, "Router profile saved"))
 }
 
 func parseCoord(v string) (float64, error) {

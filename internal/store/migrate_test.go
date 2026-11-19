@@ -34,7 +34,7 @@ func TestMigrateV2ToV3(t *testing.T) {
 	}
 	var siteID string
 	s.View(func(d *Data) {
-		if d.Format != 4 || len(d.Sites) != 1 {
+		if d.Format != FormatVersion || len(d.Sites) != 1 {
 			t.Fatalf("format %d sites %d", d.Format, len(d.Sites))
 		}
 		for id, st := range d.Sites {
@@ -57,11 +57,11 @@ func TestMigrateV2ToV3(t *testing.T) {
 		if !ok || dev.SiteID != siteID || dev.Hits != 2 {
 			t.Fatalf("device not re-keyed: %+v", d.Devices)
 		}
-		if _, ok := d.AccountByMAC(siteID, "AA:BB:CC:DD:EE:01"); !ok {
-			t.Fatal("AccountByMAC by site failed")
+		if a, ok := d.AccountByMAC("AA:BB:CC:DD:EE:01"); !ok || a.SiteID != siteID {
+			t.Fatal("AccountByMAC failed")
 		}
-		if _, ok := d.AccountByMAC("other", "AA:BB:CC:DD:EE:01"); ok {
-			t.Fatal("MAC must not match another site")
+		if _, ok := d.AccountByMAC("AA:BB:CC:DD:EE:FE"); ok {
+			t.Fatal("unknown MAC must not match")
 		}
 	})
 	// The original is backed up byte for byte, mode 0600.
@@ -77,7 +77,7 @@ func TestMigrateV2ToV3(t *testing.T) {
 	var probe struct{ Format int }
 	raw, _ := os.ReadFile(p)
 	json.Unmarshal(raw, &probe)
-	if probe.Format != 4 {
+	if probe.Format != FormatVersion {
 		t.Fatalf("saved format %d", probe.Format)
 	}
 	s2, err := Open(dir)
@@ -99,7 +99,7 @@ func TestMigrateV2EmptyCreatesNoSite(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.View(func(d *Data) {
-		if d.Format != 4 || len(d.Sites) != 0 {
+		if d.Format != FormatVersion || len(d.Sites) != 0 {
 			t.Fatalf("%d %d", d.Format, len(d.Sites))
 		}
 	})
@@ -138,7 +138,7 @@ func TestV3RoundTrip(t *testing.T) {
 }
 
 func TestUnknownFormatRefused(t *testing.T) {
-	for _, f := range []string{"1", "5", "0"} {
+	for _, f := range []string{"1", "8", "0"} {
 		dir := t.TempDir()
 		p := filepath.Join(dir, "ispbill.json")
 		raw := []byte(`{"format":` + f + `}`)
@@ -240,4 +240,66 @@ func TestMigrateV2OrphanDevicesDropped(t *testing.T) {
 	if problems := Validate(d); len(problems) != 0 {
 		t.Fatalf("Validate: %v", problems)
 	}
+}
+
+// A format 4 file (from before settings existed) loads, is backed up as
+// .v4.bak, is rewritten as the current format and keeps every row.
+func TestMigrateV4ToV5(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "ispbill.json")
+	v4 := `{"format":4,"sites":{"s1":{"id":"s1","name":"A","mode":"env"}},"packages":{},"accounts":{},"orders":{},"vouchers":{},"payments":{},"devices":{},"tasks":{},"events":[],"event_seq":0}`
+	os.WriteFile(p, []byte(v4), 0o600)
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.View(func(d *Data) {
+		if d.Format != FormatVersion || len(d.Sites) != 1 || d.Settings == nil || len(d.Settings) != 0 {
+			t.Fatalf("format %d sites %d settings %v", d.Format, len(d.Sites), d.Settings)
+		}
+	})
+	if b, err := os.ReadFile(p + ".v4.bak"); err != nil || string(b) != v4 {
+		t.Fatalf("v4 backup: %v", err)
+	}
+	if err := s.Update(func(d *Data) error {
+		d.Settings["admin.pass_hash"] = Setting{Key: "admin.pass_hash", Value: "h"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s2, _ := Open(dir)
+	s2.View(func(d *Data) {
+		if d.Settings["admin.pass_hash"].Value != "h" {
+			t.Fatal("setting lost over a reopen")
+		}
+	})
+	// An older binary (format 4 only) must refuse, not drop the hash: the
+	// file now says 5, and decodeJSON of an older build rejects unknown formats.
+	var probe struct{ Format int }
+	raw, _ := os.ReadFile(p)
+	json.Unmarshal(raw, &probe)
+	if probe.Format != FormatVersion {
+		t.Fatalf("saved format %d", probe.Format)
+	}
+}
+
+func TestMigrateV6ToV7MakesRoutersIPoEAndPurgesJobSettings(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{"format":6,"sites":{"s1":{"id":"s1","name":"A","mode":"wg","access_mode":"hotspot"},"s2":{"id":"s2","name":"B","mode":"wg"}},
+	"settings":{"site.s1.prov_job":{"key":"site.s1.prov_job","value":"x"},"site.s1.serving_customers":{"key":"site.s1.serving_customers","value":"yes"},
+	"site.s1.join_report":{"key":"site.s1.join_report","value":"keep"},"site.s2.hotspot_bypass_at":{"key":"site.s2.hotspot_bypass_at","value":"x"},
+	"site.s2.cutover_confirmed_at":{"key":"site.s2.cutover_confirmed_at","value":"x"},"other":{"key":"other","value":"keep"}}}`
+	os.WriteFile(filepath.Join(dir, "ispbill.json"), []byte(raw), 0o600)
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.View(func(d *Data) {
+		if d.Format != 7 || d.Sites["s1"].AccessMode != AccessIPoE || d.Sites["s2"].AccessMode != AccessIPoE {
+			t.Fatalf("format %d, modes %q %q", d.Format, d.Sites["s1"].AccessMode, d.Sites["s2"].AccessMode)
+		}
+		if len(d.Settings) != 2 || d.Settings["site.s1.join_report"].Value != "keep" || d.Settings["other"].Value != "keep" {
+			t.Fatalf("settings %v", d.Settings)
+		}
+	})
 }

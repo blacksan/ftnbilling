@@ -198,19 +198,10 @@ func (s *Server) fleetTiles(sc scope) ([]fleetTile, fleetTotals) {
 	return tiles, tot
 }
 
+// adminFleet: the fleet overview is the Routers page now (it carries the same
+// status, flats, WAN and tunnel columns). The old address keeps working.
 func (s *Server) adminFleet(w http.ResponseWriter, r *http.Request) {
-	if !s.hasOps() {
-		s.notReady(w, r, "fleet", "The fleet monitor")
-		return
-	}
-	p := s.page(r, "fleet")
-	p.Refresh = 30
-	tiles, tot := s.fleetTiles(s.scopeOf(r))
-	p.Data["Tiles"], p.Data["Totals"] = tiles, tot
-	p.Data["Revenue"] = true
-	p.Data["Paused"] = len(tiles) == 0
-	p.Data["Site"] = p.Site
-	s.render(w, "admin_fleet", p)
+	http.Redirect(w, r, "/admin/routers", http.StatusFound)
 }
 
 // ---- uptime ---------------------------------------------------------------

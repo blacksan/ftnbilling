@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +19,8 @@ func (s *Server) siteRoutes(get, post func(string, http.HandlerFunc)) {
 	get("/admin/sites/new", s.adminSiteNew)
 	get("/admin/sites/view", s.adminSiteView)
 	get("/admin/sites/status.json", s.adminSiteStatus)
+	get("/admin/sites/checks.json", s.adminSiteChecks)
+	post("/admin/sites/fix", s.adminSiteFix)
 	post("/admin/sites/create", s.adminSiteCreate)
 	post("/admin/sites/update", s.adminSiteUpdate)
 	post("/admin/sites/join", s.adminSiteJoin)
@@ -28,6 +29,8 @@ func (s *Server) siteRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/sites/sync", s.adminSiteSync)
 	post("/admin/sites/disable", s.adminSiteDisable)
 	post("/admin/sites/remove", s.adminSiteRemove)
+	post("/admin/sites/reboot", s.adminSiteReboot)
+	s.deviceRoutes(get, post)
 }
 
 // joinScript serves GET /j/{token}: the one-time router script. Every kind of
@@ -38,10 +41,14 @@ func (s *Server) joinScript(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
-	script, siteID, err := s.mgr.ConsumeJoinOpts(r.PathValue("token"), r.UserAgent(), realIP(r), r.URL.Query().Get("nocheck") == "1")
+	script, siteID, err := s.mgr.ConsumeJoin(r.PathValue("token"), r.UserAgent(), realIP(r), r.URL.Query().Get("nocheck") == "1")
 	switch {
 	case errors.Is(err, sites.ErrJoinInvalid):
 		http.NotFound(w, r)
+		return
+	case errors.Is(err, sites.ErrCannotRender):
+		// The token is still valid: say why, so the admin can fix it and run the command again.
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	case err != nil:
 		s.log.Error("join script", "err", err)
@@ -52,6 +59,24 @@ func (s *Server) joinScript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Write(script)
+}
+
+// joinReset serves GET /j/{token}/reset: the fixed reset stub, for five minutes
+// after the setup script was fetched with the same token. Same 404 as a bad link.
+func (s *Server) joinReset(w http.ResponseWriter, r *http.Request) {
+	if !s.joinRL.allow(realIP(r)) {
+		w.Header().Set("Retry-After", "60")
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+		return
+	}
+	stub, err := s.mgr.ResetStub(r.PathValue("token"), r.UserAgent())
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write(stub)
 }
 
 type siteRow struct {
@@ -104,38 +129,18 @@ func (s *Server) siteRows() []siteRow {
 	return rows
 }
 
-func (s *Server) adminSites(w http.ResponseWriter, r *http.Request) {
-	p := s.page(r, "sites")
-	p.Data["Rows"] = s.siteRows()
-	s.render(w, "admin_sites", p)
-}
-
-func (s *Server) adminSiteNew(w http.ResponseWriter, r *http.Request) {
-	p := s.page(r, "sites")
-	p.Data["Mode"] = "new"
-	p.Data["Form"] = sites.ApplyDefaults(s.cfg, store.Site{Mode: store.SiteModeWG})
-	s.render(w, "admin_sites", p)
-}
-
 func siteInput(r *http.Request) sites.SiteInput {
 	f := func(k string) string { return strings.TrimSpace(r.PostFormValue(k)) }
 	fl := func(k string) float64 { v, _ := strconv.ParseFloat(f(k), 64); return v }
 	vlan, _ := strconv.Atoi(f("vlan"))
 	return sites.SiteInput{
 		Name: f("name"), Notes: f("notes"), SupportPhone: f("support"),
-		HotspotServer: f("hotspot"), WANInterface: f("wan"), WANList: f("wanlist"), OLTInterface: f("olt"),
-		CustomerNet: f("subnet"), VLANID: vlan, WANCapMbps: fl("wancap"), OLTCapMbps: fl("oltcap"), FUPTB: fl("fup"),
-		Provision: r.PostFormValue("provision") == "1", LegacyContainer: r.PostFormValue("legacy") == "1", BenchPort: f("bench"),
+		WANInterface: f("wan"), OLTInterface: f("olt"),
+		CustomerNet: f("subnet"), VLANID: vlan, WANCapMbps: fl("wancap"), OLTCapMbps: fl("oltcap"), FUPTB: fl("fup"), BenchPort: f("bench"),
+		WANMode: f("wanmode"), WANAddress: f("wanaddr"), WANGateway: f("wangw"), WANDNS: f("wandns"),
+		PPPoEUser: f("pppoeuser"), PPPoEPass: r.PostFormValue("pppoepass"), PPPoEPassClear: r.PostFormValue("pppoeclear") == "1",
+		LANPorts: f("lanports"), LANSubnet: f("lansubnet"),
 	}
-}
-
-func (s *Server) adminSiteCreate(w http.ResponseWriter, r *http.Request) {
-	st, err := s.mgr.CreateSite(siteInput(r))
-	if err != nil {
-		s.back(w, r, "/admin/sites/new", "Error: "+err.Error())
-		return
-	}
-	s.back(w, r, "/admin/sites/view?id="+st.ID, "Building added. Now connect its router with the join command below.")
 }
 
 func (s *Server) siteID(r *http.Request) (store.Site, bool) {
@@ -147,51 +152,6 @@ func (s *Server) siteID(r *http.Request) (store.Site, bool) {
 	var ok bool
 	s.st.View(func(d *store.Data) { st, ok = d.Sites[id]; ok = ok && !st.Removed })
 	return st, ok
-}
-
-// siteView builds the building page; cmd and fallback are set only in the
-// response to a join request, which is the one time the command is shown.
-func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site, cmd, cmdNoCheck string, exp time.Time) {
-	p := s.page(r, "sites")
-	eff := s.mgr.Effective(st)
-	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
-	defer cancel()
-	status, _ := s.mgr.Status(ctx, st.ID)
-	p.Data["Site"], p.Data["Eff"], p.Data["Status"] = st, eff, status
-	p.Data["Env"] = st.Mode == store.SiteModeEnv
-	p.Data["Cmd"], p.Data["CmdNoCheck"], p.Data["CmdExpires"] = cmd, cmdNoCheck, exp
-	p.Data["Insecure"] = !strings.HasPrefix(s.cfg.PublicBaseURL, "https://")
-	p.Data["AllowInsecure"] = s.cfg.AllowInsecureJoin
-	p.Data["TTL"] = int(s.cfg.JoinTokenTTL.Minutes())
-	p.Data["Portal"] = s.portalBase(r) + "/portal?site=" + url.QueryEscape(st.ID)
-	var pkgs []store.Package
-	var accts int
-	s.st.View(func(d *store.Data) {
-		pkgs = d.PackageList()
-		for _, a := range d.Accounts {
-			if a.SiteID == st.ID {
-				accts++
-			}
-		}
-	})
-	p.Data["Pkgs"], p.Data["Accounts"] = pkgs, accts
-	if rep, ok := s.svc.Building(st.ID); ok {
-		p.Data["Rep"] = rep
-	}
-	p.Data["Roles"] = []string{store.RoleLandlord, store.RoleCaretaker, store.RoleAgent, store.RoleSecurity, store.RoleOther}
-	if cmd != "" {
-		w.Header().Set("Cache-Control", "no-store")
-	}
-	s.render(w, "admin_sites", p)
-}
-
-func (s *Server) adminSiteView(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.siteID(r)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	s.siteView(w, r, st, "", "", time.Time{})
 }
 
 func (s *Server) adminSiteStatus(w http.ResponseWriter, r *http.Request) {
@@ -213,7 +173,7 @@ func (s *Server) adminSiteUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.mgr.UpdateSite(st.ID, siteInput(r))
-	s.back(w, r, "/admin/sites/view?id="+st.ID, msgOr(err, "Saved"))
+	s.back(w, r, "/admin/routers/view?id="+st.ID, msgOr(err, "Saved"))
 }
 
 func (s *Server) adminSiteJoin(w http.ResponseWriter, r *http.Request) {
@@ -222,14 +182,13 @@ func (s *Server) adminSiteJoin(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	tok, exp, err := s.mgr.MintJoin(st.ID)
+	cmd, noCheck, exp, err := s.joinLines(st)
 	if err != nil {
-		s.back(w, r, "/admin/sites/view?id="+st.ID, "Error: "+err.Error())
+		s.back(w, r, "/admin/routers/view?id="+st.ID+"&tab=setup", "Error: "+err.Error())
 		return
 	}
-	base := s.cfg.PublicBaseURL
-	// The command is rendered here and never put in a URL or the log.
-	s.siteView(w, r, st, sites.JoinCommand(base, tok, true), sites.JoinCommand(base, tok, false), exp)
+	// The line is rendered here and never put in a URL or the log.
+	s.siteView(w, r, st, cmd, noCheck, exp)
 }
 
 func (s *Server) adminSiteJoinRevoke(w http.ResponseWriter, r *http.Request) {
@@ -242,7 +201,7 @@ func (s *Server) adminSiteJoinRevoke(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, store.ErrNoChange) {
 		err = nil
 	}
-	s.back(w, r, "/admin/sites/view?id="+st.ID, msgOr(err, "The join command no longer works"))
+	s.back(w, r, "/admin/routers/view?id="+st.ID, msgOr(err, "The join command no longer works"))
 }
 
 func (s *Server) adminSitePackages(w http.ResponseWriter, r *http.Request) {
@@ -262,7 +221,7 @@ func (s *Server) adminSitePackages(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 	err := s.svc.SaveSiteOverrides(st.ID, ov)
-	s.back(w, r, "/admin/sites/view?id="+st.ID, msgOr(err, "Packages saved for this building"))
+	s.back(w, r, "/admin/routers/view?id="+st.ID, msgOr(err, "Packages saved for this router"))
 }
 
 func (s *Server) adminSiteSync(w http.ResponseWriter, r *http.Request) {
@@ -273,8 +232,13 @@ func (s *Server) adminSiteSync(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+	if billing.IPoE(st) {
+		_, err := s.svc.ReconcileSite(ctx, st.ID)
+		s.back(w, r, "/admin/routers/view?id="+st.ID, msgOr(err, "Router reconciled with the accounts"))
+		return
+	}
 	err := s.svc.SyncProfiles(ctx, st.ID)
-	s.back(w, r, "/admin/sites/view?id="+st.ID, msgOr(err, "Speed profiles pushed to the router"))
+	s.back(w, r, "/admin/routers/view?id="+st.ID, msgOr(err, "Speed profiles pushed to the router"))
 }
 
 func (s *Server) adminSiteDisable(w http.ResponseWriter, r *http.Request) {
@@ -288,7 +252,7 @@ func (s *Server) adminSiteDisable(w http.ResponseWriter, r *http.Request) {
 	if off {
 		msg = "Paused: no collection and no router changes until resumed"
 	}
-	s.back(w, r, "/admin/sites/view?id="+st.ID, msgOr(s.mgr.SetDisabled(st.ID, off), msg))
+	s.back(w, r, "/admin/routers/view?id="+st.ID, msgOr(s.mgr.SetDisabled(st.ID, off), msg))
 }
 
 func (s *Server) adminSiteRemove(w http.ResponseWriter, r *http.Request) {
@@ -298,8 +262,8 @@ func (s *Server) adminSiteRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.mgr.RemoveSite(st.ID, r.PostFormValue("confirm")); err != nil {
-		s.back(w, r, "/admin/sites/view?id="+st.ID, "Error: "+err.Error())
+		s.back(w, r, "/admin/routers/view?id="+st.ID, "Error: "+err.Error())
 		return
 	}
-	s.back(w, r, "/admin/sites", "Building removed: "+st.Name)
+	s.back(w, r, "/admin/routers", "Router removed: "+st.Name)
 }

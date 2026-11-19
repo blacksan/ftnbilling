@@ -1,36 +1,3 @@
 {{define "admin_notready"}}{{template "ahead" .}}
-<div class="card"><b>{{.Data.What}} is not running.</b> <span class="muted">This page needs the monitoring services that the server starts at launch. Restart the server to bring them up.</span></div>
-{{template "afoot"}}{{end}}
-
-{{define "admin_fleet"}}{{template "ahead" .}}{{$T := .Data.Totals}}
-<div class="tiles">
-<div class="tile {{if $T.Down}}bad{{else if $T.Up}}good{{end}}">Buildings online<b>{{$T.Up}} <small style="display:inline">of {{$T.Sites}}</small></b><small>{{if $T.Down}}{{$T.Down}} down{{else if $T.Other}}{{$T.Other}} paused or not joined{{else}}all reachable{{end}}</small></div>
-<div class="tile">Flats active<b>{{$T.Active}} <small style="display:inline">of {{$T.Total}}</small></b><small>flats with a paid plan running</small></div>
-<div class="tile">Revenue today<b>{{kes $T.Today}}</b><small>this month {{kes $T.Month}}</small></div>
-<div class="tile {{if $T.Alerts}}warn{{else}}good{{end}}">Open alerts<b>{{$T.Alerts}}</b><small>{{if $T.Alerts}}<a href="/admin/alerts">see the alerts</a>{{else}}nothing needs attention{{end}}</small></div>
-</div>
-<p class="muted">Reloads every 30 seconds. Revenue counts M-Pesa and test payments, not vouchers or free grants. A building is marked down after 3 failed checks in a row (about 90 seconds) and up again after 2 successful ones.</p>
-<div class="fgrid">
-{{range .Data.Tiles}}<div class="ftile {{.Class}}">
-<div class="st"><h3><a href="/admin/site/select?site={{.S.ID}}&amp;next=/admin/metrics" style="color:inherit;text-decoration:none">{{.S.Name}}</a></h3><span class="pill {{.State}}">{{.State}}</span>{{if .Alerts}}<span class="badge" title="open alerts">{{.Alerts}}</span>{{end}}{{if .Muted}}<span class="muted">muted</span>{{end}}</div>
-{{if eq .State "down"}}<div style="color:var(--ink)">Down for {{.Since}}.</div><div>{{.Cause}}</div>{{if .Err}}<div class="muted">{{.Err}}</div>{{end}}
-{{else if eq .State "up"}}<div>Up for {{.Since}}</div>
-{{else if eq .State "paused"}}<div>Paused: not monitored</div>
-{{else if eq .State "waiting"}}<div>Waiting for the router to join</div>
-{{else}}<div>No probe result yet</div>{{end}}
-{{if .HasWAN}}<div class="bar"><i style="width:{{f1 .WANPct}}%"></i></div>{{end}}
-<dl>
-<dt>WireGuard handshake</dt><dd>{{.Handshake}}</dd>
-<dt>WAN load</dt><dd>{{if .HasWAN}}{{.WAN}} ({{f0 .WANPct}}%){{else}}-{{end}}</dd>
-<dt>Router ping</dt><dd>{{if .Router}}{{.Router}}{{else}}-{{end}}</dd>
-<dt>Tunnel</dt><dd>{{if .Tunnel}}{{.Tunnel}}{{else}}-{{end}}</dd>
-<dt>Flats active</dt><dd>{{.Active}} of {{.Total}}</dd>
-<dt>Revenue today</dt><dd>{{kes .Today}}</dd>
-<dt>Revenue this month</dt><dd>{{kes .Month}}</dd>
-</dl>
-{{if .Notice}}<form method="post" action="/admin/sites/outage-notice" style="margin-top:10px" onsubmit="return confirm('Send a WhatsApp outage notice to every tenant of {{.S.Name}} who has a WhatsApp number?')"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="site" value="{{.S.ID}}"><button>Tell tenants about the outage</button>{{if .Notified}} <span class="muted">{{.Notified}} notices already sent</span>{{end}}</form>{{end}}
-<div style="margin-top:8px"><a href="/admin/uptime?site={{.S.ID}}">uptime</a> &middot; <a href="/admin/site/select?site={{.S.ID}}&amp;next=/admin/metrics">usage</a> &middot; <a href="/admin/sites/view?id={{.S.ID}}">building</a></div>
-</div>
-{{else}}<div class="card">No buildings yet. <a href="/admin/sites/new">Add the first one.</a></div>{{end}}
-</div>
-{{template "afoot"}}{{end}}
+<div class="panel"><b>{{.Data.What}} is not running.</b> <span class="muted">This page needs the monitoring services that the server starts at launch. Restart the server to bring them up.</span></div>
+{{template "afoot" .}}{{end}}

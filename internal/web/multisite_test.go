@@ -38,6 +38,9 @@ type multi struct {
 	*app
 	mocks map[string]*routeros.Mock
 	logs  *syncBuf
+
+	alertMu sync.Mutex
+	alerts  []string // security alerts the owners would have got
 }
 
 func (m *multi) addSite(t *testing.T, name string) store.Site {
@@ -66,14 +69,19 @@ func newMultiOps(t *testing.T, mut func(*config.Config), mkOps func(cfg config.C
 	_, pub, _ := wg.GenerateKeypair()
 	cfg := config.Config{BrandName: "Building WiFi", TestMode: true, AdminUser: "admin", AdminPass: pw,
 		SupportPhone: "0700 111 222", NetflowAddr: "off", PingTargets: []string{"8.8.8.8"},
-		WGPublicKey: pub, WGEndpoint: "203.0.113.10:51820", WGSubnet: "10.99.0.0/22", AdminAllowCIDR: "10.98.0.0/24", JoinTokenTTL: 30 * time.Minute,
-		JoinRequireMikrotikUA: true, PublicBaseURL: "https://billing.example.co.ke", DataDir: t.TempDir(),
+		WGPublicKey: pub, WGEndpoint: "203.0.113.10:51820", WGSubnet: "10.99.0.0/22", DataKey: testKey, JoinTokenTTL: 30 * time.Minute,
+		JoinRequireMikrotikUA: true, PublicIP: "203.0.113.10", PublicBaseURL: "https://billing.example.co.ke", DataDir: t.TempDir(),
 		FlowEvery: time.Hour, PortEvery: time.Hour, PingEvery: time.Hour, DNSEvery: time.Hour, SaveEvery: time.Hour}
 	if mut != nil {
 		mut(&cfg)
 	}
 	st, _ := storetest.Open(t, cfg.DataDir)
 	logs := &syncBuf{}
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Log(logs.String())
+		}
+	})
 	log := slog.New(slog.NewTextHandler(logs, nil))
 	m := &multi{mocks: map[string]*routeros.Mock{}, logs: logs}
 	var mu sync.Mutex
@@ -101,9 +109,11 @@ func newMultiOps(t *testing.T, mut func(*config.Config), mkOps func(cfg config.C
 	}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	m.app = &app{ts: ts, st: st, svc: svc, mgr: mgr,
-		cl: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
-	m.admin("GET", "/admin", nil).Body.Close()
+	srv.SetSecurityAlertSink(func(msg string) { m.alertMu.Lock(); m.alerts = append(m.alerts, msg); m.alertMu.Unlock() })
+	m.app = &app{ts: ts, st: st, svc: svc, mgr: mgr, srv: srv, cl: &http.Client{CheckRedirect: noRedirect}}
+	m.owner = seedUser(t, srv, st, "admin", store.RoleOwner, pw)
+	m.br = signIn(t, ts, srv, st, m.owner)
+	m.csrf = m.br.CSRF
 	return m
 }
 
@@ -124,41 +134,15 @@ func (m *multi) selectSite(t *testing.T, id string) {
 	m.cookie = &http.Cookie{Name: "ftn_site", Value: id}
 }
 
-func TestPortalGuardIsPerSite(t *testing.T) {
-	m := newMulti(t)
-	A, B := m.addSite(t, "Alpha"), m.addSite(t, "Beta")
-	macB := "AA:BB:CC:DD:EE:0B"
-	if _, err := m.svc.CreateAccount(billing.AccountInput{SiteID: B.ID, Flat: "Flat B1", MAC: macB}); err != nil {
-		t.Fatal(err)
-	}
-	m.mock(A.ID)
-	m.mock(B.ID).AddHost(macB, "10.5.50.20")
-	time.Sleep(1100 * time.Millisecond)
-	// The device is on Beta's hotspot: Beta shows the flat, Alpha does not.
-	_, b := m.portal(t, "/portal?site="+B.ID+"&mac="+macB+"&ip=10.5.50.20")
-	if !strings.Contains(b, "Flat B1") || !strings.Contains(b, `name="site" value="`+B.ID+`"`) {
-		t.Fatalf("site B portal: %s", b)
-	}
-	_, b = m.portal(t, "/portal?site="+A.ID+"&mac="+macB+"&ip=10.5.50.20")
-	if strings.Contains(b, "Flat B1") {
-		t.Fatal("site A's portal accepted site B's MAC")
-	}
-	// No site and two buildings: the neutral page.
-	_, b = m.portal(t, "/portal?mac="+macB+"&ip=10.5.50.20")
-	if strings.Contains(b, "Flat B1") || !strings.Contains(b, "Open this page from the WiFi login") {
-		t.Fatalf("no site should be neutral: %s", b)
-	}
-}
-
 func TestAdminSwitcherFiltersLists(t *testing.T) {
 	m := newMulti(t)
 	A, B := m.addSite(t, "Alpha"), m.addSite(t, "Beta")
 	m.svc.CreateAccount(billing.AccountInput{SiteID: A.ID, Flat: "Flat A1", MAC: "AA:BB:CC:00:00:01"})
-	m.svc.CreateAccount(billing.AccountInput{SiteID: B.ID, Flat: "Flat B1", MAC: "AA:BB:CC:00:00:01"})
+	m.svc.CreateAccount(billing.AccountInput{SiteID: B.ID, Flat: "Flat B1", MAC: "AA:BB:CC:00:00:0B"})
 	m.svc.CreateAccount(billing.AccountInput{SiteID: B.ID, Flat: "Flat B2", MAC: "AA:BB:CC:00:00:02"})
 
 	html := m.adminGet(t, "/admin/accounts") // no cookie, two buildings: all
-	for _, f := range []string{"Flat A1", "Flat B1", "Flat B2", "<th>Building</th>", "All buildings"} {
+	for _, f := range []string{"Flat A1", "Flat B1", "Flat B2", "<th>Router</th>"} {
 		if !strings.Contains(html, f) {
 			t.Errorf("all view lacks %q", f)
 		}
@@ -203,34 +187,44 @@ func TestMoveAccountThroughTheAdmin(t *testing.T) {
 	}
 }
 
-func TestAdminServedOnlyToLoopbackAndAdminNet(t *testing.T) {
+// /admin is public now (it has its own sign-in); only the routers' WireGuard
+// subnet is shut out, of /admin and of /api/v1.
+func TestAdminAndAPINotServedToRouterTunnel(t *testing.T) {
 	m := newMulti(t)
-	for ip, want := range map[string]int{
-		"10.99.0.5":    404, // a router tunnel
-		"198.51.100.7": 404, // the internet
-		"10.98.0.5":    200, // an admin WireGuard peer
-		"10.98.1.5":    404, // outside the admin /24
-		"127.0.0.1":    200,
-	} {
-		req, _ := http.NewRequest("GET", m.ts.URL+"/admin", nil)
-		req.SetBasicAuth("admin", pw)
+	get := func(ip, path string, cookie bool) int {
+		req, _ := http.NewRequest("GET", m.ts.URL+path, nil)
 		req.Header.Set("X-Forwarded-For", ip)
+		if cookie {
+			req.AddCookie(m.br.Cookie)
+		}
 		r, err := m.cl.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
 		r.Body.Close()
-		if r.StatusCode != want {
-			t.Errorf("admin from %s: %d, want %d", ip, r.StatusCode, want)
+		return r.StatusCode
+	}
+	for _, p := range []string{"/admin", "/admin/login", "/admin/accounts", "/admin/security", "/api/v1/me", "/api/v1/accounts", "/api/v1/auth/login"} {
+		if got := get("10.99.0.5", p, true); got != 404 {
+			t.Errorf("%s from the tunnel: %d, want 404", p, got)
 		}
 	}
-	// no forwarded header: the test client is on loopback
-	req, _ := http.NewRequest("GET", m.ts.URL+"/admin", nil)
-	req.SetBasicAuth("admin", pw)
-	r, _ := m.cl.Do(req)
-	r.Body.Close()
-	if r.StatusCode != 200 {
-		t.Errorf("admin from loopback: %d", r.StatusCode)
+	// Anywhere else: signed out gets the login page; signed in gets /admin.
+	if got := get("198.51.100.7", "/admin/login", false); got != 200 {
+		t.Errorf("login from the internet: %d", got)
+	}
+	if got := get("198.51.100.7", "/admin", false); got != 303 {
+		t.Errorf("/admin signed out: %d", got)
+	}
+	if got := get("198.51.100.7", "/admin", true); got != 200 {
+		t.Errorf("/admin signed in: %d", got)
+	}
+	if got := get("127.0.0.1", "/admin", true); got != 200 {
+		t.Errorf("/admin from loopback: %d", got)
+	}
+	// The portal itself is still served to the tunnel's neighbours (the customers).
+	if got := get("10.99.0.5", "/healthz", false); got == 404 {
+		t.Errorf("healthz from the tunnel: %d", got)
 	}
 }
 
@@ -267,24 +261,24 @@ func TestJoinEndpoint(t *testing.T) {
 	if len(token) < 40 {
 		t.Fatalf("token %q", token)
 	}
-	if strings.Contains(m.adminGet(t, "/admin/sites/view?id="+site.ID), token) {
+	if strings.Contains(m.adminGet(t, "/admin/routers/view?id="+site.ID), token) {
 		t.Fatal("the command is shown again on a later page load")
 	}
 
 	// A link preview (wrong User-Agent) neither works nor uses the token up.
 	r1, b1 := m.joinGet(token, "Slackbot-LinkExpanding 1.0")
 	// An unknown token looks exactly the same.
-	r2, b2 := m.joinGet("nope-nope-nope-nope-nope-nope-nope-nope-nope", "Mikrotik/7.15 Fetch")
+	r2, b2 := m.joinGet("nope-nope-nope-nope-nope-nope-nope-nope-nope", "RouterOS 7.20")
 	if r1.StatusCode != 404 || r2.StatusCode != 404 || b1 != b2 {
 		t.Fatalf("bad requests must look identical: %d %q vs %d %q", r1.StatusCode, b1, r2.StatusCode, b2)
 	}
-	r3, script := m.joinGet(token, "Mikrotik/7.15 Fetch")
+	r3, script := m.joinGet(token, "RouterOS 7.20")
 	if r3.StatusCode != 200 || !strings.HasPrefix(r3.Header.Get("Content-Type"), "text/plain") || r3.Header.Get("Cache-Control") != "no-store" ||
 		!strings.Contains(script, "wireguard") {
 		t.Fatalf("script %d %s %.200s", r3.StatusCode, r3.Header.Get("Content-Type"), script)
 	}
 	// Single use.
-	r4, b4 := m.joinGet(token, "Mikrotik/7.15 Fetch")
+	r4, b4 := m.joinGet(token, "RouterOS 7.20")
 	if r4.StatusCode != 404 || b4 != b1 {
 		t.Fatalf("second use: %d %q", r4.StatusCode, b4)
 	}
@@ -315,12 +309,12 @@ func TestJoinEndpointNoCheckVariant(t *testing.T) {
 	if !strings.Contains(page, "/j/"+tok+"?nocheck=1") {
 		t.Fatalf("the fallback command lacks ?nocheck=1: %.600s", page)
 	}
-	r, script := m.joinGet(tok+"?nocheck=1", "Mikrotik/7.15 Fetch")
+	r, script := m.joinGet(tok+"?nocheck=1", "RouterOS 7.20")
 	if r.StatusCode != 200 || strings.Contains(script, "check-certificate=yes") || !strings.Contains(script, "check-certificate=no") {
 		t.Fatalf("nocheck script %d: wants check-certificate=no on the page downloads", r.StatusCode)
 	}
 	tok2, _ := token("Epsilon")
-	r, script = m.joinGet(tok2, "Mikrotik/7.15 Fetch")
+	r, script = m.joinGet(tok2, "RouterOS 7.20")
 	if r.StatusCode != 200 || strings.Contains(script, "check-certificate=no") || !strings.Contains(script, "check-certificate=yes") {
 		t.Fatalf("default script %d: wants check-certificate=yes", r.StatusCode)
 	}
@@ -341,64 +335,23 @@ func TestJoinEndpointIsRateLimited(t *testing.T) {
 	}
 }
 
-func TestRouterFilesArePerSite(t *testing.T) {
-	m := newMulti(t)
-	A := m.addSite(t, "Alpha")
-	code, b := m.portal(t, "/routeros/hotspot/"+A.ID+"/login.html")
-	if code != 200 || !strings.Contains(b, "/portal?site="+A.ID+"&mac=$(mac-esc)") || strings.Contains(b, "{{") {
-		t.Fatalf("per-site login.html %d %s", code, b)
-	}
-	if code, _ = m.portal(t, "/routeros/hotspot/sdeadbe/login.html"); code != 404 {
-		t.Fatalf("unknown site: %d", code)
-	}
-	// No legacy building here, so the un-prefixed paths are gone.
-	if code, _ = m.portal(t, "/routeros/hotspot/login.html"); code != 404 {
-		t.Fatalf("legacy path served without a legacy building: %d", code)
-	}
-}
-
-func TestVoucherFromAnotherBuildingIsRefused(t *testing.T) {
-	m := newMulti(t)
-	A, B := m.addSite(t, "Alpha"), m.addSite(t, "Beta")
-	macA := "AA:BB:CC:00:0A:01"
-	m.svc.CreateAccount(billing.AccountInput{SiteID: A.ID, Flat: "Flat A1", MAC: macA})
-	m.mock(A.ID).AddHost(macA, "10.5.50.9")
-	time.Sleep(1100 * time.Millisecond)
-	var pkg string
-	m.st.View(func(d *store.Data) {
-		for id := range d.Packages {
-			pkg = id
-		}
-	})
-	_, vs, err := m.svc.GenerateVouchers(pkg, B.ID, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	form := url.Values{"site": {A.ID}, "mac": {macA}, "ip": {"10.5.50.9"}, "voucher": {vs[0].Code}}
-	r, _ := m.cl.PostForm(m.ts.URL+"/portal/voucher", form)
-	b := body(t, r)
-	if !strings.Contains(b, "invalid or already used") {
-		t.Fatalf("voucher from building B worked in A: %.300s", b)
-	}
-}
-
 func TestBuildingPages(t *testing.T) {
 	m := newMulti(t)
-	if h := m.adminGet(t, "/admin/sites"); !strings.Contains(h, "No buildings yet") {
+	if h := m.adminGet(t, "/admin/routers"); !strings.Contains(h, "No routers linked yet") {
 		t.Fatal("empty list")
 	}
-	if h := m.adminGet(t, "/admin/sites/new"); !strings.Contains(h, "Add building") {
+	if h := m.adminGet(t, "/admin/routers/new"); !strings.Contains(h, "Add router") {
 		t.Fatal("new page")
 	}
 	loc := m.adminPost(t, "/admin/sites/create", url.Values{"name": {"Delta Court"}, "support": {"0711000000"}})
-	if !strings.Contains(loc, "/admin/sites/view?id=") {
+	if !strings.Contains(loc, "/admin/routers/view?id=") {
 		t.Fatalf("create: %s", loc)
 	}
-	id := strings.TrimPrefix(strings.SplitN(loc, "&msg", 2)[0], "/admin/sites/view?id=")
-	if h := m.adminGet(t, "/admin/sites/view?id="+id); !strings.Contains(h, "Delta Court") || !strings.Contains(h, "Make the join command") {
+	id := strings.TrimPrefix(strings.SplitN(loc, "&", 2)[0], "/admin/routers/view?id=")
+	if h := m.adminGet(t, "/admin/routers/view?id="+id+"&tab=setup"); !strings.Contains(h, "Delta Court") || !strings.Contains(h, "Make the join line") {
 		t.Fatal("view page")
 	}
-	if h := m.adminGet(t, "/admin/sites/status.json?id="+id); !strings.Contains(h, `"token":"none"`) {
+	if h := m.adminGet(t, "/admin/routers/status.json?id="+id); !strings.Contains(h, `"token":"none"`) {
 		t.Fatalf("status json: %s", h)
 	}
 	if l := m.adminPost(t, "/admin/sites/create", url.Values{"name": {"delta court"}}); !strings.Contains(l, "Error") {
@@ -411,7 +364,7 @@ func TestBuildingPages(t *testing.T) {
 	if l := m.adminPost(t, "/admin/sites/remove", url.Values{"id": {id}, "confirm": {"Delta Court"}}); strings.Contains(l, "Error") {
 		t.Fatalf("remove: %s", l)
 	}
-	if h := m.adminGet(t, "/admin/sites"); strings.Contains(h, "Delta Court") {
+	if h := m.adminGet(t, "/admin/routers"); strings.Contains(h, "Delta Court") {
 		t.Fatal("removed building still listed")
 	}
 }
@@ -424,4 +377,10 @@ func TestHealthzCountsBuildings(t *testing.T) {
 	if r.StatusCode != 200 || !strings.Contains(b, `"sites_total":1`) || !strings.Contains(b, `"router_ok"`) {
 		t.Fatalf("healthz %d %s", r.StatusCode, b)
 	}
+}
+
+func (m *multi) gotAlerts() []string {
+	m.alertMu.Lock()
+	defer m.alertMu.Unlock()
+	return append([]string(nil), m.alerts...)
 }

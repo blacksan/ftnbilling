@@ -55,7 +55,7 @@ func newFixture(t *testing.T, mut func(*config.Config)) *fixture {
 		t.Fatal(err)
 	}
 	f := &fixture{t: t, cfg: cfg, st: st, now: time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC), mocks: map[string]*routeros.Mock{}}
-	f.m = New(Options{Cfg: cfg, Store: st, Log: quiet(), Now: func() time.Time { f.mu.Lock(); defer f.mu.Unlock(); return f.now },
+	f.m = New(Options{Cfg: cfg, DataKey: cfg.DataKey, Store: st, Log: quiet(), Now: func() time.Time { f.mu.Lock(); defer f.mu.Unlock(); return f.now },
 		Dir: func(string) metrics.Directory { return nil },
 		NewClient: func(s store.Site) routeros.Client {
 			f.mu.Lock()
@@ -78,7 +78,7 @@ func (f *fixture) site(id string) (s store.Site) {
 
 func (f *fixture) create(name string) store.Site {
 	f.t.Helper()
-	s, err := f.m.CreateSite(SiteInput{Name: name, Provision: true})
+	s, err := f.m.CreateSite(SiteInput{Name: name})
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -117,16 +117,16 @@ func TestJoinTokenFlow(t *testing.T) {
 		}
 	})
 	// A link-preview bot (wrong User-Agent) does not consume it.
-	if _, _, err := f.m.ConsumeJoin(tok, "WhatsApp/2.23", "1.2.3.4"); err != ErrJoinInvalid {
+	if _, _, err := f.m.ConsumeJoin(tok, "WhatsApp/2.23", "1.2.3.4", false); err != ErrJoinInvalid {
 		t.Fatalf("bot: %v", err)
 	}
 	if got := f.site(s.ID); !got.Join.UsedAt.IsZero() || got.WGPublicKey != "" {
 		t.Fatal("a bot used the token up")
 	}
-	if _, _, err := f.m.ConsumeJoin("not-the-token", mt, "1.2.3.4"); err != ErrJoinInvalid {
+	if _, _, err := f.m.ConsumeJoin("not-the-token", mt, "1.2.3.4", false); err != ErrJoinInvalid {
 		t.Fatalf("wrong token: %v", err)
 	}
-	script, id, err := f.m.ConsumeJoin(tok, "MikroTik/7.20 (fetch)", "198.51.100.7")
+	script, id, err := f.m.ConsumeJoin(tok, "MikroTik/7.20 (fetch)", "198.51.100.7", false)
 	if err != nil || id != s.ID {
 		t.Fatalf("%v %s", err, id)
 	}
@@ -152,7 +152,7 @@ func TestJoinTokenFlow(t *testing.T) {
 		t.Fatal("script lacks the REST password or tunnel address")
 	}
 	// Single use.
-	if _, _, err := f.m.ConsumeJoin(tok, mt, "1.2.3.4"); err != ErrJoinInvalid {
+	if _, _, err := f.m.ConsumeJoin(tok, mt, "1.2.3.4", false); err != ErrJoinInvalid {
 		t.Fatalf("second use: %v", err)
 	}
 	// The peers file lists the router, and the status job is told to apply it.
@@ -172,7 +172,7 @@ func TestJoinTokenFlow(t *testing.T) {
 	// A second building takes the next address.
 	b := f.create("Block B")
 	tokB, _, _ := f.m.MintJoin(b.ID)
-	if _, _, err := f.m.ConsumeJoin(tokB, mt, "x"); err != nil {
+	if _, _, err := f.m.ConsumeJoin(tokB, mt, "x", false); err != nil {
 		t.Fatal(err)
 	}
 	if f.site(b.ID).TunnelIP != "10.99.0.3" {
@@ -184,10 +184,10 @@ func TestJoinTokenFlow(t *testing.T) {
 	if f.site(s.ID).WGPublicKey != before.WGPublicKey || f.site(s.ID).RESTPass != before.RESTPass {
 		t.Fatal("minting must not change the live keys")
 	}
-	if _, _, err := f.m.ConsumeJoin(tok, mt, "x"); err != ErrJoinInvalid {
+	if _, _, err := f.m.ConsumeJoin(tok, mt, "x", false); err != ErrJoinInvalid {
 		t.Fatal("the old token must be dead after a new mint")
 	}
-	if _, _, err := f.m.ConsumeJoin(tok2, mt, "x"); err != nil {
+	if _, _, err := f.m.ConsumeJoin(tok2, mt, "x", false); err != nil {
 		t.Fatal(err)
 	}
 	after := f.site(s.ID)
@@ -208,7 +208,7 @@ func TestJoinTokenExpiryAndRevoke(t *testing.T) {
 	if st, _ := f.m.Status(context.Background(), s.ID); st.Token != TokenExpired {
 		t.Fatalf("%+v", st)
 	}
-	if _, _, err := f.m.ConsumeJoin(tok, mt, "x"); err != ErrJoinInvalid {
+	if _, _, err := f.m.ConsumeJoin(tok, mt, "x", false); err != ErrJoinInvalid {
 		t.Fatalf("expired: %v", err)
 	}
 	if f.site(s.ID).WGPublicKey != "" {
@@ -218,7 +218,7 @@ func TestJoinTokenExpiryAndRevoke(t *testing.T) {
 	if err := f.m.RevokeJoin(s.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.m.ConsumeJoin(tok, mt, "x"); err != ErrJoinInvalid {
+	if _, _, err := f.m.ConsumeJoin(tok, mt, "x", false); err != ErrJoinInvalid {
 		t.Fatalf("revoked: %v", err)
 	}
 	if st, _ := f.m.Status(context.Background(), s.ID); st.Token != TokenNone {
@@ -242,7 +242,7 @@ func TestJoinSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bench override: %v", err)
 	}
-	if _, _, err := f.m.ConsumeJoin(tok, "curl/8", "x"); err != nil {
+	if _, _, err := f.m.ConsumeJoin(tok, "curl/8", "x", false); err != nil {
 		t.Fatalf("UA check disabled: %v", err)
 	}
 	f = newFixture(t, func(c *config.Config) { c.WGPublicKey = "" })
@@ -266,7 +266,7 @@ func TestConcurrentConsumeUsesTokenOnce(t *testing.T) {
 		wgp.Add(1)
 		go func() {
 			defer wgp.Done()
-			if _, _, err := f.m.ConsumeJoin(tok, mt, "x"); err == nil {
+			if _, _, err := f.m.ConsumeJoin(tok, mt, "x", false); err == nil {
 				mu.Lock()
 				ok++
 				mu.Unlock()
@@ -319,7 +319,7 @@ func TestManagerLifecycle(t *testing.T) {
 		t.Fatal("unknown site")
 	}
 	// Joining starts the runtime (join consumed -> ApplyPeers + Reload).
-	if _, _, err := f.m.ConsumeJoin(tok, mt, "x"); err != nil {
+	if _, _, err := f.m.ConsumeJoin(tok, mt, "x", false); err != nil {
 		t.Fatal(err)
 	}
 	if f.m.Collector(a.ID) == nil || f.m.Router(a.ID).Ping(context.Background()) != nil {
@@ -369,10 +369,10 @@ func TestManagerLifecycle(t *testing.T) {
 	}
 	// Edit restarts it.
 	c1 := f.m.Collector(a.ID)
-	if err := f.m.UpdateSite(a.ID, SiteInput{Name: "Block A2", WANInterface: "ether2", Provision: true}); err != nil {
+	if err := f.m.UpdateSite(a.ID, SiteInput{Name: "Block A2", WANInterface: "ether3"}); err != nil {
 		t.Fatal(err)
 	}
-	if f.m.Collector(a.ID) == c1 || f.m.Collector(a.ID).Config().WAN != "ether2" || f.site(a.ID).Name != "Block A2" {
+	if f.m.Collector(a.ID) == c1 || f.m.Collector(a.ID).Config().WAN != "ether3" || f.site(a.ID).Name != "Block A2" {
 		t.Fatal("update must rebuild the collector")
 	}
 	if cfg := f.m.Collector(a.ID).Config(); len(cfg.PortAllow) != 3 || cfg.SiteID != a.ID {
@@ -388,7 +388,7 @@ func TestRemoveSite(t *testing.T) {
 	a := f.create("Block A")
 	tok, _, _ := f.m.MintJoin(a.ID)
 	f.start()
-	f.m.ConsumeJoin(tok, mt, "x")
+	f.m.ConsumeJoin(tok, mt, "x", false)
 	joined := f.site(a.ID)
 	f.st.Update(func(d *store.Data) error {
 		d.Accounts["x"] = store.Account{ID: "x", SiteID: a.ID, Flat: "Flat 1"}
@@ -427,7 +427,7 @@ func TestRemoveSite(t *testing.T) {
 	// The freed address is reused.
 	b := f.create("Block B")
 	tokB, _, _ := f.m.MintJoin(b.ID)
-	f.m.ConsumeJoin(tokB, mt, "x")
+	f.m.ConsumeJoin(tokB, mt, "x", false)
 	if f.site(b.ID).TunnelIP != joined.TunnelIP {
 		t.Fatalf("address not reused: %s vs %s", f.site(b.ID).TunnelIP, joined.TunnelIP)
 	}
@@ -438,7 +438,7 @@ func TestWatchJoinMarksJoined(t *testing.T) {
 	a := f.create("Block A")
 	tok, _, _ := f.m.MintJoin(a.ID)
 	f.start()
-	f.m.ConsumeJoin(tok, mt, "x")
+	f.m.ConsumeJoin(tok, mt, "x", false)
 	deadline := time.Now().Add(3 * time.Second)
 	for f.site(a.ID).JoinedAt.IsZero() {
 		if time.Now().After(deadline) {
@@ -472,7 +472,7 @@ func joinNow(f *fixture, name string) store.Site {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	if _, _, err := f.m.ConsumeJoin(tok, mt, "x"); err != nil {
+	if _, _, err := f.m.ConsumeJoin(tok, mt, "x", false); err != nil {
 		f.t.Fatal(err)
 	}
 	return f.site(s.ID)

@@ -36,6 +36,8 @@ func (m MockRouters) Router(siteID string) routeros.Client {
 type siteState struct {
 	profilesOK atomic.Bool
 	taskMu     sync.Mutex
+	provOnce   sync.Once
+	prov       *provState
 }
 
 func (s *Service) state(siteID string) *siteState {

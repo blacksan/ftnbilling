@@ -7,7 +7,7 @@ The owner approved this plan. Module `ispbill`, Go 1.24, standard library only.
 - **Packages:** one shared list, with overrides per site.
 - **Admin:** a single admin.
 - **QoE features:** fleet overview, per-building drill-down, uptime history, and alerts.
-- **Alert channels:** email, Telegram, and the WhatsApp Cloud API. WhatsApp also sends messages to tenants.
+- **Alert channels:** email and the WhatsApp Cloud API (Telegram was planned and later removed). WhatsApp also sends messages to tenants.
 
 ## 0. Decisions
 
@@ -105,7 +105,7 @@ internal/wg      keys.go (X25519 keygen, ValidKey), peers.go (render peers.conf,
 internal/sites   manager.go, runtime.go, hostguard.go (moved from web), joinscript.go + join.rsc.tmpl, netflow.go (UDP demux)
 internal/fleet   (P2) prober, outages, summary
 internal/alerts  (P2) engine, rules, state
-internal/notify  (P2) outbox, smtp.go, telegram.go, whatsapp.go, tenant.go, inbound.go
+internal/notify  (P2) outbox, smtp.go, whatsapp.go, tenant.go, inbound.go
 ```
 
 ### `billing.Service`
@@ -412,7 +412,7 @@ The engine runs every 30 seconds. Default rules, all editable:
 
 ```go
 type Message struct {
-  ID, Channel /*email|telegram|whatsapp*/, Kind, To, SiteID, AccountID string
+  ID, Channel /*email|whatsapp*/, Kind, To, SiteID, AccountID string
   Template, Lang string; Params []string
   Subject, Text string
   DedupeKey string; Priority int
@@ -427,7 +427,7 @@ type Message struct {
 - Sent rows are kept 60 days, capped at 5000.
 
 **Sending and retries:**
-- **Workers and rate limits:** one worker per channel. WhatsApp 5 per second, with `WA_DAILY_LIMIT` (default 240) tenant messages per day; admin alerts are exempt. Telegram 1 per second. SMTP 1 every 2 seconds.
+- **Workers and rate limits:** one worker per channel. WhatsApp 5 per second, with `WA_DAILY_LIMIT` (default 240) tenant messages per day; admin alerts are exempt. SMTP 1 every 2 seconds.
 - **Backoff:** start at 30 seconds and double up to 1 hour, for at most 8 attempts.
 - **Permanent errors:** these fail immediately.
 - **Auth errors:** these pause the channel and show a banner.
@@ -438,7 +438,6 @@ type Message struct {
 
 **Channels:**
 - **Email (`smtp.go`):** `net/smtp` with STARTTLS on 587, or implicit TLS on 465. Env: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `ALERT_EMAIL_TO`.
-- **Telegram (`telegram.go`):** `POST https://api.telegram.org/bot<token>/sendMessage`. Env: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
 - **WhatsApp (`whatsapp.go`):**
   - `POST https://graph.facebook.com/<WA_API_VERSION>/<WA_PHONE_NUMBER_ID>/messages` with `Authorization: Bearer WA_TOKEN`.
   - The body is a template payload: `messaging_product`, `to`, `type=template`, `template{name, language{code}, components[body parameters]}`.
@@ -615,7 +614,7 @@ Adapt the existing helpers: `newEnv` (billing), `newAppCfg` (web), `newRig` (pay
   - Permanent vs transient errors.
   - Daily cap and quiet hours.
   - `Validate` skips.
-  - WhatsApp and Telegram against `httptest`, checking the exact JSON.
+  - WhatsApp against `httptest`, checking the exact JSON.
   - SMTP against an in-test TCP server.
 - **tenant scanners:**
   - One reminder per expiry, and a new expiry gets a new reminder.
@@ -656,7 +655,7 @@ Adapt the existing helpers: `newEnv` (billing), `newAppCfg` (web), `newRig` (pay
 
 ### Phase 2
 
-1. **notify:** outbox, smtp, telegram and whatsapp, with config.
+1. **notify:** outbox, smtp and whatsapp, with config.
 2. **fleet:** prober, store, summary.
 3. **alerts:** engine, rules, state.
 4. **notify:** `tenant.go`, plus the account fields.

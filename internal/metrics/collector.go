@@ -43,6 +43,10 @@ type Config struct {
 	// PortAllow, when non-empty, limits SamplePorts to exactly these
 	// interface names (joined buildings). Empty keeps the legacy prefix filter.
 	PortAllow []string
+	// IPoE: the building serves flats by static lease and per-flat simple
+	// queues "ftn-<code>" (no hotspot sessions). Usage comes from the queue
+	// byte counters.
+	IPoE bool
 }
 
 // CapFraction is "at the cap" for the percent-of-time-at-cap measure.
@@ -86,6 +90,11 @@ type sessPrev struct {
 	at      time.Time
 }
 
+type queuePrev struct {
+	up, down uint64
+	at       time.Time
+}
+
 type ifPrev struct {
 	rx, tx uint64
 	at     time.Time
@@ -109,6 +118,7 @@ type Collector struct {
 	D        Data
 	L        Live
 	prevS    map[string]sessPrev
+	prevQ    map[string]queuePrev
 	lastFlow time.Time
 	prevIf   map[string]ifPrev
 	ipCode   map[string]ipEntry
@@ -125,7 +135,7 @@ type ipEntry struct {
 // Its directory is created when the first save happens.
 func New(path string, cfg Config, rt routeros.Telemetry, d Directory, log *slog.Logger) *Collector {
 	c := &Collector{cfg: cfg, rt: rt, dir: d, log: log, path: path, now: time.Now,
-		prevS: map[string]sessPrev{}, prevIf: map[string]ifPrev{}, ipCode: map[string]ipEntry{},
+		prevS: map[string]sessPrev{}, prevQ: map[string]queuePrev{}, prevIf: map[string]ifPrev{}, ipCode: map[string]ipEntry{},
 		dns: map[netip.Addr]dnsInfo{}, failing: map[string]bool{}}
 	data, err := load(c.path)
 	if err != nil {
@@ -353,6 +363,88 @@ func (c *Collector) SampleSessions(now time.Time, sessions []routeros.Session, q
 		})
 		if c.cfg.Synthetic {
 			c.syntheticServices(now, code, a.down+a.up)
+		}
+	}
+	c.L.Flats = live
+	c.L.FlowAt = now
+	for k, e := range c.ipCode {
+		if now.Sub(e.seen) > 24*time.Hour {
+			delete(c.ipCode, k)
+		}
+	}
+}
+
+// queueCode returns the account code of a flat's queue "ftn-<code>" (""
+// when the queue is not one of ours).
+func queueCode(q routeros.SimpleQueue) string {
+	if !strings.HasPrefix(q.Name, "ftn-") {
+		return ""
+	}
+	return strings.TrimPrefix(q.Name, "ftn-")
+}
+
+// SampleQueues turns the byte counters of the per-flat queues (IPoE) into
+// per-flat deltas. A queue seen for the first time is only baselined: its
+// counters hold traffic from before this server was watching. A counter that
+// goes down (the queue was recreated or counters reset) counts from zero.
+func (c *Collector) SampleQueues(now time.Time, queues []routeros.SimpleQueue) {
+	accts := c.acctMap()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	live := map[string]LiveRate{}
+	seen := map[string]bool{}
+	for _, q := range queues {
+		code := queueCode(q)
+		info, known := accts[code]
+		if !known {
+			continue
+		}
+		seen[q.Name] = true
+		addr := strings.TrimSuffix(q.Target, "/32")
+		if c.ipCode != nil && addr != "" {
+			c.ipCode[addr] = ipEntry{code, now}
+		}
+		capBps := float64(q.MaxB) // download limit
+		if capBps <= 0 {
+			capBps = float64(info.SpeedMbps) * 1e6
+		}
+		// RouterOS lists "upload/download" from the target's side.
+		live[code] = LiveRate{UpBps: float64(q.RateA), DownBps: float64(q.RateB), CapBps: capBps, Address: addr, At: now}
+		prev, had := c.prevQ[q.Name]
+		c.prevQ[q.Name] = queuePrev{up: q.BytesUp, down: q.BytesDown, at: now}
+		if !had {
+			continue
+		}
+		dUp, dDown := delta(prev.up, q.BytesUp), delta(prev.down, q.BytesDown)
+		dt := now.Sub(prev.at)
+		if dt < time.Second {
+			dt = time.Second
+		}
+		down, up := float64(dDown)*8/dt.Seconds(), float64(dUp)*8/dt.Seconds()
+		onMin := 0.0
+		if dUp+dDown > 0 {
+			onMin = dt.Minutes()
+		}
+		atCap := capBps > 0 && down >= CapFraction*capBps
+		pkD, pkU := uint64(down), uint64(up)
+		c.getAcct(code).Add(now, func(cell *Cell) {
+			cell.Down += dDown
+			cell.Up += dUp
+			cell.PkDown = maxU(cell.PkDown, pkD)
+			cell.PkUp = maxU(cell.PkUp, pkU)
+			cell.OnMin += onMin
+			if atCap {
+				cell.CapMin += onMin
+			}
+			cell.N++
+		})
+		if c.cfg.Synthetic {
+			c.syntheticServices(now, code, dUp+dDown)
+		}
+	}
+	for k := range c.prevQ {
+		if !seen[k] {
+			delete(c.prevQ, k)
 		}
 	}
 	c.L.Flats = live
@@ -618,6 +710,14 @@ func (c *Collector) Run(ctx context.Context) {
 		}
 	}
 	loop(c.cfg.FlowEvery, to(func(cx context.Context) {
+		if c.cfg.IPoE {
+			qs, err := c.rt.SimpleQueues(cx)
+			c.note("queues", err)
+			if err == nil {
+				c.SampleQueues(c.now(), qs)
+			}
+			return
+		}
 		ss, err := c.rt.ActiveSessions(cx)
 		if err != nil {
 			c.note("sessions", err)

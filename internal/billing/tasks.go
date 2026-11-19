@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"ispbill/internal/routeros"
 	"ispbill/internal/store"
 )
 
@@ -106,11 +105,29 @@ func (s *Service) RunSiteTasks(ctx context.Context, siteID string) int {
 		}
 	})
 	ok := 0
+	// An IPoE building is reconciled as a whole: one pass over the router
+	// answers every due task (a hundred queued tasks after an outage cost one
+	// pass, not a hundred).
+	ipoe := false
+	if st, found := s.site(siteID); found && IPoE(st) {
+		ipoe = true
+	}
+	var batchErr error
+	batchDone := false
 	for _, t := range due {
 		if ctx.Err() != nil {
 			break
 		}
-		err := s.reconcile(ctx, t)
+		var err error
+		if ipoe {
+			if !batchDone {
+				_, batchErr = s.ReconcileSite(ctx, siteID)
+				batchDone = true
+			}
+			err = batchErr
+		} else {
+			err = s.reconcile(ctx, t)
+		}
 		_ = s.st.Update(func(d *store.Data) error {
 			cur, found := d.Tasks[t.ID]
 			if !found {
@@ -144,54 +161,8 @@ func (s *Service) RunSiteTasks(ctx context.Context, siteID string) int {
 // If the account is gone, or now lives in another building, the router user is
 // removed from this building's router.
 func (s *Service) reconcile(ctx context.Context, t store.Task) error {
-	var a store.Account
-	var pkg store.Package
-	var found bool
-	s.st.View(func(d *store.Data) {
-		a, found = d.Accounts[t.AccountID]
-		pkg = d.Packages[a.PackageID]
-	})
-	rt := s.router(t.SiteID)
-	if !found || a.SiteID != t.SiteID {
-		if err := rt.KickUser(ctx, t.Code); err != nil {
-			return err
-		}
-		return rt.RemoveUser(ctx, t.Code)
-	}
-	want := wantUser(a, s.now())
-	if want {
-		if !s.state(t.SiteID).profilesOK.Load() {
-			if err := s.SyncProfiles(ctx, t.SiteID); err != nil {
-				return fmt.Errorf("profile sync: %w", err)
-			}
-		}
-		if err := rt.EnsureUser(ctx, routeros.User{
-			Name: a.Code, Password: a.HSPass, Profile: pkg.Profile(), MAC: a.MAC, Comment: "ispbill:" + a.Flat,
-		}); err != nil {
-			return err
-		}
-		if t.Kick {
-			if err := rt.KickUser(ctx, a.Code); err != nil {
-				return err
-			}
-		}
-	} else {
-		if err := rt.KickUser(ctx, a.Code); err != nil {
-			return err
-		}
-		if err := rt.RemoveUser(ctx, a.Code); err != nil {
-			return err
-		}
-	}
-	return s.st.Update(func(d *store.Data) error {
-		cur, ok := d.Accounts[a.ID]
-		if !ok || cur.RouterActive == want {
-			return store.ErrNoChange
-		}
-		cur.RouterActive = want
-		d.Accounts[a.ID] = cur
-		return nil
-	})
+	_, err := s.ReconcileSite(ctx, t.SiteID) // IPoE: the table diff covers the task
+	return err
 }
 
 // ---- sweeper ------------------------------------------------------------
@@ -203,16 +174,10 @@ func (s *Service) Sweep(ctx context.Context) {
 	now := s.now()
 	_ = s.st.Update(func(d *store.Data) error {
 		changed := false
-		queued := map[string]bool{}
-		for _, t := range d.Tasks {
-			queued[t.SiteID+"|"+t.AccountID] = true
-		}
 		remind := time.Duration(s.policy.ReminderDays) * 24 * time.Hour
 		for _, a := range d.AccountList() {
-			if wantUser(a, now) != a.RouterActive && !queued[a.SiteID+"|"+a.ID] {
-				s.enqueueLocked(d, a, false, "state changed by clock")
-				changed = true
-			}
+			// The router holds no per-user session; the per-site diff below turns
+			// a plan that just ended into a suspended-list entry.
 			if a.Suspended || a.ExpiresAt.IsZero() {
 				continue
 			}
@@ -243,15 +208,28 @@ func (s *Service) Sweep(ctx context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if !s.state(id).profilesOK.Load() {
-				if err := s.SyncProfiles(ctx, id); err != nil {
-					s.log.Warn("profile sync retry failed", "site", id, "err", err)
-				}
+			// Full per-site diff every sweep; due tasks ride on the same pass.
+			if s.hasDueTasks(id) {
+				s.RunSiteTasks(ctx, id)
+			} else if _, err := s.ReconcileSite(ctx, id); err != nil {
+				s.log.Warn("ipoe reconcile failed", "site", id, "err", err)
 			}
-			s.RunSiteTasks(ctx, id)
 		}()
 	}
 	wg.Wait()
+}
+
+// hasDueTasks reports whether a building has queued router tasks that may run now.
+func (s *Service) hasDueTasks(siteID string) (due bool) {
+	now := s.now()
+	s.st.View(func(d *store.Data) {
+		for _, t := range d.Tasks {
+			if t.SiteID == siteID && !t.NextTry.After(now) {
+				due = true
+			}
+		}
+	})
+	return
 }
 
 // RunSweeper retries router tasks every few seconds and sweeps every interval.
@@ -279,6 +257,9 @@ func (s *Service) RunSweeper(ctx context.Context, every time.Duration) {
 func (s *Service) ResyncAll() {
 	_ = s.st.Update(func(d *store.Data) error {
 		for id, a := range d.Accounts {
+			if IPoE(d.Sites[a.SiteID]) {
+				continue // IPoE rows are compared with the router by the diff, not forgotten
+			}
 			if a.RouterActive {
 				a.RouterActive = false
 				d.Accounts[id] = a

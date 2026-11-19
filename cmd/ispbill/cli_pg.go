@@ -26,6 +26,7 @@ func runDBCommand(cmd string, args []string, getenv func(string) string, out io.
 	outPath := fs.String("out", "", "output file (export-json)")
 	asJSON := fs.Bool("json", false, "machine-readable output (db-check)")
 	against := fs.String("against", "", "database URL to compare with (db-check)")
+	check := fs.Bool("check", false, "only report the schema version, change nothing; fails when it is not the latest (migrate)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("%s: %w\n\n%s", cmd, err, usage)
 	}
@@ -40,6 +41,22 @@ func runDBCommand(cmd string, args []string, getenv func(string) string, out io.
 	}
 	switch cmd {
 	case "migrate":
+		if *check {
+			b, err := pgstore.Open(ctx, *url, pgstore.Options{NoLock: true, NoMigrate: true})
+			if err != nil {
+				return err
+			}
+			defer b.Close()
+			have, err := b.AppliedVersion(ctx)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "database is at schema version %d (this program: %d)\n", have, pgstore.SchemaVersion())
+			if have != pgstore.SchemaVersion() {
+				return fmt.Errorf("the schema is not the latest: run the installer, or: ispbill migrate")
+			}
+			return nil
+		}
 		b, err := pgstore.Open(ctx, *url, pgstore.Options{NoLock: true})
 		if err != nil {
 			return err
@@ -94,7 +111,7 @@ func runDBCommand(cmd string, args []string, getenv func(string) string, out io.
 		if err := store.WriteJSON(*outPath, d); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "wrote %s (mode 0600). It holds secrets (router passwords, encrypted national IDs): keep it private.\n", *outPath)
+		fmt.Fprintf(out, "wrote %s (mode 0600). It holds secrets (router passwords, encrypted national IDs, sign-in data: password hashes, sealed 2FA secrets and recovery-code hashes): keep it private.\n", *outPath)
 		return nil
 
 	case "db-check":
@@ -114,6 +131,16 @@ func runDBCommand(cmd string, args []string, getenv func(string) string, out io.
 			return json.NewEncoder(out).Encode(counts)
 		}
 		printCounts(out, counts)
+		if counts.MACConflicts > 0 {
+			d, err := b.LoadAll(ctx)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "\nMAC conflicts: %d open flat(s) share a MAC with another flat (or have a malformed one). They are not provisioned until fixed:\n", counts.MACConflicts)
+			for _, l := range store.Conflicts(d) {
+				fmt.Fprintf(out, "  - %s\n", l)
+			}
+		}
 		return nil
 	}
 	return nil
@@ -125,6 +152,9 @@ func printCounts(out io.Writer, c pgstore.Counts) {
 	}
 	fmt.Fprintf(out, "%-18s %d\n", "closed accounts", c.Closed)
 	fmt.Fprintf(out, "%-18s KES %d\n", "applied payments", c.AppliedKES)
+	if c.SchemaVersion > 0 && c.SchemaVersion < pgstore.SchemaVersion() {
+		fmt.Fprintf(out, "schema version %d (this program is at %d): tables added since then are counted as 0\n", c.SchemaVersion, pgstore.SchemaVersion())
+	}
 }
 
 // compareDB prints how a restored copy (counts) differs from the live

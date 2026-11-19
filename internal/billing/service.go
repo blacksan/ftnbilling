@@ -18,12 +18,39 @@ var (
 	ErrVoucherUsed  = errors.New("voucher is invalid or already used")
 	ErrNoPackage    = errors.New("no package matches that amount")
 	ErrSuspended    = errors.New("this account is suspended")
-	ErrDuplicateMAC = errors.New("that MAC address already belongs to another account")
-	ErrDuplicateKey = errors.New("that transaction code is already recorded")
-	ErrBadState     = errors.New("that payment is not waiting for a decision")
-	ErrVoucherSite  = errors.New("this voucher is for another building")
-	ErrNoSite       = errors.New("choose a building")
+	ErrDuplicateMAC = store.ErrDuplicateMAC
+	// ErrDuplicateEquipmentMAC: another live (not retired) equipment item has that MAC.
+	ErrDuplicateEquipmentMAC = store.ErrDuplicateEquipmentMAC
+	ErrDuplicateKey          = errors.New("that transaction code is already recorded")
+	ErrBadState              = errors.New("that payment is not waiting for a decision")
+	ErrVoucherSite           = errors.New("this voucher is for another building")
+	ErrNoSite                = errors.New("choose a building")
 )
+
+// DuplicateMACError says which open account already owns a MAC. It matches
+// ErrDuplicateMAC (and store.ErrDuplicateMAC) with errors.Is; use errors.As to
+// get the owner, e.g. for the API's mac_in_use details. A MAC is unique across
+// all buildings among open accounts.
+type DuplicateMACError struct {
+	AccountID string
+	Code      string
+	Flat      string
+	SiteID    string
+	SiteName  string
+}
+
+func (e *DuplicateMACError) Error() string {
+	return fmt.Sprintf("%s (%s in %s, code %s)", ErrDuplicateMAC.Error(), e.Flat, e.SiteName, e.Code)
+}
+
+// Unwrap makes errors.Is(err, ErrDuplicateMAC) true.
+func (e *DuplicateMACError) Unwrap() error { return ErrDuplicateMAC }
+
+// duplicateMAC builds the error for the account that owns the MAC. Call it
+// inside View/Update with d.
+func duplicateMAC(d *store.Data, owner store.Account) error {
+	return &DuplicateMACError{AccountID: owner.ID, Code: owner.Code, Flat: owner.Flat, SiteID: owner.SiteID, SiteName: d.Sites[owner.SiteID].Name}
+}
 
 // Account states shown to people.
 const (
@@ -58,7 +85,13 @@ type Service struct {
 }
 
 func NewService(st *store.Store, rs RouterSource, log *slog.Logger) *Service {
-	return &Service{st: st, routers: rs, log: log, now: time.Now, policy: DefaultPolicy()}
+	svc := &Service{st: st, routers: rs, log: log, now: time.Now, policy: DefaultPolicy()}
+	if h, ok := rs.(interface {
+		SetForeignIPs(func(siteID string) map[string]bool)
+	}); ok {
+		h.SetForeignIPs(svc.foreignIPs) // the cutover script's address allocation avoids the router's own static leases
+	}
+	return svc
 }
 
 // SetClock overrides the clock (tests).
@@ -210,8 +243,8 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 		if st, ok := d.Sites[in.SiteID]; !ok || st.Removed {
 			return ErrNoSite
 		}
-		if other, ok := d.AccountByMAC(in.SiteID, mac); ok {
-			return fmt.Errorf("%w (%s)", ErrDuplicateMAC, other.Flat)
+		if other, ok := d.AccountByMAC(mac); ok {
+			return duplicateMAC(d, other)
 		}
 		if flatTaken(d, in.SiteID, flat, "") {
 			return fmt.Errorf("an account for %q already exists in this building", flat)
@@ -221,8 +254,21 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 			Tenant: cleanText(in.Tenant, 60), Phone: phone, Notes: cleanText(in.Notes, 300), WhatsApp: wa,
 			HSPass: RandomSecret(16), CreatedAt: s.now(),
 		}
+		if st := d.Sites[in.SiteID]; IPoE(st) {
+			// An IPoE flat gets its fixed address now, and the router a task.
+			pl, err := s.PlanFor(st)
+			if err != nil {
+				return err
+			}
+			if a.IP, err = FreeIPLocked(d, in.SiteID, pl, s.foreignIPs(in.SiteID)); err != nil {
+				return err
+			}
+		}
 		d.Accounts[a.ID] = a
 		delete(d.Devices, store.DeviceKey(a.SiteID, mac))
+		if IPoE(d.Sites[in.SiteID]) {
+			s.enqueueLocked(d, a, false, "account created")
+		}
 		return nil
 	})
 	if err == nil {
@@ -268,14 +314,22 @@ func (s *Service) ChangeMAC(ctx context.Context, id, rawMAC string) error {
 		if !ok {
 			return ErrNotFound
 		}
-		if other, ok := d.AccountByMAC(a.SiteID, mac); ok && other.ID != id {
-			return fmt.Errorf("%w (%s)", ErrDuplicateMAC, other.Flat)
+		if other, ok := d.AccountByMAC(mac); ok && other.ID != id {
+			return duplicateMAC(d, other)
 		}
-		if strings.EqualFold(a.MAC, mac) {
+		if strings.EqualFold(a.MAC, mac) && !a.MACConflict {
 			return store.ErrNoChange
 		}
-		d.AddEvent(store.Event{Time: s.now(), SiteID: a.SiteID, Kind: "info", AccountID: id, Msg: fmt.Sprintf("%s: ONT MAC changed %s -> %s", a.Flat, a.MAC, mac)})
-		a.MAC = mac
+		// Writing a MAC always puts the account back under the uniqueness
+		// rule (clears a migration's MACConflict flag). The same MAC on a
+		// flagged account is a re-check: it clears the flag if the MAC is
+		// free (checked above) and was refused otherwise.
+		msg := fmt.Sprintf("%s: ONT MAC changed %s -> %s", a.Flat, a.MAC, mac)
+		if strings.EqualFold(a.MAC, mac) {
+			msg = fmt.Sprintf("%s: ONT MAC %s checked, no other flat uses it", a.Flat, mac)
+		}
+		d.AddEvent(store.Event{Time: s.now(), SiteID: a.SiteID, Kind: "info", AccountID: id, Msg: msg})
+		a.MAC, a.MACConflict = mac, false
 		d.Accounts[id] = a
 		delete(d.Devices, store.DeviceKey(a.SiteID, mac))
 		s.enqueueLocked(d, a, true, "MAC changed")
@@ -319,8 +373,26 @@ func (s *Service) AccountByCode(code string) (a store.Account, ok bool) {
 	return
 }
 
-func (s *Service) AccountByMAC(siteID, mac string) (a store.Account, ok bool) {
-	s.st.View(func(d *store.Data) { a, ok = d.AccountByMAC(siteID, mac) })
+// AccountByMAC finds the open account that owns a MAC in any building.
+func (s *Service) AccountByMAC(mac string) (a store.Account, ok bool) {
+	s.st.View(func(d *store.Data) { a, ok = d.AccountByMAC(mac) })
+	return
+}
+
+// PortalAccount finds the account a device on siteID's own network belongs
+// to: the open account with that MAC in this building (the owner first, else a flagged one)
+// A flagged account is used when migration found the MAC on two flats: the
+// hotspot keeps working for the flat behind this router until somebody fixes
+// the MAC. An account of another building is never returned.
+func (s *Service) PortalAccount(siteID, mac string) (a store.Account, ok bool) {
+	s.st.View(func(d *store.Data) {
+		for _, c := range d.OpenAccountsByMAC(mac) {
+			if c.SiteID == siteID {
+				a, ok = c, true
+				return
+			}
+		}
+	})
 	return
 }
 
@@ -332,8 +404,8 @@ func (s *Service) NoteDevice(siteID, mac, ip, source string) {
 		return
 	}
 	_ = s.st.Update(func(d *store.Data) error {
-		if _, ok := d.AccountByMAC(siteID, mac); ok {
-			return store.ErrNoChange
+		if len(d.OpenAccountsByMAC(mac)) > 0 {
+			return store.ErrNoChange // already a customer (here or in another building)
 		}
 		if st, ok := d.Sites[siteID]; !ok || st.Removed {
 			return store.ErrNoChange
@@ -345,6 +417,7 @@ func (s *Service) NoteDevice(siteID, mac, ip, source string) {
 			dev = store.Device{SiteID: siteID, MAC: mac, FirstSeen: now}
 		}
 		dev.LastSeen, dev.Hits = now, dev.Hits+1
+		dev.Vendor = Vendor(mac)
 		if ip != "" {
 			dev.IP = ip
 		}
@@ -370,31 +443,23 @@ func (s *Service) HotspotHosts(ctx context.Context, siteID string) ([]routeros.H
 	return s.router(siteID).Hosts(ctx)
 }
 
-// RefreshHosts pulls unauthorised hotspot hosts from the router into the list.
-func (s *Service) RefreshHosts(ctx context.Context, siteID string) error {
-	hosts, err := s.router(siteID).Hosts(ctx)
-	if err != nil {
-		return err
-	}
-	for _, h := range hosts {
-		if h.Authorized || h.Bypassed {
-			continue
-		}
-		mac, err := NormalizeMAC(h.MAC)
-		if err != nil {
-			continue
-		}
-		s.NoteDevice(siteID, mac, h.Address, "hotspot-host")
-	}
-	return nil
-}
-
-// DismissDevice removes a MAC from the unregistered list.
+// DismissDevice removes a MAC from the unregistered list. A device the
+// reconciler keeps seeing (source dhcp or arp) is kept as a dismissed marker
+// so it does not come back every minute; one that opens the portal again does.
 func (s *Service) DismissDevice(siteID, mac string) error {
+	if m, err := NormalizeMAC(mac); err == nil {
+		mac = m
+	}
 	return s.st.Update(func(d *store.Data) error {
 		key := store.DeviceKey(siteID, mac)
-		if _, ok := d.Devices[key]; !ok {
+		dev, ok := d.Devices[key]
+		if !ok {
 			return store.ErrNoChange
+		}
+		if dev.Source == "dhcp" || dev.Source == "arp" {
+			dev.Source, dev.Online = SourceDismissed, false
+			d.Devices[key] = dev
+			return nil
 		}
 		delete(d.Devices, key)
 		return nil

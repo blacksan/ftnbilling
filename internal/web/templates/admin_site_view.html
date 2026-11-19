@@ -1,0 +1,131 @@
+{{define "admin_site_view"}}{{template "ahead" .}}{{$s := .Data.Site}}{{$d := .}}{{$tab := .Data.Tab}}{{$X := .Data.Stats}}
+<div class="rhead"><span class="pill {{.Data.State}}">{{.Data.State}}</span>{{if $s.Disabled}}<span class="pill suspended">paused</span>{{end}}<span class="muted">{{if .Data.Env}}legacy router{{else}}{{.Data.ModeLabel}}{{end}} &middot; {{.Data.Accounts}} flats</span>
+<a class="btn ghost sm" href="/admin/site/select?site={{$s.ID}}&amp;next=/admin/accounts">Open its flats</a></div>
+<nav class="tabs" aria-label="Router sections">{{range .Data.Tabs}}<a class="tab" href="/admin/routers/view?id={{$s.ID}}&amp;tab={{.Key}}"{{if eq .Key $tab}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}</nav>
+
+{{if eq $tab "overview"}}
+<div id="rt-live" data-refresh="15">
+{{if not $X.Reachable}}<p class="flash bad" role="status">The router could not be read just now, so CPU, memory and uptime are blank. The flats and money below are the server's own numbers.</p>{{end}}
+<div class="stats">
+{{template "stat" (dict "K" "Flats online" "V" $X.FlatsOn "S" (printf "%s, pulling traffic now" $X.FlatsSub) "Icon" "live" "Tone" "teal" "Feature" true)}}
+{{template "stat" (dict "K" "WAN" "V" $X.WAN "S" $X.WANSub "Icon" "metrics" "Tone" "info")}}
+{{template "stat" (dict "K" "Tunnel" "V" $X.Tunnel "S" $X.TunnelSub "Icon" "pulse" "Tone" "ok")}}
+{{template "stat" (dict "K" "CPU" "V" $X.CPU "S" (printf "memory %s %s" $X.Mem $X.MemSub) "Icon" "sites" "Tone" "plum")}}
+{{template "stat" (dict "K" "Uptime" "V" $X.Uptime "S" "since last boot" "Icon" "clock" "Tone" "warn")}}
+</div>
+<div class="grid c2">
+<section class="panel"><h2>Connection</h2><dl class="kv">
+<dt>Router API</dt><dd>{{if .Data.Status.RESTOK}}<span class="ok">reachable</span>{{else}}<span class="bad">not reachable</span> <span class="muted">{{.Data.Status.RESTErr}}</span>{{end}}</dd>
+{{if not .Data.Env}}<dt>Tunnel</dt><dd>{{if .Data.Status.Handshake}}up, last handshake {{.Data.Status.HandshakeAge}} s ago{{else if .Data.Status.WGKnown}}no handshake{{else}}unknown{{end}}</dd>{{end}}
+<dt>Tenant portal</dt><dd class="mono" style="word-break:break-all">{{.Data.Portal}}</dd>
+{{if $X.Model}}<dt>Hardware</dt><dd>{{$X.Model}} <span class="muted">RouterOS {{$X.Version}}{{if $X.Temp}}, {{$X.Temp}}{{end}}</span></dd>{{end}}
+<dt>Equipment</dt><dd>{{$X.Equip}}</dd>
+{{if $X.UnregOnline}}<dt>Devices not registered</dt><dd><a href="/admin/routers/view?id={{$s.ID}}&amp;tab=clients">{{$X.UnregOnline}} online now</a></dd>{{end}}
+{{if $X.OpenAlerts}}<dt>Open alerts</dt><dd><a href="/admin/alerts">{{$X.OpenAlerts}}</a></dd>{{end}}</dl></section>
+{{with .Data.Rep}}<section class="panel"><h2>Flats and money</h2><dl class="kv">
+<dt>Flats</dt><dd>{{.Flats}} <span class="muted">{{.Occupied}} occupied, {{.Vacant}} vacant</span></dd>
+<dt>Active</dt><dd>{{.Active}} <span class="muted">{{.Expired}} expired, {{.Suspended}} suspended, {{.New}} new</span></dd>
+<dt>Revenue this month</dt><dd>{{kes .ThisMonth}} <span class="muted">last month {{kes .LastMonth}}</span></dd>
+<dt>Equipment</dt><dd>{{index .ByStatus "installed"}} installed <span class="muted">{{index .ByStatus "in_stock"}} in stock, {{index .ByStatus "faulty"}} faulty</span></dd></dl></section>{{end}}
+</div>
+{{with .Data.Rep}}<section class="panel"><h2>Revenue by month</h2>{{if .Months}}<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr><th>Month</th><th class="n">Payments</th><th class="n">KES</th></tr></thead><tbody>{{range .Months}}<tr><td data-label="Month">{{.Month}}</td><td class="n" data-label="Payments">{{.Payments}}</td><td class="n" data-label="KES">{{.KES}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No payments through this router yet.</p>{{end}}</section>{{end}}
+</div>
+
+{{else if eq $tab "setup"}}
+<div data-setup="{{$s.ID}}" data-name="{{$s.Name}}"{{if eq .Role "owner"}} data-owner{{end}} class="stack-col">
+{{if not .Data.Env}}<section class="panel"><div class="panel-h"><h2>Join the router</h2></div>
+{{if .Data.Cmd}}<p>Paste this once in the router's terminal (WinBox, New Terminal). It works once, for {{.Data.TTL}} minutes.</p>
+<div class="cmdbox"><textarea id="joincmd" readonly rows="3" aria-label="Join line">{{.Data.Cmd}}</textarea><button type="button" class="btn" data-copy-from="#joincmd">Copy line</button></div>
+<details><summary>If the router's clock is wrong, or it has no certificate store</summary><p class="muted">This skips the certificate check. Use it only if the line above fails with a certificate error.</p>
+<div class="cmdbox"><textarea id="joincmd2" readonly rows="3" aria-label="Join line without certificate check">{{.Data.CmdNoCheck}}</textarea><button type="button" class="btn ghost" data-copy-from="#joincmd2">Copy line</button></div></details>
+<p class="muted">Shown only now. Expires {{eat .Data.CmdExpires}}. Do not paste it into chat.</p>
+<p id="jst" class="muted" data-join-text>Status: {{.Data.Status.Token}}</p><span hidden data-join-poll="{{$s.ID}}"></span>
+<form method="post" action="/admin/routers/join/revoke"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button class="ghost sm">Cancel this line</button></form>
+{{else}}{{if and .Data.Insecure (not .Data.AllowInsecure)}}<p class="bad">PUBLIC_BASE_URL must start with https:// before a join line can be made.</p>{{end}}
+<p class="muted">The router runs RouterOS 7 with the right clock. Fetch must be allowed in device mode (the line asks for it and tells you to press the router button). The line makes the tunnel, the API user and the rest.</p>
+{{if .CanWrite}}<form method="post" action="/admin/routers/join"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button>{{if .Data.Status.Joined}}Make a new join line (rebuilds the tunnel){{else}}Make the join line{{end}}</button></form>{{end}}
+<p class="muted" data-join-text>Status: {{.Data.Status.Token}}</p>{{end}}</section>{{end}}
+<section class="panel"><div class="panel-h"><h2>Setup checklist</h2><button type="button" class="ghost sm" data-recheck>Check again</button></div>
+<p class="muted" data-checks-sum aria-live="polite"></p><ul class="checks" data-checks><li class="ph">Reading the router.</li></ul></section>
+<section class="panel"><div class="panel-h"><h2>Set-up progress</h2></div>
+<div data-job aria-live="polite"><p class="muted">Reading the set-up state.</p></div>
+</section>
+{{with .Data.JoinReport}}<section class="panel"><div class="panel-h"><h2>Last join report</h2><span class="pill {{if .OK}}active{{else}}expired{{end}}">{{if .OK}}passed{{else}}needs a look{{end}}</span></div>
+<p class="muted">{{eat .At}}{{if .ROS}} &middot; RouterOS {{.ROS}}{{end}}</p><pre class="rep">{{range .Lines}}{{.}}
+{{end}}</pre></section>{{end}}
+
+</div>
+
+{{else if eq $tab "clients"}}
+{{template "rt_clients" .}}
+
+{{else if eq $tab "interfaces"}}
+<div id="rt-live" data-refresh="10">
+{{if .Data.Ifaces}}{{if not .Data.Reachable}}<p class="flash bad" role="status">The router could not be read just now. These are the last readings the server kept.</p>{{end}}
+<div class="tw"><table class="rs"><thead><tr><th>Port</th><th>Role</th><th>State</th><th>Addresses</th><th class="n">Receive</th><th class="n">Send</th><th>MAC</th><th class="n">MTU</th></tr></thead><tbody>
+{{range .Data.Ifaces}}<tr><td class="mono" data-label="Port"><b>{{.Name}}</b>{{if .Comment}}<br><span class="muted">{{.Comment}}</span>{{end}}</td><td data-label="Role">{{.Role}}</td><td data-label="State">{{if .Disabled}}<span class="pill paused">disabled</span>{{else}}<span class="pill {{if .Running}}online{{else}}offline{{end}}">{{if .Running}}running{{else}}down{{end}}</span>{{end}}</td><td class="mono" data-label="Addresses">{{.Addrs}}</td><td class="n" data-label="Receive">{{.Rx}}</td><td class="n" data-label="Send">{{.Tx}}</td><td class="mono" data-label="MAC">{{.MAC}}</td><td class="n" data-label="MTU">{{if .MTU}}{{.MTU}}{{end}}</td></tr>{{end}}</tbody></table></div>
+<p class="muted">Read from the router {{.Data.IfacesAt}}. Rates are measured between two readings, so they show a dash on the first look.</p>
+{{else}}{{template "empty" (dict "Title" "No interfaces to show." "Text" "The router could not be read. Ports show here once it answers.")}}{{end}}
+</div>
+
+{{else if eq $tab "plans"}}
+<section class="panel"><h2>Plans at this router</h2><p class="muted" style="margin:6px 0 12px">Hide a plan here, or give it a different price. Prices must stay unique inside the router.</p>
+<form method="post" action="/admin/routers/packages"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
+<div class="tw" style="margin:0"><table><thead><tr><th>Plan</th><th class="n">Shared price</th><th>Hidden here</th><th>Price here (KES, 0 = shared)</th></tr></thead><tbody>
+{{range .Data.Pkgs}}{{$o := index $s.PkgOverrides .ID}}<tr><td>{{.Name}} <span class="muted">{{.SpeedMbps}} Mbps</span></td><td class="n">{{.PriceKES}}</td><td><input type="checkbox" name="hidden_{{.ID}}" value="1"{{if $o.Hidden}} checked{{end}} aria-label="Hide {{.Name}}"></td><td><input name="price_{{.ID}}" type="number" min="0" value="{{if $o.PriceKES}}{{$o.PriceKES}}{{else}}0{{end}}" style="width:100px" aria-label="Price for {{.Name}}"></td></tr>{{end}}</tbody></table></div>
+<p style="margin-top:12px"><button>Save plans</button></p></form></section>
+
+{{else if eq $tab "profile"}}
+<div class="grid c2">
+<section class="panel"><h2>Details</h2>
+<form method="post" action="/admin/routers/update" class="stack-col" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
+{{template "sitefields" $s}}
+{{if .Data.Env}}<p class="muted">The layout of this router comes from the server's environment variables.</p>
+{{else}}<details><summary>Router layout</summary><div class="stack-col" style="margin-top:10px">{{template "sitelayout" .Data.Eff}}<p class="muted">Changes apply to the next join line and to metrics. Run the join line again to rebuild the router side.</p></div></details>{{end}}
+<div><button>Save</button></div></form></section>
+{{with .Data.Rep}}<section class="panel"><h2>Location</h2>
+<form method="post" action="/admin/routers/profile" class="stack-col" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
+<label class="field">Address<input name="address" value="{{$s.Address}}" maxlength="200" placeholder="Street, estate, town"></label>
+<div class="two"><label class="field">Latitude<input name="lat" value="{{if $s.Lat}}{{$s.Lat}}{{end}}" placeholder="-1.2864"></label><label class="field">Longitude<input name="lng" value="{{if $s.Lng}}{{$s.Lng}}{{end}}" placeholder="36.8172"></label></div>
+<label class="field">Went live<input type="date" name="go_live" value="{{day $s.GoLive}}"></label><div><button>Save profile</button> {{if $s.Lat}}<a class="btn ghost" href="geo:{{$s.Lat}},{{$s.Lng}}">Open in maps</a>{{end}}</div></form></section>
+<section class="panel"><h2>Network equipment</h2><table>
+{{range .Router}}<tr><td>Router</td><td><a href="/admin/equipment/view?id={{.ID}}">{{if .Serial}}{{.Serial}}{{else}}{{.Model}}{{end}}</a> <span class="muted">{{.Model}} {{.MAC}}</span></td></tr>{{end}}
+{{range .OLT}}<tr><td>OLT</td><td><a href="/admin/equipment/view?id={{.ID}}">{{if .Serial}}{{.Serial}}{{else}}{{.Model}}{{end}}</a> <span class="muted">{{.Model}} {{.MAC}}</span></td></tr>{{end}}
+{{if not (or .Router .OLT)}}<tr><td class="muted">None recorded. <a href="/admin/equipment">Add the router and OLT</a>.</td></tr>{{end}}</table></section>
+<section class="panel"><h2>Contacts</h2><table>{{range .Contacts}}<tr><td><b>{{.Role}}</b></td><td>{{.Name}}</td><td>{{.Phone}}{{if .Email}} <span class="muted">{{.Email}}</span>{{end}}</td>
+<td><form method="post" action="/admin/routers/contacts/delete" class="i"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$s.ID}}"><input type="hidden" name="cid" value="{{.ID}}"><button class="ghost sm">Remove</button></form></td></tr>{{else}}<tr><td class="muted">No contacts yet.</td></tr>{{end}}</table>
+<form method="post" action="/admin/routers/contacts/save" class="row" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$s.ID}}">
+<label class="field">Role<select name="role">{{range $d.Data.Roles}}<option>{{.}}</option>{{end}}</select></label><label class="field">Name<input name="name" required></label><label class="field">Phone<input name="phone"></label><button>Add contact</button></form></section>{{end}}
+</div>
+
+{{else}}
+<div class="grid c2">
+<section class="panel"><h2>Router actions</h2>
+<form method="post" action="/admin/routers/sync" class="row" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button class="ghost">{{if .Data.IPoE}}Reconcile now{{else}}Push speed profiles now{{end}}</button><span class="muted">normally automatic</span></form>
+<form method="post" action="/admin/routers/disable" class="row" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="disable" value="{{if $s.Disabled}}0{{else}}1{{end}}"><button class="ghost">{{if $s.Disabled}}Resume this router{{else}}Pause this router{{end}}</button><span class="muted">paused: no collection, no router changes; tenants cannot buy</span></form>
+<form method="post" action="/admin/routers/reboot" class="row" style="margin-top:12px" data-reboot><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
+<input name="confirm_name" placeholder="{{$s.Name}}" required autocomplete="off" aria-label="Type the router name to reboot it"><button class="ghost">Reboot router</button></form>
+<p class="muted" style="margin-top:6px">Type the router name. Customers lose their connection for a minute or two. Not possible while the router is being set up, and once every 10 minutes.</p></section>
+<section class="panel danger"><h2 class="bad">Remove router</h2><p class="muted" style="margin:6px 0 10px">Only possible when it has no flats. Its payments stay in the ledger. Type the router name to confirm.</p>
+<form method="post" action="/admin/routers/remove" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input name="confirm" placeholder="{{$s.Name}}" required autocomplete="off" aria-label="Router name"><button>Remove</button></form></section>
+</div>
+{{end}}
+{{template "afoot" .}}{{end}}
+
+{{define "rt_clients"}}{{$d := .}}
+<div id="rt-live" data-refresh="10">
+<form method="get" action="/admin/routers/view" class="row clients-search" role="search"><input type="hidden" name="id" value="{{.Data.Site.ID}}"><input type="hidden" name="tab" value="clients">
+<input type="search" name="q" value="{{.Data.Q}}" placeholder="Search flat, tenant, code, IP, MAC, vendor" aria-label="Search clients" data-clients-q autocomplete="off"><button class="ghost">Search</button>
+{{with .Data.Counts}}<span class="muted">{{.Flats}} flats, {{.Online}} online, {{.Unregistered}} not registered</span>{{end}}</form>
+{{if not .Data.Reachable}}<p class="flash bad" role="status">The router could not be read just now. Rates and devices are the last ones the server kept.</p>{{end}}
+{{if .Data.Clients}}<div class="tw tall"><table class="rs"><thead><tr><th>Flat</th><th>State</th><th>IP</th><th>MAC</th><th>Port</th><th>Speed</th><th class="n">Down / Up</th><th class="n">Today / month</th><th>On router</th></tr></thead><tbody>
+{{range .Data.Clients}}<tr>{{if eq .Kind "flat"}}<td class="who"><b><a href="/admin/accounts/view?code={{.Code}}">{{.Flat}}</a></b><span>{{if .Online}}<span class="pill online">online</span> {{end}}{{.Tenant}}</span></td><td data-label="State"><span class="pill {{.State}}">{{.State}}</span></td>
+{{else}}<td class="who"><b>{{if .HostName}}{{.HostName}}{{else}}Not registered{{end}}</b><span>{{if .Online}}<span class="pill online">online</span> {{end}}{{.Vendor}}{{if .RouterUser}} <code>{{.RouterUser}}</code>{{end}}</span></td><td data-label="State">{{if $d.CanWrite}}<button type="button" class="sm" data-open="addcustomer" data-mac="{{.MAC}}" data-site="{{$d.Data.Site.ID}}">Create customer</button>{{end}}</td>
+{{end}}<td class="mono" data-label="IP">{{.IP}}</td><td class="mono" data-label="MAC">{{.MAC}}</td><td data-label="Port">{{.Port}}</td><td data-label="Speed">{{.QueueLimit}}</td><td class="n" data-label="Down / Up">{{bps (f64 .DownBps)}} / {{bps (f64 .UpBps)}}</td><td class="n" data-label="Today / month">{{if eq .Kind "flat"}}{{bytes .UsageTodayBytes}} / {{bytes .UsageMonthBytes}}{{end}}</td>
+<td data-label="On router">{{if eq .Kind "flat"}}<span class="pill {{if .InSync}}synced{{else}}drift{{end}}">{{if .SuspendedOnRouter}}suspended{{else if .InSync}}in sync{{else}}{{.LeaseStatus}}{{end}}</span>{{end}}</td></tr>{{end}}</tbody></table></div>
+{{if .Data.Truncated}}<p class="muted">Showing the first 1000. Search to narrow the list.</p>{{end}}
+<p class="muted">Read from the router {{.Data.ClientsAt}}.</p>
+{{else if .Data.Q}}{{template "empty" (dict "Title" "Nothing matches that search." "Text" "Try part of a flat name, a phone's MAC or an IP address.")}}
+{{else}}{{template "empty" (dict "Title" "No flats on this router yet." "Text" "Add a customer and pick this router. Its ONT shows here once it connects." "Acts" (acts "Add customer|#modal:addcustomer"))}}{{end}}
+</div>
+{{end}}

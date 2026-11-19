@@ -81,6 +81,13 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 				e.Status, e.InstalledAt = store.EqInstalled, now
 			}
 		}
+		if mac != "" && e.Status != store.EqRetired {
+			for _, o := range d.Equipment {
+				if o.ID != e.ID && o.Status != store.EqRetired && strings.EqualFold(o.MAC, mac) {
+					return fmt.Errorf("%w (%s %s)", ErrDuplicateEquipmentMAC, o.Kind, o.Serial)
+				}
+			}
+		}
 		oldSite := e.SiteID
 		e.Kind, e.Serial, e.MAC = kind, serial, mac
 		e.Model, e.Firmware, e.Notes = cleanText(in.Model, 60), cleanText(in.Firmware, 40), cleanText(in.Notes, 300)
@@ -109,14 +116,18 @@ func (s *Service) changeMACLocked(d *store.Data, id, mac string) error {
 	if !ok {
 		return ErrNotFound
 	}
-	if other, ok := d.AccountByMAC(a.SiteID, mac); ok && other.ID != id {
-		return fmt.Errorf("%w (%s)", ErrDuplicateMAC, other.Flat)
+	if other, ok := d.AccountByMAC(mac); ok && other.ID != id {
+		return duplicateMAC(d, other)
 	}
-	if strings.EqualFold(a.MAC, mac) {
+	if strings.EqualFold(a.MAC, mac) && !a.MACConflict {
 		return nil
 	}
-	d.AddEvent(store.Event{Time: s.now(), SiteID: a.SiteID, Kind: "info", AccountID: id, Msg: fmt.Sprintf("%s: ONT MAC changed %s -> %s", a.Flat, a.MAC, mac)})
-	a.MAC = mac
+	msg := fmt.Sprintf("%s: ONT MAC changed %s -> %s", a.Flat, a.MAC, mac)
+	if strings.EqualFold(a.MAC, mac) {
+		msg = fmt.Sprintf("%s: ONT MAC %s checked, no other flat uses it", a.Flat, mac)
+	}
+	d.AddEvent(store.Event{Time: s.now(), SiteID: a.SiteID, Kind: "info", AccountID: id, Msg: msg})
+	a.MAC, a.MACConflict = mac, false // back under the uniqueness rule
 	d.Accounts[id] = a
 	delete(d.Devices, store.DeviceKey(a.SiteID, mac))
 	s.enqueueLocked(d, a, true, "MAC changed")

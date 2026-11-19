@@ -26,7 +26,7 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 			HotspotServer: "hotspot1", WANInterface: "ether1", WANList: "WAN", OLTInterface: "sfp1", VLANID: 20, CustomerSubnet: "10.20.0.0/24",
 			WANCapMbps: 100.5, OLTCapMbps: 1000, FUPTB: 2.5, Provision: true, BenchPort: "ether5", LegacyContainer: true,
 			PkgOverrides: map[string]store.PkgOverride{"p1": {Hidden: true, PriceKES: 70}},
-			Address:      "Kilimani Rd", Lat: -1.2921, Lng: 36.8219, GoLive: at, CreatedAt: at}
+			Address:      "Kilimani Rd", Lat: -1.2921, Lng: 36.8219, GoLive: at, AccessMode: store.AccessIPoEObserve, CreatedAt: at}
 		d.Sites["s222222"] = store.Site{ID: "s222222", Name: "Env", Mode: store.SiteModeEnv, CreatedAt: at}
 		d.Packages["p1"] = store.Package{ID: "p1", Name: "1 Day", Slug: "1-day", DurationMin: 1440, SpeedMbps: 10, PriceKES: 50, Sort: 1}
 		d.Packages["p2"] = store.Package{ID: "p2", Name: "Old", Slug: "old", DurationMin: 60, SpeedMbps: 5, PriceKES: 10, Disabled: true, Deleted: true, Sort: 2}
@@ -38,7 +38,9 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 		d.Equipment["e3"] = store.Equipment{ID: "e3", Kind: store.KindRouter, Serial: "sn1", Status: store.EqInstalled, SiteID: "s111111", CreatedAt: at}
 		d.Accounts["a1"] = store.Account{ID: "a1", SiteID: "s111111", Code: "ABC234", Flat: "Flat 1", Floor: "2", MAC: "AA:BB:CC:DD:EE:01", Tenant: "Alice",
 			Phone: "254711000001", Notes: "n", WhatsApp: "254711000003", WAOptOut: true, PackageID: "p1", ExpiresAt: at, Suspended: true, HSPass: "x",
-			RouterActive: true, RemindedFor: at, ExpiredFor: at, CustomerID: "c1", ODB: "ODB-1", SplitterID: "e2", SplitterPort: 4, CreatedAt: at}
+			RouterActive: true, RemindedFor: at, ExpiredFor: at, CustomerID: "c1", ODB: "ODB-1", SplitterID: "e2", SplitterPort: 4, IP: "10.20.0.60", CreatedAt: at}
+		// Flagged by a migration: same MAC as a1, kept, not provisioned.
+		d.Accounts["a3"] = store.Account{ID: "a3", SiteID: "s222222", Code: "DUP234", Flat: "Flat 3", MAC: "AA:BB:CC:DD:EE:01", MACConflict: true, CreatedAt: at}
 		d.ClosedAccounts["a2"] = store.Account{ID: "a2", SiteID: "s111111", Code: "XYZ234", Flat: "Flat 2", CreatedAt: at, ClosedAt: at}
 		d.Tenancies["t1"] = store.Tenancy{ID: "t1", CustomerID: "c1", AccountID: "a1", Note: "n", MoveIn: at}
 		d.Tenancies["t2"] = store.Tenancy{ID: "t2", CustomerID: "c1", AccountID: "a2", MoveIn: at, MoveOut: at.Add(time.Hour)}
@@ -52,13 +54,24 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 			Name: "ALICE", BillRef: "ABC234", AccountID: "a1", CustomerID: "c1", PackageID: "p1", OrderID: "o1", Note: "n", PaidAt: at, CreatedAt: at, ResolvedAt: at}
 		d.Payments["UNMATCHED1"] = store.Payment{Key: "UNMATCHED1", Method: "mpesa-c2b", Status: store.PayUnmatched, AmountKES: 75, PaidAt: at, CreatedAt: at}
 		d.Devices[store.DeviceKey("s111111", "AA:BB:CC:DD:EE:09")] = store.Device{SiteID: "s111111", MAC: "AA:BB:CC:DD:EE:09", IP: "10.20.0.9", Source: "portal",
-			FirstSeen: at, LastSeen: at, Hits: 3}
+			FirstSeen: at, LastSeen: at, Hits: 3, Vendor: "Huawei", HostName: "HUAWEI-ONT", Online: true}
 		d.Tasks["task1"] = store.Task{ID: "task1", SiteID: "s111111", AccountID: "a1", Code: "ABC234", Kick: true, Rev: 2, Reason: "r", Attempts: 1, NextTry: at,
 			LastErr: "e", CreatedAt: at}
 		d.EquipmentEvents["ee1"] = store.EquipmentEvent{ID: "ee1", EquipmentID: "e1", Kind: store.EqEvAssigned, FromStatus: "in_stock", ToStatus: "installed",
 			SiteID: "s111111", AccountID: "a1", CustomerID: "c1", Note: "n", Time: at}
 		d.Notes["n1"] = store.Note{ID: "n1", CustomerID: "c1", AccountID: "a1", SiteID: "s111111", EquipmentID: "e1", Text: "hello", Time: at}
+		d.Settings["wa.token"] = store.Setting{Key: "wa.token", Value: "c2VhbGVk", Enc: true, UpdatedAt: at}
+		d.Settings["wa.lang"] = store.Setting{Key: "wa.lang", Value: "sw", UpdatedAt: at}
 		d.AddEvent(store.Event{Time: at, SiteID: "s111111", Kind: "info", AccountID: "a1", CustomerID: "c1", EquipmentID: "e1", Msg: "m"})
+		d.AddEvent(store.Event{Time: at, Kind: "audit", AccountID: "a1", Msg: "changed", Actor: "brian", IP: "203.0.113.9"})
+		d.AdminUsers["u1"] = store.AdminUser{ID: "u1", Username: "Brian", Role: store.RoleOwner, PassHash: "pbkdf2$x", TOTPSecretEnc: "sealed",
+			TOTPConfirmedAt: at, TOTPLastStep: 12345, TOTPFails: 3, TOTPFailAt: at, RecoveryCodes: []string{"h1", "h2"}, PassChangedAt: at, CreatedAt: at, UpdatedAt: at}
+		d.AdminUsers["u2"] = store.AdminUser{ID: "u2", Username: "viewer", Role: store.RoleViewer, Disabled: true, CreatedAt: at}
+		d.AdminSessions["sess1"] = store.AdminSession{ID: "sess1", UserID: "u1", CSRF: "csrf", MFA: true, IP: "203.0.113.9", UserAgent: "UA",
+			CreatedAt: at, LastSeenAt: at, ExpiresAt: at.Add(time.Hour)}
+		d.APIDevices["dev1"] = store.APIDevice{ID: "dev1", UserID: "u1", InstallID: "inst", Name: "Pixel", Model: "Pixel 9", Platform: "android",
+			AppVersion: "1.0", AccessHash: "ah", AccessExpiresAt: at, RefreshHash: "rh", RefreshPrevHash: "rp", RefreshOlder: []string{"o1", "o2"}, RefreshRotatedAt: at,
+			RefreshExpiresAt: at, AbsoluteExpiresAt: at, LastIP: "203.0.113.9", CreatedAt: at, LastSeenAt: at, RevokedAt: at, RevokedReason: "reuse"}
 		return nil
 	})
 	if err != nil {
@@ -86,6 +99,156 @@ func Run(t *testing.T) {
 		}
 		if _, ok := after.ClosedAccounts["a2"]; !ok {
 			t.Fatal("closed account not restored into ClosedAccounts")
+		}
+	})
+
+	t.Run("OneMACPerOpenAccountAcrossBuildings", func(t *testing.T) {
+		h := New(t)
+		at := Fixture(t, h.Store)
+		before := h.Store.Snapshot()
+		const mac = "AA:BB:CC:DD:EE:01" // owned by a1 in s111111
+		try := func(what string, fn func(d *store.Data)) error {
+			t.Helper()
+			err := h.Store.Update(func(d *store.Data) error { fn(d); return nil })
+			if h.Store.Healthy() != nil {
+				t.Fatalf("%s: a duplicate must not degrade the store", what)
+			}
+			return err
+		}
+		// A new account in another building, in another spelling.
+		err := try("create", func(d *store.Data) {
+			d.Accounts["n1"] = store.Account{ID: "n1", SiteID: "s222222", Code: "NEW234", Flat: "Flat 9", MAC: "aa-bb-cc-dd-ee-01", CreatedAt: at}
+		})
+		if !errors.Is(err, store.ErrDuplicateMAC) {
+			t.Fatalf("create: %v", err)
+		}
+		// Changing an existing account onto it.
+		err = try("change", func(d *store.Data) {
+			a := d.Accounts["a3"]
+			a.MACConflict = false // un-flagging it would make a second owner
+			d.Accounts["a3"] = a
+		})
+		if !errors.Is(err, store.ErrDuplicateMAC) {
+			t.Fatalf("un-flag: %v", err)
+		}
+		// Re-opening a closed account whose MAC is taken.
+		err = try("reopen", func(d *store.Data) {
+			a := d.ClosedAccounts["a2"]
+			a.MAC = mac
+			a.ClosedAt = time.Time{}
+			delete(d.ClosedAccounts, "a2")
+			d.Accounts["a2"] = a
+		})
+		if !errors.Is(err, store.ErrDuplicateMAC) {
+			t.Fatalf("reopen: %v", err)
+		}
+		if got := h.Store.Snapshot(); !reflect.DeepEqual(got, before) {
+			t.Fatal("a refused update changed memory")
+		}
+		if got := h.Reopen().Snapshot(); !reflect.DeepEqual(got, before) {
+			t.Fatal("a refused update changed the stored data")
+		}
+		// Two accounts may swap MACs in one update; a closed account frees its MAC.
+		if err := try("swap", func(d *store.Data) {
+			a1, a4 := d.Accounts["a1"], store.Account{ID: "a4", SiteID: "s222222", Code: "SWP234", Flat: "Flat 4", MAC: "AA:BB:CC:DD:EE:04", CreatedAt: at}
+			a1.MAC, a4.MAC = a4.MAC, a1.MAC
+			d.Accounts["a1"], d.Accounts["a4"] = a1, a4
+		}); err != nil {
+			t.Fatalf("swap: %v", err)
+		}
+		if err := try("close and reuse", func(d *store.Data) {
+			a4 := d.Accounts["a4"] // now holds ...EE:01
+			delete(d.Accounts, "a4")
+			a4.ClosedAt = at
+			d.ClosedAccounts["a4"] = a4
+			d.Accounts["n2"] = store.Account{ID: "n2", SiteID: "s222222", Code: "NEW235", Flat: "Flat 10", MAC: mac, CreatedAt: at}
+		}); err != nil {
+			t.Fatalf("close and reuse: %v", err)
+		}
+		// Two accounts of one building cannot share an IP.
+		err = try("ip", func(d *store.Data) {
+			a := d.Accounts["n2"]
+			a.SiteID, a.IP = "s111111", "10.20.0.60"
+			d.Accounts["n2"] = a
+		})
+		if !errors.Is(err, store.ErrDuplicateIP) {
+			t.Fatalf("duplicate IP: %v", err)
+		}
+	})
+
+	t.Run("IntegrityRefusalsNeverDegradeTheStore", func(t *testing.T) {
+		h := New(t)
+		at := Fixture(t, h.Store)
+		before := h.Store.Snapshot()
+		cases := []struct {
+			name string
+			fn   func(d *store.Data)
+			want error
+		}{
+			{"equipment MAC", func(d *store.Data) {
+				d.Equipment["n1"] = store.Equipment{ID: "n1", Kind: store.KindONT, MAC: "aa-bb-cc-dd-ee-01", Status: store.EqInStock, CreatedAt: at}
+			}, store.ErrDuplicateEquipmentMAC},
+			{"user name", func(d *store.Data) {
+				d.AdminUsers["n1"] = store.AdminUser{ID: "n1", Username: "BRIAN", Role: store.RoleViewer, CreatedAt: at}
+			}, store.ErrDuplicateUsername},
+			{"access token", func(d *store.Data) {
+				d.APIDevices["n1"] = store.APIDevice{ID: "n1", UserID: "u1", AccessHash: "ah", CreatedAt: at}
+			}, store.ErrDuplicateToken},
+			{"refresh token", func(d *store.Data) {
+				d.APIDevices["n1"] = store.APIDevice{ID: "n1", UserID: "u1", RefreshHash: "rh", CreatedAt: at}
+			}, store.ErrDuplicateToken},
+			{"malformed MAC", func(d *store.Data) {
+				d.Accounts["n1"] = store.Account{ID: "n1", SiteID: "s111111", Code: "MAL234", Flat: "Flat 20", MAC: "aa:bb", CreatedAt: at}
+			}, store.ErrBadMAC},
+			{"access mode", func(d *store.Data) {
+				st := d.Sites["s222222"]
+				st.AccessMode = "bogus"
+				d.Sites["s222222"] = st
+			}, store.ErrBadAccessMode},
+			{"un-retiring a duplicate", func(d *store.Data) {
+				d.Equipment["r1"] = store.Equipment{ID: "r1", Kind: store.KindONT, MAC: "AA:BB:CC:DD:EE:01", Status: store.EqRetired, CreatedAt: at}
+			}, nil}, // allowed: retired items may share a MAC (checked below)
+		}
+		for _, c := range cases {
+			for i := 0; i < 5; i++ { // more than the failure count that degrades a store
+				err := h.Store.Update(func(d *store.Data) error { c.fn(d); return nil })
+				if c.want == nil {
+					if err != nil {
+						t.Fatalf("%s: %v", c.name, err)
+					}
+					break
+				}
+				if !errors.Is(err, c.want) {
+					t.Fatalf("%s: got %v, want %v", c.name, err, c.want)
+				}
+			}
+			if err := h.Store.Healthy(); err != nil {
+				t.Fatalf("%s: store degraded: %v", c.name, err)
+			}
+		}
+		after := h.Store.Snapshot()
+		if len(after.Equipment) != len(before.Equipment)+1 || after.Equipment["r1"].Status != store.EqRetired {
+			t.Fatal("only the retired item should have been added")
+		}
+		delete(after.Equipment, "r1")
+		after.EventSeq, before.EventSeq = 0, 0
+		if !reflect.DeepEqual(after.Equipment, before.Equipment) || !reflect.DeepEqual(after.Accounts, before.Accounts) ||
+			!reflect.DeepEqual(after.AdminUsers, before.AdminUsers) || !reflect.DeepEqual(after.APIDevices, before.APIDevices) {
+			t.Fatal("a refused update changed the data")
+		}
+		// A real write still works afterwards.
+		if err := h.Store.Update(func(d *store.Data) error { d.Notes["after"] = store.Note{ID: "after", Text: "t", Time: at}; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		// Un-retiring the duplicate is refused.
+		err := h.Store.Update(func(d *store.Data) error {
+			e := d.Equipment["r1"]
+			e.Status = store.EqInStock
+			d.Equipment["r1"] = e
+			return nil
+		})
+		if !errors.Is(err, store.ErrDuplicateEquipmentMAC) {
+			t.Fatalf("un-retire: %v", err)
 		}
 	})
 
@@ -224,6 +387,51 @@ func Run(t *testing.T) {
 		s.Update(func(d *store.Data) error { d.AddEvent(store.Event{Kind: "info", Msg: "next"}); return nil })
 		if got := h.Reopen().Snapshot().EventSeq; got != 351 {
 			t.Fatalf("seq after restart: %d", got)
+		}
+	})
+
+	t.Run("SettingsDiffAndRollback", func(t *testing.T) {
+		h := New(t)
+		at := time.Date(2026, 6, 7, 8, 9, 10, 987654321, time.UTC)
+		if err := h.Store.Update(func(d *store.Data) error {
+			d.Settings["a.one"] = store.Setting{Key: "a.one", Value: "1", UpdatedAt: at}
+			d.Settings["a.two"] = store.Setting{Key: "a.two", Value: "sealed", Enc: true, UpdatedAt: at}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		got := h.Reopen().Snapshot().Settings
+		if len(got) != 2 || got["a.one"].Value != "1" || got["a.one"].Enc || !got["a.two"].Enc ||
+			!got["a.one"].UpdatedAt.Equal(at.Truncate(time.Microsecond)) {
+			t.Fatalf("settings not stored: %+v", got)
+		}
+		want := h.Store.Snapshot()
+		boom := errors.New("boom")
+		err := h.Store.Update(func(d *store.Data) error {
+			d.Settings["a.one"] = store.Setting{Key: "a.one", Value: "changed", UpdatedAt: at}
+			delete(d.Settings, "a.two")
+			d.Settings["a.three"] = store.Setting{Key: "a.three", Value: "x", UpdatedAt: at}
+			return boom
+		})
+		if !errors.Is(err, boom) || !reflect.DeepEqual(h.Store.Snapshot(), want) {
+			t.Fatalf("rollback after error failed: %v", err)
+		}
+		h.Fault.FailNextCommit(ErrInjected)
+		err = h.Store.Update(func(d *store.Data) error { delete(d.Settings, "a.one"); return nil })
+		if !errors.Is(err, store.ErrPersist) || !reflect.DeepEqual(h.Store.Snapshot(), want) {
+			t.Fatalf("rollback after commit failure failed: %v", err)
+		}
+		// Update one row and delete another in one commit.
+		if err := h.Store.Update(func(d *store.Data) error {
+			d.Settings["a.one"] = store.Setting{Key: "a.one", Value: "2", UpdatedAt: at}
+			delete(d.Settings, "a.two")
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		got = h.Reopen().Snapshot().Settings
+		if len(got) != 1 || got["a.one"].Value != "2" {
+			t.Fatalf("update+delete not stored: %+v", got)
 		}
 	})
 

@@ -9,10 +9,19 @@ import (
 func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 
 func TestAdminPassRules(t *testing.T) {
+	// Load no longer refuses a missing ADMIN_PASS (the password may live in the
+	// database); CheckAdminPass is what main applies when the database has none.
 	for _, pw := range []string{"", "admin"} {
-		if _, err := Load(env(map[string]string{"ADMIN_PASS": pw, "ROUTER_MOCK": "true"})); err == nil {
-			t.Errorf("ADMIN_PASS=%q must be refused", pw)
+		c, err := Load(env(map[string]string{"ADMIN_PASS": pw, "ROUTER_MOCK": "true"}))
+		if err != nil {
+			t.Errorf("ADMIN_PASS=%q must load: %v", pw, err)
 		}
+		if c.CheckAdminPass() == nil {
+			t.Errorf("ADMIN_PASS=%q must not be usable as the admin password", pw)
+		}
+	}
+	if c, _ := Load(env(map[string]string{"ADMIN_PASS": "s3cret!"})); c.CheckAdminPass() != nil {
+		t.Error("a real ADMIN_PASS is usable")
 	}
 	if _, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true"})); err != nil {
 		t.Fatal(err)
@@ -118,17 +127,17 @@ func TestNotificationSettings(t *testing.T) {
 	base := map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "1"}
 	c, err := Load(env(base))
 	if err != nil || c.SMTPPort != 587 || c.WADailyLimit != 240 || c.WAMinConfirmKES != 250 || c.WALang != "en" || c.WAAPIVersion == "" ||
-		c.EmailConfigured() || c.TelegramConfigured() || c.WhatsAppConfigured() {
+		c.EmailConfigured() || c.WhatsAppConfigured() {
 		t.Fatalf("%+v %v", c, err)
 	}
 	m := map[string]string{"SMTP_HOST": "smtp.x", "SMTP_FROM": "a@x", "SMTP_PORT": "465", "ALERT_EMAIL_TO": "a@x, b@x",
-		"TELEGRAM_BOT_TOKEN": "1:A", "TELEGRAM_CHAT_ID": "-5", "WA_TOKEN": "t", "WA_PHONE_NUMBER_ID": "99",
+		"WA_TOKEN": "t", "WA_PHONE_NUMBER_ID": "99",
 		"WA_ADMIN_NUMBERS": "0712345678,+254 722 111 222", "WA_DAILY_LIMIT": "100", "WA_MIN_CONFIRM_KES": "0"}
 	for k, v := range base {
 		m[k] = v
 	}
 	c, err = Load(env(m))
-	if err != nil || !c.EmailConfigured() || !c.TelegramConfigured() || !c.WhatsAppConfigured() || c.SMTPPort != 465 ||
+	if err != nil || !c.EmailConfigured() || !c.WhatsAppConfigured() || c.SMTPPort != 465 ||
 		len(c.AlertEmailTo) != 2 || len(c.WAAdminNumbers) != 2 || c.WAAdminNumbers[0] != "254712345678" || c.WAAdminNumbers[1] != "254722111222" ||
 		c.WADailyLimit != 100 || c.WAMinConfirmKES != 0 {
 		t.Fatalf("%+v %v", c, err)
@@ -157,6 +166,29 @@ func TestDatabaseSettings(t *testing.T) {
 	for _, bad := range []string{"not base64!", "c2hvcnQ="} { // not base64; 5 bytes
 		if _, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "DATA_KEY": bad})); err == nil {
 			t.Errorf("DATA_KEY=%q must be refused", bad)
+		}
+	}
+}
+
+func TestNormalizeWANumber(t *testing.T) {
+	for in, want := range map[string]string{"0712345678": "254712345678", "+254 722-111 222": "254722111222", "254700000000": "254700000000"} {
+		if got, err := NormalizeWANumber(in); err != nil || got != want {
+			t.Errorf("%q: %q %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{"", "abc", "12345", "0712", "+25471234567890123"} {
+		if _, err := NormalizeWANumber(bad); err == nil {
+			t.Errorf("%q must be refused", bad)
+		}
+	}
+}
+
+// Old environment files still carry ADMIN_ALLOW_CIDR; it is ignored now (the
+// admin pages have their own sign-in), not refused.
+func TestOldAdminAllowCIDRIsIgnored(t *testing.T) {
+	for _, v := range []string{"10.98.0.0/24", "not a cidr", ""} {
+		if _, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ADMIN_ALLOW_CIDR": v, "ROUTER_MOCK": "true"})); err != nil {
+			t.Errorf("ADMIN_ALLOW_CIDR=%q: %v", v, err)
 		}
 	}
 }

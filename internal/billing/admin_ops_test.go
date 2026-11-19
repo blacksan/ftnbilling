@@ -24,9 +24,6 @@ func TestChangePackageKeepAndFresh(t *testing.T) {
 	if cur.PackageID != m40.ID || !cur.ExpiresAt.Equal(exp) {
 		t.Fatalf("keep: got pkg %s exp %v", cur.PackageID, cur.ExpiresAt)
 	}
-	if u, ok := e.rt.GetUser(a.Code); !ok || u.Profile != m40.Profile() {
-		t.Fatalf("router profile not updated: %+v", u)
-	}
 
 	day := e.pkg("1 Day")
 	if err := e.svc.ChangePackage(ctx, a.ID, day.ID, false); err != nil {

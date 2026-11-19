@@ -59,10 +59,22 @@ func randomAlnum(n int) (string, error) {
 	return string(out), nil
 }
 
-// MintJoin creates a new single-use join token for a building, replacing any
-// earlier one, and returns the plaintext token (shown once; only its hash is
-// stored). It is refused unless PUBLIC_BASE_URL is https, or ALLOW_INSECURE_JOIN is set.
-func (m *Manager) MintJoin(siteID string) (token string, expires time.Time, err error) {
+// routerUserAgent reports whether a request comes from RouterOS /tool fetch.
+// RouterOS 7 sends "User-Agent: RouterOS <version>"; RouterOS 6 sent
+// "Mikrotik/6.x Fetch". The check only stops link previewers and browsers
+// from burning a one-time token; it is not authentication.
+func routerUserAgent(ua string) bool {
+	ua = strings.ToLower(strings.TrimSpace(ua))
+	return strings.HasPrefix(ua, "routeros") || strings.HasPrefix(ua, "mikrotik")
+}
+
+// ErrCannotRender wraps the reasons the bootstrap script cannot be made
+// (no PUBLIC_IP, a bad layout field, no DATA_KEY for the PPPoE password...).
+// The text is meant for the admin, so the web layer shows it.
+var ErrCannotRender = errors.New("cannot make the set-up script")
+
+// mintToken makes and stores a new token for a router.
+func (m *Manager) mintToken(siteID string) (token string, expires time.Time, err error) {
 	if !strings.HasPrefix(m.cfg.PublicBaseURL, "https://") && !m.cfg.AllowInsecureJoin {
 		return "", time.Time{}, ErrInsecureBase
 	}
@@ -90,7 +102,14 @@ func (m *Manager) MintJoin(siteID string) (token string, expires time.Time, err 
 	return token, expires, nil
 }
 
-// RevokeJoin discards a building's pending token.
+// MintJoin creates a new single-use join token for a router, replacing any
+// earlier one, and returns the plaintext token (shown once; only its hash is
+// stored). It is refused unless PUBLIC_BASE_URL is https, or ALLOW_INSECURE_JOIN is set.
+func (m *Manager) MintJoin(siteID string) (token string, expires time.Time, err error) {
+	return m.mintToken(siteID)
+}
+
+// RevokeJoin discards a router's pending token.
 func (m *Manager) RevokeJoin(siteID string) error {
 	return m.st.Update(func(d *store.Data) error {
 		s, ok := d.Sites[siteID]
@@ -106,27 +125,28 @@ func (m *Manager) RevokeJoin(siteID string) error {
 	})
 }
 
-// ConsumeJoin turns a token into the router script. The token is consumed
-// only when its hash matches, it has not expired or been used, and, if
-// JOIN_REQUIRE_MIKROTIK_UA is on, the User-Agent starts with "Mikrotik" (so a
-// chat app's link preview cannot use it up). In one store update it generates
-// the router's keypair and a new REST password, stores the router's public key
-// and the password, allocates the tunnel address if needed and marks the token
-// used. Afterwards it rewrites the WireGuard peers and restarts the building's
-// runtime. The router's private key exists only in the returned script.
-func (m *Manager) ConsumeJoin(token, userAgent, from string) (script []byte, siteID string, err error) {
-	return m.ConsumeJoinOpts(token, userAgent, from, false)
-}
-
-// ConsumeJoinOpts is ConsumeJoin with noCheck: the router fetched the script
-// without certificate checking, so the script's own downloads skip it too.
-func (m *Manager) ConsumeJoinOpts(token, userAgent, from string, noCheck bool) (script []byte, siteID string, err error) {
+// ConsumeJoin turns a token into the router's bootstrap script. The token is
+// consumed only when its hash matches, it has not expired or been used, and,
+// if JOIN_REQUIRE_MIKROTIK_UA is on, the User-Agent starts with "Mikrotik" (so
+// a chat app's link preview cannot use it up). In one store update it
+// generates the router's keypair and a new REST password, stores the router's
+// public key and the password, allocates the tunnel address if needed and
+// marks the token used. Afterwards it rewrites the WireGuard peers and
+// restarts the router's runtime. The router's private key exists only in the
+// returned script. noCheck: the router fetched without certificate checking,
+// so the script's report skips it too.
+func (m *Manager) ConsumeJoin(token, userAgent, from string, noCheck bool) (script []byte, siteID string, err error) {
 	if token == "" || len(token) > 128 {
 		return nil, "", ErrJoinInvalid
 	}
-	if m.cfg.JoinRequireMikrotikUA && !strings.HasPrefix(strings.ToLower(userAgent), "mikrotik") {
+	if m.cfg.JoinRequireMikrotikUA && !routerUserAgent(userAgent) {
+		m.noteRefusedUA(token, userAgent) // a valid token turned away for its User-Agent shows on the router page
 		return nil, "", ErrJoinInvalid
 	}
+	return m.consume(token, ROSVersionFromUA(userAgent), from, noCheck)
+}
+
+func (m *Manager) consume(token, rosVersion, from string, noCheck bool) (script []byte, siteID string, err error) {
 	want := HashToken(token)
 	now := m.now()
 	err = m.st.Update(func(d *store.Data) error {
@@ -150,6 +170,7 @@ func (m *Manager) ConsumeJoinOpts(token, userAgent, from string, noCheck bool) (
 			return err
 		}
 		site.Mode, site.WGPublicKey, site.RESTPass = store.SiteModeWG, pub, pass
+		site.AccessMode = store.AccessIPoE
 		site.RESTUser, site.RESTPort = nonEmpty(site.RESTUser, DefaultUser), nonZeroInt(site.RESTPort, DefaultREST)
 		if site.TunnelIP == "" {
 			ip, err := d.NextTunnelIP(m.pfx)
@@ -158,16 +179,28 @@ func (m *Manager) ConsumeJoinOpts(token, userAgent, from string, noCheck bool) (
 			}
 			site.TunnelIP = ip
 		}
+		pppoe, err := m.OpenPPPoEPass(site)
+		if err != nil {
+			return fmt.Errorf("%w: the PPPoE password: %v", ErrCannotRender, err)
+		}
+		in := BootstrapInput{
+			Site: ApplyDefaults(m.cfg, site), PPPoEPass: pppoe, PrivateKey: priv, RESTPass: pass, ServerPub: m.cfg.WGPublicKey,
+			Endpoint: m.cfg.WGEndpoint, WGSubnet: m.pfx, PublicBase: m.cfg.PublicBaseURL, PublicIP: m.cfg.PublicIP, Generated: now, NoCheck: noCheck,
+			ROSVersion: rosVersion, Token: token,
+		}
+		if w, ok := m.flowWant(""); ok {
+			fmt.Sscanf(w.port, "%d", &in.NetflowPort)
+		}
+		script, err = RenderBootstrap(in)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrCannotRender, err)
+		}
+		m.refused.clear(site.ID)
 		site.Join.UsedAt, site.Join.UsedFrom = now, from
 		site.JoinedAt = time.Time{} // the next successful ping marks it joined again
-		script, err = RenderJoinScript(ScriptInput{
-			Site: ApplyDefaults(m.cfg, site), PrivateKey: priv, RESTPass: pass, ServerPub: m.cfg.WGPublicKey,
-			Endpoint: m.cfg.WGEndpoint, WGSubnet: m.pfx, PublicBase: m.cfg.PublicBaseURL, PublicIP: m.cfg.PublicIP, Generated: now, NoCheck: noCheck,
-		})
-		if err != nil {
-			return fmt.Errorf("could not render the join script: %w", err)
-		}
 		d.Sites[site.ID] = site
+		delete(d.Settings, JoinReportKey(site.ID)) // the new run reports afresh
+		d.AddEvent(store.Event{Time: now, SiteID: site.ID, Kind: "audit", Msg: "set-up script handed out"})
 		siteID = site.ID
 		return nil
 	})
@@ -181,8 +214,48 @@ func (m *Manager) ConsumeJoinOpts(token, userAgent, from string, noCheck bool) (
 	if m.opt.OnJoined != nil {
 		m.opt.OnJoined(siteID)
 	}
-	m.log.Info("join script handed out", "site", siteID, "from", from)
+	m.log.Info("set-up script handed out", "site", siteID, "from", from)
 	return script, siteID, nil
+}
+
+// ResetStub serves the fixed reset script (the second file of the paste line)
+// for ResetWindow after the setup script was fetched with the same token. It
+// does not consume anything and may be fetched again within the window.
+func (m *Manager) ResetStub(token, userAgent string) ([]byte, error) {
+	if token == "" || len(token) > 128 {
+		return nil, ErrJoinInvalid
+	}
+	if m.cfg.JoinRequireMikrotikUA && !routerUserAgent(userAgent) {
+		return nil, ErrJoinInvalid
+	}
+	want := HashToken(token)
+	now := m.now()
+	ok := false
+	m.st.View(func(d *store.Data) {
+		for _, s := range d.Sites {
+			if s.Join.Hash != "" && subtle.ConstantTimeCompare([]byte(want), []byte(s.Join.Hash)) == 1 && !s.Removed &&
+				!s.Join.UsedAt.IsZero() && !now.After(s.Join.UsedAt.Add(ResetWindow)) {
+				ok = true
+			}
+		}
+	})
+	if !ok {
+		return nil, ErrJoinInvalid
+	}
+	return []byte(ResetStubScript), nil
+}
+
+// DownloadScript is Line B: for a router that cannot take the paste line. It
+// mints a token and consumes it on the server, and returns the same script for
+// the owner to put on the router by hand (Files, then /import ftn-setup.rsc).
+// Every download makes new keys: the previous script stops working.
+func (m *Manager) DownloadScript(siteID, from string) ([]byte, error) {
+	token, _, err := m.mintToken(siteID)
+	if err != nil {
+		return nil, err
+	}
+	script, _, err := m.consume(token, "7.13", from, false)
+	return script, err
 }
 
 func nonZeroInt(v, def int) int {
@@ -213,6 +286,10 @@ type SiteStatus struct {
 	RESTOK       bool       `json:"rest_ok"`
 	RESTErr      string     `json:"rest_err,omitempty"`
 	Joined       bool       `json:"joined"`
+	// RefusedUA / RefusedAt: a fetch with this building's valid join token was
+	// turned away because its User-Agent is not a RouterOS fetch's.
+	RefusedUA string    `json:"refused_ua,omitempty"`
+	RefusedAt time.Time `json:"refused_at,omitempty"`
 }
 
 // TokenStateOf classifies a stored token.

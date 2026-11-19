@@ -69,13 +69,12 @@ func newOpsRig(t *testing.T) *opsRig {
 	r := &opsRig{snd: &recSender{}, dial: map[string]bool{}}
 	r.multi = newMultiOps(t, func(c *config.Config) {
 		c.WAToken, c.WAPhoneNumberID, c.WAAdminNumbers, c.WADailyLimit = "tok", "1234", []string{"254700111222"}, 240
-		c.TelegramToken, c.TelegramChatID = "1:A", "-1001234567"
-		c.SMTPHost, c.SMTPFrom = "smtp.example", "alerts@ftn.example"
+		c.SMTPHost, c.SMTPFrom, c.AlertEmailTo = "smtp.example", "alerts@ftn.example", []string{"ops@ftn.example"}
 		c.WAAppSecret, c.WAVerifyToken = "appsecret", "vtoken"
 	}, func(cfg config.Config, st *store.Store, mgr *sites.Manager, svc *billing.Service) web.Ops {
 		log := slog.New(slog.NewTextHandler(io.Discard, nil))
 		box, err := notify.Open(notify.Options{Path: filepath.Join(cfg.DataDir, "outbox.json"), Log: log,
-			Senders: map[string]notify.Sender{notify.ChanTelegram: r.snd, notify.ChanWhatsApp: r.snd}})
+			Senders: map[string]notify.Sender{notify.ChanEmail: r.snd, notify.ChanWhatsApp: r.snd}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -88,7 +87,7 @@ func newOpsRig(t *testing.T) *opsRig {
 			return errors.New("refused")
 		}})
 		eng := alerts.New(alerts.Options{Path: filepath.Join(cfg.DataDir, "alerts.json"), In: alertIn{st, fl}, Out: box, Log: log,
-			Targets: func() alerts.Targets { return alerts.Targets{Telegram: []string{"-1001234567"}} }})
+			Targets: func() alerts.Targets { return alerts.Targets{Email: []string{"ops@ftn.example"}} }})
 		ten := notify.NewTenant(notify.TenantOptions{Store: st, Box: box, Log: log, Policy: svc.Policy, PayHint: "M-Pesa Paybill 123456", MinConfirmKES: 250,
 			OpenOutage: func(id string) (time.Time, bool) { o, ok := fl.OpenOutage(id); return o.Start, ok }, OutageEnd: fl.OutageEnd})
 		in := notify.NewInbound(notify.InboundOptions{Store: st, Box: box, AppSecret: cfg.WAAppSecret, VerifyToken: cfg.WAVerifyToken, SupportPhone: "0700 111 222", PayHint: "M-Pesa Paybill 123456"})
@@ -130,15 +129,20 @@ func TestFleetPageAndLanding(t *testing.T) {
 	a := r.joined(t, "Alpha Court", "10.99.0.2", true)
 	b := r.joined(t, "Beta Heights", "10.99.0.3", false)
 	r.probe(3)
-	// With two buildings and "All", /admin lands on the fleet page.
+	// With two routers and "All", /admin is the Overview and the old fleet address is the Routers page.
 	resp := r.admin("GET", "/admin", nil)
 	resp.Body.Close()
-	if resp.StatusCode != 303 || resp.Header.Get("Location") != "/admin/fleet" {
-		t.Fatalf("landing: %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	if resp.StatusCode != 200 {
+		t.Fatalf("landing: %d", resp.StatusCode)
 	}
-	page := r.adminGet(t, "/admin/fleet")
-	for _, want := range []string{"Alpha Court", "Beta Heights", `<meta http-equiv="refresh" content="30">`, "Buildings online", "1 <small", "Tell tenants about the outage",
-		"cause unknown", `name="site" value="` + b.ID + `"`, "Fleet overview"} {
+	resp = r.admin("GET", "/admin/fleet", nil)
+	resp.Body.Close()
+	if resp.StatusCode != 302 || resp.Header.Get("Location") != "/admin/routers" {
+		t.Fatalf("fleet: %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	page := r.adminGet(t, "/admin/routers")
+	for _, want := range []string{"Alpha Court", "Beta Heights", "Routers online", "Tell tenants about the outage",
+		"cause unknown", `name="site" value="` + b.ID + `"`} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("fleet page lacks %q:\n%s", want, page)
 		}
@@ -155,7 +159,7 @@ func TestFleetPageAndLanding(t *testing.T) {
 	r.cookie = nil
 	resp = r.admin("GET", "/admin/metrics", nil)
 	resp.Body.Close()
-	if resp.StatusCode != 303 || resp.Header.Get("Location") != "/admin/fleet" {
+	if resp.StatusCode != 303 || resp.Header.Get("Location") != "/admin/routers" {
 		t.Fatalf("metrics with All: %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	// Sidebar entries exist.
@@ -176,7 +180,7 @@ func TestUptimePage(t *testing.T) {
 	r.mu.Unlock()
 	r.probe(3)
 	page := r.adminGet(t, "/admin/uptime?site="+a.ID+"&days=30")
-	for _, want := range []string{"Availability, last 30 days", `class="ustrip"`, "ongoing", "Alpha Court", "All buildings", "Beta Heights", "Tunnel round-trip time"} {
+	for _, want := range []string{"Availability, last 30 days", `class="ustrip"`, "ongoing", "Alpha Court", "All routers", "Beta Heights", "Tunnel round-trip time"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("uptime page lacks %q", want)
 		}
@@ -190,19 +194,19 @@ func TestAlertsSettingsTestAndMute(t *testing.T) {
 	r := newOpsRig(t)
 	a := r.joined(t, "Alpha Court", "10.99.0.2", true)
 	page := r.adminGet(t, "/admin/alerts")
-	for _, want := range []string{"Open alerts", "Building offline", "WAN saturated", "Packet loss", "High latency", "OLT port down", "Send test", "Mute a building"} {
+	for _, want := range []string{"Open alerts", "Router offline", "WAN saturated", "Packet loss", "High latency", "OLT port down", "Send test", "Mute a router"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("alerts page lacks %q", want)
 		}
 	}
 	form := url.Values{"rule_offline_on": {"1"}, "rule_offline_hold": {"7"}, "rule_wan_sat_on": {"1"}, "rule_wan_sat_thr": {"90"}, "rule_wan_sat_hold": {"20"},
 		"rule_loss_on": {"1"}, "rule_loss_thr": {"4"}, "rule_loss_hold": {"10"}, "rule_latency_thr": {"200"}, "rule_latency_hold": {"10"},
-		"rule_olt_down_on": {"1"}, "rule_olt_down_hold": {"2"}, "ch_telegram": {"1"}, "cooldown": {"30"}, "repeat_on": {"1"}, "repeat_hours": {"4"}, "notice": {"auto"}, "auto_min": {"45"}}
+		"rule_olt_down_on": {"1"}, "rule_olt_down_hold": {"2"}, "ch_email": {"1"}, "cooldown": {"30"}, "repeat_on": {"1"}, "repeat_hours": {"4"}, "notice": {"auto"}, "auto_min": {"45"}}
 	resp := r.admin("POST", "/admin/alerts/settings", form)
 	resp.Body.Close()
 	set := r.ops.Alerts.Settings()
 	if resp.StatusCode != 303 || set.Rules[alerts.RuleOffline].HoldMin != 7 || set.Rules[alerts.RuleWANSat].Threshold != 90 || set.Rules[alerts.RuleLatency].Enabled ||
-		set.Email || !set.Telegram || set.WhatsApp || set.CooldownMin != 30 || !set.RepeatEnabled || set.RepeatHours != 4 || set.OutageNotice != "auto" || set.AutoMin != 45 {
+		!set.Email || set.WhatsApp || set.CooldownMin != 30 || !set.RepeatEnabled || set.RepeatHours != 4 || set.OutageNotice != "auto" || set.AutoMin != 45 {
 		t.Fatalf("%d %+v", resp.StatusCode, set)
 	}
 	// invalid numbers are refused and nothing changes
@@ -212,20 +216,20 @@ func TestAlertsSettingsTestAndMute(t *testing.T) {
 	if loc := resp.Header.Get("Location"); !strings.Contains(loc, "msg=Error") || r.ops.Alerts.Settings().Rules[alerts.RuleLoss].Threshold != 4 {
 		t.Fatalf("%s", loc)
 	}
-	// test button: Telegram is configured in the rig, email is not
-	resp = r.admin("POST", "/admin/alerts/test", url.Values{"channel": {"telegram"}})
-	resp.Body.Close()
-	if !strings.Contains(resp.Header.Get("Location"), "Test+message+sent") || len(r.snd.got) != 1 || r.snd.got[0].To != "-1001234567" || !strings.Contains(r.snd.got[0].Text, "Test alert") {
-		t.Fatalf("%s %+v", resp.Header.Get("Location"), r.snd.got)
-	}
+	// test button: email has a recipient in the rig, WhatsApp has none
 	resp = r.admin("POST", "/admin/alerts/test", url.Values{"channel": {"email"}})
 	resp.Body.Close()
+	if !strings.Contains(resp.Header.Get("Location"), "Test+message+sent") || len(r.snd.got) != 1 || r.snd.got[0].To != "ops@ftn.example" || !strings.Contains(r.snd.got[0].Text, "Test alert") {
+		t.Fatalf("%s %+v", resp.Header.Get("Location"), r.snd.got)
+	}
+	resp = r.admin("POST", "/admin/alerts/test", url.Values{"channel": {"whatsapp"}})
+	resp.Body.Close()
 	if !strings.Contains(resp.Header.Get("Location"), "Error") {
-		t.Fatal("email has no recipient")
+		t.Fatal("whatsapp has no recipient in this rig")
 	}
 	// a failing channel shows the error
 	r.snd.fail = errors.New("boom")
-	resp = r.admin("POST", "/admin/alerts/test", url.Values{"channel": {"telegram"}})
+	resp = r.admin("POST", "/admin/alerts/test", url.Values{"channel": {"email"}})
 	resp.Body.Close()
 	if !strings.Contains(resp.Header.Get("Location"), "failed") {
 		t.Fatal(resp.Header.Get("Location"))
@@ -247,8 +251,8 @@ func TestMessagesPage(t *testing.T) {
 	r := newOpsRig(t)
 	r.joined(t, "Alpha Court", "10.99.0.2", true)
 	box := r.ops.Box
-	m1, _ := box.Enqueue(notify.Message{Channel: notify.ChanTelegram, To: "-1", Kind: notify.KindAdminAlert, Text: "x", Priority: 1})
-	m2, _ := box.Enqueue(notify.Message{Channel: notify.ChanTelegram, To: "-1", Kind: notify.KindAdminAlert, Text: "y", NotBefore: time.Now().Add(time.Hour)})
+	m1, _ := box.Enqueue(notify.Message{Channel: notify.ChanEmail, To: "ops@ftn.example", Kind: notify.KindAdminAlert, Text: "x", Priority: 1})
+	m2, _ := box.Enqueue(notify.Message{Channel: notify.ChanEmail, To: "ops@ftn.example", Kind: notify.KindAdminAlert, Text: "y", NotBefore: time.Now().Add(time.Hour)})
 	page := r.adminGet(t, "/admin/messages")
 	for _, want := range []string{"Waiting", "admin_alert", m1.ID, "held until", "Cancel"} {
 		if want != m1.ID && !strings.Contains(page, want) {
@@ -267,25 +271,25 @@ func TestMessagesPage(t *testing.T) {
 		t.Fatal("retry")
 	}
 	// send them: the first goes, then a bad token pauses the channel and the banner shows
-	box.Step(context.Background(), notify.ChanTelegram)
+	box.Step(context.Background(), notify.ChanEmail)
 	if g, _ := box.Get(m1.ID); g.Status != notify.StatusSent {
 		t.Fatal("sent")
 	}
 	if !strings.Contains(r.adminGet(t, "/admin/messages?status=sent"), "sent") {
 		t.Fatal("filter")
 	}
-	r.snd.fail = notify.Auth("telegram: 401 Unauthorized")
-	box.Enqueue(notify.Message{Channel: notify.ChanTelegram, To: "-1", Kind: notify.KindAdminAlert, Text: "z"})
-	time.Sleep(1100 * time.Millisecond) // the channel's 1 s rate gap
+	r.snd.fail = notify.Auth("smtp: 401 Unauthorized")
+	box.Enqueue(notify.Message{Channel: notify.ChanEmail, To: "ops@ftn.example", Kind: notify.KindAdminAlert, Text: "z"})
+	time.Sleep(2100 * time.Millisecond) // the channel's 2 s rate gap
 	for i := 0; i < 3 && len(box.Paused()) == 0; i++ {
-		box.Step(context.Background(), notify.ChanTelegram)
+		box.Step(context.Background(), notify.ChanEmail)
 		time.Sleep(300 * time.Millisecond)
 	}
 	page = r.adminGet(t, "/admin/messages")
 	if !strings.Contains(page, "sending is paused") || !strings.Contains(page, "401 Unauthorized") {
 		t.Fatalf("auth banner missing:\n%s", page)
 	}
-	resp = r.admin("POST", "/admin/messages/resume", url.Values{"channel": {"telegram"}})
+	resp = r.admin("POST", "/admin/messages/resume", url.Values{"channel": {"email"}})
 	resp.Body.Close()
 	if len(box.Paused()) != 0 {
 		t.Fatal("resume")
@@ -318,7 +322,7 @@ func TestOutageNoticeButton(t *testing.T) {
 		t.Fatalf("%s", resp.Header.Get("Location"))
 	}
 	// the notice count shows on the fleet page
-	if !strings.Contains(r.adminGet(t, "/admin/fleet"), "2 notices already sent") {
+	if !strings.Contains(r.adminGet(t, "/admin/routers"), "2 notices already sent") {
 		t.Fatal("fleet page should count the notices")
 	}
 	// switched off: refused

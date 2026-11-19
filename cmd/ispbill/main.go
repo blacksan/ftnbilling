@@ -15,10 +15,12 @@ import (
 	"syscall"
 	"time"
 
+	"ispbill/internal/authn"
 	"ispbill/internal/billing"
 	"ispbill/internal/config"
 	"ispbill/internal/metrics"
 	"ispbill/internal/payments"
+	"ispbill/internal/settings"
 	"ispbill/internal/sites"
 	"ispbill/internal/store"
 	"ispbill/internal/web"
@@ -51,6 +53,16 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	defer st.Close()
+	if len(cfg.DataKey) == 0 {
+		return errors.New("DATA_KEY is not set: it seals the two-factor secrets. Generate one (openssl rand -base64 32) and put it in the environment file")
+	}
+	au, err := authn.New(st, cfg.DataKey, cfg.BrandName)
+	if err != nil {
+		return fmt.Errorf("DATA_KEY: %w", err)
+	}
+	if err := seedOwner(au, st, cfg, log); err != nil {
+		return err
+	}
 	if cfg.RouterMock {
 		log.Warn("ROUTER_MOCK=true: using an in-memory fake router")
 	}
@@ -60,11 +72,12 @@ func run(log *slog.Logger) error {
 
 	var svc *billing.Service
 	mgr := sites.New(sites.Options{
-		Cfg: cfg, Store: st, Log: log,
+		Cfg: cfg, Store: st, Log: log, DataKey: cfg.DataKey,
 		Dir:      func(siteID string) metrics.Directory { return svc.Directory(siteID) },
 		OnJoined: func(siteID string) { svc.MarkProfilesDirty(siteID) },
 	})
 	svc = billing.NewService(st, mgr, log)
+	mgr.SetProvisioner(svc)
 	if err := svc.SetDataKey(cfg.DataKey); err != nil {
 		return fmt.Errorf("DATA_KEY: %w", err)
 	}
@@ -92,11 +105,12 @@ func run(log *slog.Logger) error {
 		}()
 	}
 
-	mp := payments.NewMpesa(payments.MpesaConfig{
-		BaseURL: cfg.MpesaBaseURL(), Key: cfg.MpesaKey, Secret: cfg.MpesaSecret, Shortcode: cfg.MpesaShortcode,
-		Passkey: cfg.MpesaPasskey, PublicBaseURL: cfg.PublicBaseURL, CallbackToken: cfg.MpesaCallbackToken,
-		Enabled: cfg.MpesaEnabled(),
-	}, svc, st, log)
+	// Settings saved in the admin pages lie over the environment file.
+	setm, err := settings.New(st, cfg.DataKey, cfg, os.Getenv)
+	if err != nil {
+		return fmt.Errorf("settings: %w", err)
+	}
+	mp := payments.NewMpesa(mpesaConf(setm.Effective()), svc, st, log)
 	// Callbacks the database could not take are kept on disk and replayed.
 	mp.SetSpool(payments.NewSpool(filepath.Join(cfg.DataDir, "spool")))
 	wg.Add(1)
@@ -129,13 +143,13 @@ func run(log *slog.Logger) error {
 		log.Warn("TEST_MODE=true: the test payment button grants free access")
 	}
 	log.Info("starting", "listen", cfg.ListenAddr, "data", cfg.DataDir, "router_mock", cfg.RouterMock,
-		"test_mode", cfg.TestMode, "mpesa_enabled", cfg.MpesaEnabled(), "mpesa_env", cfg.MpesaEnv)
+		"test_mode", cfg.TestMode, "mpesa_enabled", setm.Effective().MpesaEnabled(), "mpesa_env", setm.Effective().MpesaEnv)
 
 	svc.ResyncAll()
 	wg.Add(1)
 	go func() { defer wg.Done(); svc.RunSweeper(ctx, 60*time.Second) }()
 
-	ops, err := startOps(ctx, &wg, cfg, st, svc, mgr, log)
+	ops, err := startOps(ctx, &wg, setm, mp, st, svc, mgr, log)
 	if err != nil {
 		stop()
 		wg.Wait()
@@ -144,7 +158,22 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	webSrv := web.New(cfg, st, svc, providers, mp, mgr, log)
+	webSrv.SetSettings(setm)
 	webSrv.SetOps(ops)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		tick := time.NewTicker(10 * time.Minute)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				au.Prune()
+			}
+		}
+	}()
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -177,6 +206,35 @@ func run(log *slog.Logger) error {
 		err = nil
 	}
 	return err
+}
+
+// seedOwner creates the first admin owner when there is none. The password
+// comes from the admin.pass_hash setting (a password saved in the old Settings
+// page) or else from ADMIN_PASS. After that the admin_users table is the only
+// source: both are ignored.
+func seedOwner(au *authn.Service, st *store.Store, cfg config.Config, log *slog.Logger) error {
+	if _, ok := au.Owner(); ok {
+		return nil
+	}
+	var hash string
+	st.View(func(d *store.Data) { hash = d.Settings["admin.pass_hash"].Value })
+	if hash == "" {
+		if err := cfg.CheckAdminPass(); err != nil {
+			return err
+		}
+		var err error
+		if hash, err = settings.HashPassword(cfg.AdminPass); err != nil {
+			return err
+		}
+	}
+	created, err := au.SeedOwner(cfg.AdminUser, hash)
+	if err != nil {
+		return err
+	}
+	if created {
+		log.Info("admin owner created; sign in and enrol the authenticator app (ispbill admin-reset-password -setup-code prints the setup code)", "user", cfg.AdminUser)
+	}
+	return nil
 }
 
 // runnableSites lists the buildings whose router can be reached right now.

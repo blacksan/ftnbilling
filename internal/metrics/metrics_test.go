@@ -589,3 +589,38 @@ func TestServiceDaysKept62DaysAndSaveCreatesDir(t *testing.T) {
 		t.Fatalf("service days after save: %v", days)
 	}
 }
+
+func queue(code string, up, down uint64) routeros.SimpleQueue {
+	return routeros.SimpleQueue{Name: "ftn-" + code, Target: "10.5.50.60/32", Comment: "ftn:acct:" + code + " Flat 3B",
+		MaxA: 20e6, MaxB: 20e6, RateA: 1e6, RateB: 9e6, BytesUp: up, BytesDown: down}
+}
+
+func TestIPoEUsageFromQueueCounters(t *testing.T) {
+	c := newCol(t)
+	// First sight is only a baseline: the counters hold history.
+	c.SampleQueues(t0, []routeros.SimpleQueue{queue("K7Q2MX", 5000, 90000), {Name: "guests", BytesDown: 1 << 40}, queue("NOPE99", 1, 1)})
+	if d, u := total(c, "K7Q2MX"); d != 0 || u != 0 {
+		t.Fatalf("baseline must not count history: %d %d", d, u)
+	}
+	c.SampleQueues(t0.Add(time.Minute), []routeros.SimpleQueue{queue("K7Q2MX", 5300, 95000)})
+	if d, u := total(c, "K7Q2MX"); d != 5000 || u != 300 {
+		t.Fatalf("delta: %d %d", d, u)
+	}
+	// Counters reset (queue recreated): the new value is the delta.
+	c.SampleQueues(t0.Add(2*time.Minute), []routeros.SimpleQueue{queue("K7Q2MX", 20, 700)})
+	if d, u := total(c, "K7Q2MX"); d != 5700 || u != 320 {
+		t.Fatalf("reset: %d %d", d, u)
+	}
+	// Queues that are not an account's (or whose flat is unknown) are ignored.
+	if d, _ := total(c, "NOPE99"); d != 0 {
+		t.Fatal("unknown flat counted")
+	}
+	live := c.Snapshot().Flats["K7Q2MX"]
+	if live.Address != "10.5.50.60" || live.DownBps != 9e6 || live.UpBps != 1e6 || live.CapBps != 20e6 {
+		t.Fatalf("%+v", live)
+	}
+	// The queue's address is how NetFlow finds the flat.
+	if got := c.codeForIP("10.5.50.60", t0.Add(2*time.Minute)); got != "K7Q2MX" {
+		t.Fatalf("ip->code %q", got)
+	}
+}

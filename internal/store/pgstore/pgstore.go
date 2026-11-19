@@ -33,6 +33,8 @@ type Options struct {
 	NoLock bool
 	// AppName shows in pg_stat_activity.
 	AppName string
+
+	maxVersion int // tests: migrate only up to this version
 }
 
 // Backend implements store.Backend and store.EventReader.
@@ -237,6 +239,14 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	do(err)
 	nts, err := queryAll(ctx, tx, notesC, "")
 	do(err)
+	sets, err := queryAll(ctx, tx, settingsC, "")
+	do(err)
+	ausers, err := queryAll(ctx, tx, adminUsersC, "")
+	do(err)
+	asess, err := queryAll(ctx, tx, adminSessionsC, "")
+	do(err)
+	adevs, err := queryAll(ctx, tx, apiDevicesC, "")
+	do(err)
 	limit := 300
 	if all {
 		limit = 1 << 30
@@ -253,6 +263,8 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	d.Accounts, d.ClosedAccounts, d.Tenancies, d.Contacts = map[string]store.Account{}, map[string]store.Account{}, map[string]store.Tenancy{}, map[string]store.Contact{}
 	d.Orders, d.Vouchers, d.Payments, d.Devices = map[string]store.Order{}, map[string]store.Voucher{}, map[string]store.Payment{}, map[string]store.Device{}
 	d.Tasks, d.EquipmentEvents, d.Notes = map[string]store.Task{}, map[string]store.EquipmentEvent{}, map[string]store.Note{}
+	d.Settings = map[string]store.Setting{}
+	d.AdminUsers, d.AdminSessions, d.APIDevices = map[string]store.AdminUser{}, map[string]store.AdminSession{}, map[string]store.APIDevice{}
 	fill(d.Sites, sites, sitesC)
 	fill(d.Packages, pk, packagesC)
 	fill(d.Customers, cust, customersC)
@@ -273,6 +285,10 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	fill(d.Tasks, tsk, tasksC)
 	fill(d.EquipmentEvents, eqe, eqEventsC)
 	fill(d.Notes, nts, notesC)
+	fill(d.Settings, sets, settingsC)
+	fill(d.AdminUsers, ausers, adminUsersC)
+	fill(d.AdminSessions, asess, adminSessionsC)
+	fill(d.APIDevices, adevs, apiDevicesC)
 	for i := len(evs) - 1; i >= 0; i-- { // oldest first in memory
 		d.Events = append(d.Events, evs[i])
 	}
@@ -306,6 +322,10 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	tasksC.queueDeletes(batch, cs.Tasks.Delete)
 	eqEventsC.queueDeletes(batch, cs.EquipmentEvents.Delete)
 	notesC.queueDeletes(batch, cs.Notes.Delete)
+	settingsC.queueDeletes(batch, cs.Settings.Delete)
+	adminSessionsC.queueDeletes(batch, cs.AdminSessions.Delete)
+	apiDevicesC.queueDeletes(batch, cs.APIDevices.Delete)
+	adminUsersC.queueDeletes(batch, cs.AdminUsers.Delete)
 	mark("delete")
 	sitesC.queueUpserts(batch, cs.Sites)
 	mark("sites")
@@ -337,6 +357,14 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	mark("equipment_events")
 	notesC.queueUpserts(batch, cs.Notes)
 	mark("notes")
+	settingsC.queueUpserts(batch, cs.Settings)
+	mark("settings")
+	adminUsersC.queueUpserts(batch, cs.AdminUsers)
+	mark("admin_users")
+	adminSessionsC.queueUpserts(batch, cs.AdminSessions)
+	mark("admin_sessions")
+	apiDevicesC.queueUpserts(batch, cs.APIDevices)
+	mark("api_devices")
 	eventsC.queueUpserts(batch, store.Delta[store.Event]{Upsert: cs.NewEvents})
 	mark("events")
 	if batch.Len() == 0 {
@@ -349,9 +377,14 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	defer tx.Rollback(context.Background())
 	br := tx.SendBatch(ctx, batch)
 	for i := 0; i < batch.Len(); i++ {
-		if _, err := br.Exec(); err != nil {
+		tag, err := br.Exec()
+		if err != nil {
 			br.Close()
-			return connErr(fmt.Errorf("%s: %w", names[i], err))
+			return connErr(integrityErr(fmt.Errorf("%s: %w", names[i], err)))
+		}
+		if (names[i] == "admin_users" || names[i] == "api_devices") && tag.RowsAffected() == 0 {
+			br.Close()
+			return fmt.Errorf("%s: %w", names[i], store.ErrStaleWrite)
 		}
 	}
 	if err := br.Close(); err != nil {
@@ -360,11 +393,44 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	if err := tx.Commit(ctx); err != nil {
 		var pe *pgconn.PgError
 		if errors.As(err, &pe) { // the server answered: the commit definitely failed
-			return err
+			return integrityErr(err)
 		}
 		return fmt.Errorf("%w: %w", store.ErrAmbiguous, err)
 	}
 	return nil
+}
+
+// integrityErr marks a refusal by the database (SQLSTATE class 23: unique,
+// foreign key, check, not null) with store.ErrIntegrity, and, where the rule is
+// one the program knows by name, with the specific error too, so callers can
+// tell a duplicate MAC from a bad value. The original error stays in the chain
+// and in the message. Update treats ErrIntegrity as a refusal, never an outage.
+func integrityErr(err error) error {
+	var pe *pgconn.PgError
+	if !errors.As(err, &pe) || !strings.HasPrefix(pe.Code, "23") {
+		return err
+	}
+	var specific error
+	switch pe.ConstraintName {
+	case "accounts_mac_open":
+		specific = store.ErrDuplicateMAC
+	case "accounts_site_ip_open":
+		specific = store.ErrDuplicateIP
+	case "accounts_mac_shape":
+		specific = store.ErrBadMAC
+	case "equipment_mac_live":
+		specific = store.ErrDuplicateEquipmentMAC
+	case "admin_users_username":
+		specific = store.ErrDuplicateUsername
+	case "api_devices_access", "api_devices_refresh":
+		specific = store.ErrDuplicateToken
+	case "sites_access_mode_check":
+		specific = store.ErrBadAccessMode
+	}
+	if specific != nil {
+		return fmt.Errorf("%w: %w: %w", store.ErrIntegrity, specific, err)
+	}
+	return fmt.Errorf("%w: %w", store.ErrIntegrity, err)
 }
 
 // connErr marks an error that did not come from the server (timeout, reset,
@@ -381,7 +447,7 @@ func connErr(err error) error {
 	return fmt.Errorf("%w: %w", store.ErrConnection, err)
 }
 
-// queueAccountPrepare frees the unique slots (code, open MAC per site) held by
+// queueAccountPrepare frees the unique slots (code, open MAC, open IP per site) held by
 // accounts whose code, MAC, site or open/closed state is changing. Swapping a
 // MAC or code between two accounts, or moving a MAC from one account to a new
 // one, would otherwise collide in whatever order the rows are written. The
@@ -394,7 +460,8 @@ func queueAccountPrepare(b *pgx.Batch, d store.Delta[store.Account]) {
 		if !ok {
 			continue
 		}
-		if old.Code != cur.Code || !strings.EqualFold(old.MAC, cur.MAC) || old.SiteID != cur.SiteID || old.ClosedAt.IsZero() != cur.ClosedAt.IsZero() {
+		if old.Code != cur.Code || !strings.EqualFold(old.MAC, cur.MAC) || old.SiteID != cur.SiteID || old.ClosedAt.IsZero() != cur.ClosedAt.IsZero() ||
+			old.IP != cur.IP || old.MACConflict != cur.MACConflict {
 			ids = append(ids, cur.ID)
 		}
 	}
@@ -402,7 +469,7 @@ func queueAccountPrepare(b *pgx.Batch, d store.Delta[store.Account]) {
 		return
 	}
 	sort.Strings(ids)
-	b.Queue("UPDATE accounts SET code = '', mac = '' WHERE id = ANY($1)", ids)
+	b.Queue("UPDATE accounts SET code = '', mac = '', ip = '' WHERE id = ANY($1)", ids)
 }
 
 // Events reads the full event history, newest first.

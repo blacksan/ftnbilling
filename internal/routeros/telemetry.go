@@ -32,9 +32,13 @@ type Session struct {
 // "a/b" pair and RateB/MaxB the second; both pairs share the same ordering, so
 // ratios are meaningful whichever direction RouterOS lists first.
 type SimpleQueue struct {
-	Name, Target string
-	RateA, RateB int64 // bit/s
-	MaxA, MaxB   int64 // bit/s, 0 = unlimited
+	Name, Target, Comment string
+	RateA, RateB          int64 // bit/s
+	MaxA, MaxB            int64 // bit/s, 0 = unlimited
+	// BytesUp and BytesDown are the queue's byte counters (RouterOS lists
+	// "upload/download" from the target's side, like max-limit). They only go
+	// up until the queue is recreated or counters are reset.
+	BytesUp, BytesDown uint64
 }
 
 type Iface struct {
@@ -156,9 +160,11 @@ func (c *REST) SimpleQueues(ctx context.Context) ([]SimpleQueue, error) {
 	}
 	out := make([]SimpleQueue, 0, len(rows))
 	for _, r := range rows {
-		q := SimpleQueue{Name: r["name"], Target: r["target"]}
+		q := SimpleQueue{Name: r["name"], Target: r["target"], Comment: r["comment"]}
 		q.RateA, q.RateB = splitPair(r["rate"])
 		q.MaxA, q.MaxB = splitPair(r["max-limit"])
+		up, down := splitPair(r["bytes"])
+		q.BytesUp, q.BytesDown = uint64(up), uint64(down)
 		out = append(out, q)
 	}
 	return out, nil
@@ -195,6 +201,24 @@ func (c *REST) DNSCache(ctx context.Context) ([]DNSEntry, error) {
 func (c *REST) PingHost(ctx context.Context, target string, count int) (PingResult, error) {
 	var rows []map[string]string
 	body := map[string]string{"address": target, "count": strconv.Itoa(count)}
+	to := time.Duration(count+8) * time.Second
+	if err := c.doT(ctx, to, http.MethodPost, "/ping", nil, body, &rows); err != nil {
+		return PingResult{}, err
+	}
+	return parsePing(target, count, rows), nil
+}
+
+// SourcePinger is a client that can ping from a chosen source address (the
+// customer gateway), which proves the customers' path to the internet:
+// forwarding and masquerade, not only the router's own route.
+type SourcePinger interface {
+	PingFrom(ctx context.Context, target, src string, count int) (PingResult, error)
+}
+
+// PingFrom runs the router's ping tool with src-address set.
+func (c *REST) PingFrom(ctx context.Context, target, src string, count int) (PingResult, error) {
+	var rows []map[string]string
+	body := map[string]string{"address": target, "count": strconv.Itoa(count), "src-address": src}
 	to := time.Duration(count+8) * time.Second
 	if err := c.doT(ctx, to, http.MethodPost, "/ping", nil, body, &rows); err != nil {
 		return PingResult{}, err

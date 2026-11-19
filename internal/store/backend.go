@@ -18,6 +18,17 @@ var (
 	// commit happened (the connection broke during COMMIT). The store then
 	// reloads everything from the backend to find out.
 	ErrAmbiguous = errors.New("commit outcome unknown")
+	// ErrIntegrity is wrapped by a backend when the database refused a change
+	// because it breaks an integrity rule (SQLSTATE class 23: unique, foreign
+	// key, check, not null). The change was wrong, not the database: Update
+	// rolls back, returns the error, and never counts it towards degrading.
+	ErrIntegrity = errors.New("the database refused the change")
+	// ErrStaleWrite is an integrity refusal: the sign-in row this process
+	// tried to write is older than the one in the database (another process,
+	// such as the admin-reset command, changed it). The write is dropped so a
+	// stale copy can never undo a password, 2FA or revoke change. Restart the
+	// service to load the newer rows.
+	ErrStaleWrite = fmt.Errorf("%w: a newer copy of this sign-in row is in the database (changed by another process); restart the service", ErrIntegrity)
 	// ErrConnection is wrapped by a backend when a commit failed because the
 	// database could not be reached or stopped answering (as opposed to the
 	// database refusing the change). The store turns degraded at once.
@@ -84,6 +95,10 @@ type ChangeSet struct {
 	Tasks           Delta[Task]
 	EquipmentEvents Delta[EquipmentEvent]
 	Notes           Delta[Note]
+	Settings        Delta[Setting]
+	AdminUsers      Delta[AdminUser]
+	AdminSessions   Delta[AdminSession]
+	APIDevices      Delta[APIDevice]
 	NewEvents       []Event
 }
 
@@ -92,7 +107,8 @@ func (c *ChangeSet) Empty() bool {
 	return c.Sites.Empty() && c.Packages.Empty() && c.Customers.Empty() && c.Equipment.Empty() &&
 		c.Accounts.Empty() && c.Tenancies.Empty() && c.Contacts.Empty() && c.Orders.Empty() &&
 		c.Vouchers.Empty() && c.Payments.Empty() && c.Devices.Empty() && c.Tasks.Empty() &&
-		c.EquipmentEvents.Empty() && c.Notes.Empty() && len(c.NewEvents) == 0
+		c.EquipmentEvents.Empty() && c.Notes.Empty() && c.Settings.Empty() &&
+		c.AdminUsers.Empty() && c.AdminSessions.Empty() && c.APIDevices.Empty() && len(c.NewEvents) == 0
 }
 
 // Summary is a short human description (counts only, never row contents).
@@ -109,7 +125,10 @@ func (c *ChangeSet) Summary() string {
 		n("contacts", len(c.Contacts.Upsert), len(c.Contacts.Delete)) + n("orders", len(c.Orders.Upsert), len(c.Orders.Delete)) +
 		n("vouchers", len(c.Vouchers.Upsert), len(c.Vouchers.Delete)) + n("payments", len(c.Payments.Upsert), len(c.Payments.Delete)) +
 		n("devices", len(c.Devices.Upsert), len(c.Devices.Delete)) + n("tasks", len(c.Tasks.Upsert), len(c.Tasks.Delete)) +
-		n("equipment_events", len(c.EquipmentEvents.Upsert), len(c.EquipmentEvents.Delete)) + n("notes", len(c.Notes.Upsert), len(c.Notes.Delete))
+		n("equipment_events", len(c.EquipmentEvents.Upsert), len(c.EquipmentEvents.Delete)) + n("notes", len(c.Notes.Upsert), len(c.Notes.Delete)) +
+		n("settings", len(c.Settings.Upsert), len(c.Settings.Delete)) +
+		n("admin_users", len(c.AdminUsers.Upsert), len(c.AdminUsers.Delete)) + n("admin_sessions", len(c.AdminSessions.Upsert), len(c.AdminSessions.Delete)) +
+		n("api_devices", len(c.APIDevices.Upsert), len(c.APIDevices.Delete))
 	if len(c.NewEvents) > 0 {
 		s += fmt.Sprintf(" events+%d", len(c.NewEvents))
 	}

@@ -1,4 +1,4 @@
-// Package notify delivers messages to the admin (email, Telegram, WhatsApp)
+// Package notify delivers messages to the admin (email, WhatsApp)
 // and to tenants (WhatsApp). Everything goes through a persistent outbox, so
 // a message is never sent twice and is retried after a restart.
 package notify
@@ -14,7 +14,6 @@ import (
 // Channels.
 const (
 	ChanEmail    = "email"
-	ChanTelegram = "telegram"
 	ChanWhatsApp = "whatsapp"
 )
 
@@ -52,7 +51,7 @@ const (
 // Message is one outgoing message.
 type Message struct {
 	ID        string `json:"id"`
-	Channel   string `json:"channel"` // email | telegram | whatsapp
+	Channel   string `json:"channel"` // email | whatsapp
 	Kind      string `json:"kind"`
 	To        string `json:"to"`
 	SiteID    string `json:"site_id,omitempty"`

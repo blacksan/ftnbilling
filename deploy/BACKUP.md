@@ -6,9 +6,9 @@ There are three layers, all installed by `deploy/install.sh`:
 |---|---|---|
 | Database dump | every 6 hours (`ftnbilling-dump.timer`) | `pg_dump -Fc` of the `ftnbilling` database into `/var/backups/ftnbilling/db/` (root only, mode 0600). Each dump is checked with `pg_restore -l` and written under a temporary name first. Kept: the newest 8, one per day for 14 days, one per week for 8 weeks, one per month for 12 months. The same run also makes the daily file tar (`ispbill.json*`, `outbox.json`, `alerts.json`, `fleet.json`, `spool/`, kept 30 days) and, on Sundays, the `metrics/` tar (kept 4 weeks). This replaces the old daily cron job. Run by hand: `sudo ftnbilling-backup dump` |
 | Restore drill | monthly (`ftnbilling-drill.timer`) | Creates a scratch database `ftnbilling_drill`, restores the newest dump into it, runs `ftnbilling db-check` against it and compares row counts and the sum of applied payments with production (the restored copy may be missing recent rows but must never have more), then drops it. A backup you have never restored is only a hope. Run by hand: `sudo ftnbilling-backup drill` |
-| Google Drive | weekly (below) | An encrypted snapshot off the server, with a fresh dump, the settings file (including `DATA_KEY`), `wg0.conf` and `wg-admin.conf` |
+| Google Drive | weekly (below) | An encrypted snapshot off the server, with a fresh dump, the settings file (including `DATA_KEY`) and `wg0.conf` |
 
-The last dump, drill and upload results are written to `/var/lib/ftnbilling/backup-status.json` (`dump_at`, `dump_file`, `dump_bytes`, `drill_at`, `drill_ok`, `drill_msg`, `upload_at`, `upload_ok`, `error`), which the admin Settings page shows; the app treats a dump older than 36 hours as stale. A failed dump or drill also sends a Telegram message if `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set. `sudo ftnbilling-doctor` checks all of this.
+The last dump, drill and upload results are written to `/var/lib/ftnbilling/backup-status.json` (`dump_at`, `dump_file`, `dump_bytes`, `drill_at`, `drill_ok`, `drill_msg`, `upload_at`, `upload_ok`, `error`), which the admin Settings page shows; the app treats a dump older than 36 hours as stale. The app raises a "Backup problem" alert (email and WhatsApp, as set up in Settings) when the dump is older than 36 hours, or the status shows an `error`, `drill_ok` false or `upload_ok` false. `sudo ftnbilling-doctor` checks all of this.
 
 Dumps on the same server do not protect you from losing the server: set up the Drive upload (section 1).
 
@@ -88,8 +88,8 @@ Now open Google Drive in a browser. You will see a folder
 too. Do not rename, move or delete them by hand; use the commands here.
 
 If a backup fails, the reason is in the log: `journalctl -u ftnbilling-backup`.
-If the server's settings file has `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`,
-a failure also sends you a Telegram message.
+A failure also raises a "Backup problem" alert in the app (Alerts page, and email or
+WhatsApp if you set them up in Settings).
 
 ## 3. What is in the backup, and what is not
 
@@ -99,17 +99,17 @@ In it:
   `fleet.json`, `alerts.json`, `outbox.json`, the `metrics/` history and the
   WireGuard peer list in `wg/`).
 - Settings, including passwords: `/etc/ftnbilling/` (the `.env` file).
-- The WireGuard server keys: `/etc/wireguard/wg0.conf` (routers) and
-  `/etc/wireguard/wg-admin.conf` (your admin devices). With them, a rebuilt
-  server keeps the same identity and routers and admin devices reconnect on
-  their own.
+- The WireGuard server key: `/etc/wireguard/wg0.conf` (routers). With it, a
+  rebuilt server keeps the same identity and the routers reconnect on their
+  own. (Older snapshots may also hold `wg-admin.conf`; the admin VPN no longer
+  exists and that file is not needed.)
 - The web server settings: `/etc/caddy/Caddyfile`.
 - When PostgreSQL is in use (`DATABASE_URL` in the settings file): a fresh,
   verified full database dump, `database.dump` (the same kind the 6-hourly
   timer makes). If the dump fails, the Drive backup fails loudly instead of
   silently leaving the database out. The settings file holds `DATA_KEY`:
-  without it the stored national IDs cannot be read, so keep the backup
-  passphrases safe.
+  without it the stored national IDs and the secrets saved in Settings (M-Pesa,
+  WhatsApp, email) cannot be read, so keep the backup passphrases safe.
 - `MANIFEST.txt`: server name, date, app version and a checksum of every file.
 
 Not in it:

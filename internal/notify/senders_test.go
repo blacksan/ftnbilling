@@ -96,45 +96,6 @@ func TestWhatsAppTextSession(t *testing.T) {
 	}
 }
 
-func TestTelegramExactJSON(t *testing.T) {
-	var gotPath, gotBody string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		gotPath, gotBody = r.URL.Path, string(b)
-		w.Write([]byte(`{"ok":true,"result":{"message_id":77}}`))
-	}))
-	defer srv.Close()
-	tg := &Telegram{Token: "123:ABC", BaseURL: srv.URL}
-	id, err := tg.Send(context.Background(), Message{To: "-100200300", Text: "Kilimani is offline"})
-	if err != nil || id != "77" {
-		t.Fatalf("%q %v", id, err)
-	}
-	if gotPath != "/bot123:ABC/sendMessage" || gotBody != `{"chat_id":"-100200300","text":"Kilimani is offline"}` {
-		t.Fatalf("%s %s", gotPath, gotBody)
-	}
-}
-
-func TestTelegramErrorClassesAndTokenScrubbed(t *testing.T) {
-	for status, c := range map[int][2]bool{401: {true, false}, 403: {true, false}, 400: {false, true}, 429: {false, false}, 502: {false, false}} {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(status)
-			w.Write([]byte(`{"ok":false,"description":"nope"}`))
-		}))
-		_, err := (&Telegram{Token: "T", BaseURL: srv.URL}).Send(context.Background(), Message{To: "1", Text: "x"})
-		srv.Close()
-		if err == nil || isAuth(err) != c[0] || isPermanent(err) != c[1] {
-			t.Fatalf("%d: %v", status, err)
-		}
-	}
-	srv := httptest.NewServer(nil)
-	url := srv.URL
-	srv.Close() // connection refused: the error text contains the URL and so the token
-	_, err := (&Telegram{Token: "SECRETTOKEN", BaseURL: url}).Send(context.Background(), Message{To: "1", Text: "x"})
-	if err == nil || strings.Contains(err.Error(), "SECRETTOKEN") || isPermanent(err) || isAuth(err) {
-		t.Fatalf("%v", err)
-	}
-}
-
 // ---- SMTP against an in-test server ----------------------------------------
 
 type smtpRec struct {
@@ -348,5 +309,49 @@ func TestSMTPErrorClasses(t *testing.T) {
 	var te error = Auth("x")
 	if !errors.Is(te, te) {
 		t.Fatal()
+	}
+}
+
+// A server that accepts the connection and then says nothing (or never
+// finishes a TLS handshake) must not hold the caller past its context
+// deadline: the web server's write timeout is 30 s.
+func TestSMTPStopsAtContextDeadline(t *testing.T) {
+	for _, implicit := range []bool{false, true} {
+		ln, _ := net.Listen("tcp", "127.0.0.1:0")
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				defer c.Close() // held open, silent
+			}
+		}()
+		s := &SMTP{Host: "127.0.0.1", Port: listenPort(t, ln), Implicit: implicit, User: "ops", Pass: "pw", From: "alerts@ftn.example", Timeout: 30 * time.Second}
+		ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+		start := time.Now()
+		_, err := s.Send(ctx, testMsg())
+		cancel()
+		ln.Close()
+		if err == nil || time.Since(start) > 3*time.Second {
+			t.Fatalf("implicit=%v: err=%v after %v", implicit, err, time.Since(start))
+		}
+	}
+	// Cancelling the context also ends it.
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			defer c.Close()
+			time.Sleep(5 * time.Second)
+		}
+	}()
+	s := &SMTP{Host: "127.0.0.1", Port: listenPort(t, ln), From: "alerts@ftn.example", Timeout: 30 * time.Second}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(200 * time.Millisecond); cancel() }()
+	start := time.Now()
+	if _, err := s.Send(ctx, testMsg()); err == nil || time.Since(start) > 3*time.Second {
+		t.Fatalf("cancel: err=%v after %v", err, time.Since(start))
 	}
 }

@@ -95,6 +95,15 @@ func (m *Mock) SimpleQueues(context.Context) ([]SimpleQueue, error) {
 		out = append(out, SimpleQueue{Name: "<hotspot-" + user + ">", Target: m.active[user] + "/32", MaxA: cap, MaxB: cap,
 			RateA: cap / 20, RateB: int64(float64(cap) * (0.2 + 0.75*m.tel().rng.Float64()))})
 	}
+	// Queues written through the row API (the IPoE reconciler's ftn-<code>).
+	for _, r := range m.tables["/queue/simple"] {
+		q := SimpleQueue{Name: r["name"], Target: r["target"], Comment: r["comment"]}
+		q.MaxA, q.MaxB = splitPair(r["max-limit"])
+		q.RateA, q.RateB = splitPair(r["rate"])
+		up, down := splitPair(r["bytes"])
+		q.BytesUp, q.BytesDown = uint64(up), uint64(down)
+		out = append(out, q)
+	}
 	return out, nil
 }
 
@@ -169,4 +178,22 @@ func (m *Mock) System(context.Context) (SysInfo, error) {
 	st := m.tel()
 	return SysInfo{CPULoad: 5 + int(30*eveningFactor(time.Now())*st.rng.Float64()), FreeMem: 700 << 20, TotalMem: 1 << 30,
 		Uptime: "3d4h", TempC: 44 + 8*st.rng.Float64(), HasTemp: true}, nil
+}
+
+// SetCustomerPathDown makes pings from a customer source address get no answer
+// (a broken masquerade or forwarding rule), while the router's own pings work.
+func (m *Mock) SetCustomerPathDown(down bool) { m.mu.Lock(); m.custDown = down; m.mu.Unlock() }
+
+// PingFrom implements SourcePinger.
+func (m *Mock) PingFrom(ctx context.Context, target, src string, count int) (PingResult, error) {
+	m.mu.Lock()
+	down := m.custDown
+	m.mu.Unlock()
+	if down {
+		if err := m.Ping(ctx); err != nil {
+			return PingResult{}, err
+		}
+		return PingResult{Target: target, Sent: count, LossPct: 100}, nil
+	}
+	return m.PingHost(ctx, target, count)
 }
