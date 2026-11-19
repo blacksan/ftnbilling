@@ -684,3 +684,27 @@ func TestBootstrapCommandRestoresDNSOnFailure(t *testing.T) {
 		t.Fatal("the no-check line restores DNS too")
 	}
 }
+
+// L-6: IPv6 is switched off, and the router still has an IPv6 input firewall that
+// drops everything that does not come from the admin LAN (belt and braces).
+func TestBootstrapHasAnIPv6InputFirewall(t *testing.T) {
+	s := benchSite()
+	in := benchInput(s)
+	cfg := config.Config{PublicIP: "203.0.113.10", WANInterface: "ether1", OLTInterface: "sfp-sfpplus1", CustomerSubnet: "10.5.50.0/24"}
+	s.RESTUser = "ispbill"
+	in.Site = ApplyDefaults(cfg, s)
+	out, err := RenderBootstrap(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(out)
+	drop := strings.Index(text, `/ipv6/firewall/filter add chain=input action=drop in-interface-list=!LAN comment="ftn: ipv6 input drop non-LAN"`)
+	est := strings.Index(text, `/ipv6/firewall/filter add chain=input action=accept connection-state=established,related`)
+	off := strings.Index(text, "/ipv6/settings set disable-ipv6=yes")
+	if drop < 0 || est < 0 || off < 0 {
+		t.Fatalf("missing: drop %d est/rel %d disable %d", drop, est, off)
+	}
+	if !(off < est && est < drop) {
+		t.Errorf("order: disable-ipv6 %d, est/rel accept %d, drop %d", off, est, drop)
+	}
+}
