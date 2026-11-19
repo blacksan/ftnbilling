@@ -285,6 +285,14 @@ fi
 if have caddy && [ -r /etc/caddy/Caddyfile ]; then
   if caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then pass "Caddyfile valid" ""; else fail "Caddyfile valid" "caddy validate failed"; fi
 fi
+# The M-Pesa callbacks are unsigned: Caddy should only let Safaricom's addresses reach /pay/cb/*.
+if [ -r /etc/caddy/Caddyfile ]; then
+  if grep -q 'not remote_ip' /etc/caddy/Caddyfile 2>/dev/null; then
+    pass "M-Pesa callback source filter" "/pay/cb/* is limited to the addresses in the Caddyfile"
+  else
+    warn "M-Pesa callback source filter" "/pay/cb/* is open to every address (installed with CADDY_MPESA_IPS=any, or before the filter was the default): re-run the installer to limit it to Safaricom's addresses"
+  fi
+fi
 
 # ------------------------------------------------------------------ wireguard
 section "WireGuard"

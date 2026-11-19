@@ -505,3 +505,42 @@ func TestInstallShipsWipeTool(t *testing.T) {
 		t.Errorf("deploy/ftnbilling-wipe must exist and be executable: %v", err)
 	}
 }
+
+// M-2: the Caddyfile limits /pay/cb/* to Safaricom's addresses unless told otherwise.
+func TestInstallMpesaCallbackFilter(t *testing.T) {
+	bashOrSkip(t)
+	block := func(ips string) (string, string, error) {
+		script := "set -e\ndie() { echo \"die: $*\" >&2; exit 1; }\nwarn() { echo \"WARNING: $*\" >&2; }\nnote() { echo \"note: $*\"; }\n" +
+			"SAFARICOM_CALLBACK_IPS=\"$(sed -n 's/^SAFARICOM_CALLBACK_IPS=\"\\(.*\\)\"$/\\1/p' install.sh)\"\n" + fnSrc(t, "mpesa_cb_block") + "\nmpesa_cb_block\n"
+		cmd := exec.Command("bash", "-c", script)
+		cmd.Env = append(os.Environ(), "CADDY_MPESA_IPS="+ips)
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		return string(out), stderr.String(), err
+	}
+	// Default: Safaricom's list, and no word of "any".
+	out, _, err := block("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"@mpesa_cb_other", "path /pay/cb/*", "not remote_ip 196.201.", "respond @mpesa_cb_other \"Forbidden\" 403"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("default block lacks %q:\n%s", want, out)
+		}
+	}
+	// Custom list (commas allowed).
+	out, _, err = block("203.0.113.0/24,198.51.100.7")
+	if err != nil || !strings.Contains(out, "not remote_ip 203.0.113.0/24 198.51.100.7") || strings.Contains(out, "196.201.") {
+		t.Errorf("custom list: %v\n%s", err, out)
+	}
+	// Explicit opt-out: no filter, loud warning.
+	out, stderr, err := block("any")
+	if err != nil || strings.Contains(out, "remote_ip") || !strings.Contains(stderr, "WARNING") {
+		t.Errorf("any: %v\nout %s\nstderr %s", err, out, stderr)
+	}
+	// Garbage never reaches the Caddyfile.
+	if _, stderr, err := block("1.2.3.4 } respond"); err == nil || !strings.Contains(stderr, "CADDY_MPESA_IPS must be") {
+		t.Errorf("bad value accepted: %v %s", err, stderr)
+	}
+}
