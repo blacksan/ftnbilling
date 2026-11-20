@@ -60,6 +60,7 @@ const (
 	CheckDHCP         = "dhcp.ftn"
 	CheckWAN          = "wan.internet"
 	CheckBootFile     = "bootstrap.file"
+	CheckAdminNet     = "admin.no_internet"
 	checksCacheFor    = 60 * time.Second
 	checksBudget      = 45 * time.Second // the whole pass, all reads together
 	recheckMax        = 6                // ... this many times in a row
@@ -86,6 +87,9 @@ var tableProps = map[string]string{
 func tableQuery(path string) map[string]string {
 	if p, ok := tableProps[path]; ok {
 		return map[string]string{".proplist": p}
+	}
+	if path == "/ip/firewall/address-list" { // the lists of flats can be long; the checks read the admin allow list only
+		return map[string]string{"list": AdminAllowList}
 	}
 	return nil
 }
@@ -244,7 +248,7 @@ var checkSingles = []string{"/system/resource", "/system/device-mode", "/ip/dns"
 var checkTables = []string{
 	"/ip/address", "/interface", "/interface/bridge", "/interface/bridge/port", "/interface/bridge/host", "/interface/vlan",
 	"/interface/list/member", "/ip/dhcp-server", "/ip/dhcp-client", "/ip/traffic-flow/target", "/ip/service",
-	"/user/group", "/file", "/ip/firewall/filter", "/ip/firewall/nat", "/ip/route",
+	"/user/group", "/file", "/ip/firewall/filter", "/ip/firewall/nat", "/ip/firewall/address-list", "/ip/route",
 	// read-only, for router.script_hooks
 	"/ppp/profile", "/tool/netwatch",
 }
@@ -504,6 +508,7 @@ var needs = map[string][]string{
 	CheckDHCP:        {"/ip/dhcp-server"},
 	CheckWAN:         {"/ip/route"},
 	CheckBootFile:    {"/file"},
+	CheckAdminNet:    {"/ip/firewall/filter", "/ip/firewall/address-list", "/interface/bridge"},
 }
 
 type checkDef struct {
@@ -525,6 +530,7 @@ var checkDefs = []checkDef{
 	{CheckCustomerIf, "network", "Customer network is on one interface", true, "", evalCustomerIf},
 	{CheckDHCP, "network", "Customer DHCP server is on", true, "", evalDHCP},
 	{CheckWalled, "network", "Unpaid and unregistered houses are walled", true, "", evalWalled},
+	{CheckAdminNet, "network", "Admin port reaches the router and the billing site only", false, "", evalAdminNet},
 	{CheckWalledDNS, "network", "Walled houses can still resolve any name", false, "", evalWalledDNS},
 	{CheckWAN, "network", "Router has a way to the internet", false, "", evalWAN},
 	{CheckOLT, "network", "Fibre (OLT) port is not stuck in the bridge", true, "", evalOLT},

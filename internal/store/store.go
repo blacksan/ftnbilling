@@ -98,6 +98,11 @@ type Site struct {
 	// server switched off and keeps off (self-healed by the sweep).
 	CustomerPorts string `json:"customer_ports,omitempty"`
 	DisabledPorts string `json:"disabled_ports,omitempty"`
+	// PortsPolicy "off" means every port except the uplink and the admin LAN stays switched off until the
+	// owner enables it (EnabledPorts is the comma list of owner-enabled ports). Empty = a router that predates
+	// the policy: the first sweep after the upgrade records what is in service and then sets "off".
+	PortsPolicy  string `json:"ports_policy,omitempty"`
+	EnabledPorts string `json:"enabled_ports,omitempty"`
 
 	// Bootstrap script (format 7). WANMode is dhcp (the default, also when
 	// empty), static or pppoe. The static fields are used for static only. The

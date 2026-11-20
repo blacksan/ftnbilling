@@ -8,7 +8,8 @@
 # on a blank router: if it finds "ftn:" objects of an earlier run, or anything
 # that is not ours, it refuses and changes nothing; a rebuild always goes
 # through the paste line, which resets the router first. It never prints a secret.
-# The router is never open: the firewall hold (section 2) is in place before the
+# Ports are off by default: only the uplink and the admin port are up when it finishes; the admin port has no
+# internet except the server's own names (tcp 80/443). The router is never open: the firewall hold (section 2) is in place before the
 # WAN is up, the WAN client is created switched off and is switched on only
 # after the whole rule set is in (section 6).
 :local fails 0
@@ -90,6 +91,16 @@
     /ip/firewall/filter add chain=input action=drop connection-state=new,invalid in-interface-list=WAN comment="ftn: hold"
     /ip/firewall/filter add chain=forward action=drop connection-state=new,invalid in-interface-list=WAN comment="ftn: hold"
   }
+  # Ports are off by default: every physical ethernet and SFP port except the uplink and the admin port is switched
+  # off here, before the WAN exists, so a cable plugged into a spare port gets nothing. The OLT and customer ports
+  # start off too; the owner enables them in the Ports tab. Nothing later in this script needs them to be up
+  # (bridge ports, the customer VLAN and addresses are made on disabled ports without trouble, and the report goes
+  # out over the WAN). If the script stops early they stay off.
+  :local keepUp {"ether1";"ether2"}
+  :foreach i in=[/interface/find where type=ether] do={
+    :local n [/interface/get $i name]
+    :if ([:typeof [:find $keepUp $n]] = "nil") do={ /interface/set $i disabled=yes }
+  }
   /ip/dhcp-client remove [find where comment~"^ftn:"]
   /ip/dhcp-client remove [find where interface="ether1"]
   /interface/pppoe-client remove [find where comment~"^ftn:"]
@@ -147,8 +158,17 @@
   # Its address, peer and route are added in section 9.
   /interface/wireguard remove [find where name="wg-ftn"]
   /interface/wireguard add name=wg-ftn private-key="PRIVATEKEYPRIVATEKEYPRIVATEKEYPRIVATEKEY0=" mtu=1380 comment="ftn: tunnel to the billing server"
+  # The admin port reaches the router and the server's own names (tcp 80/443) only. RouterOS resolves the FQDN
+  # entries itself and keeps them current. The WAN is not up yet, so an entry that cannot be resolved now is not an
+  # error: the list is healed by the server's sweep, and the drop rule below holds either way.
+  /ip/firewall/address-list remove [find where list="ftn-admin-allow"]
+  :do { /ip/firewall/address-list add list=ftn-admin-allow address=billing.example.co.ke comment="ftn: admin allow billing.example.co.ke" } on-error={ :put "   (could not add billing.example.co.ke to the admin allow list now; the server adds it later)" }
+  :do { /ip/firewall/address-list add list=ftn-admin-allow address=203.0.113.10 comment="ftn: admin allow 203.0.113.10" } on-error={ :put "   (could not add 203.0.113.10 to the admin allow list now; the server adds it later)" }
   /ip/firewall/filter remove [find where comment~"^ftn:" and comment!="ftn: hold"]
   /ip/firewall/nat remove [find where comment~"^ftn:"]
+  /ip/firewall/filter add chain=forward action=accept in-interface=br-lan out-interface-list=WAN protocol=tcp dst-port=80,443 dst-address-list=ftn-admin-allow connection-state=new,established,related comment="ftn: admin allow billing site"
+  /ip/firewall/filter add chain=forward action=drop in-interface=br-lan out-interface-list=WAN comment="ftn: admin no internet"
+  /ip/firewall/filter add chain=forward action=drop src-address=192.168.88.0/24 out-interface-list=WAN comment="ftn: admin net no internet"
   /ip/firewall/filter add chain=forward action=accept protocol=tcp dst-port=80,443 dst-address=203.0.113.10 src-address-list=ftn-unreg comment="ftn: ipoe walled payment page ftn-unreg"
   /ip/firewall/filter add chain=forward action=accept protocol=tcp dst-port=80,443 dst-address=203.0.113.10 src-address-list=ftn-suspended comment="ftn: ipoe walled payment page ftn-suspended"
   /ip/firewall/filter add chain=forward action=reject reject-with=tcp-reset protocol=tcp src-address-list=ftn-unreg comment="ftn: ipoe walled reject tcp ftn-unreg"
@@ -162,7 +182,6 @@
   /ip/firewall/filter add chain=forward action=drop connection-state=invalid comment="ftn: forward drop invalid"
   /ip/firewall/filter add chain=forward action=drop in-interface=wg-ftn comment="ftn: wg no forward in"
   /ip/firewall/filter add chain=forward action=drop out-interface=wg-ftn comment="ftn: wg no forward out"
-  /ip/firewall/filter add chain=forward action=accept in-interface-list=LAN out-interface-list=WAN comment="ftn: lan to wan"
   /ip/firewall/filter add chain=forward action=accept in-interface-list=LAN out-interface=br-customers comment="ftn: lan to customers"
   /ip/firewall/filter add chain=forward action=accept in-interface=br-customers out-interface-list=WAN comment="ftn: customers to wan"
   /ip/firewall/filter add chain=forward action=drop comment="ftn: forward drop rest"

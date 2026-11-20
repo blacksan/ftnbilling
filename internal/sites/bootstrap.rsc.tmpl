@@ -8,7 +8,8 @@
 # on a blank router: if it finds "ftn:" objects of an earlier run, or anything
 # that is not ours, it refuses and changes nothing; a rebuild always goes
 # through the paste line, which resets the router first. It never prints a secret.
-# The router is never open: the firewall hold (section 2) is in place before the
+# Ports are off by default: only the uplink and the admin port are up when it finishes; the admin port has no
+# internet except the server's own names (tcp 80/443). The router is never open: the firewall hold (section 2) is in place before the
 # WAN is up, the WAN client is created switched off and is switched on only
 # after the whole rule set is in (section 6).
 :local fails 0
@@ -93,6 +94,16 @@
     /ip/firewall/filter add chain=input action=drop connection-state=new,invalid in-interface-list=WAN comment="ftn: hold"
     /ip/firewall/filter add chain=forward action=drop connection-state=new,invalid in-interface-list=WAN comment="ftn: hold"
   }
+  # Ports are off by default: every physical ethernet and SFP port except the uplink and the admin port is switched
+  # off here, before the WAN exists, so a cable plugged into a spare port gets nothing. The OLT and customer ports
+  # start off too; the owner enables them in the Ports tab. Nothing later in this script needs them to be up
+  # (bridge ports, the customer VLAN and addresses are made on disabled ports without trouble, and the report goes
+  # out over the WAN). If the script stops early they stay off.
+  :local keepUp {{.KeepUp}}
+  :foreach i in=[/interface/find where type=ether] do={
+    :local n [/interface/get $i name]
+    :if ([:typeof [:find $keepUp $n]] = "nil") do={ /interface/set $i disabled=yes }
+  }
   /ip/dhcp-client remove [find where comment~"^ftn:"]
   /ip/dhcp-client remove [find where interface="{{.WANIface}}"]
   /interface/pppoe-client remove [find where comment~"^ftn:"]
@@ -170,6 +181,13 @@
   # Its address, peer and route are added in section 9.
   /interface/wireguard remove [find where name="{{.WGIface}}"]
   /interface/wireguard add name={{.WGIface}} private-key="{{.PrivateKey}}" mtu={{.MTU}} comment="ftn: tunnel to the billing server"
+  # The admin port reaches the router and the server's own names (tcp 80/443) only. RouterOS resolves the FQDN
+  # entries itself and keeps them current. The WAN is not up yet, so an entry that cannot be resolved now is not an
+  # error: the list is healed by the server's sweep, and the drop rule below holds either way.
+  /ip/firewall/address-list remove [find where list="{{.AdminList}}"]
+{{- range .AdminAllow}}
+  :do { /ip/firewall/address-list add list={{$.AdminList}} address={{.Address}} comment="{{rq .Comment}}" } on-error={ :put "   (could not add {{.Address}} to the admin allow list now; the server adds it later)" }
+{{- end}}
   /ip/firewall/filter remove [find where comment~"^ftn:" and comment!="ftn: hold"]
   /ip/firewall/nat remove [find where comment~"^ftn:"]
 {{- range .Filter}}

@@ -61,6 +61,8 @@ type BootstrapInput struct {
 	Token string
 	// NetflowPort is the server's traffic-flow port; 0 leaves traffic-flow alone.
 	NetflowPort int
+	// WebFigDomain (WEBFIG_DOMAIN) is, with the host of PublicBase and PublicIP, what the admin port may reach.
+	WebFigDomain string
 }
 
 // bootstrapData is the template view of BootstrapInput.
@@ -94,6 +96,9 @@ type bootstrapData struct {
 	DHCPServer, UnregList, UnregPool string
 	DNSServers                       string
 	Filter, NAT                      []string
+	AdminAllow                       []AdminAllowEntry
+	AdminList                        string
+	KeepUp                           string // RouterOS array literal of the ports that stay on: the uplink and the admin ports
 	NetflowPort                      int
 	NoCheck                          bool
 	Token                            string
@@ -154,7 +159,11 @@ func (r ipoeRule) line() string {
 func bootstrapFirewall(plan SubnetPlan, lan LANPlan, serverIP, mgmt, publicIP string, restPort int) (filter, nat []string) {
 	w := walledRules(plan, publicIP, restPort)
 	f := func(args, comment string) { filter = append(filter, ruleLine("filter", args, comment)) }
-	// Forward.
+	// Forward. The admin port rules come first of all: nothing above them can accept the admin LAN's traffic,
+	// and the established/related accept below cannot let it out (see adminfw.go).
+	for _, r := range adminRuleSet(lan.Network) {
+		filter = append(filter, r.line())
+	}
 	for _, r := range w.Forward {
 		filter = append(filter, r.line())
 	}
@@ -162,7 +171,6 @@ func bootstrapFirewall(plan SubnetPlan, lan LANPlan, serverIP, mgmt, publicIP st
 	f("chain=forward action=drop connection-state=invalid", "ftn: forward drop invalid")
 	f("chain=forward action=drop in-interface="+WGInterface, "ftn: wg no forward in")
 	f("chain=forward action=drop out-interface="+WGInterface, "ftn: wg no forward out")
-	f("chain=forward action=accept in-interface-list=LAN out-interface-list=WAN", "ftn: lan to wan")
 	f("chain=forward action=accept in-interface-list=LAN out-interface="+CustomerBridge, "ftn: lan to customers")
 	f("chain=forward action=accept in-interface="+CustomerBridge+" out-interface-list=WAN", "ftn: customers to wan")
 	f("chain=forward action=drop", "ftn: forward drop rest")
@@ -190,6 +198,7 @@ func bootstrapFirewall(plan SubnetPlan, lan LANPlan, serverIP, mgmt, publicIP st
 	// NAT.
 	n := func(args, comment string) { nat = append(nat, ruleLine("nat", args, comment)) }
 	n("chain=srcnat action=masquerade out-interface-list=WAN src-address="+plan.Network, "ftn: customer masquerade")
+	// Only what the admin accept lets through (the billing site) ever meets this rule; without it that traffic could not come back.
 	n("chain=srcnat action=masquerade out-interface-list=WAN src-address="+lan.Network, "ftn: lan masquerade")
 	for _, r := range w.NAT {
 		nat = append(nat, r.line())
@@ -299,6 +308,13 @@ func RenderBootstrap(in BootstrapInput) ([]byte, error) {
 	httpsBase := u.Scheme == "https"
 	base := strings.TrimRight(in.PublicBase, "/")
 	d.ReportPost = reportPostLine(base, in.Token, httpsBase, in.NoCheck)
+	d.AdminAllow = AdminAllowFor(in.PublicBase, in.WebFigDomain, in.PublicIP)
+	d.AdminList = AdminAllowList
+	keep := []string{`"` + s.WANInterface + `"`}
+	for _, p := range d.LANPorts {
+		keep = append(keep, `"`+p+`"`)
+	}
+	d.KeepUp = "{" + strings.Join(keep, ";") + "}"
 	d.Filter, d.NAT = bootstrapFirewall(plan, lan, serverIP, mgmt.String(), in.PublicIP, s.RESTPort)
 	out, err := execScript(bootstrapTmpl, in.ROSVersion, d)
 	if err != nil {

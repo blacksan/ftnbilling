@@ -618,7 +618,7 @@ func TestTheOLTUplinkIsNeverSwitchedOffFromHere(t *testing.T) {
 	f, s, m := portsRig(t)
 	for _, who := range []PortActor{ownerWho} {
 		if pe := portErrOf(t, f, s.ID, "sfp-sfpplus1", PortChange{Disabled: bp(true), ConfirmName: "Block A"}, who); pe.Kind != PortErrOLTOff ||
-			!strings.Contains(pe.Msg, "Move the OLT role to another port or unplug the OLT instead") {
+			pe.Msg != "OLT port: can't be switched off here. Give the OLT role to another port first." {
 			t.Fatalf("%+v", pe)
 		}
 	}
@@ -638,6 +638,7 @@ func TestSweepDoesNotSwitchOffAnAdminLANOrOLTPortAgain(t *testing.T) {
 	f.st.Update(func(d *store.Data) error {
 		x := d.Sites[s.ID]
 		x.DisabledPorts = "ether4,sfp-sfpplus1,ether5"
+		x.EnabledPorts = "ether3,ether4,sfp-sfpplus1" // the owner never enabled ether5
 		d.Sites[s.ID] = x
 		return nil
 	})

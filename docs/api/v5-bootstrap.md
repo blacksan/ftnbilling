@@ -232,7 +232,7 @@ enable and disable are written at once (one read, one write).
 |---|---|
 | WAN port, or `role: "wan"` | 409 `port_locked`, nothing written |
 | the last Admin LAN port leaves the admin LAN, or is switched off. Before any change to the admin LAN at least one Admin LAN port that stays must be switched on, have a link (`running`) and already be a member of `br-lan` (read from the router; an unreadable router refuses) | 409 `last_lan_port`, nothing written, even with the typed name |
-| the OLT uplink asked to be switched off (move the OLT role to another port or unplug the OLT instead) | 409 `olt_disable_refused`; the port list has `can_disable: false` |
+| the OLT uplink asked to be switched off ("OLT port: can't be switched off here. Give the OLT role to another port first."; it can be enabled) | 409 `olt_disable_refused`; the port list has `can_disable: false` |
 | the OLT uplink asked to become something else (give the role to another port instead) | 409 `bad_state` |
 | a switched-off port made Admin LAN or OLT | 409 `bad_state` (enable it first) |
 | operator touching Admin LAN or the OLT uplink (role or enable/disable, either direction) | 403 `forbidden_role`; only an owner |
@@ -244,6 +244,10 @@ Disabling a customer port needs no typed name; `disable_warning` carries the num
 Every change is in the router's activity with the actor (`port ether5: role Unused -> Customer port`, `port ether5 disabled`). A customer or unused port the server switched off is remembered (`disabled_ports` on the router) and kept off by the
 sweep (`switched off ether5`, actor `system`); enabling it forgets it. An Admin LAN port that is switched off is a one-off: it is not remembered, so enabling it again at the router is not undone;
 the sweep never switches a LAN port or the OLT uplink off. The sweep and the apply honour "Pause automatic fixes"; an explicit change from the page runs anyway.
+
+Ports are off by default. A router built by the current script has every port except the uplink and the Admin LAN port switched off, the OLT and customer ports included, and `ports_policy` `off`. A port is on only when the owner enabled it (`PATCH` with `disabled: false`; the server switches it on and records it in `enabled_ports`); the sweep switches off any other port that is on, never switches one on, and never touches the uplink or the Admin LAN port. Each port row carries `owner_enabled`, a `note` (the Admin LAN port: "Admin — router management and the billing site only") and a `warning` ("Up with no role — disable it if you don't use it" for a port that is up with no role). A router from before the policy (`ports_policy` empty) gets it at its first sweep: every port that is on and has a role or a link is recorded as enabled, so nothing in service goes down.
+
+The Admin LAN has no internet: three forward rules at the top of the filter (`ftn: admin allow billing site`, `ftn: admin no internet`, `ftn: admin net no internet`) let it reach only tcp 80 and 443 to the address list `ftn-admin-allow` (the server's `DOMAIN`, `WEBFIG_DOMAIN` and public IP); the router itself stays reachable from the Admin LAN. The checklist item `admin.no_internet` is fixed automatically.
 
 Allowlist (`fixWriter`) additions: `disabled=yes|no` on `/interface` rows of non-WAN physical ports the pass named (nothing else on `/interface`); `br-lan` membership rows the server made
 (`ftn: LAN port`), new members first and an old one only when another wanted member is in; the existing `br-customers` and customer VLAN rows. The server still never writes `/user`, `/ip/service`,

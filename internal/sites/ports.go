@@ -45,6 +45,17 @@ var PortRoleLabels = map[string]string{
 	PortRoleCustomer: "Customer port", PortRoleUnused: "Unused",
 }
 
+// PortsPolicyOff is Site.PortsPolicy of a router on the default-off policy: every physical port except the
+// uplink and the admin LAN ports stays switched off until the owner enables it (Site.EnabledPorts).
+const PortsPolicyOff = "off"
+
+// Texts shown for ports.
+const (
+	OLTNoOffMsg   = "OLT port: can't be switched off here. Give the OLT role to another port first."
+	AdminPortNote = "Admin — router management and the billing site only"
+	NoRoleUpWarn  = "Up with no role — disable it if you don't use it"
+)
+
 // Warnings shown before a risky change.
 const (
 	WarnLAN = "You may lose your WinBox session on this port."
@@ -101,6 +112,11 @@ type PortInfo struct {
 	DisableWarning string `json:"disable_warning,omitempty"`
 	RoleWarning    string `json:"role_warning,omitempty"`
 	ConfirmDisable bool   `json:"confirm_disable,omitempty"`
+	// OwnerEnabled: the owner enabled the port (always true for the uplink and the admin port). Note is a fixed line
+	// for the port's role ("Admin — ..."); Warning is a hint about the port's state.
+	OwnerEnabled bool   `json:"owner_enabled"`
+	Note         string `json:"note,omitempty"`
+	Warning      string `json:"warning,omitempty"`
 	// CanDisable is false for the OLT uplink: it is moved to another port or unplugged, never switched off here.
 	CanDisable bool `json:"can_disable"`
 	// Missing: the server stores a role for this port but the router has no physical port of that name any more.
@@ -115,6 +131,9 @@ type PortsView struct {
 	Reachable   bool
 	Status      CustomerPortStatus
 }
+
+// portsManaged: the router is on the default-off policy (see PortsPolicyOff).
+func portsManaged(s store.Site) bool { return s.PortsPolicy == PortsPolicyOff }
 
 // roleOf is the role the server stores for a port name.
 func roleOf(eff store.Site, name string) string {
@@ -296,6 +315,16 @@ func (m *Manager) Ports(ctx context.Context, siteID, viewerRole string) (PortsVi
 		if pi.Disabled && !isYes(r["disabled"]) {
 			pi.Disabled = false // the router says it is on; the sweep will switch it off again
 		}
+		pi.OwnerEnabled = role == PortRoleWAN || role == PortRoleLAN || !portsManaged(site) || containsStr(SplitPorts(site.EnabledPorts), name)
+		if !pi.OwnerEnabled {
+			pi.Disabled = true // not enabled by the owner: the router switches it off at the next check, whatever it says now
+		}
+		if role == PortRoleLAN {
+			pi.Note = AdminPortNote
+		}
+		if role == PortRoleUnused && pi.Running && !pi.Disabled {
+			pi.Warning = NoRoleUpWarn
+		}
 		if !pi.Running || pi.Disabled {
 			pi.Speed, pi.Duplex = "", ""
 		}
@@ -394,7 +423,7 @@ func (m *Manager) decoratePort(pi *PortInfo, site store.Site, viewerRole string)
 	case PortRoleLAN:
 		pi.DisableWarning, pi.RoleWarning = WarnLAN, WarnLAN
 	case PortRoleOLT:
-		pi.DisableWarning, pi.RoleWarning = "The OLT uplink is not switched off here. Move the OLT role to another port or unplug the OLT instead.", WarnOLT
+		pi.DisableWarning, pi.RoleWarning = OLTNoOffMsg, WarnOLT
 	case PortRoleCustomer:
 		if pi.Flats != nil && *pi.Flats > 0 {
 			pi.DisableWarning = fmt.Sprintf("%d house(s) with leases are seen on this port and go offline.", *pi.Flats)
@@ -602,14 +631,14 @@ func (m *Manager) ChangePort(ctx context.Context, siteID, port string, ch PortCh
 			return res, portErr(PortErrLastLAN, "%s is the last Admin LAN port. Make another port an Admin LAN port first.", port)
 		case cur == PortRoleLAN && !m.lanSurvivor(ctx, rt, ifaces, removeStr(lans, port), true):
 			return res, portErr(PortErrLastLAN, lastLANMsg, port)
-		case (target == PortRoleLAN || target == PortRoleOLT) && (isYes(row["disabled"]) || containsStr(SplitPorts(site.DisabledPorts), port)):
+		case (target == PortRoleLAN || target == PortRoleOLT) && (isYes(row["disabled"]) || containsStr(SplitPorts(site.DisabledPorts), port) || (portsManaged(site) && !containsStr(SplitPorts(site.EnabledPorts), port))):
 			return res, portErr(PortErrConflict, "%s is switched off. Enable it first.", port)
 		}
 	}
 	if ch.Disabled != nil && *ch.Disabled {
 		switch cur {
 		case PortRoleOLT:
-			return res, portErr(PortErrOLTOff, "The OLT uplink is not switched off from here. Move the OLT role to another port or unplug the OLT instead.")
+			return res, portErr(PortErrOLTOff, "%s", OLTNoOffMsg)
 		case PortRoleLAN:
 			if len(lans) <= 1 || !m.lanSurvivor(ctx, rt, ifaces, removeStr(lans, port), true) {
 				return res, portErr(PortErrLastLAN, lastLANMsg, port)
@@ -630,7 +659,8 @@ func (m *Manager) ChangePort(ctx context.Context, siteID, port string, ch PortCh
 		return res, &PortRefusal{Kind: PortErrConfirm, Msg: "type the router name to confirm. " + confirmWhy, Warning: confirmWhy}
 	}
 
-	wantDisable := ch.Disabled != nil && (*ch.Disabled != isYes(row["disabled"]) || *ch.Disabled != containsStr(SplitPorts(site.DisabledPorts), port))
+	wantDisable := ch.Disabled != nil && (*ch.Disabled != isYes(row["disabled"]) || *ch.Disabled != containsStr(SplitPorts(site.DisabledPorts), port) ||
+		(portsManaged(site) && *ch.Disabled == containsStr(SplitPorts(site.EnabledPorts), port)))
 	endRole := cur
 	if roleChange {
 		endRole = target
@@ -761,6 +791,12 @@ func (m *Manager) setPortDisabled(ctx context.Context, rt routeros.Client, eff s
 			l = append(l, port)
 		}
 		s.DisabledPorts = strings.Join(l, ",")
+		// What the owner enabled is what the sweep keeps on; everything else of a router on the policy stays off.
+		en := removeStr(SplitPorts(s.EnabledPorts), port)
+		if !off {
+			en = append(en, port)
+		}
+		s.EnabledPorts = strings.Join(en, ",")
 		d.Sites[eff.ID] = s
 		d.AddEvent(store.Event{Time: m.now(), SiteID: eff.ID, Kind: "audit", Actor: who.Name, Msg: "port " + port + " " + word})
 		return nil

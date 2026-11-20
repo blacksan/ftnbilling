@@ -367,6 +367,7 @@ func (m *Manager) cpPass(ctx context.Context, siteID string, eff store.Site) cpR
 			return cpResult{state: PortError, msg: unreachableMsg(err), failed: true}
 		}
 	}
+	eff = m.startPortsPolicy(siteID, eff, sn)
 	w := m.newFixWriter(rt, eff)
 	plan := planCustomerPorts(sn, eff)
 	for iface := range plan.stale {
@@ -733,14 +734,24 @@ func planCustomerPorts(sn *snapshot, site store.Site) customerPlan {
 			}
 		}
 	}
+	// Ports the server keeps switched off. A router on the default-off policy keeps every physical port off that
+	// the owner has not enabled, except the uplink (and any WAN interface) and the admin LAN ports, which the
+	// server never switches off. An older router (policy not started yet) only keeps off what the owner switched
+	// off in the Ports tab, and never the OLT uplink.
 	off := SplitPorts(site.DisabledPorts)
+	managed := portsManaged(site)
+	enabled := SplitPorts(site.EnabledPorts)
+	wans := wanIfaces(sn, site)
 	for _, r := range sn.tbl("/interface") {
-		// only customer and unused ports are kept off: an admin LAN port or the OLT uplink that someone
-		// switched on again at the router stays on
-		if containsStr(p.lanPorts, r["name"]) || r["name"] == site.OLTInterface {
+		name := r["name"]
+		if containsStr(p.lanPorts, name) || name == site.WANInterface || wans[name] || !physicalType(r["type"]) || rowDisabled(r) {
 			continue
 		}
-		if containsStr(off, r["name"]) && !rowDisabled(r) && r["name"] != site.WANInterface && physicalType(r["type"]) && !wanIfaces(sn, site)[r["name"]] {
+		wantOff := containsStr(off, name) && name != site.OLTInterface
+		if managed {
+			wantOff = !containsStr(enabled, name)
+		}
+		if wantOff {
 			p.disable = append(p.disable, r)
 		}
 	}
@@ -885,4 +896,56 @@ func (m *Manager) PortChoices(ctx context.Context, siteID string) []string {
 		}
 	}
 	return append(phys, other...)
+}
+
+// startPortsPolicy starts the default-off policy on a router that predates it (Site.PortsPolicy empty), from the
+// snapshot of the first sweep after the upgrade. Nothing that is in service goes down: every port that is on at
+// the router and has a role (OLT, customer port) or a link is recorded as enabled by the owner. A port the owner
+// had switched off stays off. Only ports that are on, have no role and no link are switched off by the sweep
+// that follows. When the router could not be read nothing is recorded and nothing is switched off: the policy
+// starts with the first complete read. The record is made before any port is written.
+func (m *Manager) startPortsPolicy(siteID string, eff store.Site, sn *snapshot) store.Site {
+	if eff.PortsPolicy != "" {
+		return eff
+	}
+	if _, err := sn.failed("/interface"); err != nil || len(sn.tbl("/interface")) == 0 {
+		return eff
+	}
+	wans := wanIfaces(sn, eff)
+	off := SplitPorts(eff.DisabledPorts)
+	enabled := SplitPorts(eff.EnabledPorts)
+	var kept []string
+	for _, r := range sn.tbl("/interface") {
+		name := r["name"]
+		if !physicalType(r["type"]) || name == "" || name == eff.WANInterface || wans[name] || rowDisabled(r) || containsStr(off, name) || containsStr(enabled, name) {
+			continue
+		}
+		switch role := roleOf(eff, name); {
+		case role == PortRoleLAN:
+		case role == PortRoleOLT, role == PortRoleCustomer, yes(r["running"]):
+			enabled = append(enabled, name)
+			kept = append(kept, name)
+		}
+	}
+	err := m.st.Update(func(d *store.Data) error {
+		s, ok := d.Sites[siteID]
+		if !ok || s.Removed || s.PortsPolicy != "" {
+			return store.ErrNoChange
+		}
+		s.PortsPolicy, s.EnabledPorts = PortsPolicyOff, strings.Join(enabled, ",")
+		d.Sites[siteID] = s
+		msg := "ports are off unless the owner enables them; kept in service: "
+		if len(kept) == 0 {
+			msg += "none"
+		} else {
+			msg += strings.Join(kept, ", ")
+		}
+		d.AddEvent(store.Event{Time: m.now(), SiteID: siteID, Kind: "audit", Actor: ActorSystem, Msg: msg})
+		return nil
+	})
+	if err != nil {
+		return eff // not recorded: not applied either
+	}
+	eff.PortsPolicy, eff.EnabledPorts = PortsPolicyOff, strings.Join(enabled, ",")
+	return eff
 }

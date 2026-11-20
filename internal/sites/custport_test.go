@@ -23,6 +23,8 @@ func cpRig(t *testing.T, bench string, vlan int) (*fixture, store.Site, *routero
 	if err := f.st.Update(func(d *store.Data) error {
 		x := d.Sites[s.ID]
 		x.CustomerPorts, x.VLANID = bench, vlan
+		// a router in service: the owner has enabled every port of the rig (the default is off, see ports_off_test.go)
+		x.PortsPolicy, x.EnabledPorts = PortsPolicyOff, "ether3,ether4,ether5,sfp-sfpplus1"
 		d.Sites[s.ID] = x
 		return nil
 	}); err != nil {
