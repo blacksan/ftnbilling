@@ -688,8 +688,10 @@ func (s *Server) adminPayments(w http.ResponseWriter, r *http.Request) {
 			case pay.Status == store.PayRefunded:
 				pc["refunded"]++
 			}
-			switch pay.Method {
-			case "mpesa", "cash", "voucher":
+			switch {
+			case billing.MethodMatches("mpesa", pay.Method):
+				pc["mpesa"]++
+			case pay.Method == "cash" || pay.Method == "voucher":
 				pc[pay.Method]++
 			}
 			if !countsAsRevenue(pay) {
@@ -703,7 +705,7 @@ func (s *Server) adminPayments(w http.ResponseWriter, r *http.Request) {
 			}
 			if !pay.PaidAt.Before(monthStart) {
 				pMonth += pay.AmountKES
-				if pay.Method == "mpesa" {
+				if billing.MethodMatches("mpesa", pay.Method) {
 					pMpesa += pay.AmountKES
 				}
 			}
@@ -839,7 +841,24 @@ func (s *Server) adminUnmatched(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminUnmatchedAssign(w http.ResponseWriter, r *http.Request) {
-	err := s.svc.AssignPayment(r.Context(), r.PostFormValue("key"), r.PostFormValue("account"), r.PostFormValue("package"), r.PostFormValue("note"))
+	key, acct, pkg, note := r.PostFormValue("key"), r.PostFormValue("account"), r.PostFormValue("package"), r.PostFormValue("note")
+	lower := r.PostFormValue("lower")
+	if lower != billing.AssignSwitchPlan && lower != billing.AssignAddTime {
+		lower = billing.AssignRefuseLower
+	}
+	err := s.svc.AssignPaymentMode(r.Context(), key, acct, pkg, note, lower)
+	if errors.Is(err, billing.ErrLowerPlan) {
+		// Do not downgrade silently: ask which way the admin wants it.
+		a, _ := s.svc.GetAccount(acct)
+		var cur, want store.Package
+		s.st.View(func(d *store.Data) { cur, want = d.Packages[a.PackageID], d.Packages[pkg] })
+		p := s.page(r, "unmatched")
+		p.Data["Key"], p.Data["Account"], p.Data["Package"], p.Data["Note"] = key, acct, pkg, note
+		p.Data["Flat"], p.Data["Cur"], p.Data["Want"], p.Data["Expires"] = a.Flat, cur, want, a.ExpiresAt
+		w.WriteHeader(http.StatusConflict)
+		s.render(w, "admin_assign_lower", p)
+		return
+	}
 	s.back(w, r, "/admin/unmatched", msgOr(err, "Payment assigned and applied"))
 }
 

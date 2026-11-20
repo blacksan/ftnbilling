@@ -21,6 +21,7 @@ type Provider interface {
 // Completer is implemented by billing.Service.
 type Completer interface {
 	CompleteOrder(ctx context.Context, orderID, receipt string) error
+	CompleteOrderAt(ctx context.Context, orderID, receipt string, paidAt time.Time) error
 	FailOrder(ctx context.Context, orderID, reason string) error
 	SetCheckoutID(orderID, checkoutID string) error
 	Credit(ctx context.Context, in billing.CreditInput) (store.Payment, bool, error)

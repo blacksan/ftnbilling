@@ -203,11 +203,15 @@ func (s *Server) apiPaymentAssign(w http.ResponseWriter, r *http.Request, c *api
 		AccountID string `json:"account_id"`
 		PackageID string `json:"package_id"`
 		Note      string `json:"note"`
+		Lower     string `json:"lower_plan"` // "" = refuse a slower plan, "extend" = add time at the current plan, "switch" = move to the slower plan
 	}
 	if !decode(w, r, &req, false) {
 		return
 	}
 	fields := map[string]string{}
+	if req.Lower != "" && req.Lower != billing.AssignAddTime && req.Lower != billing.AssignSwitchPlan {
+		fields["lower_plan"] = "must be empty, extend or switch"
+	}
 	if req.AccountID == "" {
 		fields["account_id"] = "choose an account"
 	}
@@ -222,7 +226,7 @@ func (s *Server) apiPaymentAssign(w http.ResponseWriter, r *http.Request, c *api
 		apiErr(w, http.StatusNotFound, codeNotFound, "No such payment.", nil)
 		return
 	}
-	if err := s.svc.AssignPayment(r.Context(), key, req.AccountID, req.PackageID, req.Note); err != nil {
+	if err := s.svc.AssignPaymentMode(r.Context(), key, req.AccountID, req.PackageID, req.Note, req.Lower); err != nil {
 		s.billingErr(w, err, "")
 		return
 	}

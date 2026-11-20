@@ -26,6 +26,10 @@ type CreditInput struct {
 	Force       bool      // admin only: apply even if the package is slower than the active plan
 }
 
+// errLinked is internal: the receipt replaced the key of a payment an admin had
+// marked paid, so the data changed but nothing was credited.
+var errLinked = errors.New("receipt linked to a manual payment")
+
 // ErrLowerPlan is returned when an active account would be moved to a slower
 // package. Downgrades wait for the end of the current plan.
 var ErrLowerPlan = errors.New("lower plan while active")
@@ -74,7 +78,20 @@ func (s *Service) creditLocked(d *store.Data, in CreditInput) (p store.Payment, 
 		}
 	}
 	if old, ok := d.Payments[key]; ok {
-		return old, false, nil
+		switch old.Status {
+		case store.PayApplied:
+			return old, false, nil
+		case store.PayUnmatched:
+			// The same receipt first arrived without a home (an odd amount, a
+			// deleted package, a lower plan) and now comes with an account and
+			// a package: apply that row instead of reporting "already exists".
+			return s.applyUnmatchedLocked(d, old, in)
+		default:
+			return old, false, fmt.Errorf("%w: receipt %s was already marked %s", ErrBadState, key, old.Status)
+		}
+	}
+	if p, ok := linkManualLocked(d, key, in, s.now()); ok {
+		return p, false, errLinked
 	}
 	a, ok := d.Accounts[in.AccountID]
 	if !ok {
@@ -115,6 +132,93 @@ func (s *Service) creditLocked(d *store.Data, in CreditInput) (p store.Payment, 
 	return p, true, nil
 }
 
+// ManualPrefix starts the ledger key of an order an admin marked paid by hand.
+const ManualPrefix = "MANUAL-"
+
+// manualLinkWindow is how long after "Mark paid" the real confirmation of the
+// same money is still recognised and linked instead of credited again.
+const manualLinkWindow = 6 * time.Hour
+
+// applyUnmatchedLocked turns an Unmatched row into an applied payment.
+func (s *Service) applyUnmatchedLocked(d *store.Data, old store.Payment, in CreditInput) (store.Payment, bool, error) {
+	a, ok := d.Accounts[in.AccountID]
+	if !ok {
+		return old, false, ErrNotFound
+	}
+	pkg, ok := d.Packages[in.PackageID]
+	if !ok {
+		return old, false, errors.New("package no longer exists")
+	}
+	now := s.now()
+	if !in.Force && lowerWhileActive(d, a, pkg, now) {
+		return old, false, ErrLowerPlan
+	}
+	if in.VoucherCode != "" {
+		return old, false, ErrVoucherUsed
+	}
+	a = applyPackage(a, pkg, now)
+	d.Accounts[a.ID] = a
+	s.enqueueLocked(d, a, "payment "+old.Key)
+	old.Status, old.AccountID, old.CustomerID, old.SiteID, old.PackageID = store.PayApplied, a.ID, a.CustomerID, a.SiteID, pkg.ID
+	old.ResolvedAt = now
+	if in.OrderID != "" {
+		old.OrderID = in.OrderID
+	}
+	if old.Phone == "" {
+		old.Phone = in.Phone
+	}
+	old.Note = joinNote(old.Note, "applied when the matching confirmation arrived")
+	d.Payments[old.Key] = old
+	return old, true, nil
+}
+
+// linkManualLocked recognises the real confirmation of money an admin already
+// marked paid by hand (key MANUAL-<order>): the real receipt is recorded as a
+// duplicate of that payment and nothing is credited a second time. The caller
+// sees created=false, the same as for any duplicate.
+func linkManualLocked(d *store.Data, key string, in CreditInput, now time.Time) (store.Payment, bool) {
+	if !strings.HasPrefix(in.Method, "mpesa") || in.AmountKES <= 0 || strings.HasPrefix(key, ManualPrefix) {
+		return store.Payment{}, false
+	}
+	var best store.Payment
+	found := false
+	for k, m := range d.Payments {
+		if !strings.HasPrefix(k, ManualPrefix) || m.Status != store.PayApplied || m.AccountID != in.AccountID ||
+			m.AmountKES != in.AmountKES || now.Sub(m.CreatedAt) > manualLinkWindow {
+			continue
+		}
+		if in.OrderID != "" && m.OrderID != in.OrderID {
+			continue
+		}
+		if !found || m.CreatedAt.After(best.CreatedAt) {
+			best, found = m, true
+		}
+	}
+	if !found {
+		return store.Payment{}, false
+	}
+	linkManualRow(d, best, key, in.Method, in.AmountKES, in.Phone, in.PaidAt, now)
+	return d.Payments[key], true
+}
+
+// linkManualRow records the real confirmation of money an admin already marked
+// paid. The ledger is never deleted from, so the manual row stays the one
+// applied (and counted) payment; the real receipt is stored beside it as an
+// ignored duplicate that says where the credit is, so a redelivery finds it.
+func linkManualRow(d *store.Data, m store.Payment, key, method string, amount int, phone string, paidAt, now time.Time) {
+	if paidAt.IsZero() {
+		paidAt = m.PaidAt
+	}
+	if phone == "" {
+		phone = m.Phone
+	}
+	d.Payments[key] = store.Payment{Key: key, SiteID: m.SiteID, Method: method, Status: store.PayIgnored, AmountKES: amount,
+		Phone: phone, BillRef: m.BillRef, AccountID: m.AccountID, CustomerID: m.CustomerID, PackageID: m.PackageID, OrderID: m.OrderID,
+		Note: "duplicate: already credited when an admin marked the order paid (" + m.Key + "); not credited twice", PaidAt: paidAt, CreatedAt: now, ResolvedAt: now}
+	m.Note = joinNote(m.Note, "confirmed by M-Pesa receipt "+key)
+	d.Payments[m.Key] = m
+}
+
 // Credit applies a package to an account and records the ledger entry. A
 // duplicate key is a no-op (created=false), so callbacks are idempotent.
 func (s *Service) Credit(ctx context.Context, in CreditInput) (store.Payment, bool, error) {
@@ -123,6 +227,9 @@ func (s *Service) Credit(ctx context.Context, in CreditInput) (store.Payment, bo
 	err := s.st.Update(func(d *store.Data) error {
 		var err error
 		p, created, err = s.creditLocked(d, in)
+		if errors.Is(err, errLinked) {
+			return nil // the ledger row was re-keyed; the caller sees created=false, a duplicate
+		}
 		if err != nil || !created {
 			if err == nil {
 				return store.ErrNoChange
@@ -184,8 +291,22 @@ func (s *Service) RecordUnmatched(in UnmatchedInput) (bool, error) {
 	return created, err
 }
 
-// AssignPayment applies an unmatched payment to an account and package.
+// How AssignPayment treats a payment for a plan slower than the account's
+// active one.
+const (
+	AssignRefuseLower = ""       // refuse with ErrLowerPlan: the admin must choose
+	AssignSwitchPlan  = "switch" // move the account to the slower plan now
+	AssignAddTime     = "extend" // keep the current plan and add the purchased time to it
+)
+
+// AssignPayment applies an unmatched payment to an account and package. A plan
+// slower than the active one is refused (ErrLowerPlan); use AssignPaymentMode.
 func (s *Service) AssignPayment(ctx context.Context, key, accountID, pkgID, note string) error {
+	return s.AssignPaymentMode(ctx, key, accountID, pkgID, note, AssignRefuseLower)
+}
+
+// AssignPaymentMode is AssignPayment with the admin's choice for a lower plan.
+func (s *Service) AssignPaymentMode(ctx context.Context, key, accountID, pkgID, note, lower string) error {
 	var site string
 	err := s.st.Update(func(d *store.Data) error {
 		p, ok := d.Payments[key]
@@ -204,7 +325,20 @@ func (s *Service) AssignPayment(ctx context.Context, key, accountID, pkgID, note
 			return errors.New("choose a package")
 		}
 		now := s.now()
-		a = applyPackage(a, pkg, now)
+		switch {
+		case !lowerWhileActive(d, a, pkg, now):
+			a = applyPackage(a, pkg, now)
+		case lower == AssignSwitchPlan:
+			a = applyPackage(a, pkg, now)
+			note = joinNote(note, "switched to the slower plan")
+		case lower == AssignAddTime:
+			keep := a.PackageID
+			a = applyPackage(a, pkg, now)
+			a.PackageID = keep
+			note = joinNote(note, "time added at the current plan")
+		default:
+			return ErrLowerPlan
+		}
 		d.Accounts[a.ID] = a
 		s.enqueueLocked(d, a, "assigned payment "+key)
 		p.Status, p.AccountID, p.PackageID, p.ResolvedAt = store.PayApplied, a.ID, pkg.ID, now
@@ -355,7 +489,16 @@ func (s *Service) CreateOrder(in OrderInput) (store.Order, error) {
 			return ErrSuspended
 		}
 		p, ok := d.EffectivePackage(a.SiteID, in.PackageID)
-		if !ok || p.Disabled || p.Deleted {
+		// A voucher outlives its package being switched off ("disable the
+		// package instead so the vouchers still work"): an unused voucher for
+		// exactly this package redeems even if the package is disabled or
+		// hidden at this building. A deleted package never does.
+		voucherOK := false
+		if in.VoucherCode != "" && ok {
+			v, vok := d.Vouchers[in.VoucherCode]
+			voucherOK = vok && !v.Used && v.PackageID == p.ID
+		}
+		if !ok || p.Deleted || (p.Disabled && !voucherOK) {
 			return errors.New("that package is not available")
 		}
 		if lowerWhileActive(d, a, p, s.now()) {
@@ -383,6 +526,32 @@ func (s *Service) SetCheckoutID(orderID, checkoutID string) error {
 		d.Orders[orderID] = o
 		return nil
 	})
+}
+
+// OrderTTL is how long a pending order waits for its payment before it is
+// marked expired. An expired order is still completed by a late confirmation.
+const OrderTTL = 15 * time.Minute
+
+// ExpireOrders marks pending orders older than OrderTTL as expired (not
+// failed: the customer may still pay, and the confirmation will credit them).
+// It returns how many were changed.
+func (s *Service) ExpireOrders() (int, error) {
+	n := 0
+	err := s.st.Update(func(d *store.Data) error {
+		cut := s.now().Add(-OrderTTL)
+		for id, o := range d.Orders {
+			if o.Status == store.OrderPending && o.CreatedAt.Before(cut) {
+				o.Status, o.Reason = store.OrderExpired, "no payment was received within 15 minutes"
+				d.Orders[id] = o
+				n++
+			}
+		}
+		if n == 0 {
+			return store.ErrNoChange
+		}
+		return nil
+	})
+	return n, err
 }
 
 // FailOrder marks a pending order failed (a paid order is never downgraded).
@@ -419,6 +588,14 @@ func orderMethodLabel(m string) string {
 // paid order, or a receipt that is already in the ledger, extends nothing.
 // Router problems never fail the payment: the router task is retried.
 func (s *Service) CompleteOrder(ctx context.Context, orderID, receipt string) error {
+	return s.CompleteOrderAt(ctx, orderID, receipt, time.Time{})
+}
+
+// CompleteOrderAt is CompleteOrder with the time the customer paid (Daraja's
+// transaction time); zero means now. An order an admin marked paid by hand
+// (receipt MANUAL-...) takes the real receipt when it arrives and is not
+// credited again.
+func (s *Service) CompleteOrderAt(ctx context.Context, orderID, receipt string, paidAt time.Time) error {
 	var o store.Order
 	var acct store.Account
 	already, lowered, gone := false, false, false
@@ -430,12 +607,20 @@ func (s *Service) CompleteOrder(ctx context.Context, orderID, receipt string) er
 		}
 		if o.Status == store.OrderPaid {
 			already = true
+			key := strings.ToUpper(strings.TrimSpace(receipt))
+			if m, ok := d.Payments[strings.ToUpper(o.Receipt)]; ok && strings.HasPrefix(m.Key, ManualPrefix) && key != "" &&
+				!strings.HasPrefix(key, ManualPrefix) && m.Status == store.PayApplied {
+				if _, taken := d.Payments[key]; !taken {
+					linkManualRow(d, m, key, orderMethodLabel(o.Method), o.AmountKES, o.Phone, paidAt, s.now())
+					return nil
+				}
+			}
 			return store.ErrNoChange
 		}
 		if _, _, err := s.creditLocked(d, CreditInput{
 			Key: receipt, Method: orderMethodLabel(o.Method), AccountID: o.AccountID, PackageID: o.PackageID,
-			AmountKES: o.AmountKES, Phone: o.Phone, OrderID: o.ID, VoucherCode: o.VoucherCode,
-		}); err != nil {
+			AmountKES: o.AmountKES, Phone: o.Phone, OrderID: o.ID, VoucherCode: o.VoucherCode, PaidAt: paidAt,
+		}); err != nil && !errors.Is(err, errLinked) {
 			_, acctExists := d.Accounts[o.AccountID]
 			if errors.Is(err, ErrLowerPlan) || !acctExists { // plan changed, or account deleted, while the payment was in flight
 				why := ErrLowerPlan.Error()

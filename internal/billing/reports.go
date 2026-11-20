@@ -14,6 +14,16 @@ func CountsAsRevenue(p store.Payment) bool {
 	return p.Status == store.PayApplied && p.Method != "voucher" && p.Method != "admin"
 }
 
+// MethodMatches reports whether a stored payment method belongs to a filter or
+// tab. "mpesa" is the group of every M-Pesa method (mpesa-stk, mpesa-c2b,
+// mpesa-manual); any other filter value must match exactly.
+func MethodMatches(filter, method string) bool {
+	if filter == "mpesa" {
+		return method == "mpesa" || strings.HasPrefix(method, "mpesa-")
+	}
+	return method == filter
+}
+
 // PaymentFilter selects ledger rows. Dates are EAT calendar days, inclusive.
 type PaymentFilter struct {
 	From, To   time.Time // zero = open ended
@@ -49,7 +59,7 @@ func (s *Service) FilterPayments(f PaymentFilter) (rows []store.Payment, tot Pay
 				continue
 			}
 			if (f.SiteID != "" && p.SiteID != f.SiteID) || (f.AccountID != "" && p.AccountID != f.AccountID) ||
-				(f.CustomerID != "" && p.CustomerID != f.CustomerID) || (f.Method != "" && p.Method != f.Method) ||
+				(f.CustomerID != "" && p.CustomerID != f.CustomerID) || (f.Method != "" && !MethodMatches(f.Method, p.Method)) ||
 				(f.Status != "" && p.Status != f.Status) {
 				continue
 			}

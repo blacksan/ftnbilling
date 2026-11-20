@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -255,9 +256,44 @@ func (m *Mpesa) rejectUnconfirmed(ctx context.Context, p pending, reason string)
 
 // queryTxStatus asks Daraja about a receipt. The answer arrives later at the result URL.
 func (m *Mpesa) queryTxStatus(ctx context.Context, key, receipt string) error {
-	tok, err := m.token(ctx)
+	m.vmu.Lock()
+	if st := m.verify[key]; st != nil {
+		st.queries++
+		st.lastQuery = m.now()
+	}
+	m.vmu.Unlock()
+	ids, _, err := m.sendTxStatus(ctx, receipt)
 	if err != nil {
 		return err
+	}
+	m.rememberConvs(key, ids)
+	return nil
+}
+
+// rememberConvs lets the result callback find the check it belongs to.
+func (m *Mpesa) rememberConvs(key string, ids []string) {
+	m.vmu.Lock()
+	defer m.vmu.Unlock()
+	if m.convs == nil {
+		m.convs = map[string]string{}
+	}
+	if len(m.convs) > 4*maxPendingVerify {
+		m.convs = map[string]string{}
+	}
+	for _, id := range ids {
+		if id != "" {
+			m.convs[id] = key
+		}
+	}
+}
+
+// sendTxStatus posts one Transaction Status query and returns the conversation
+// ids Daraja gave (the result callback carries one of them) and Daraja's own
+// synchronous reply, scrubbed.
+func (m *Mpesa) sendTxStatus(ctx context.Context, receipt string) (ids []string, reply string, err error) {
+	tok, err := m.token(ctx)
+	if err != nil {
+		return nil, "", err
 	}
 	c := m.conf()
 	party := c.C2BShortcode
@@ -272,22 +308,17 @@ func (m *Mpesa) queryTxStatus(ctx context.Context, key, receipt string) error {
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/mpesa/transactionstatus/v1/query", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return nil, "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", "application/json")
-	m.vmu.Lock()
-	if st := m.verify[key]; st != nil {
-		st.queries++
-		st.lastQuery = m.now()
-	}
-	m.vmu.Unlock()
 	resp, err := m.hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("transaction status: %s", m.scrub(err.Error()))
+		return nil, "", fmt.Errorf("transaction status: %s", m.scrub(err.Error()))
 	}
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	reply = m.scrub(string(rb))
 	var r struct {
 		ConversationID           string          `json:"ConversationID"`
 		OriginatorConversationID string          `json:"OriginatorConversationID"`
@@ -304,19 +335,119 @@ func (m *Mpesa) queryTxStatus(ctx context.Context, key, receipt string) error {
 		if msg == "" {
 			msg = "HTTP " + strconv.Itoa(resp.StatusCode)
 		}
-		return fmt.Errorf("transaction status rejected: %s", m.scrub(msg))
+		return nil, reply, fmt.Errorf("transaction status rejected: %s", m.scrub(msg))
 	}
+	return []string{r.ConversationID, r.OriginatorConversationID}, reply, nil
+}
+
+// ReceiptTest is one run of the Settings "Test receipt confirmation" button.
+type ReceiptTest struct {
+	Receipt string    `json:"receipt"`
+	Status  string    `json:"status"`  // waiting, confirmed, not_confirmed, error
+	Verdict string    `json:"verdict"` // what the receipt check concluded, in words
+	Sent    string    `json:"sent"`    // Daraja's immediate reply to the query
+	Raw     string    `json:"raw"`     // the result callback exactly as Daraja posted it (secrets hidden)
+	Started time.Time `json:"started"`
+}
+
+const receiptTestPrefix = "test:"
+
+// TestReceipt runs one Transaction Status query for a receipt that is known to
+// be real (copy it from the M-Pesa statement) and keeps Daraja's raw answer for
+// ReceiptTestStatus. It does not need receipt confirmation to be switched on:
+// it is how the initiator credentials are tested before it is.
+func (m *Mpesa) TestReceipt(ctx context.Context, receipt string) (ReceiptTest, error) {
+	c := m.conf()
+	switch {
+	case !c.Enabled:
+		return ReceiptTest{}, errors.New("M-Pesa is not enabled: save the key, secret, shortcode, passkey and the public URL first")
+	case c.Initiator == "" || c.SecurityCredential == "":
+		return ReceiptTest{}, errors.New("set the initiator name and the security credential first")
+	case c.CallbackToken == "":
+		return ReceiptTest{}, errors.New("a callback token is needed: Daraja posts the answer to a URL that carries it")
+	}
+	receipt = strings.ToUpper(strings.TrimSpace(receipt))
+	t := &ReceiptTest{Receipt: receipt, Status: "waiting", Started: m.now(), Verdict: "waiting for Daraja's answer (usually a few seconds)"}
+	// Register the key before sending: the answer can beat the reply.
+	key := receiptTestPrefix + receipt
 	m.vmu.Lock()
-	for _, id := range []string{r.ConversationID, r.OriginatorConversationID} {
-		if id != "" {
-			m.convs[id] = key
+	if m.rtests == nil {
+		m.rtests = map[string]*ReceiptTest{}
+	}
+	for k, v := range m.rtests {
+		if m.now().Sub(v.Started) > time.Hour {
+			delete(m.rtests, k)
 		}
 	}
-	if len(m.convs) > 4*maxPendingVerify {
-		m.convs = map[string]string{r.ConversationID: key, r.OriginatorConversationID: key}
-	}
+	m.rtests[key] = t
 	m.vmu.Unlock()
-	return nil
+	ids, reply, err := m.sendTxStatus(ctx, receipt)
+	m.vmu.Lock()
+	t.Sent = reply
+	if err != nil {
+		t.Status, t.Verdict = "error", err.Error()
+		out := *t
+		m.vmu.Unlock()
+		return out, err
+	}
+	out := *t
+	m.vmu.Unlock()
+	m.rememberConvs(key, ids)
+	return out, nil
+}
+
+// ReceiptTestStatus returns the latest state of a receipt test.
+func (m *Mpesa) ReceiptTestStatus(receipt string) (ReceiptTest, bool) {
+	m.vmu.Lock()
+	defer m.vmu.Unlock()
+	t, ok := m.rtests[receiptTestPrefix+strings.ToUpper(strings.TrimSpace(receipt))]
+	if !ok {
+		return ReceiptTest{}, false
+	}
+	return *t, true
+}
+
+// judge applies the receipt check's rules to a result and says what it concludes.
+func (m *Mpesa) judge(res txStatusResult, receipt string) (ok bool, why string) {
+	params := map[string]string{}
+	for _, p := range res.Result.ResultParameters.ResultParameter {
+		params[p.Key] = rawString(p.Value)
+	}
+	switch {
+	case rawString(res.Result.ResultCode) != "0":
+		return false, "Daraja: " + m.scrub(res.Result.ResultDesc)
+	case !strings.EqualFold(params["ReceiptNo"], receipt):
+		return false, "Daraja answered for a different receipt"
+	case !strings.EqualFold(params["TransactionStatus"], "Completed"):
+		return false, "Daraja says the transaction is " + m.scrub(params["TransactionStatus"])
+	}
+	return true, ""
+}
+
+// recordReceiptTest stores the raw answer of a receipt test.
+func (m *Mpesa) recordReceiptTest(key string, body []byte, res txStatusResult) {
+	_, receipt, _ := strings.Cut(key, ":")
+	ok, why := m.judge(res, receipt)
+	raw := m.scrub(string(body))
+	var pretty bytes.Buffer
+	if json.Indent(&pretty, []byte(raw), "", "  ") == nil {
+		raw = pretty.String()
+	}
+	if len(raw) > 8000 {
+		raw = raw[:8000] + "\n... (cut)"
+	}
+	m.vmu.Lock()
+	defer m.vmu.Unlock()
+	t := m.rtests[key]
+	if t == nil {
+		return
+	}
+	t.Raw = raw
+	if ok {
+		t.Status, t.Verdict = "confirmed", "Daraja confirmed this receipt: receipt confirmation will work with these credentials."
+	} else {
+		t.Status, t.Verdict = "not_confirmed", "Daraja did not confirm this receipt: "+why+". Check the initiator name, the security credential and that the receipt is real; receipt confirmation would not credit payments with this setup."
+	}
 }
 
 type txStatusResult struct {
@@ -346,6 +477,11 @@ func (m *Mpesa) HandleTxStatusResult(ctx context.Context, body []byte) C2BRespon
 	key, ok := m.convs[res.ConversationID]
 	if !ok {
 		key, ok = m.convs[res.OriginatorConversationID]
+	}
+	if ok && strings.HasPrefix(key, receiptTestPrefix) { // the Settings test button, not a payment
+		m.vmu.Unlock()
+		m.recordReceiptTest(key, body, r)
+		return C2BAccept
 	}
 	st := m.verify[key]
 	if !ok || st == nil || (res.ConversationID == "" && res.OriginatorConversationID == "") {

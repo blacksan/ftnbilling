@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"net"
 	"net/http"
 	"net/netip"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"ispbill/internal/billing"
+	"ispbill/internal/payments"
 	"ispbill/internal/store"
 )
 
@@ -416,6 +418,14 @@ func (s *Server) payStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := prov.Start(r.Context(), o); err != nil {
+		if errors.Is(err, payments.ErrPushUncertain) {
+			// Daraja may have accepted the push: the prompt can be on the phone. Keep
+			// the order pending; the callback (matched by phone and amount if the
+			// checkout id was lost) or the 15-minute expiry settles it.
+			s.log.Warn("payment start unclear; order left pending", "order", o.ID, "err", err)
+			http.Redirect(w, r, "/portal/wait?order="+o.ID, http.StatusSeeOther)
+			return
+		}
 		s.log.Warn("payment start failed", "order", o.ID, "method", method, "err", err)
 		_ = s.svc.FailOrder(r.Context(), o.ID, "the payment prompt could not be sent")
 		again(http.StatusBadGateway, "We could not send the payment prompt. Please try again in a minute, or call "+p.Support+".")

@@ -118,6 +118,9 @@ func run(log *slog.Logger) error {
 			if n, err := mp.Replay(ctx); n > 0 || err != nil {
 				log.Info("replayed spooled payment callbacks", "applied", n, "err", err)
 			}
+			if n, err := svc.ExpireOrders(); n > 0 || err != nil { // waiting checkouts end as "expired", not "failed"
+				log.Info("expired unpaid portal orders", "count", n, "err", err)
+			}
 		}
 	}()
 	providers := map[string]payments.Provider{

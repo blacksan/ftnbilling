@@ -179,6 +179,7 @@
 <a class="tab" href="/admin/payments?method=voucher"{{if eq .Data.PTab "voucher"}} aria-current="page"{{end}}>Voucher<span class="n">{{index $c "voucher"}}</span></a>
 <a class="tab" href="/admin/payments?status=unmatched"{{if eq .Data.PTab "unmatched"}} aria-current="page"{{end}}>Unmatched<span class="n">{{index $c "unmatched"}}</span></a>
 <a class="tab" href="/admin/payments?status=refunded"{{if eq .Data.PTab "refunded"}} aria-current="page"{{end}}>Refunded<span class="n">{{index $c "refunded"}}</span></a></nav>
+{{if or (eq .Data.PTab "voucher") (eq .Data.F.Method "voucher")}}<p class="muted" style="max-width:70ch">These are voucher redemptions. The KES shown is the plan's price, but it is not counted in "Money in" or the revenue totals: a voucher is prepaid time, and the cash for it is whatever you took when you sold it.</p>{{end}}
 <details class="panel" style="padding:12px 16px"><summary>Filter by date, method or text</summary>
 <form method="get" action="/admin/payments" class="row" style="margin-top:12px">
 <label class="field">From<input type="date" name="from" value="{{$F.From}}"></label><label class="field">To<input type="date" name="to" value="{{$F.To}}"></label>
@@ -224,8 +225,17 @@
 {{range .Data.Done}}<tr><td data-label="Paid">{{eat .P.PaidAt}}</td><td data-label="Receipt" class="mono">{{.P.Key}}</td><td class="n" data-label="KES">{{.P.AmountKES}}</td><td data-label="Payer">{{.P.Phone}} {{.P.Name}}</td><td data-label="Status"><span class="pill {{.P.Status}}">{{.P.Status}}</span></td><td data-label="Note">{{.P.Note}}</td></tr>{{end}}</tbody></table></div>{{end}}
 {{template "afoot" .}}{{end}}
 
+{{define "admin_assign_lower"}}{{template "ahead" .}}{{$d := .}}
+<div class="card" style="max-width:70ch"><h3>This plan is slower than the flat's current one</h3>
+<p>{{.Data.Flat}} is active on <b>{{.Data.Cur.Name}}</b> until {{eat .Data.Expires}}. The payment is for <b>{{.Data.Want.Name}}</b> ({{.Data.Want.SpeedMbps}} Mbps against {{.Data.Cur.SpeedMbps}} Mbps). Choose how to apply it:</p>
+<ul><li><b>Add time at the current plan</b>: the flat keeps {{.Data.Cur.Name}} and its expiry moves later by {{.Data.Want.Name}}'s duration. Nothing gets slower.</li>
+<li><b>Switch to the slower plan</b>: the flat drops to {{.Data.Want.Name}} now, with the remaining time and the new time at that speed.</li></ul>
+<form method="post" action="/admin/unmatched/assign"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="key" value="{{.Data.Key}}"><input type="hidden" name="account" value="{{.Data.Account}}"><input type="hidden" name="package" value="{{.Data.Package}}"><input type="hidden" name="note" value="{{.Data.Note}}">
+<button class="sm" name="lower" value="extend">Add time at the current plan</button> <button class="ghost sm" name="lower" value="switch">Switch to the slower plan</button> <a class="btn ghost sm" href="/admin/unmatched">Cancel</a></form></div>
+{{template "afoot" .}}{{end}}
+
 {{define "admin_orders"}}{{template "ahead" .}}{{$d := .}}
-<p class="muted" style="max-width:70ch">Checkouts started from the payment page. A pending or failed order can be marked paid by hand if you saw the money; it is then recorded as MANUAL-&lt;order&gt;. Prefer Record payment so the real transaction code is kept.</p>
+<p class="muted" style="max-width:70ch">Checkouts started from the payment page. A pending or failed order can be marked paid by hand if you saw the money; it is then recorded as MANUAL-&lt;order&gt;; when the real M-Pesa confirmation of that money arrives it is listed as an ignored duplicate of it and is not credited a second time. Prefer Record payment so the real transaction code is kept. A pending order that gets no payment is marked expired after 15 minutes; a late payment still completes it.</p>
 {{if .Data.Orders}}<div class="tw tall"><table class="rs"><thead><tr>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>Time</th><th>Order</th><th>Flat</th><th>Payer</th><th>Plan</th><th class="n">KES</th><th>Method</th><th>Status</th><th>Receipt</th><th></th></tr></thead><tbody>
 {{range .Data.Orders}}<tr>{{if $d.Data.ShowSite}}<td data-label="Router">{{index $d.Data.SiteNames .SiteID}}</td>{{end}}<td data-label="Time">{{eat .CreatedAt}}</td><td data-label="Order" class="mono">{{.ID}}</td><td data-label="Flat">{{(acctOf $d.Data.AcctMap .AccountID).Flat}}</td><td data-label="Payer">{{.Phone}}</td><td data-label="Plan">{{(pkgOf $d.Data.PkgMap .PackageID).Name}}</td><td class="n" data-label="KES">{{.AmountKES}}</td><td data-label="Method">{{.Method}}</td><td data-label="Status"><span class="pill {{.Status}}">{{.Status}}</span>{{if .Reason}} <span class="muted">{{.Reason}}</span>{{end}}</td><td data-label="Receipt" class="mono">{{.Receipt}}</td>
 <td>{{if ne .Status "paid"}}<form class="i" method="post" action="/admin/orders/markpaid"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><button class="ghost sm">Mark paid</button></form>{{end}}</td></tr>{{end}}</tbody></table></div>
