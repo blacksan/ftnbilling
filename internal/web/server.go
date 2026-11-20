@@ -36,12 +36,6 @@ var faviconSVG []byte
 //go:embed static/logo-*.svg
 var logoFS embed.FS
 
-// Comfortaa Bold (SIL Open Font License), used for the brand wordmark so it
-// looks the same on every phone without needing internet.
-//
-//go:embed static/comfortaa-700.woff2
-var brandFont []byte
-
 // Server wires HTTP handlers to the billing service.
 type Server struct {
 	cfg       config.Config
@@ -199,7 +193,64 @@ func (s *Server) Handler() http.Handler {
 	s.adminRoutes(mux)
 	s.apiRoutes(mux)
 	s.staticRoutes(mux)
-	return s.middleware(mux)
+	h := s.middleware(mux)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			h.ServeHTTP(w, r)
+			return
+		}
+		nw := &notFoundWriter{ResponseWriter: w}
+		h.ServeHTTP(nw, r)
+		if nw.hit {
+			s.notFound(w, r)
+		}
+	})
+}
+
+// notFoundWriter holds back the plain-text 404 that the mux (or http.NotFound) writes, so the
+// themed page can answer in its place. Anything that is not a plain-text 404 passes through.
+type notFoundWriter struct {
+	http.ResponseWriter
+	hit bool
+}
+
+func (n *notFoundWriter) WriteHeader(code int) {
+	if code == http.StatusNotFound && strings.HasPrefix(n.Header().Get("Content-Type"), "text/plain") {
+		n.hit = true
+		return
+	}
+	n.ResponseWriter.WriteHeader(code)
+}
+
+func (n *notFoundWriter) Write(b []byte) (int, error) {
+	if n.hit {
+		return len(b), nil
+	}
+	return n.ResponseWriter.Write(b)
+}
+
+func (n *notFoundWriter) Flush() {
+	if f, ok := n.ResponseWriter.(http.Flusher); ok && !n.hit {
+		f.Flush()
+	}
+}
+
+func (n *notFoundWriter) Unwrap() http.ResponseWriter { return n.ResponseWriter }
+
+// notFound is the themed 404 for pages that do not exist. API and machine paths keep the
+// plain one-line answer.
+func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
+	p := r.URL.Path
+	if strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/pay/cb/") || strings.HasPrefix(p, "/wa/") || strings.HasPrefix(p, "/static/") || strings.HasPrefix(p, "/brand/") || strings.HasPrefix(p, "/j/") || s.fromTunnel(r) {
+		// Routers on the tunnel never see a themed page or a link to the admin.
+		http.NotFound(w, r)
+		return
+	}
+	back, label := "/pay", "Back to the payment page"
+	if p == "/admin" || strings.HasPrefix(p, "/admin/") {
+		back, label = "/admin", "Back to the admin"
+	}
+	s.notice(w, r, http.StatusNotFound, "Page not found", "There is nothing at this address. It may have moved, or the link may be old.", back, label)
 }
 
 // siteOnline reports whether a building's router answered a ping recently.

@@ -1,19 +1,9 @@
-{{define "authhead"}}<!doctype html><html lang="en" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>{{.Brand}} admin</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><style>
-:root{--bg:#0b0d12;--card:#1b2130;--line:#2c3446;--ink:#e6e9ef;--muted:#9aa3b2;--accent:#f7931e;--onaccent:#0e1a33;--bad:#ff6b6b;--badbg:rgba(255,107,107,.13);--input:#121722;--good:#3ccf8e;--goodbg:rgba(60,207,142,.14)}
-@media (prefers-color-scheme:light){:root{--bg:#f3f5f9;--card:#fff;--line:#e2e6ee;--ink:#1c2230;--muted:#5d6676;--accent:#c96f00;--input:#fff;--bad:#c62f2f;--badbg:#fde8e8;--good:#11935c;--goodbg:#e2f6ec}}
-*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--ink);font:15px/1.5 Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
-main{width:100%;max-width:400px;padding:16px}.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px}
-h1{font-size:20px;margin:0 0 4px}p{margin:6px 0}.muted{color:var(--muted);font-size:13px}label{display:block;margin:12px 0 0;font-size:13px;color:var(--muted)}
-input{display:block;width:100%;margin-top:4px;font:inherit;padding:10px;border-radius:9px;border:1px solid var(--line);background:var(--input);color:var(--ink)}
-input:focus{outline:2px solid var(--accent);outline-offset:-1px}
-button{width:100%;margin-top:16px;font:inherit;font-weight:700;padding:11px;border-radius:9px;border:1px solid var(--accent);background:var(--accent);color:var(--onaccent);cursor:pointer}
-button.alt{background:transparent;color:var(--ink);border-color:var(--line)}
-.err{background:var(--badbg);color:var(--bad);padding:9px 12px;border-radius:9px;margin:10px 0}.ok{background:var(--goodbg);color:var(--good);padding:9px 12px;border-radius:9px;margin:10px 0}
-img.logo{height:40px;margin-bottom:12px}img.qr{display:block;margin:10px auto;width:220px;height:220px;image-rendering:pixelated;background:#fff;border-radius:8px}
-code{background:var(--input);padding:2px 6px;border-radius:5px;word-break:break-all}.codes{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:10px 0;font:600 15px ui-monospace,monospace}
-a{color:var(--accent)}summary{cursor:pointer;color:var(--muted);margin-top:14px;font-size:13px}
-</style></head><body><main><div class="card"><img class="logo" src="/brand/logo-white-text.svg" alt="{{.Brand}}">{{end}}
-{{define "authfoot"}}</div><p class="muted" style="text-align:center"><a href="/pay">Back to the payment page</a></p></main></body></html>{{end}}
+{{define "authhead"}}<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="robots" content="noindex,nofollow"><title>{{.Brand}} admin</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><script src="{{static "theme.js"}}"></script><link rel="stylesheet" href="{{static "tokens.css"}}"><link rel="stylesheet" href="{{static "app.css"}}"></head><body class="auth"><main><div class="card"><img class="logo" src="/brand/logo-white-text.svg" alt="{{.Brand}}">{{end}}
+{{define "authfoot"}}</div><p class="muted back"><a href="/pay">Back to the payment page</a></p></main></body></html>{{end}}
+
+{{define "admin_notice"}}{{template "authhead" .}}
+<h1>{{.Title}}</h1><p class="muted">{{.Msg}}</p>
+<p><a class="btn alt" href="{{.Back}}">{{.BackLabel}}</a></p></div></main></body></html>{{end}}
 
 {{define "admin_login"}}{{template "authhead" .}}
 <h1>Admin sign-in</h1><p class="muted">For {{.Brand}} staff.</p>

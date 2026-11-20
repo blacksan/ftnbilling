@@ -1,0 +1,72 @@
+/* Fast Tech Net design tokens: direction C, "Lattice Teal".
+   Shared by the admin (app.css), the sign-in pages and the customer portal
+   (portal.css). tokens_test.go parses the three colour blocks below and
+   checks WCAG contrast, so keep each custom property on the form
+   --name:#rrggbb;  */
+
+@font-face{font-family:"FTN Sans";font-style:normal;font-weight:100 900;font-display:swap;src:url(fonts/geist-latin-wght-normal.woff2) format("woff2")}
+@font-face{font-family:"FTN Mono";font-style:normal;font-weight:100 900;font-display:swap;src:url(fonts/geist-mono-latin-wght-normal.woff2) format("woff2")}
+
+/* ---- tokens: light (default) ------------------------------------------- */
+:root{
+  color-scheme:light;
+  --bg:#F8FAFC;--surface:#FFFFFF;--surface-2:#F1F5F9;--surface-3:#E2E8F0;
+  --line:#E2E8F0;--line-strong:#8391A7;--field:#64748B;
+  --ink:#0F172A;--ink-2:#334155;--muted:#475569;
+  --brand:#1A6D6B;--on-brand:#FFFFFF;--brand-ink:#175756;--brand-soft:#EDF7F7;--brand-hi:#6FC0BE;--focus:#1A6D6B;
+  --side:#0F3433;--on-side:#FFFFFF;--side-mut:#A9C9C8;--side-accent:#6FC0BE;
+  --ok:#1E7A4C;--ok-soft:#E7F6EE;
+  --warn:#7A5800;--warn-soft:#FFF6D6;--warn-fill:#F5B800;--on-warn-fill:#0F172A;
+  --bad:#C0283D;--bad-soft:#FDECEF;
+  --info:#1F5FBF;--info-soft:#E8F0FD;
+  --chart-1:#0072B2;--chart-2:#009E73;--chart-3:#B8628F;--chart-4:#64748B;--chart-5:#1B7FB8;--chart-grid:#CBD5E1;
+  --teal-50:#EDF7F7;--teal-100:#D2EDEC;--teal-200:#A6DAD8;--teal-300:#6FC0BE;--teal-400:#3FA2A0;--teal-500:#238683;--teal-600:#1A6D6B;--teal-700:#175756;--teal-800:#144645;--teal-900:#0F3433;
+}
+/* ---- tokens: dark, when the system asks and nothing is chosen ------------ */
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme=light]){
+    color-scheme:dark;
+    --bg:#0E1420;--surface:#151C2B;--surface-2:#1B2436;--surface-3:#243047;
+    --line:#243047;--line-strong:#5A6B88;--field:#7587A5;
+    --ink:#F1F5F9;--ink-2:#CBD5E1;--muted:#94A3B8;
+    --brand:#6FC0BE;--on-brand:#0F3433;--brand-ink:#6FC0BE;--brand-soft:#123635;--brand-hi:#6FC0BE;--focus:#6FC0BE;
+    --side:#0A0F1A;--on-side:#F1F5F9;--side-mut:#94A3B8;--side-accent:#6FC0BE;
+    --ok:#4CC38A;--ok-soft:#10301F;
+    --warn:#F5C842;--warn-soft:#3A2E08;--warn-fill:#F5B800;--on-warn-fill:#0F172A;
+    --bad:#FF7A8A;--bad-soft:#3F1620;
+    --info:#7FB0FF;--info-soft:#14284A;
+    --chart-1:#56B4E9;--chart-2:#2FC59B;--chart-3:#E08BB8;--chart-4:#94A3B8;--chart-5:#F0E442;--chart-grid:#33415A;
+    --teal-50:#EDF7F7;--teal-100:#D2EDEC;--teal-200:#A6DAD8;--teal-300:#6FC0BE;--teal-400:#3FA2A0;--teal-500:#238683;--teal-600:#1A6D6B;--teal-700:#175756;--teal-800:#144645;--teal-900:#0F3433;
+  }
+}
+/* ---- tokens: dark, chosen with the toggle -------------------------------- */
+:root[data-theme=dark]{
+  color-scheme:dark;
+  --bg:#0E1420;--surface:#151C2B;--surface-2:#1B2436;--surface-3:#243047;
+  --line:#243047;--line-strong:#5A6B88;--field:#7587A5;
+  --ink:#F1F5F9;--ink-2:#CBD5E1;--muted:#94A3B8;
+  --brand:#6FC0BE;--on-brand:#0F3433;--brand-ink:#6FC0BE;--brand-soft:#123635;--brand-hi:#6FC0BE;--focus:#6FC0BE;
+  --side:#0A0F1A;--on-side:#F1F5F9;--side-mut:#94A3B8;--side-accent:#6FC0BE;
+  --ok:#4CC38A;--ok-soft:#10301F;
+  --warn:#F5C842;--warn-soft:#3A2E08;--warn-fill:#F5B800;--on-warn-fill:#0F172A;
+  --bad:#FF7A8A;--bad-soft:#3F1620;
+  --info:#7FB0FF;--info-soft:#14284A;
+  --chart-1:#56B4E9;--chart-2:#2FC59B;--chart-3:#E08BB8;--chart-4:#94A3B8;--chart-5:#F0E442;--chart-grid:#33415A;
+  --teal-50:#EDF7F7;--teal-100:#D2EDEC;--teal-200:#A6DAD8;--teal-300:#6FC0BE;--teal-400:#3FA2A0;--teal-500:#238683;--teal-600:#1A6D6B;--teal-700:#175756;--teal-800:#144645;--teal-900:#0F3433;
+}
+
+/* ---- shared, theme independent: type, space, radius, motion --------------- */
+:root{
+  --f-sans:"FTN Sans",Geist,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"FTN Mono","Geist Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  /* one type scale */
+  --fs-12:12px;--fs-13:13px;--fs-14:14px;--fs-16:16px;--fs-20:20px;--fs-24:24px;--fs-32:32px;
+  /* 4px spacing scale */
+  --sp-1:4px;--sp-2:8px;--sp-3:12px;--sp-4:16px;--sp-5:20px;--sp-6:24px;--sp-8:32px;--sp-10:40px;
+  /* radius: controls 10, cards 14, dialogs 20, pills full */
+  --r1:10px;--r2:14px;--r3:14px;--r4:20px;--r-pill:99px;
+  --row-h:40px;--ctl-h:40px;
+  --side-w:240px;--top-h:56px;
+  --shadow:0 1px 2px rgba(15,23,42,.05),0 8px 24px -12px rgba(15,23,42,.14);
+  --ease:cubic-bezier(.2,.7,.2,1);
+}

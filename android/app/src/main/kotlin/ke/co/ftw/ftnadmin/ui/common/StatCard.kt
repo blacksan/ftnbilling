@@ -1,5 +1,6 @@
 package ke.co.ftw.ftnadmin.ui.common
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -10,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -21,7 +21,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -29,32 +28,26 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ke.co.ftw.ftnadmin.ui.theme.AppTheme
-import ke.co.ftw.ftnadmin.ui.theme.FtnColors
 
 /**
- * Card colour families. Each maps onto existing theme roles (container + on-container, with a solid
- * accent for the icon chip), so light and dark both stay legible without new colour tokens.
+ * Stat cards are neutral (white card, 1dp outline, number + label). The tone only recolours the icon chip and the
+ * sparkline, and only the status tones (Good, Warn, Bad, Info) do so; Feature, Brand and Teal are plain brand now.
  */
 enum class CardTone { Feature, Brand, Info, Teal, Good, Warn, Bad, Neutral }
 
-private data class ToneColors(val container: Color, val content: Color, val accent: Color, val onAccent: Color)
+private data class ToneColors(val chip: Color, val onChip: Color, val accent: Color)
 
 @Composable
 private fun CardTone.colors(): ToneColors {
     val s = MaterialTheme.colorScheme
     val x = AppTheme.extended
-    val dark = s.background.luminance() < 0.5f
     return when (this) {
-        CardTone.Feature ->
-            if (dark) ToneColors(s.primaryContainer, s.onPrimaryContainer, s.onPrimaryContainer, s.primaryContainer)
-            else ToneColors(FtnColors.Navy, Color.White, FtnColors.Orange, FtnColors.Navy)
-        CardTone.Brand -> ToneColors(s.primaryContainer, s.onPrimaryContainer, s.primary, s.onPrimary)
-        CardTone.Info -> ToneColors(s.secondaryContainer, s.onSecondaryContainer, s.secondary, s.onSecondary)
-        CardTone.Teal -> ToneColors(s.tertiaryContainer, s.onTertiaryContainer, s.tertiary, s.onTertiary)
-        CardTone.Good -> ToneColors(x.successContainer, x.onSuccessContainer, x.success, x.onSuccess)
-        CardTone.Warn -> ToneColors(x.warningContainer, x.onWarningContainer, x.warning, x.onWarning)
-        CardTone.Bad -> ToneColors(s.errorContainer, s.onErrorContainer, s.error, s.onError)
-        CardTone.Neutral -> ToneColors(s.surfaceContainerHigh, s.onSurface, s.outline, s.surface)
+        CardTone.Good -> ToneColors(x.successContainer, x.success, x.success)
+        CardTone.Warn -> ToneColors(x.warningFill, x.onWarningFill, x.warning)
+        CardTone.Bad -> ToneColors(s.errorContainer, s.error, s.error)
+        CardTone.Info -> ToneColors(s.tertiaryContainer, s.tertiary, s.tertiary)
+        CardTone.Feature, CardTone.Brand, CardTone.Teal -> ToneColors(s.primaryContainer, s.onPrimaryContainer, s.primary)
+        CardTone.Neutral -> ToneColors(s.surfaceContainer, s.onSurfaceVariant, s.primary)
     }
 }
 
@@ -76,21 +69,25 @@ fun StatCard(
     onClick: (() -> Unit)? = null,
 ) {
     val c = tone.colors()
-    val colors = CardDefaults.cardColors(containerColor = c.container, contentColor = c.content)
+    val colors = CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+    )
+    val border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     val desc = listOf(label, "$value $unit".trim(), sub).filter { it.isNotBlank() }.joinToString(", ")
     val body: @Composable () -> Unit = {
-        Column(Modifier.padding(14.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(Modifier.padding(16.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (icon != null) {
-                    Surface(shape = CircleShape, color = c.accent, contentColor = c.onAccent, modifier = Modifier.size(28.dp)) {
-                        Icon(icon, contentDescription = null, modifier = Modifier.padding(5.dp))
+                    Surface(shape = MaterialTheme.shapes.extraSmall, color = c.chip, contentColor = c.onChip, modifier = Modifier.size(28.dp)) {
+                        Icon(icon, contentDescription = null, modifier = Modifier.padding(6.dp))
                     }
                     Spacer(Modifier.size(8.dp))
                 }
                 Text(
                     label,
                     style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
@@ -100,7 +97,7 @@ fun StatCard(
                 Text(
                     value,
                     style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     softWrap = false,
                 )
@@ -108,7 +105,7 @@ fun StatCard(
                     Text(
                         unit,
                         style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         softWrap = false,
                         modifier = Modifier.padding(bottom = 4.dp),
@@ -116,7 +113,7 @@ fun StatCard(
                 }
             }
             if (sub.isNotBlank()) {
-                Text(sub, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
             if (spark.size >= 2) {
                 Spacer(Modifier.height(2.dp))
@@ -125,5 +122,5 @@ fun StatCard(
         }
     }
     val m = modifier.semantics(mergeDescendants = true) { contentDescription = desc }
-    if (onClick != null) Card(onClick = onClick, modifier = m, colors = colors) { body() } else Card(modifier = m, colors = colors) { body() }
+    if (onClick != null) Card(onClick = onClick, modifier = m, colors = colors, border = border) { body() } else Card(modifier = m, colors = colors, border = border) { body() }
 }

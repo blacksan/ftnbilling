@@ -298,8 +298,5 @@ func (s *Server) minRole(method, path string) string {
 }
 
 func (s *Server) forbidden(w http.ResponseWriter, r *http.Request, sess store.AdminSession, u store.AdminUser) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusForbidden)
-	_, _ = w.Write([]byte(`<!doctype html><meta name="viewport" content="width=device-width"><body style="font:16px system-ui;background:#0d1117;color:#e6e9ef;display:grid;place-items:center;height:90vh"><div>Your role (` +
-		u.Role + `) cannot do this. <a style="color:#8b83ff" href="/admin">Back</a></div>`))
+	s.notice(w, r, http.StatusForbidden, "Not allowed", "Your role ("+u.Role+") cannot do this.", "/admin", "Back to the overview")
 }

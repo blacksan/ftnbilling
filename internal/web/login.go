@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -41,6 +42,24 @@ func (s *Server) loginRoutes(mux *http.ServeMux) {
 
 func (s *Server) authPage(r *http.Request) authPage {
 	return authPage{Brand: s.cfg.BrandName, Next: nextParam(r)}
+}
+
+// noticePage is the small card shown for dead ends (forbidden, WebFig not available).
+type noticePage struct {
+	authPage
+	Title, Msg, Back, BackLabel string
+}
+
+// notice renders a themed one-card message instead of a bare line of text.
+func (s *Server) notice(w http.ResponseWriter, r *http.Request, code int, title, msg, back, backLabel string) {
+	var buf bytes.Buffer
+	if err := s.tpl.ExecuteTemplate(&buf, "admin_notice", noticePage{authPage: s.authPage(r), Title: title, Msg: msg, Back: back, BackLabel: backLabel}); err != nil {
+		http.Error(w, msg, code)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_, _ = w.Write(buf.Bytes())
 }
 
 // nextParam reads where to go after signing in, from the query or the form.

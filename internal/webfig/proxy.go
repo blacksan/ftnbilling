@@ -50,7 +50,7 @@ func newProxyState(m *Manager) *proxyState {
 const clearSiteData = `"cache", "storage"`
 
 const noSessionPage = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>WebFig</title>` +
-	`<body style="font:16px system-ui;background:#0d1117;color:#e6e9ef;display:grid;place-items:center;height:90vh"><p>Open WebFig from the router page in the admin.</p>`
+	`<body style="font:16px/1.45 system-ui,sans-serif;background:#0E1420;color:#F1F5F9;display:grid;place-items:center;height:90vh;margin:0;padding:16px;text-align:center"><p>Open WebFig from the router page in the admin.</p>`
 
 func plain(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -60,7 +60,7 @@ func plain(w http.ResponseWriter, code int, msg string) {
 		return
 	}
 	_, _ = w.Write([]byte(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>WebFig</title>` +
-		`<body style="font:16px system-ui;background:#0d1117;color:#e6e9ef;display:grid;place-items:center;height:90vh"><p>` + msg + `</p>`))
+		`<body style="font:16px/1.45 system-ui,sans-serif;background:#0E1420;color:#F1F5F9;display:grid;place-items:center;height:90vh;margin:0;padding:16px;text-align:center"><p>` + msg + `</p>`))
 }
 
 func (m *Manager) baseHeaders(w http.ResponseWriter) {

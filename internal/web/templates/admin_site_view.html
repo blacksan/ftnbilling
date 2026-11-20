@@ -7,10 +7,10 @@
 <div id="rt-live" data-refresh="15">
 {{if not $X.Reachable}}<p class="flash bad" role="status">The router could not be read just now, so CPU, memory and uptime are blank. The flats and money below are the server's own numbers.</p>{{end}}
 <div class="stats">
-{{template "stat" (dict "K" "Flats online" "V" $X.FlatsOn "S" (printf "%s, pulling traffic now" $X.FlatsSub) "Icon" "live" "Tone" "teal" "Feature" true)}}
+{{template "stat" (dict "K" "Flats online" "V" $X.FlatsOn "S" (printf "%s, pulling traffic now" $X.FlatsSub) "Icon" "live" "Feature" true)}}
 {{template "stat" (dict "K" "WAN" "V" $X.WAN "S" $X.WANSub "Icon" "metrics" "Tone" "info")}}
 {{template "stat" (dict "K" "Tunnel" "V" $X.Tunnel "S" $X.TunnelSub "Icon" "pulse" "Tone" "ok")}}
-{{template "stat" (dict "K" "CPU" "V" $X.CPU "S" (printf "memory %s %s" $X.Mem $X.MemSub) "Icon" "sites" "Tone" "plum")}}
+{{template "stat" (dict "K" "CPU" "V" $X.CPU "S" (printf "memory %s %s" $X.Mem $X.MemSub) "Icon" "sites")}}
 {{template "stat" (dict "K" "Uptime" "V" $X.Uptime "S" "since last boot" "Icon" "clock" "Tone" "warn")}}
 </div>
 <div class="grid c2">
@@ -36,10 +36,10 @@
 {{if .Sessions}}<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr><th>Who</th><th>From</th><th>Opened</th><th>Ends by</th><th></th></tr></thead><tbody>
 {{range .Sessions}}<tr><td data-label="Who">{{.User}}</td><td class="mono" data-label="From">{{.IP}}</td><td data-label="Opened">{{eat .Started}}</td><td data-label="Ends by">{{eat .Expires}}</td>
 <td><form method="post" action="/admin/routers/webfig/end"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="sid" value="{{.ID}}"><button class="ghost sm">End</button></form></td></tr>{{end}}</tbody></table></div>
-{{else}}<p class="muted">No WebFig session is open on this router.</p>{{end}}
+{{else}}<p class="muted nil">No WebFig session is open on this router.</p>{{end}}
 {{if .Activity}}<h3>Recent activity</h3><ul class="checks">{{range .Activity}}<li><span class="muted">{{eat .Time}}</span> {{.Msg}} <span class="muted">{{.Actor}}{{if .IP}} from {{.IP}}{{end}}</span></li>{{end}}</ul>{{end}}
 <p class="muted">A session belongs to one browser and one router. It ends after 30 minutes without use, or 2 hours after it opened.</p></section>{{end}}{{end}}
-{{with .Data.Rep}}<section class="panel"><h2>Revenue by month</h2>{{if .Months}}<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr><th>Month</th><th class="n">Payments</th><th class="n">KES</th></tr></thead><tbody>{{range .Months}}<tr><td data-label="Month">{{.Month}}</td><td class="n" data-label="Payments">{{.Payments}}</td><td class="n" data-label="KES">{{.KES}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No payments through this router yet.</p>{{end}}</section>{{end}}
+{{with .Data.Rep}}<section class="panel"><h2>Revenue by month</h2>{{if .Months}}<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr><th>Month</th><th class="n">Payments</th><th class="n">KES</th></tr></thead><tbody>{{range .Months}}<tr><td data-label="Month">{{.Month}}</td><td class="n" data-label="Payments">{{.Payments}}</td><td class="n" data-label="KES">{{.KES}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted nil">No payments through this router yet.</p>{{end}}</section>{{end}}
 </div>
 
 {{else if eq $tab "setup"}}
@@ -98,19 +98,19 @@
 <form method="post" action="/admin/routers/packages"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
 <div class="tw" style="margin:0"><table><thead><tr><th>Plan</th><th class="n">Shared price</th><th>Hidden here</th><th>Price here (KES, 0 = shared)</th></tr></thead><tbody>
 {{range .Data.Pkgs}}{{$o := index $s.PkgOverrides .ID}}<tr><td>{{.Name}} <span class="muted">{{.SpeedMbps}} Mbps</span></td><td class="n">{{.PriceKES}}</td><td><input type="checkbox" name="hidden_{{.ID}}" value="1"{{if $o.Hidden}} checked{{end}} aria-label="Hide {{.Name}}"></td><td><input name="price_{{.ID}}" type="number" min="0" value="{{if $o.PriceKES}}{{$o.PriceKES}}{{else}}0{{end}}" style="width:100px" aria-label="Price for {{.Name}}"></td></tr>{{end}}</tbody></table></div>
-<p style="margin-top:12px"><button>Save plans</button></p></form></section>
+<p class="mt-3"><button>Save plans</button></p></form></section>
 
 {{else if eq $tab "profile"}}
 <div class="grid c2">
 <section class="panel"><h2>Details</h2>
-<form method="post" action="/admin/routers/update" class="stack-col" style="margin-top:12px"{{if $s.WGPublicKey}} data-plumb{{if .Data.Pause.Paused}} data-paused{{end}} data-olt-default="sfp-sfpplus1" data-olt="{{.Data.Eff.OLTInterface}}" data-vlan="{{.Data.Eff.VLANID}}" data-lanports="{{.Data.Eff.LANPorts}}" data-name="{{$s.Name}}"{{end}}><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="confirm" value=""><input type="hidden" name="confirmname" value=""><input type="hidden" name="orig_lanports" value="{{.Data.Eff.LANPorts}}"><input type="hidden" name="orig_customerports" value="{{.Data.Eff.CustomerPorts}}"><input type="hidden" name="orig_olt" value="{{.Data.Eff.OLTInterface}}"><input type="hidden" name="orig_vlan" value="{{.Data.Eff.VLANID}}">
+<form method="post" action="/admin/routers/update" class="mt-3 stack-col"{{if $s.WGPublicKey}} data-plumb{{if .Data.Pause.Paused}} data-paused{{end}} data-olt-default="sfp-sfpplus1" data-olt="{{.Data.Eff.OLTInterface}}" data-vlan="{{.Data.Eff.VLANID}}" data-lanports="{{.Data.Eff.LANPorts}}" data-name="{{$s.Name}}"{{end}}><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="confirm" value=""><input type="hidden" name="confirmname" value=""><input type="hidden" name="orig_lanports" value="{{.Data.Eff.LANPorts}}"><input type="hidden" name="orig_customerports" value="{{.Data.Eff.CustomerPorts}}"><input type="hidden" name="orig_olt" value="{{.Data.Eff.OLTInterface}}"><input type="hidden" name="orig_vlan" value="{{.Data.Eff.VLANID}}">
 {{template "sitefields" $s}}
 {{with .Data.CustPort}}{{if .Text}}<p class="cport {{.State}}" data-cport="{{.State}}" role="status">{{.Text}}</p>{{end}}{{if .OLTMessage}}<p class="cport error" role="status">OLT uplink: {{.OLTMessage}}</p>{{end}}{{end}}
 {{if .Data.Ports}}<datalist id="router-ports">{{range .Data.Ports}}<option value="{{.}}">{{end}}</datalist>{{end}}
-<details><summary>Router layout</summary><div class="stack-col" style="margin-top:10px">{{template "sitelayout" .Data.Eff}}<p class="muted">Admin LAN, OLT uplink and customer ports are set up on the router by the server as soon as you save (and healed by the sweep); use the Ports tab to enable, disable or move a port. The internet uplink is never changed by the server. Other layout changes apply to the next line and to metrics.</p></div></details>
+<details><summary>Router layout</summary><div class="mt-3 stack-col">{{template "sitelayout" .Data.Eff}}<p class="muted">Admin LAN, OLT uplink and customer ports are set up on the router by the server as soon as you save (and healed by the sweep); use the Ports tab to enable, disable or move a port. The internet uplink is never changed by the server. Other layout changes apply to the next line and to metrics.</p></div></details>
 <div><button>Save</button></div></form></section>
 {{with .Data.Rep}}<section class="panel"><h2>Location</h2>
-<form method="post" action="/admin/routers/profile" class="stack-col" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
+<form method="post" action="/admin/routers/profile" class="mt-3 stack-col"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
 <label class="field">Address<input name="address" value="{{$s.Address}}" maxlength="200" placeholder="Street, estate, town"></label>
 <div class="two"><label class="field">Latitude<input name="lat" value="{{if $s.Lat}}{{$s.Lat}}{{end}}" placeholder="-1.2864"></label><label class="field">Longitude<input name="lng" value="{{if $s.Lng}}{{$s.Lng}}{{end}}" placeholder="36.8172"></label></div>
 <label class="field">Went live<input type="date" name="go_live" value="{{day $s.GoLive}}"></label><div><button>Save profile</button> {{if $s.Lat}}<a class="btn ghost" href="geo:{{$s.Lat}},{{$s.Lng}}">Open in maps</a>{{end}}</div></form></section>
@@ -124,11 +124,11 @@
 {{else}}
 <div class="grid c2">
 <section class="panel"><h2>Router actions</h2>
-<form method="post" action="/admin/routers/sync" class="row" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button class="ghost">Reconcile now</button><span class="muted">normally automatic</span></form>
-<form method="post" action="/admin/routers/disable" class="row" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="disable" value="{{if $s.Disabled}}0{{else}}1{{end}}"><button class="ghost">{{if $s.Disabled}}Resume this router{{else}}Pause this router{{end}}</button><span class="muted">paused: no collection, no router changes; tenants cannot buy</span></form>
-<form method="post" action="/admin/routers/reboot" class="row" style="margin-top:12px" data-reboot><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
+<form method="post" action="/admin/routers/sync" class="mt-3 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button class="ghost">Reconcile now</button><span class="muted">normally automatic</span></form>
+<form method="post" action="/admin/routers/disable" class="mt-3 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="disable" value="{{if $s.Disabled}}0{{else}}1{{end}}"><button class="ghost">{{if $s.Disabled}}Resume this router{{else}}Pause this router{{end}}</button><span class="muted">paused: no collection, no router changes; tenants cannot buy</span></form>
+<form method="post" action="/admin/routers/reboot" class="mt-3 row" data-reboot><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
 <input name="confirm_name" placeholder="{{$s.Name}}" required autocomplete="off" aria-label="Type the router name to reboot it"><button class="ghost">Reboot router</button></form>
-<p class="muted" style="margin-top:6px">Type the router name. Customers lose their connection for a minute or two. Not possible while the router is being set up, and once every 10 minutes.</p></section>
+<p class="mt-2 muted">Type the router name. Customers lose their connection for a minute or two. Not possible while the router is being set up, and once every 10 minutes.</p></section>
 <section class="panel danger"><h2 class="bad">Remove router</h2><p class="muted" style="margin:6px 0 10px">Only possible when it has no flats. Its payments stay in the ledger. Type the router name to confirm.</p>
 <form method="post" action="/admin/routers/remove" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input name="confirm" placeholder="{{$s.Name}}" required autocomplete="off" aria-label="Router name"><button>Remove</button></form></section>
 </div>

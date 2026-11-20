@@ -11,15 +11,15 @@ import (
 
 // Chart palette (validated reference palette, light surface).
 const (
-	ColDown  = "#2a78d6" // download / primary
-	ColUp    = "#eb6834" // upload
-	ColAqua  = "#1baf7a"
-	ColViol  = "#6250d6"
-	ColMag   = "#e87ba4"
-	ColCap   = "#e34948" // capacity / limit line
-	colInk   = "#1c2630"
-	colMuted = "#5b6670"
-	colGrid  = "#e3e7ec"
+	ColDown  = "#0072b2" // download / primary
+	ColUp    = "#009e73" // upload
+	ColAqua  = "#1b7fb8"
+	ColViol  = "#b8628f"
+	ColMag   = "#64748b"
+	ColCap   = "#c0283d" // capacity / limit line
+	colInk   = "#0f172a"
+	colMuted = "#475569"
+	colGrid  = "#cbd5e1"
 )
 
 // LineSeries is one line of a LineChart. NaN values break the line.
@@ -69,17 +69,59 @@ func fmtTick(v float64) string {
 	return fmt.Sprintf("%.1f", v)
 }
 
+// chartBox wraps a chart so that on a narrow screen it scrolls sideways instead of
+// shrinking: the SVG never renders narrower than its drawing width, so axis text keeps
+// at least its designed pixel size (11 to 14 px) on every viewport.
+// tokClass maps a series colour onto the theme's chart token (and the danger colour for the
+// capacity line), so the SVG follows light/dark; the hex stays as the light fallback.
+func tokClass(kind, c string) string {
+	t := ""
+	switch strings.ToLower(c) {
+	case ColDown:
+		t = "1"
+	case ColUp:
+		t = "2"
+	case ColViol:
+		t = "3"
+	case ColMag:
+		t = "4"
+	case ColAqua:
+		t = "5"
+	case ColCap:
+		t = "b"
+	}
+	if t == "" {
+		return ""
+	}
+	return ` class="` + kind + t + `"`
+}
+
+// seriesDash gives each series its own dash pattern, so lines differ by more than colour.
+func seriesDash(i int) string {
+	switch i % 4 {
+	case 1:
+		return ` stroke-dasharray="9 3"`
+	case 2:
+		return ` stroke-dasharray="1 4.5"`
+	case 3:
+		return ` stroke-dasharray="9 3 2 3"`
+	}
+	return ""
+}
+
+func chartBox(svg string) template.HTML {
+	return template.HTML(`<div class="chartbox" tabindex="0" role="region" aria-label="Chart, scrolls sideways on small screens">` + svg + `</div>`)
+}
+
 func svgOpen(w, h int, label string) *strings.Builder {
 	var b strings.Builder
-	fmt.Fprintf(&b, `<svg viewBox="0 0 %d %d" role="img" aria-label="%s" style="width:100%%;max-width:%dpx;height:auto;display:block;font-family:system-ui,sans-serif">`, w, h, esc(label), w*5/4)
+	fmt.Fprintf(&b, `<svg class="chart" viewBox="0 0 %d %d" role="img" aria-label="%s" style="--w:%dpx;width:100%%;max-width:%dpx;height:auto;display:block;font-family:inherit">`, w, h, esc(label), w, w*5/4)
 	return &b
 }
 
+// emptyChart is the no-data state: a plain themed message (no SVG, so its text never scales).
 func emptyChart(w, h int, label, msg string) template.HTML {
-	b := svgOpen(w, h, label)
-	fmt.Fprintf(b, `<rect x="0.5" y="0.5" width="%d" height="%d" rx="6" fill="#fcfcfb" stroke="%s"/>`, w-1, h-1, colGrid)
-	fmt.Fprintf(b, `<text x="%d" y="%d" text-anchor="middle" font-size="14" fill="%s">%s</text></svg>`, w/2, h/2+5, colMuted, esc(msg))
-	return template.HTML(b.String())
+	return template.HTML(`<p class="muted nil">` + esc(msg) + `</p>`)
 }
 
 // LineChart draws a time series chart as inline SVG. It never panics on empty
@@ -128,13 +170,13 @@ func LineChart(o LineOpts) template.HTML {
 	}
 	y := func(v float64) float64 { return T + ph*(1-v/yMax) }
 	b := svgOpen(W, H, "time series chart")
-	fmt.Fprintf(b, `<rect x="0.5" y="0.5" width="%d" height="%d" rx="6" fill="#fcfcfb" stroke="%s"/>`, W-1, H-1, colGrid)
+	fmt.Fprintf(b, `<rect x="0.5" y="0.5" width="%d" height="%d" rx="6" class="cbg" fill="#ffffff" stroke="%s"/>`, W-1, H-1, colGrid)
 	// grid + y labels
 	for v := 0.0; v <= yMax+step/2; v += step {
-		fmt.Fprintf(b, `<line x1="%d" x2="%d" y1="%.1f" y2="%.1f" stroke="%s" stroke-width="1"/>`, L, W-R, y(v), y(v), colGrid)
-		fmt.Fprintf(b, `<text x="%d" y="%.1f" text-anchor="end" font-size="11.5" fill="%s">%s</text>`, L-6, y(v)+4, colMuted, fmtTick(v))
+		fmt.Fprintf(b, `<line x1="%d" x2="%d" y1="%.1f" y2="%.1f" class="cg" stroke="%s" stroke-width="1"/>`, L, W-R, y(v), y(v), colGrid)
+		fmt.Fprintf(b, `<text x="%d" y="%.1f" text-anchor="end" font-size="11.5" class="cm" fill="%s">%s</text>`, L-6, y(v)+4, colMuted, fmtTick(v))
 	}
-	fmt.Fprintf(b, `<text x="%d" y="14" font-size="11.5" fill="%s">%s</text>`, 8, colMuted, esc(o.Unit))
+	fmt.Fprintf(b, `<text x="%d" y="14" font-size="11.5" class="cm" fill="%s">%s</text>`, 8, colMuted, esc(o.Unit))
 	// x labels
 	layout := o.XLayout
 	if layout == "" {
@@ -155,20 +197,20 @@ func LineChart(o LineOpts) template.HTML {
 		} else if k == ticks-1 && ticks > 1 {
 			anchor = "end"
 		}
-		fmt.Fprintf(b, `<text x="%.1f" y="%d" text-anchor="%s" font-size="11.5" fill="%s">%s</text>`, x(i), H-9, anchor, colMuted, esc(o.T[i].In(EAT).Format(layout)))
+		fmt.Fprintf(b, `<text x="%.1f" y="%d" text-anchor="%s" font-size="11.5" class="cm" fill="%s">%s</text>`, x(i), H-9, anchor, colMuted, esc(o.T[i].In(EAT).Format(layout)))
 	}
 	if o.CapLine > 0 {
-		fmt.Fprintf(b, `<line x1="%d" x2="%d" y1="%.1f" y2="%.1f" stroke="%s" stroke-width="1.5" stroke-dasharray="6 4"/>`, L, W-R, y(o.CapLine), y(o.CapLine), ColCap)
+		fmt.Fprintf(b, `<line x1="%d" x2="%d" y1="%.1f" y2="%.1f"%s stroke="%s" stroke-width="1.5" stroke-dasharray="3 3"/>`, L, W-R, y(o.CapLine), y(o.CapLine), tokClass("ss", ColCap), ColCap)
 	}
 	// series
-	for _, s := range o.Series {
+	for si, s := range o.Series {
 		var d strings.Builder
 		pen := false
 		runLen := 0
 		lastX, lastY := 0.0, 0.0
 		flush := func() {
 			if runLen == 1 {
-				fmt.Fprintf(b, `<circle cx="%.1f" cy="%.1f" r="2.5" fill="%s"/>`, lastX, lastY, s.Color)
+				fmt.Fprintf(b, `<circle cx="%.1f" cy="%.1f" r="2.5"%s fill="%s"/>`, lastX, lastY, tokClass("fs", s.Color), s.Color)
 			}
 		}
 		for i, v := range s.Vals {
@@ -190,40 +232,28 @@ func LineChart(o LineOpts) template.HTML {
 		}
 		flush()
 		if d.Len() > 0 {
-			fmt.Fprintf(b, `<path d="%s" fill="none" stroke="%s" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`, d.String(), s.Color)
+			fmt.Fprintf(b, `<path d="%s" fill="none"%s stroke="%s" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"%s/>`, d.String(), tokClass("ss", s.Color), s.Color, seriesDash(si))
 		}
 	}
-	// legend (top right)
-	lx := float64(W - R)
-	items := len(o.Series)
+	// legend: HTML under the chart (not inside the scrolling SVG), so series names stay in
+	// view on a phone; each swatch repeats the series' colour and dash pattern.
+	var lg strings.Builder
+	nl := len(o.Series)
 	if o.CapLine > 0 {
-		items++
+		nl++
 	}
-	_ = items
-	type leg struct {
-		name, col string
-		dash      bool
-	}
-	var legs []leg
-	for _, s := range o.Series {
-		legs = append(legs, leg{s.Name, s.Color, false})
-	}
-	if o.CapLine > 0 {
-		legs = append(legs, leg{o.CapLabel, ColCap, true})
-	}
-	for i := len(legs) - 1; i >= 0; i-- {
-		l := legs[i]
-		w := float64(len(l.name))*6.4 + 26
-		lx -= w
-		if l.dash {
-			fmt.Fprintf(b, `<line x1="%.1f" x2="%.1f" y1="11" y2="11" stroke="%s" stroke-width="2" stroke-dasharray="4 3"/>`, lx, lx+16, l.col)
-		} else {
-			fmt.Fprintf(b, `<line x1="%.1f" x2="%.1f" y1="11" y2="11" stroke="%s" stroke-width="3" stroke-linecap="round"/>`, lx, lx+16, l.col)
+	if nl > 0 {
+		lg.WriteString(`<ul class="clegend">`)
+		for si, s := range o.Series {
+			fmt.Fprintf(&lg, `<li><svg class="sw" width="26" height="8" viewBox="0 0 26 8" aria-hidden="true"><line x1="1" x2="25" y1="4" y2="4"%s stroke="%s" stroke-width="3" stroke-linecap="round"%s/></svg>%s</li>`, tokClass("ss", s.Color), s.Color, seriesDash(si), esc(s.Name))
 		}
-		fmt.Fprintf(b, `<text x="%.1f" y="15" font-size="12" fill="%s">%s</text>`, lx+20, colInk, esc(l.name))
+		if o.CapLine > 0 {
+			fmt.Fprintf(&lg, `<li><svg class="sw" width="26" height="8" viewBox="0 0 26 8" aria-hidden="true"><line x1="1" x2="25" y1="4" y2="4"%s stroke="%s" stroke-width="2" stroke-dasharray="3 3"/></svg>%s</li>`, tokClass("ss", ColCap), ColCap, esc(o.CapLabel))
+		}
+		lg.WriteString(`</ul>`)
 	}
 	b.WriteString(`</svg>`)
-	return template.HTML(b.String())
+	return template.HTML(string(chartBox(b.String())) + lg.String())
 }
 
 // BarRow is one bar of BarsH.
@@ -250,7 +280,7 @@ func BarsH(rows []BarRow, color, empty string) template.HTML {
 	}
 	H := len(rows)*rowH + 12
 	b := svgOpen(W, H, "bar chart")
-	fmt.Fprintf(b, `<rect x="0.5" y="0.5" width="%d" height="%d" rx="6" fill="#fcfcfb" stroke="%s"/>`, W-1, H-1, colGrid)
+	fmt.Fprintf(b, `<rect x="0.5" y="0.5" width="%d" height="%d" rx="6" class="cbg" fill="#ffffff" stroke="%s"/>`, W-1, H-1, colGrid)
 	bw := float64(W - labW - valW - 16)
 	for i, r := range rows {
 		y := 8 + i*rowH
@@ -258,7 +288,7 @@ func BarsH(rows []BarRow, color, empty string) template.HTML {
 		if rs := []rune(lab); len(rs) > 24 {
 			lab = string(rs[:23]) + "…"
 		}
-		txt := fmt.Sprintf(`<text x="%d" y="%d" text-anchor="end" font-size="12.5" fill="%s">%s</text>`, labW, y+15, colInk, esc(lab))
+		txt := fmt.Sprintf(`<text x="%d" y="%d" text-anchor="end" font-size="12.5" class="ci" fill="%s">%s</text>`, labW, y+15, colInk, esc(lab))
 		if r.Href != "" {
 			txt = fmt.Sprintf(`<a href="%s">%s</a>`, esc(r.Href), txt)
 		}
@@ -267,11 +297,11 @@ func BarsH(rows []BarRow, color, empty string) template.HTML {
 		if w < 2 && r.Value > 0 {
 			w = 2
 		}
-		fmt.Fprintf(b, `<rect x="%d" y="%d" width="%.1f" height="16" rx="3" fill="%s"/>`, labW+8, y+4, w, color)
-		fmt.Fprintf(b, `<text x="%.1f" y="%d" font-size="12" fill="%s">%s</text>`, float64(labW+8)+w+6, y+16, colMuted, esc(r.Text))
+		fmt.Fprintf(b, `<rect x="%d" y="%d" width="%.1f" height="16" rx="3"%s fill="%s"/>`, labW+8, y+4, w, tokClass("fs", color), color)
+		fmt.Fprintf(b, `<text x="%.1f" y="%d" font-size="12" class="cm" fill="%s">%s</text>`, float64(labW+8)+w+6, y+16, colMuted, esc(r.Text))
 	}
 	b.WriteString(`</svg>`)
-	return template.HTML(b.String())
+	return chartBox(b.String())
 }
 
 // HourStrip draws 24 cells (EAT hour of day) shaded by value (percent).
@@ -289,36 +319,36 @@ func HourStrip(vals [24]float64) template.HTML {
 		return emptyChart(W, H, "busy hours", "No hourly data yet")
 	}
 	b := svgOpen(W, H, "average WAN utilisation by hour of day")
-	fmt.Fprintf(b, `<rect x="0.5" y="0.5" width="%d" height="%d" rx="6" fill="#fcfcfb" stroke="%s"/>`, W-1, H-1, colGrid)
+	fmt.Fprintf(b, `<rect x="0.5" y="0.5" width="%d" height="%d" rx="6" class="cbg" fill="#ffffff" stroke="%s"/>`, W-1, H-1, colGrid)
 	cw := float64(W-24) / 24
 	for h, v := range vals {
 		x := 12 + float64(h)*cw
 		if math.IsNaN(v) {
-			fmt.Fprintf(b, `<rect x="%.1f" y="12" width="%.1f" height="36" rx="3" fill="#f1f3f5"/>`, x+1, cw-2)
+			fmt.Fprintf(b, `<rect x="%.1f" y="12" width="%.1f" height="36" rx="3" class="cna" fill="#e2e8f0"/>`, x+1, cw-2)
 		} else {
 			t := v / maxV
-			// light blue to dark blue
-			r := 232 + (31-232)*t
-			g := 240 + (95-240)*t
-			bl := 251 + (181-251)*t
-			txt := "#1c2631" // cell text: kept dark in both themes
-			if t > 0.5 {
-				txt = "#ffffff"
+			// teal 50 to teal 600 (the brand ramp)
+			r := 237 + (26-237)*t
+			g := 247 + (109-247)*t
+			bl := 247 + (107-247)*t
+			txt := "hd" // cell text: dark on light cells, white on dark ones, in both themes
+			if t > 0.82 {
+				txt = "hw"
 			}
 			fmt.Fprintf(b, `<rect x="%.1f" y="12" width="%.1f" height="36" rx="3" fill="rgb(%.0f,%.0f,%.0f)"><title>%02d:00 EAT: %.1f%%</title></rect>`, x+1, cw-2, r, g, bl, h, v)
 			lab := fmt.Sprintf("%.0f", v)
 			if v < 10 {
 				lab = fmt.Sprintf("%.1f", v)
 			}
-			fmt.Fprintf(b, `<text x="%.1f" y="35" text-anchor="middle" font-size="10" fill="%s">%s</text>`, x+cw/2, txt, lab)
+			fmt.Fprintf(b, `<text x="%.1f" y="35" text-anchor="middle" font-size="10" class="%s">%s</text>`, x+cw/2, txt, lab)
 		}
 		if h%3 == 0 {
-			fmt.Fprintf(b, `<text x="%.1f" y="64" text-anchor="middle" font-size="11.5" fill="%s">%02d</text>`, x+cw/2, colMuted, h)
+			fmt.Fprintf(b, `<text x="%.1f" y="64" text-anchor="middle" font-size="11.5" class="cm" fill="%s">%02d</text>`, x+cw/2, colMuted, h)
 		}
 	}
-	fmt.Fprintf(b, `<text x="%d" y="79" font-size="11" fill="%s">Hour of day (EAT). Number = average WAN use, %% of capacity. Darker = busier.</text>`, 12, colMuted)
+	fmt.Fprintf(b, `<text x="%d" y="79" font-size="11" class="cm" fill="%s">Hour of day (EAT). Number = average WAN use, %% of capacity. Darker = busier.</text>`, 12, colMuted)
 	b.WriteString(`</svg>`)
-	return template.HTML(b.String())
+	return chartBox(b.String())
 }
 
 // XLayout picks the x label layout for a tier and period.

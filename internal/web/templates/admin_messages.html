@@ -11,7 +11,7 @@
 </div>
 <form method="get" class="row"><label>Status<select name="status">{{range .Data.Statuses}}<option value="{{.}}"{{if eq . $.Data.Status}} selected{{end}}>{{if .}}{{.}}{{else}}any{{end}}</option>{{end}}</select></label>
 <label>Channel<select name="channel">{{range .Data.Channels}}<option value="{{.}}"{{if eq . $.Data.Channel}} selected{{end}}>{{if .}}{{.}}{{else}}any{{end}}</option>{{end}}</select></label><button>Filter</button></form>
-<div class="tw msgs" style="margin-top:12px"><table><tr><th>Created (EAT)</th><th>What</th>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>To</th><th>Status</th><th>Note</th><th></th></tr>
+<div class="mt-3 tw msgs"><table><tr><th>Created (EAT)</th><th>What</th>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>To</th><th>Status</th><th>Note</th><th></th></tr>
 {{range .Data.Rows}}<tr><td>{{.Created}}</td><td>{{.M.Kind}}<br><span class="muted">{{.M.Channel}}{{if .M.Template}} <code>{{.M.Template}}</code>{{end}}</span></td>{{if $.Data.ShowSite}}<td class="bld">{{.Building}}</td>{{end}}<td>{{.Who}}</td>
 <td><span class="pill {{.M.Status}}">{{.M.Status}}</span>{{if and (eq .M.Status "sent") .M.Delivery (ne .M.Delivery "sent")}} <span class="pill {{.M.Delivery}}">{{.M.Delivery}}</span>{{end}}</td><td class="nw muted">{{if gt .M.Attempts 1}}{{.M.Attempts}} tries. {{end}}{{.Info}}</td>
 <td class="act">{{if eq .M.Status "queued"}}{{if or (ne .M.Kind "admin_alert") (eq $.Role "owner")}}<form method="post" action="/admin/messages/cancel" class="i"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.M.ID}}"><button>Cancel</button></form>{{end}}

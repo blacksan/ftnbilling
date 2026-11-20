@@ -1,9 +1,9 @@
 {{define "admin_security"}}{{template "ahead" .}}
-{{with .Data.Reveal}}<div class="card" style="border-color:var(--accent)"><b>{{.Title}}</b><p class="muted">{{.Note}}</p>
+{{with .Data.Reveal}}<div class="card" style="border-color:var(--brand)"><b>{{.Title}}</b><p class="muted">{{.Note}}</p>
 <pre class="out" style="font-size:16px">{{range .Lines}}{{.}}
 {{end}}</pre></div>{{end}}
 <div class="grid2">
-<div class="card"><b>You</b><table style="margin-top:8px"><tr><td>User</td><td>{{.Data.Me.Username}}</td></tr><tr><td>Role</td><td><span class="pill applied">{{.Data.Me.Role}}</span></td></tr>
+<div class="card"><b>You</b><table class="mt-2"><tr><td>User</td><td>{{.Data.Me.Username}}</td></tr><tr><td>Role</td><td><span class="pill applied">{{.Data.Me.Role}}</span></td></tr>
 <tr><td>Authenticator</td><td>{{if .Data.Enrolled}}<span class="ok">set up</span>, {{.Data.CodesLeft}} recovery codes left{{else}}<span class="bad">not set up</span>{{end}}</td></tr></table></div>
 <div class="card"><b>Change password</b>
 <form method="post" action="/admin/security/password" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}">
@@ -22,7 +22,7 @@
 <div class="tw"><table><tr><th>Since</th><th>Last active</th><th>Address</th><th>Browser</th><th></th></tr>
 {{range .Data.Sessions}}<tr><td>{{eat .CreatedAt}}</td><td>{{eat .LastSeenAt}}</td><td>{{.IP}}</td><td class="nw">{{.UserAgent}}</td>
 <td>{{if .Current}}<span class="pill applied">this one</span>{{else}}<form class="i" method="post" action="/admin/security/sessions/revoke"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><button class="lnk">Sign out</button></form>{{end}}</td></tr>{{end}}</table></div>
-<form method="post" action="/admin/security/sessions/revoke" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="all" value="1"><button>Sign out everywhere else</button></form>
+<form class="mt-2" method="post" action="/admin/security/sessions/revoke"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="all" value="1"><button>Sign out everywhere else</button></form>
 
 <h3>Phones (the app)</h3>
 <div class="tw"><table><tr>{{if .Data.IsOwner}}<th>User</th>{{end}}<th>Name</th><th>Model</th><th>App</th><th>Added</th><th>Last seen</th><th>Address</th><th></th></tr>

@@ -1,30 +1,5 @@
-{{define "portalcss"}}<style>@font-face{font-family:Comfortaa;font-weight:700 800;font-display:swap;src:url(/brand.woff2) format("woff2")}.pkg input{accent-color:#f7931e}
-*{box-sizing:border-box}body{margin:0;font:16px/1.4 system-ui,sans-serif;background:#f3f5f7;color:#1c2630}
-main{max-width:480px;margin:0 auto;padding:12px}h1{font-size:22px;margin:8px 0}h2{font-size:15px;margin:18px 0 6px;color:#566}
-.card{background:#fff;border-radius:10px;padding:12px;margin:8px 0;box-shadow:0 1px 2px #0002}
-.pkg{display:block;border:2px solid #dde;border-radius:10px;padding:10px 12px;margin:6px 0;background:#fff}
-.pkg input{float:right;width:22px;height:22px}.pkg b{font-size:17px}.pkg small{display:block;color:#566}
-.pkg:has(input:checked){border-color:#f7931e;background:#fff5e8}
-.pkg.off{opacity:.6;background:#f3f4f6;border-style:dashed}.pkg.off .why{color:#8a5a00;font-weight:600;margin-top:2px}
-input[type=text],input[type=tel],input[type=password]{width:100%;font-size:18px;padding:10px;border:1px solid #bbc;border-radius:8px}
-button,.btn{display:block;width:100%;font-size:17px;padding:12px;margin:8px 0;border:0;border-radius:8px;background:#f7931e;color:#0e1a33;font-weight:700;text-align:center;text-decoration:none}
-button.alt{background:#0e1a33;color:#fff}button.grey{background:#667;color:#fff}.err{background:#fde8e8;color:#8a1c1c;padding:10px;border-radius:8px}
-.warn{background:#fff4d6;color:#6b4b00;padding:10px;border-radius:8px}
-.code{font:700 26px/1.2 monospace;letter-spacing:2px;background:#f3f5f7;padding:8px;border-radius:8px;text-align:center}
-.flat{font-size:20px;font-weight:700}.pill{display:inline-block;padding:2px 10px;border-radius:99px;font-size:14px;font-weight:600}
-.pill.active{background:#d9f3e3;color:#07622d}.pill.expired,.pill.new{background:#ffe9c7;color:#7a4a00}.pill.suspended{background:#fde8e8;color:#8a1c1c}
-.muted{color:#667;font-size:14px}details summary{padding:6px 0;color:#c96f00}
-.brandbar{display:flex;align-items:center;gap:12px;margin:6px 0 10px;padding:14px 16px;border-radius:14px;color:#fff;background:linear-gradient(100deg,#0e1a33 0%,#16284f 60%,#22396b 100%)}
-.brandbar img{height:58px;width:auto;display:block}.brandbar .ftnmark{width:40px;height:50px;flex:0 0 40px}.brandbar .ftnmark .bars{fill:#f2f4f8}.brandbar small{display:block;color:#c9d2e6;font-size:13px;font-weight:400}
-.ok{background:#d9f3e3;color:#07622d;padding:10px;border-radius:8px;font-weight:600}
-.card.ok{background:#d9f3e3;color:#07622d}.card.ok .muted{color:#2f6b49}.card.ok .code{background:#eaf8ef}
-@media (prefers-color-scheme:dark){a{color:#f0b24d}body{background:#10151c;color:#e6ebf1}h2,.muted{color:#9aa7b6}.card,.pkg{background:#1a222c;box-shadow:0 1px 2px #0006}.pkg{border-color:#2d3948}
-.pkg:has(input:checked){border-color:#f7931e;background:#2a2217}.pkg small{color:#9aa7b6}.pkg.off{background:#151b23}.pkg.off .why{color:#f0b24d}
-input[type=text],input[type=tel],input[type=password]{background:#121820;color:#e6ebf1;border-color:#3a4757}.err{background:#3a1d1d;color:#ffb8b8}.warn{background:#3a3014;color:#ffe29a}
-.code{background:#121820}.pill.active{background:#12351f;color:#8fe0b0}.pill.expired,.pill.new{background:#3a2c10;color:#ffcf8a}.pill.suspended{background:#3a1d1d;color:#ffb8b8}
-button.grey{background:#56637a}details summary{color:#f0b24d}.card.ok{background:#12351f;color:#8fe0b0}.card.ok .muted{color:#9fd3b4}.card.ok .code{background:#0d2a18;color:#8fe0b0}}
-</style>{{end}}
-{{define "top"}}<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Brand}}</title><link rel="icon" type="image/svg+xml" href="/favicon.svg">{{template "portalcss"}}{{end}}
+{{define "portalcss"}}<script src="{{static "theme.js"}}"></script><link rel="stylesheet" href="{{static "tokens.css"}}"><link rel="stylesheet" href="{{static "portal.css"}}">{{end}}
+{{define "top"}}<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>{{.Brand}}</title><link rel="icon" type="image/svg+xml" href="/favicon.svg">{{template "portalcss"}}{{end}}
 {{define "head"}}{{template "top" .}}</head><body><main>{{end}}
-{{define "foot"}}<p class="muted" style="text-align:center;margin-top:24px"><a href="/admin/login" rel="nofollow">Admin login</a></p></main></body></html>{{end}}
+{{define "foot"}}<p class="muted center m-foot"><a href="/admin/login" rel="nofollow">Admin login</a></p></main></body></html>{{end}}
 {{define "brandbar"}}<div class="brandbar"><img src="/brand/logo-white-text.svg" alt="{{.}}"></div>{{end}}
