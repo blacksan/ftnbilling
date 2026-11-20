@@ -73,7 +73,7 @@
 <nav class="tabs" aria-label="Customer sections">{{range $t := (seq "overview|Overview" "payments|Payments" "usage|Usage" "events|Events")}}{{$k := index (split $t "|") 0}}{{$l := index (split $t "|") 1}}<a class="tab" href="/admin/accounts/view?code={{$A.Code}}&amp;tab={{$k}}"{{if eq $k $tab}} aria-current="page"{{end}}>{{$l}}</a>{{end}}</nav>
 {{if eq $tab "overview"}}
 <div class="grid c2">
-<section class="panel"><h2>Details</h2><form method="post" action="/admin/accounts/update" class="stack-col" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
+<section class="panel"><h2>Details</h2><form method="post" action="/admin/accounts/update" class="mt-3 stack-col"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <div class="two"><label class="field">Flat label<input name="flat" value="{{$A.Flat}}" required></label><label class="field">Tenant<input name="tenant" value="{{$A.Tenant}}"></label></div>
 <div class="two"><label class="field">Phone<input name="phone" value="{{$A.Phone}}"></label><label class="field">WhatsApp<input name="whatsapp" value="{{$A.WhatsApp}}" placeholder="0712345678"></label></div>
 <label class="ck"><input type="checkbox" name="wa_same" value="1"> WhatsApp is the same as the phone</label>
@@ -84,10 +84,10 @@
 <form method="post" action="/admin/accounts/mac" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <label class="field" style="flex:1;min-width:200px">New ONT WAN MAC<input name="mac" placeholder="AA:BB:CC:DD:EE:FF" required style="font-family:var(--f-mono)"></label><button>Change MAC</button></form>
 <p class="muted" style="margin:10px 0 0">The New devices page lists what the router sees: <a href="/admin/devices">pick a MAC there</a> and attach it to this flat.</p></section>
-<section class="panel"><h2>Actions</h2><div class="row" style="margin-top:12px">
+<section class="panel"><h2>Actions</h2><div class="mt-3 row">
 <form method="post" action="/admin/accounts/suspend"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}"><input type="hidden" name="suspend" value="{{if $A.Suspended}}0{{else}}1{{end}}"><button class="ghost">{{if $A.Suspended}}Unsuspend{{else}}Suspend{{end}}</button></form>
 </div>
-<form method="post" action="/admin/accounts/extend" class="row" style="margin-top:14px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
+<form method="post" action="/admin/accounts/extend" class="mt-4 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <label class="field">Free grant<select name="package">{{range .Data.Pkgs}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label><label class="field">Reason<input name="note" placeholder="optional"></label>
 <label class="ck"><input type="checkbox" name="force" value="1"> apply even if lower speed</label><button>Add time</button></form></section>
 </div></div>
@@ -96,7 +96,7 @@
 <form method="post" action="/admin/accounts/package" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <label class="field">New plan<select name="package">{{$cur := $A.PackageID}}{{range .Data.Pkgs}}<option value="{{.ID}}"{{if eq .ID $cur}} selected{{end}}>{{.Name}} ({{.SpeedMbps}} Mbps)</option>{{end}}</select></label>
 <label class="field">Time<select name="mode"><option value="keep">keep current expiry</option><option value="fresh">start fresh from now</option></select></label><button>Change plan</button></form>
-<form method="post" action="/admin/accounts/endplan" data-confirm="End the current plan now? The flat goes offline." style="margin-top:12px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}"><button class="ghost">End plan now</button> <span class="muted">expires it at once (record any refund in Payments)</span></form></section>
+<form class="mt-3" method="post" action="/admin/accounts/endplan" data-confirm="End the current plan now? The flat goes offline."><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}"><button class="ghost">End plan now</button> <span class="muted">expires it at once (record any refund in Payments)</span></form></section>
 <section class="panel"><h2>Apartment and unit</h2>
 <p style="margin:6px 0 10px">{{if $A.ApartmentID}}<a href="/admin/apartments/view?id={{$A.ApartmentID}}">{{.Data.AptName}}</a>, unit <b>{{$A.Unit}}</b>, router {{.Data.AcctSite}}{{else}}<span class="bad">No apartment yet.</span>{{end}}</p>
 {{if .Data.Problem}}<p class="flash bad" role="status">{{.Data.Problem}}</p>{{end}}
@@ -155,7 +155,7 @@
 {{if not $b.SameApartment}}<label class="field">Into apartment<select name="apartment_id" required>{{range $b.ApartmentChoices}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>{{end}}
 <label class="ck"><input type="checkbox" name="confirm" value="1" required> Yes, move this customer</label><button class="sm">Move customer here</button></form></div></details>{{end}}</div>
 {{else}}<div class="row" style="gap:6px">{{if $d.CanWrite}}<button type="button" class="sm" data-open="addcustomer" data-mac="{{$r.MAC}}" data-site="{{$r.SiteID}}">Create customer</button>{{end}}<details style="position:relative"><summary class="btn ghost sm" style="display:inline-flex">Attach</summary><div class="card" style="position:absolute;right:0;z-index:5;min-width:280px">
-{{if $r.Suggested}}<form method="post" action="/admin/devices/attach" style="margin-bottom:8px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$r.SiteID}}"><input type="hidden" name="mac" value="{{$r.MAC}}"><input type="hidden" name="acct" value="{{$r.Suggested.Code}}">
+{{if $r.Suggested}}<form class="mb-2" method="post" action="/admin/devices/attach"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$r.SiteID}}"><input type="hidden" name="mac" value="{{$r.MAC}}"><input type="hidden" name="acct" value="{{$r.Suggested.Code}}">
 <p class="bad" style="margin:0 0 6px">Possible ONT swap: {{$r.Suggested.Flat}}</p><p class="muted" style="margin:0 0 6px">{{$r.Suggested.Reason}}</p><button class="sm">Replace MAC of {{$r.Suggested.Flat}}</button></form>{{end}}
 <form class="row" method="post" action="/admin/devices/attach"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$r.SiteID}}"><input type="hidden" name="mac" value="{{$r.MAC}}">
 <input name="acct" list="pk{{$i}}" placeholder="search flat or code" required size="16" autocomplete="off" aria-label="Flat to attach to"><datalist id="pk{{$i}}">{{range $r.Pick}}<option value="{{.Code}}">{{.Flat}}{{if .Stale}} (MAC not seen lately){{end}}</option>{{end}}</datalist><button class="sm">Attach</button></form></div></details>
@@ -181,7 +181,7 @@
 <a class="tab" href="/admin/payments?status=refunded"{{if eq .Data.PTab "refunded"}} aria-current="page"{{end}}>Refunded<span class="n">{{index $c "refunded"}}</span></a></nav>
 {{if or (eq .Data.PTab "voucher") (eq .Data.F.Method "voucher")}}<p class="muted" style="max-width:70ch">These are voucher redemptions. The KES shown is the plan's price, but it is not counted in "Money in" or the revenue totals: a voucher is prepaid time, and the cash for it is whatever you took when you sold it.</p>{{end}}
 <details class="panel" style="padding:12px 16px"><summary>Filter by date, method or text</summary>
-<form method="get" action="/admin/payments" class="row" style="margin-top:12px">
+<form method="get" action="/admin/payments" class="mt-3 row">
 <label class="field">From<input type="date" name="from" value="{{$F.From}}"></label><label class="field">To<input type="date" name="to" value="{{$F.To}}"></label>
 <label class="field">Method<select name="method"><option value="">All</option>{{range .Data.Methods}}<option{{if eq . $F.Method}} selected{{end}}>{{.}}</option>{{end}}</select></label>
 <label class="field">Status<select name="status"><option value="">All</option>{{range seq "applied" "unmatched" "refunded" "ignored"}}<option{{if eq . $F.Status}} selected{{end}}>{{.}}</option>{{end}}</select></label>
@@ -204,7 +204,7 @@
 <label class="field">Payer phone<input name="phone" value="{{.Data.Phone}}" placeholder="0712345678"></label>
 <label class="field">Plan<select name="package" id="pkg">{{$s := .Data.Selected}}<option value="">(match by amount)</option>{{range .Data.Pkgs}}<option value="{{.ID}}" data-price="{{.PriceKES}}"{{if eq .ID $s}} selected{{end}}>{{.Name}} - {{kes .PriceKES}}</option>{{end}}</select></label>
 <label class="field">Date and time paid (EAT)<input name="date" type="datetime-local" value="{{eatNow}}"></label></div>
-<div class="row" style="margin-top:12px"><label class="field" style="flex:1;min-width:220px">Note (optional)<input name="note"></label><label class="ck"><input type="checkbox" name="force" value="1"> apply even if lower speed</label><button>Record and apply</button></div></form>
+<div class="mt-3 row"><label class="field" style="flex:1;min-width:220px">Note (optional)<input name="note"></label><label class="ck"><input type="checkbox" name="force" value="1"> apply even if lower speed</label><button>Record and apply</button></div></form>
 {{template "afoot" .}}{{end}}
 
 {{define "admin_unmatched"}}{{template "ahead" .}}{{$d := .}}
@@ -218,7 +218,7 @@
 <select name="account" aria-label="Flat">{{range $d.Data.Accounts}}<option value="{{.ID}}"{{if eq .ID $pa}} selected{{end}}>{{.Flat}} ({{.Code}})</option>{{end}}</select>
 <select name="package" aria-label="Plan">{{range $d.Data.Pkgs}}<option value="{{.ID}}"{{if eq .PriceKES $amt}} selected{{end}}>{{.Name}} ({{kes .PriceKES}})</option>{{end}}</select>
 <input name="note" placeholder="note" aria-label="Note"><button class="sm">Assign</button></form>
-<form class="row" method="post" action="/admin/unmatched/resolve" style="margin-top:6px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="key" value="{{.P.Key}}"><input name="note" placeholder="note for your records" aria-label="Note">
+<form class="mt-2 row" method="post" action="/admin/unmatched/resolve"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="key" value="{{.P.Key}}"><input name="note" placeholder="note for your records" aria-label="Note">
 <button class="ghost sm" name="status" value="refunded">Mark refunded</button><button class="ghost sm" name="status" value="ignored">Ignore</button></form></td></tr>{{end}}</tbody></table></div>
 {{else}}{{template "empty" (dict "Title" "Nothing waiting." "Text" "Every payment found its flat. Money that cannot be matched lands here for you to decide.")}}{{end}}
 {{if .Data.Done}}<h3>Decided</h3><div class="tw"><table class="rs"><thead><tr><th>Paid</th><th>Receipt</th><th class="n">KES</th><th>Payer</th><th>Status</th><th>Note</th></tr></thead><tbody>
@@ -268,13 +268,13 @@
 <td><form id="{{$f}}" method="post" action="/admin/packages/save" style="display:inline"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><button class="sm">Save</button></form>
 <form method="post" action="/admin/packages/delete" style="display:inline" data-confirm="Delete {{.Name}}?"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><button class="ghost sm">Delete</button></form></td></tr>
 {{else}}<tr><td colspan="8" class="empty-row">{{template "empty" (dict "Title" "No plans here" "Text" "Add a plan below: a name, how long it lasts, its speed and its price.")}}</td></tr>{{end}}</tbody></table></div>
-<section class="panel" id="new"><h2>New plan</h2><form method="post" action="/admin/packages/save" class="row" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<section class="panel" id="new"><h2>New plan</h2><form method="post" action="/admin/packages/save" class="mt-3 row"><input type="hidden" name="_csrf" value="{{.CSRF}}">
 <label class="field">Name<input name="name" placeholder="Monthly 10 Mbps" required></label><label class="field">Minutes<input name="duration" type="number" min="1" placeholder="43200" required style="width:110px"></label>
 <label class="field">Mbps<input name="speed" type="number" min="1" placeholder="10" required style="width:90px"></label><label class="field">Price (KES)<input name="price" type="number" min="0" placeholder="2500" required style="width:110px"></label><button>Add plan</button></form></section>
 {{template "afoot" .}}{{end}}
 
 {{define "admin_vouchers"}}{{template "ahead" .}}{{$d := .}}
-<section class="panel"><h2>Make vouchers</h2><form method="post" action="/admin/vouchers/generate" class="row" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{.CSRF}}">{{if .Site}}<input type="hidden" name="site" value="{{.Site}}">{{else}}<label class="field">Router<select name="site"><option value="">Any router</option>{{range .Sites}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>{{end}}
+<section class="panel"><h2>Make vouchers</h2><form method="post" action="/admin/vouchers/generate" class="mt-3 row"><input type="hidden" name="_csrf" value="{{.CSRF}}">{{if .Site}}<input type="hidden" name="site" value="{{.Site}}">{{else}}<label class="field">Router<select name="site"><option value="">Any router</option>{{range .Sites}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>{{end}}
 <label class="field">Plan<select name="package">{{range .Data.Pkgs}}<option value="{{.ID}}">{{.Name}} ({{kes .PriceKES}})</option>{{end}}</select></label>
 <label class="field">How many<input name="count" type="number" min="1" max="500" value="10" style="width:90px"></label> <button>Generate and print</button></form></section>
 {{if .Data.Vouchers}}<div class="tw tall"><table class="rs"><thead><tr><th>Code</th><th>Router</th><th>Plan</th><th>Batch</th><th>Status</th></tr></thead><tbody>
@@ -285,7 +285,7 @@
 {{define "admin_settings"}}{{template "ahead" .}}{{template "set_tabs" .}}
 <section class="panel"><h2>Sign-in</h2><p class="muted" style="margin:6px 0 0">Passwords, the authenticator, signed-in browsers and phones, and users are managed on <a href="/admin/security">Security</a>. Locked out? On the server run <code>sudo ftnbilling-admin-reset</code> (add <code>--generate</code> for a new random password).</p></section>
 <div class="grid c2">
-<section class="panel"><h2>Lifecycle rules</h2><table style="margin-top:8px">
+<section class="panel"><h2>Lifecycle rules</h2><table class="mt-2">
 <tr><td>Reminder before expiry</td><td>{{if .Data.Policy.ReminderDays}}{{.Data.Policy.ReminderDays}} days before (plans longer than that){{else}}off{{end}} <code>REMINDER_DAYS</code></td></tr>
 <tr><td>Reminder on expiry</td><td>{{if .Data.Policy.ReminderOnExpiry}}on{{else}}off{{end}} <code>REMINDER_ON_EXPIRY</code></td></tr>
 <tr><td>Reminder delivery</td><td>recorded on the overview, and sent to tenants who have a WhatsApp number when WhatsApp is set up (see Messages)</td></tr>
@@ -293,13 +293,13 @@
 <tr><td>Reconnection</td><td>automatic as soon as a payment is applied</td></tr>
 <tr><td>Upgrades</td><td>take effect immediately; the new plan's time is added from the current expiry</td></tr>
 <tr><td>Suspension</td><td>manual, from the subscriber page</td></tr></table></section>
-<section class="panel"><h2>Payments</h2><table style="margin-top:8px">
+<section class="panel"><h2>Payments</h2><table class="mt-2">
 <tr><td>M-Pesa Daraja</td><td>{{if .Data.Mpesa}}enabled{{else}}disabled (credentials not set){{end}} <a href="/admin/settings/mpesa">M-Pesa settings</a></td></tr><tr><td>WhatsApp</td><td>{{if .Data.WAOn}}set up{{else}}not set up{{end}} <a href="/admin/settings/whatsapp">WhatsApp settings</a></td></tr><tr><td>Email</td><td>{{if .Data.EmailOn}}set up{{else}}not set up{{end}} <a href="/admin/settings/email">Email settings</a></td></tr>
 <tr><td>Test payments</td><td>{{if .Data.Cfg.TestMode}}<span class="bad">ON (free access!)</span>{{else}}off{{end}}</td></tr>
 <tr><td>Paybill account number</td><td>the flat's account code</td></tr>
 <tr><td>Callback URLs</td><td>see <a href="/admin/settings/mpesa">M-Pesa settings</a></td></tr>
 <tr><td>Support phone shown</td><td>{{if .Data.Support}}{{.Data.Support}}{{else}}not set (SUPPORT_PHONE){{end}}</td></tr></table></section>
-<section class="panel"><h2>Database and backups</h2><table style="margin-top:8px">
+<section class="panel"><h2>Database and backups</h2><table class="mt-2">
 <tr><td>Customer database</td><td>{{if eq .Data.DBKind "postgres"}}PostgreSQL{{else}}JSON file (set <code>DATABASE_URL</code> to use PostgreSQL){{end}}{{if .Data.DBErr}} <span class="bad">not healthy: {{.Data.DBErr}}</span>{{else}} <span class="ok">healthy</span>{{end}}</td></tr>
 {{with .Data.Backup}}{{if not .Present}}<tr><td>Backups</td><td class="muted">no status file yet (written by <code>ftnbilling-backup</code> after each dump)</td></tr>
 {{else if .ReadFailed}}<tr><td>Backups</td><td class="bad">backup-status.json could not be read</td></tr>
@@ -307,10 +307,10 @@
 <tr><td>Last restore drill</td><td>{{if .DrillAt.IsZero}}never{{else}}{{eat .DrillAt}}{{if .DrillOK}}{{if deref .DrillOK}} <span class="ok">passed</span>{{else}} <span class="bad">FAILED</span> {{.DrillMsg}}{{end}}{{end}}{{end}}</td></tr>
 <tr><td>Last Drive upload</td><td>{{if .UploadAt.IsZero}}never{{else}}{{eat .UploadAt}}{{if .UploadOK}}{{if deref .UploadOK}} <span class="ok">ok</span>{{else}} <span class="bad">FAILED</span>{{end}}{{end}}{{end}}</td></tr>
 {{if .Error}}<tr><td>Problem</td><td class="bad">{{.Error}}</td></tr>{{end}}{{end}}{{end}}</table></section>
-<section class="panel"><h2>Admin access</h2><table style="margin-top:8px">
+<section class="panel"><h2>Admin access</h2><table class="mt-2">
 <tr><td>Admin access</td><td>public, with a password and an authenticator code (not from the routers' tunnel)</td></tr>
 <tr><td>Refused</td><td>router tunnels ({{.Data.WGSubnet}}) and the public internet</td></tr></table></section>
-<section class="panel"><h2>Router connections</h2><table style="margin-top:8px">
+<section class="panel"><h2>Router connections</h2><table class="mt-2">
 <tr><td>Routers</td><td>each router has its own settings: <a href="/admin/routers">Routers</a></td></tr>
 <tr><td>WireGuard endpoint</td><td>{{if .Data.WGEndpoint}}{{.Data.WGEndpoint}}{{else}}not set{{end}} <code>WG_ENDPOINT</code></td></tr>
 <tr><td>Tunnel subnet</td><td>{{.Data.WGSubnet}} <code>WG_SUBNET</code></td></tr>
@@ -320,7 +320,7 @@
 </div>
 {{template "afoot" .}}{{end}}
 
-{{define "admin_print"}}<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Vouchers {{.Batch}}</title><link rel="stylesheet" href="{{static "app.css"}}"><script src="{{static "theme.js"}}"></script><script src="{{static "app.js"}}" defer></script></head><body class="vprint">
+{{define "admin_print"}}<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Vouchers {{.Batch}}</title><link rel="stylesheet" href="{{static "tokens.css"}}"><link rel="stylesheet" href="{{static "app.css"}}"><script src="{{static "theme.js"}}"></script><script src="{{static "app.js"}}" defer></script></head><body class="vprint">
 <p class="np"><a href="/admin/vouchers">Back</a> &middot; <button type="button" data-print>Print</button> &middot; unused vouchers in batch {{.Batch}}</p>
 <div class="vg">{{$d := .}}{{range .Vouchers}}<div class="v"><div class="vb"><img src="/brand/logo-dark-text.svg" alt="{{$d.Brand}}"></div><b>{{.Code}}</b>{{with index $d.Pkgs .PackageID}}{{.Name}} &middot; {{dur .DurationMin}} &middot; {{.SpeedMbps}} Mbps{{end}}</div>{{end}}</div>
 </body></html>{{end}}

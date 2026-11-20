@@ -14,5 +14,5 @@
 
 {{define "set_form"}}<form method="post" action="{{.Action}}" class="card setf"><input type="hidden" name="_csrf" value="{{.P.CSRF}}"><input type="hidden" name="next" value="{{.P.Data.Next}}">
 <div class="fgrid">{{range .Fields}}{{template "set_field" (dict "F" .)}}{{end}}</div>
-{{if .P.Data.Production}}<div class="row" style="margin-top:10px"><label><input type="checkbox" name="confirm_reregister" value="1"> Production: I understand that replacing or going back on the callback token changes the URLs Safaricom must call, and they must be registered again (the old token works for 7 days)</label></div>{{end}}
-<div class="row" style="margin-top:10px"><label>Current admin password <small class="muted">(needed only when you set or replace a secret)</small><input type="password" name="current_password" autocomplete="current-password"></label><button>Save</button></div></form>{{end}}
+{{if .P.Data.Production}}<div class="mt-3 row"><label><input type="checkbox" name="confirm_reregister" value="1"> Production: I understand that replacing or going back on the callback token changes the URLs Safaricom must call, and they must be registered again (the old token works for 7 days)</label></div>{{end}}
+<div class="mt-3 row"><label>Current admin password <small class="muted">(needed only when you set or replace a secret)</small><input type="password" name="current_password" autocomplete="current-password"></label><button>Save</button></div></form>{{end}}
