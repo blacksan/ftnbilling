@@ -37,7 +37,14 @@ func TestStaticAssets(t *testing.T) {
 		mux := http.NewServeMux()
 		(&Server{}).staticRoutes(mux)
 		mux.ServeHTTP(w, httptest.NewRequest("GET", "/static/"+p, nil))
-		if w.Code != 404 && w.Code != 301 {
+		// Path cleaning answers "../x" with a redirect (301 before Go 1.26, 307 since): never a file.
+		switch w.Code {
+		case 404:
+		case 301, 307, 308:
+			if strings.HasPrefix(w.Header().Get("Location"), "/static/") && strings.Contains(w.Header().Get("Location"), "..") {
+				t.Errorf("%q redirects to %q", p, w.Header().Get("Location"))
+			}
+		default:
 			t.Errorf("%q: %d", p, w.Code)
 		}
 	}
