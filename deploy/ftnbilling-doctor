@@ -222,7 +222,7 @@ if [ -n "$DBURL" ] && [ -x "$BIN" ] && [ -r "$ENVF" ]; then
     if printf '%s\n' "$sc" | grep -q '^receipt confirmation: on'; then
       pass "M-Pesa receipt check" "each receipt is confirmed with Daraja before it is credited"
     elif printf '%s\n' "$sc" | grep -q '^receipt confirmation: OFF'; then
-      warn "M-Pesa receipt check" "OFF: $(printf '%s\n' "$sc" | sed -n 's/^receipt confirmation: OFF: //p' | head -1). Set MPESA_INITIATOR_NAME and MPESA_SECURITY_CREDENTIAL (Settings > M-Pesa)"
+      warn "M-Pesa receipt check" "OFF: $(printf '%s\n' "$sc" | sed -n 's/^receipt confirmation: OFF: //p' | head -1)"
     fi
     if [ "$rc" != 0 ]; then fail "saved settings readable" "$(printf '%s\n' "$sc" | sed -n '/ignored/,$p' | tail -n +2 | head -3 | tr -s ' \n' ' ')"; fi
     if [ -z "$(envval DATA_KEY)" ] && printf '%s\n' "$sc" | grep -q 'database (secret, set)'; then
@@ -285,12 +285,12 @@ fi
 if have caddy && [ -r /etc/caddy/Caddyfile ]; then
   if caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then pass "Caddyfile valid" ""; else fail "Caddyfile valid" "caddy validate failed"; fi
 fi
-# The M-Pesa callbacks are unsigned: Caddy should only let Safaricom's addresses reach /pay/cb/*.
+# The M-Pesa callbacks are unsigned: Caddy can limit /pay/cb/* to Safaricom's addresses (CADDY_MPESA_IPS).
 if [ -r /etc/caddy/Caddyfile ]; then
   if grep -q 'not remote_ip' /etc/caddy/Caddyfile 2>/dev/null; then
     pass "M-Pesa callback source filter" "/pay/cb/* is limited to the addresses in the Caddyfile"
   else
-    warn "M-Pesa callback source filter" "/pay/cb/* is open to every address (installed with CADDY_MPESA_IPS=any, or before the filter was the default): re-run the installer to limit it to Safaricom's addresses"
+    warn "M-Pesa callback source filter" "M-Pesa callbacks are not IP-filtered; set CADDY_MPESA_IPS to Safaricom's published ranges (verify them with Safaricom first, then re-run the installer)"
   fi
 fi
 

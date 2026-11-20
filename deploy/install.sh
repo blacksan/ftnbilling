@@ -44,10 +44,11 @@
 #   ADMIN_PASS    a random one is generated on first install.
 #   CADDY_MPESA_IPS  space- or comma-separated IPs/CIDRs that Caddy lets reach
 #                 /pay/cb/* (the M-Pesa callbacks); everyone else gets 403.
-#                 Default: the addresses Safaricom publishes for Daraja callbacks
-#                 (SAFARICOM_CALLBACK_IPS below; confirm them with Safaricom, a
-#                 payment from an unlisted address is refused). CADDY_MPESA_IPS=any
-#                 switches the limit off (a warning is printed and the doctor warns).
+#                 Default: NOT SET = no filter (the doctor warns). A wrong list
+#                 would answer 403 to real payments, so set it only to ranges you
+#                 have verified with Safaricom. A suggested list is in a comment
+#                 near mpesa_cb_block below (unverified). CADDY_MPESA_IPS=any is the
+#                 same as unset, written down on purpose.
 #   SUPPORT_PHONE, BRAND_NAME, PUBLIC_IP (skip auto-detection of this VPS's IPv4).
 #   WG_PORT (51820), WG_SUBNET (10.99.0.0/22),
 #   MGMT_PORT (51821, udp: the remote-WinBox WireGuard interface wg-mgmt),
@@ -917,27 +918,24 @@ SQL
   fi
 }
 
-# The source addresses Safaricom's Daraja calls the /pay/cb/* callbacks from, as
-# published in Safaricom's Daraja documentation. Daraja's callbacks are unsigned,
-# so the source address is a second lock next to the secret in the URL.
-# CHECK THIS LIST WITH SAFARICOM (Daraja support / your Paybill onboarding) before
-# relying on it: they have changed addresses before, and a payment from an
-# address that is not listed is refused with 403 and never credited. Override
-# with CADDY_MPESA_IPS="<ip/cidr> ..."; CADDY_MPESA_IPS=any switches the filter off.
-SAFARICOM_CALLBACK_IPS="196.201.214.200 196.201.214.206 196.201.213.114 196.201.214.207 196.201.214.208 196.201.213.44 196.201.212.127 196.201.212.138 196.201.212.129 196.201.212.136 196.201.212.74 196.201.212.69"
+# Daraja's callbacks are unsigned, so limiting /pay/cb/* to Safaricom's source
+# addresses is a second lock next to the secret in the URL. The installer does
+# NOT do it unless told to: a list that is wrong or out of date answers 403 to
+# real payments, which are then never credited. Set
+# CADDY_MPESA_IPS="<ip/cidr> ..." once you have Safaricom's current ranges.
+#
+# SUGGESTED, UNVERIFIED (written from memory; verify with Safaricom before use;
+# they have changed addresses before):
+#   CADDY_MPESA_IPS="196.201.214.200 196.201.214.206 196.201.213.114 196.201.214.207 196.201.214.208 196.201.213.44 196.201.212.127 196.201.212.138 196.201.212.129 196.201.212.136 196.201.212.74 196.201.212.69"
 
 # Prints the Caddyfile lines that limit /pay/cb/* by source address (CF_CB).
 mpesa_cb_block() {
   local want="${CADDY_MPESA_IPS:-}" ips
   case "$want" in
-    any|ANY|Any)
-      warn "CADDY_MPESA_IPS=any: /pay/cb/* (the M-Pesa callbacks) is open to the whole internet; only the secret in the URL (and the receipt check, if set up) protects it"
-      printf '\t# /pay/cb/* is NOT limited by source address (CADDY_MPESA_IPS=any).\n'
+    ""|any|ANY|Any)
+      note "M-Pesa callbacks (/pay/cb/*) are not limited by source address: set CADDY_MPESA_IPS to Safaricom's published ranges (verify them with Safaricom first)" >&2
+      printf '\t# /pay/cb/* is NOT limited by source address (CADDY_MPESA_IPS not set).\n'
       return 0 ;;
-    "")
-      ips=$SAFARICOM_CALLBACK_IPS
-      note "M-Pesa callbacks (/pay/cb/*) are limited to Safaricom's published addresses: $ips" >&2
-      note "check the list with Safaricom; override with CADDY_MPESA_IPS=\"<ip/cidr> ...\", or CADDY_MPESA_IPS=any to switch the limit off" >&2 ;;
     *)
       ips=$(printf '%s' "$want" | tr ',' ' ' | xargs)
       # Only addresses reach the Caddyfile: refuse anything else instead of writing it in.
@@ -945,7 +943,7 @@ mpesa_cb_block() {
         ""|*[!0-9a-fA-F:./\ ]*) die "CADDY_MPESA_IPS must be IPs or CIDRs separated by spaces or commas (or the word any), got: $want" ;;
       esac ;;
   esac
-  printf '\t# M-Pesa callbacks only from these addresses (CADDY_MPESA_IPS; default: Safaricom'"'"'s published list).\n\t@mpesa_cb_other {\n\t\tpath /pay/cb/*\n\t\tnot remote_ip %s\n\t}\n\trespond @mpesa_cb_other "Forbidden" 403\n' "$ips"
+  printf '\t# M-Pesa callbacks only from these addresses (CADDY_MPESA_IPS).\n\t@mpesa_cb_other {\n\t\tpath /pay/cb/*\n\t\tnot remote_ip %s\n\t}\n\trespond @mpesa_cb_other "Forbidden" 403\n' "$ips"
 }
 
 # The public Caddyfile, from CF_SITE (the domain, or :80), CF_CB (the optional

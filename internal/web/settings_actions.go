@@ -315,6 +315,35 @@ func (s *Server) settingsMpesaSTK(w http.ResponseWriter, r *http.Request) {
 	s.back(w, r, to+"?test="+url.QueryEscape(t.CheckoutID), "KES 1 prompt sent to "+t.Phone+". Enter your M-Pesa PIN on the phone.")
 }
 
+// settingsMpesaReceiptTest runs one Transaction Status query against a receipt
+// the owner knows is real, so the initiator credentials can be tested before
+// receipt confirmation is switched on. The raw answer is shown on the page.
+func (s *Server) settingsMpesaReceiptTest(w http.ResponseWriter, r *http.Request) {
+	to := "/admin/settings/mpesa"
+	if !s.allow(w, r, s.testRL, to, "receipt tests") {
+		return
+	}
+	if s.mpesa == nil {
+		s.back(w, r, to, "Error: M-Pesa is not available in this build")
+		return
+	}
+	code, err := billing.NormalizeTransCode(r.PostFormValue("receipt"))
+	if err != nil {
+		s.back(w, r, to, "Error: "+err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), testTimeout)
+	defer cancel()
+	t, err := s.mpesa.TestReceipt(ctx, code)
+	if err != nil {
+		s.audit(r, "settings (mpesa): receipt confirmation test failed to send")
+		s.back(w, r, to+"?rtest="+url.QueryEscape(code), "Error: "+err.Error())
+		return
+	}
+	s.audit(r, "settings (mpesa): receipt confirmation test sent for "+t.Receipt)
+	s.back(w, r, to+"?rtest="+url.QueryEscape(code), "Receipt check sent to Daraja. The answer appears below in a few seconds.")
+}
+
 // settingsMpesaSTKPoll answers the test page's polling: the in-memory state
 // (the callback updates it) and, while still pending, Daraja's own answer.
 func (s *Server) settingsMpesaSTKPoll(w http.ResponseWriter, r *http.Request) {

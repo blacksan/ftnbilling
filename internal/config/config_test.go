@@ -205,25 +205,26 @@ func TestMgmtSubnet(t *testing.T) {
 	}
 }
 
-func TestMpesaConfirmDefaultsOnOnlyWithInitiatorSettings(t *testing.T) {
-	c := Config{MpesaConfirmReceipts: "auto"}
-	if on, why := c.MpesaConfirm(); on || !strings.Contains(why, "MPESA_INITIATOR_NAME") {
-		t.Errorf("auto without initiator settings: %v %q", on, why)
+func TestMpesaConfirmIsOffUnlessExplicitlyEnabled(t *testing.T) {
+	// The default is off, even with the initiator settings present: they are untested.
+	c := Config{MpesaInitiator: "apiop", MpesaSecurityCredential: "cred"}
+	if on, why := c.MpesaConfirm(); on || !strings.Contains(why, "Test receipt confirmation") || !strings.Contains(why, "MPESA_CONFIRM_RECEIPTS=auto") {
+		t.Errorf("unset: %v %q", on, why)
 	}
-	c.MpesaInitiator, c.MpesaSecurityCredential = "apiop", "cred"
+	c.MpesaConfirmReceipts = "auto"
 	if on, _ := c.MpesaConfirm(); !on {
 		t.Error("auto with initiator settings must be on")
 	}
-	c.MpesaConfirmReceipts = ""
+	c.MpesaConfirmReceipts = "on"
 	if on, _ := c.MpesaConfirm(); !on {
-		t.Error("unset behaves as auto")
+		t.Error("on with initiator settings must be on")
 	}
 	c.MpesaConfirmReceipts = "off"
 	if on, why := c.MpesaConfirm(); on || !strings.Contains(why, "=off") {
 		t.Errorf("off: %v %q", on, why)
 	}
-	c = Config{MpesaConfirmReceipts: "on"}
-	if on, _ := c.MpesaConfirm(); on {
-		t.Error("on without credentials cannot work and is reported off")
+	c = Config{MpesaConfirmReceipts: "auto"}
+	if on, why := c.MpesaConfirm(); on || !strings.Contains(why, "MPESA_INITIATOR_NAME") {
+		t.Errorf("auto without credentials cannot work and is reported off: %v %q", on, why)
 	}
 }

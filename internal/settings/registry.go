@@ -283,7 +283,7 @@ func buildRegistry() []Def {
 		Help: "The initiator's password encrypted with Safaricom's certificate, as base64 (openssl rsautl -encrypt -certin -inkey cert.cer -pkcs, then base64).", Norm: token(40, 1000, "the security credential")}, g, s)
 	g, s = str(func(c *config.Config) *string { return &c.MpesaConfirmReceipts })
 	add(Def{Key: "mpesa.confirm_receipts", Env: "MPESA_CONFIRM_RECEIPTS", Section: SecMpesa, Label: "Confirm receipts with Daraja", Kind: KSelect, Options: []string{"auto", "on", "off"},
-		Help: "Auto is on when the initiator name and credential are set. A receipt Daraja does not confirm goes to Unmatched payments instead of being credited.", Norm: oneOf("the choice", "auto", "on", "off")}, g, s)
+		Help: "Off (the default) credits a payment as soon as Daraja calls back. Auto or on holds each payment until Daraja confirms the receipt (needs the initiator name and credential); a receipt it does not confirm goes to Unmatched payments. Test the credentials with the Test receipt confirmation button first: a wrong credential holds every payment for 15 minutes.", Norm: oneOf("the choice", "auto", "on", "off")}, g, s)
 	g, s = str(func(c *config.Config) *string { return &c.MpesaUnknownRef })
 	add(Def{Key: "mpesa.unknown_ref", Env: "MPESA_UNKNOWN_REF", Section: SecMpesa, Label: "Payment with an unknown account number", Kind: KSelect, Options: []string{"reject", "accept"},
 		Help: "Reject bounces it at the Paybill prompt. Accept takes the money and puts it in Unmatched payments.", Norm: oneOf("the choice", "reject", "accept")}, g, s)

@@ -52,8 +52,10 @@ type Config struct {
 	// whether a receipt is real before it credits it (MpesaConfirmReceipts).
 	MpesaInitiator          string
 	MpesaSecurityCredential string
-	// MpesaConfirmReceipts: "auto" (default: on when the initiator settings are
-	// present), "on", or "off" (credit as soon as a callback arrives).
+	// MpesaConfirmReceipts: "off" (default: credit as soon as a callback
+	// arrives), or "auto" / "on" (on when the initiator settings are present).
+	// It is off until an owner has tested the initiator credentials: a wrong
+	// credential would hold every real payment for 15 minutes.
 	MpesaConfirmReceipts string
 	// MpesaCallbackTokenPrev is the token this one replaced. It keeps working
 	// until MpesaCallbackTokenPrevUntil, so payments Safaricom still sends to
@@ -147,7 +149,7 @@ func Load(getenv func(string) string) (Config, error) {
 
 		MpesaInitiator:          get("MPESA_INITIATOR_NAME", ""),
 		MpesaSecurityCredential: get("MPESA_SECURITY_CREDENTIAL", ""),
-		MpesaConfirmReceipts:    strings.ToLower(get("MPESA_CONFIRM_RECEIPTS", "auto")),
+		MpesaConfirmReceipts:    strings.ToLower(get("MPESA_CONFIRM_RECEIPTS", "off")),
 	}
 	var errs []error
 	num := func(k string, def float64) float64 {
@@ -336,17 +338,17 @@ func (c Config) MpesaEnabled() bool {
 
 // MpesaConfirm tells whether M-Pesa receipts are confirmed with Daraja's
 // Transaction Status API before they are credited, and why not when they are
-// not. MPESA_CONFIRM_RECEIPTS=auto turns it on exactly when the initiator name
-// and security credential are set; "on" without them cannot work, so it is
-// reported as off.
+// not. It is off by default. MPESA_CONFIRM_RECEIPTS=auto (or on) turns it on
+// exactly when the initiator name and security credential are set; without
+// them it cannot work, so it is reported as off.
 func (c Config) MpesaConfirm() (on bool, why string) {
 	mode := c.MpesaConfirmReceipts
 	if mode == "" {
-		mode = "auto"
+		mode = "off"
 	}
 	switch {
 	case mode == "off":
-		return false, "MPESA_CONFIRM_RECEIPTS=off: payments are credited as soon as a callback arrives, so a leaked callback token can credit a fake payment"
+		return false, "MPESA_CONFIRM_RECEIPTS=off (the default): payments are credited as soon as a callback arrives, so a leaked callback token can credit a fake payment. To turn it on: set MPESA_INITIATOR_NAME and MPESA_SECURITY_CREDENTIAL, press \"Test receipt confirmation\" in Settings > M-Pesa with a real receipt until Daraja confirms it, then set MPESA_CONFIRM_RECEIPTS=auto"
 	case c.MpesaInitiator == "" || c.MpesaSecurityCredential == "":
 		return false, "the Daraja initiator name (MPESA_INITIATOR_NAME) and security credential (MPESA_SECURITY_CREDENTIAL) are not set, so receipts cannot be confirmed with Daraja; callbacks are credited unchecked"
 	}

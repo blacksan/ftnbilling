@@ -506,12 +506,14 @@ func TestInstallShipsWipeTool(t *testing.T) {
 	}
 }
 
-// M-2: the Caddyfile limits /pay/cb/* to Safaricom's addresses unless told otherwise.
+// M-2: the Caddyfile limits /pay/cb/* by source address only when CADDY_MPESA_IPS
+// is set: the built-in Safaricom list was unverified, and a wrong list answers 403
+// to real payments.
 func TestInstallMpesaCallbackFilter(t *testing.T) {
 	bashOrSkip(t)
 	block := func(ips string) (string, string, error) {
 		script := "set -e\ndie() { echo \"die: $*\" >&2; exit 1; }\nwarn() { echo \"WARNING: $*\" >&2; }\nnote() { echo \"note: $*\"; }\n" +
-			"SAFARICOM_CALLBACK_IPS=\"$(sed -n 's/^SAFARICOM_CALLBACK_IPS=\"\\(.*\\)\"$/\\1/p' install.sh)\"\n" + fnSrc(t, "mpesa_cb_block") + "\nmpesa_cb_block\n"
+			fnSrc(t, "mpesa_cb_block") + "\nmpesa_cb_block\n"
 		cmd := exec.Command("bash", "-c", script)
 		cmd.Env = append(os.Environ(), "CADDY_MPESA_IPS="+ips)
 		var stderr strings.Builder
@@ -519,25 +521,30 @@ func TestInstallMpesaCallbackFilter(t *testing.T) {
 		out, err := cmd.Output()
 		return string(out), stderr.String(), err
 	}
-	// Default: Safaricom's list, and no word of "any".
-	out, _, err := block("")
-	if err != nil {
-		t.Fatal(err)
+	// Default: no filter at all, and a note that says what to set.
+	out, stderr, err := block("")
+	if err != nil || strings.Contains(out, "remote_ip") || strings.Contains(out, "respond") || !strings.Contains(stderr, "CADDY_MPESA_IPS") {
+		t.Errorf("default: %v\nout %s\nstderr %s", err, out, stderr)
 	}
-	for _, want := range []string{"@mpesa_cb_other", "path /pay/cb/*", "not remote_ip 196.201.", "respond @mpesa_cb_other \"Forbidden\" 403"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("default block lacks %q:\n%s", want, out)
-		}
+	// The unverified list survives only as a marked comment, never as the default.
+	src, _ := os.ReadFile("install.sh")
+	if strings.Contains(string(src), "\nSAFARICOM_CALLBACK_IPS=") {
+		t.Error("the Safaricom list must not be an active variable")
+	}
+	if !strings.Contains(string(src), "UNVERIFIED") || !strings.Contains(string(src), "verify with Safaricom before use") {
+		t.Error("the suggested list must be marked unverified")
 	}
 	// Custom list (commas allowed).
 	out, _, err = block("203.0.113.0/24,198.51.100.7")
-	if err != nil || !strings.Contains(out, "not remote_ip 203.0.113.0/24 198.51.100.7") || strings.Contains(out, "196.201.") {
-		t.Errorf("custom list: %v\n%s", err, out)
+	for _, want := range []string{"@mpesa_cb_other", "path /pay/cb/*", "not remote_ip 203.0.113.0/24 198.51.100.7", "respond @mpesa_cb_other \"Forbidden\" 403"} {
+		if err != nil || !strings.Contains(out, want) {
+			t.Errorf("custom list lacks %q: %v\n%s", want, err, out)
+		}
 	}
-	// Explicit opt-out: no filter, loud warning.
-	out, stderr, err := block("any")
-	if err != nil || strings.Contains(out, "remote_ip") || !strings.Contains(stderr, "WARNING") {
-		t.Errorf("any: %v\nout %s\nstderr %s", err, out, stderr)
+	// "any" is the same as unset.
+	out, _, err = block("any")
+	if err != nil || strings.Contains(out, "remote_ip") {
+		t.Errorf("any: %v\nout %s", err, out)
 	}
 	// Garbage never reaches the Caddyfile.
 	if _, stderr, err := block("1.2.3.4 } respond"); err == nil || !strings.Contains(stderr, "CADDY_MPESA_IPS must be") {

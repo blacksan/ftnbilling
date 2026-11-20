@@ -29,6 +29,7 @@ func (s *Server) settingsRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/settings/mpesa/oauth-test", s.settingsMpesaOAuth)
 	post("/admin/settings/mpesa/register-c2b", s.settingsMpesaRegister)
 	post("/admin/settings/mpesa/stk-test", s.settingsMpesaSTK)
+	post("/admin/settings/mpesa/receipt-test", s.settingsMpesaReceiptTest)
 	get("/admin/settings/mpesa/stk-test", s.settingsMpesaSTKPoll)
 	post("/admin/settings/mpesa/rotate-token", s.settingsMpesaRotate)
 	post("/admin/settings/mpesa/urls", s.settingsMpesaReveal)
@@ -191,6 +192,20 @@ func (s *Server) settingsMpesa(w http.ResponseWriter, r *http.Request) {
 	if id := r.URL.Query().Get("test"); id != "" && s.mpesa != nil {
 		if t, ok := s.mpesa.TestStatus(id); ok {
 			p.Data["Test"] = t
+		}
+	}
+	if on, why := live.MpesaConfirm(); on {
+		p.Data["ConfirmOn"] = true
+	} else {
+		p.Data["ConfirmWhy"] = why
+	}
+	p.Data["HasInitiator"] = live.MpesaInitiator != "" && live.MpesaSecurityCredential != ""
+	if rc := r.URL.Query().Get("rtest"); rc != "" && s.mpesa != nil {
+		if t, ok := s.mpesa.ReceiptTestStatus(rc); ok {
+			p.Data["RTest"] = t
+			if t.Status == "waiting" && time.Since(t.Started) < 2*time.Minute {
+				p.Refresh = 4 // the answer comes by itself a few seconds later
+			}
 		}
 	}
 	s.render(w, "admin_settings_mpesa", p)
