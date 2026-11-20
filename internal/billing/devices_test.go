@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -251,5 +252,51 @@ func TestCreateFromDeviceWithABadPackageCreatesNothing(t *testing.T) {
 	}
 	if _, ok := e.svc.AccountByMAC("00:15:EB:00:00:77"); ok {
 		t.Fatal("a half-made account was left behind")
+	}
+}
+
+// The curated prefixes must not repeat (a repeat would make the vendor depend on map order).
+func TestOUITableHasNoDuplicatePrefixes(t *testing.T) {
+	seen := map[string]string{}
+	for _, row := range curatedOUI {
+		for _, p := range strings.Fields(row.Prefixes) {
+			if len(p) != 8 || p != strings.ToUpper(p) {
+				t.Errorf("%s: %q is not AA:BB:CC", row.Vendor, p)
+			}
+			if prev, dup := seen[p]; dup {
+				t.Errorf("%s is listed for %s and %s", p, prev, row.Vendor)
+			}
+			seen[p] = row.Vendor
+		}
+	}
+}
+
+func TestVendorKnowsTheCommonMakers(t *testing.T) {
+	for mac, want := range map[string]string{
+		"00:E0:4C:68:01:02": "Realtek", "6C:1F:F7:BB:46:94": "Ugreen", "00:15:EB:00:00:01": "ZTE", "00:E0:FC:12:34:56": "Huawei",
+		"00:03:93:AA:BB:CC": "Apple", "50:C7:BF:00:00:01": "TP-Link", "00:0C:42:00:00:01": "MikroTik", "6C:3B:6B:00:00:01": "MikroTik",
+		"6c:1f:f7:bb:46:94": "Ugreen", "DA:A1:19:00:00:01": PrivateAddress, "00:00:5E:00:00:01": "",
+	} {
+		if got := Vendor(mac); got != want {
+			t.Errorf("Vendor(%s) = %q, want %q", mac, got, want)
+		}
+	}
+}
+
+// A prefix the curated table lacks falls back to the compiled-in IEEE registry; the curated name wins.
+func TestVendorFallsBackToTheIEEERegistry(t *testing.T) {
+	ieeeOUI["12:34:56"] = "Example Makers Ltd"
+	ieeeOUI["00:E0:4C"] = "REALTEK SEMICONDUCTOR CORP."
+	t.Cleanup(func() { delete(ieeeOUI, "12:34:56"); delete(ieeeOUI, "00:E0:4C") })
+	if got := Vendor("10:34:56:00:00:01"); got != "" { // not in either table
+		t.Fatalf("got %q", got)
+	}
+	ieeeOUI["10:34:56"] = "Example Makers Ltd"
+	t.Cleanup(func() { delete(ieeeOUI, "10:34:56") })
+	if got := Vendor("10:34:56:00:00:01"); got != "Example Makers Ltd" {
+		t.Fatalf("fallback: %q", got)
+	}
+	if got := Vendor("00:E0:4C:00:00:01"); got != "Realtek" {
+		t.Fatalf("curated name lost: %q", got)
 	}
 }

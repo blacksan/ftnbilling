@@ -175,8 +175,16 @@ func (s *Service) collectDevicesX(site store.Site, pl netplan.Plan, hasPlan, com
 	// Flats that were seen right now.
 	ps.mu.Lock()
 	for _, w := range wants {
-		if o := byMAC[strings.ToUpper(w.a.MAC)]; o != nil && o.online {
+		o := byMAC[strings.ToUpper(w.a.MAC)]
+		if o != nil && o.online {
 			ps.seen[w.a.Code] = now
+		}
+		if facts.hostsOK { // the port is only re-learned from a pass that could read the bridge hosts
+			if o != nil && o.port != "" {
+				ps.ports[w.a.Code] = o.port
+			} else {
+				delete(ps.ports, w.a.Code)
+			}
 		}
 	}
 	ps.mu.Unlock()

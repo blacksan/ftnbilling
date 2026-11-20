@@ -119,6 +119,7 @@ type AccountRouterState struct {
 	SuspendedOnRouter bool      `json:"suspended_on_router"`
 	LeaseStatus       string    `json:"lease_status"` // bound | waiting | none
 	LastSeen          time.Time `json:"last_seen"`
+	Port              string    `json:"port,omitempty"` // the router port the ONT's MAC was last seen on (bridge host table), when known
 	PendingTask       bool      `json:"pending_task"`
 	LastError         string    `json:"last_error"`
 }
@@ -158,10 +159,11 @@ type provState struct {
 	status  ProvisionStatus
 	accts   map[string]acctSnap // by account code
 	seen    map[string]time.Time
-	started time.Time       // first pass, the baseline of "not seen for 24 h"
-	foreign map[string]bool // addresses of the router's own static leases, from the last pass
-	sawOn   bool            // ftn-dhcp has been seen enabled by this server
-	run     sync.Mutex      // one pass at a time per building
+	ports   map[string]string // account code -> the customer port its MAC sits on (bridge host table)
+	started time.Time         // first pass, the baseline of "not seen for 24 h"
+	foreign map[string]bool   // addresses of the router's own static leases, from the last pass
+	sawOn   bool              // ftn-dhcp has been seen enabled by this server
+	run     sync.Mutex        // one pass at a time per building
 }
 
 type acctSnap struct {
@@ -176,7 +178,9 @@ type acctSnap struct {
 
 func (s *Service) prov(siteID string) *provState {
 	st := s.state(siteID)
-	st.provOnce.Do(func() { st.prov = &provState{accts: map[string]acctSnap{}, seen: map[string]time.Time{}} })
+	st.provOnce.Do(func() {
+		st.prov = &provState{accts: map[string]acctSnap{}, seen: map[string]time.Time{}, ports: map[string]string{}}
+	})
 	return st.prov
 }
 
@@ -223,6 +227,7 @@ func (s *Service) AccountRouterState(accountID string) AccountRouterState {
 	ps := s.prov(site.ID)
 	ps.mu.Lock()
 	snap, ok := ps.accts[code]
+	st.Port = ps.ports[code]
 	ps.mu.Unlock()
 	if !ok {
 		st.InSync = false // not looked at yet

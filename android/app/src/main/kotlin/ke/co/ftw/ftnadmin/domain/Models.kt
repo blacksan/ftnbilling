@@ -29,8 +29,31 @@ data class RouterState(
     @SerialName("suspended_on_router") val suspendedOnRouter: Boolean = false,
     @SerialName("lease_status") val leaseStatus: String = "none",
     @SerialName("last_seen") val lastSeen: String? = null,
+    /** The router port the ONT's MAC sits on (bridge host table); blank when the router has not said. */
+    val port: String = "",
     @SerialName("pending_task") val pendingTask: Boolean = false,
     @SerialName("last_error") val lastError: String = "",
+)
+
+/** The account's bound MAC with its maker, state and port (the "Devices on this account" card). */
+@Serializable
+data class AccountDevice(
+    val mac: String = "",
+    val vendor: String = "",
+    val online: Boolean = false,
+    @SerialName("last_seen") val lastSeen: String? = null,
+    val port: String = "",
+)
+
+/** One item of the equipment register installed at the account's house. */
+@Serializable
+data class EquipmentItem(
+    val id: String = "",
+    val kind: String = "",
+    val serial: String = "",
+    val mac: String = "",
+    val model: String = "",
+    val status: String = "",
 )
 
 @Serializable
@@ -83,6 +106,11 @@ data class Account(
     @SerialName("customer_id") val customerId: String = "",
     @SerialName("created_at") val createdAt: String = "",
     val customer: Customer? = null,
+    /** Detail only: the bound MAC with maker, online state and port. */
+    val device: AccountDevice? = null,
+    /** Detail only: the equipment register items installed at the house. */
+    val equipment: List<EquipmentItem> = emptyList(),
+    @SerialName("mac_vendor") val macVendor: String = "",
     val payments: List<Payment> = emptyList(),
     val events: List<AccountEvent> = emptyList(),
     val usage: Usage? = null,

@@ -181,12 +181,18 @@ private fun SummaryCard(a: Account) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DeviceCard(a: Account) {
-    SectionCard("ONT and router") {
-        LabeledValue("MAC", a.mac)
+    SectionCard("Devices on this account") {
+        LabeledValue("Account MAC", a.mac)
+        LabeledValue("Vendor", (a.device?.vendor ?: a.macVendor).ifBlank { "Unknown" })
+        a.device?.let { d ->
+            LabeledValue("State", if (d.online) "Online" else "Offline")
+            LabeledValue("Last seen", formatAge(d.lastSeen))
+            LabeledValue("Port", d.port.ifBlank { "Unknown" })
+        }
         LabeledValue("IP", a.ip)
         a.router?.let { r ->
             LabeledValue("Lease", r.leaseStatus)
-            LabeledValue("Last seen", formatAge(r.lastSeen))
+            if (a.device == null) LabeledValue("Last seen", formatAge(r.lastSeen))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 StatusChip(if (r.inSync) "In sync" else "Out of sync", if (r.inSync) Tone.Good else Tone.Warn)
                 if (r.pendingTask) StatusChip("Update queued", Tone.Neutral)
@@ -200,6 +206,15 @@ private fun DeviceCard(a: Account) {
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall,
             )
+        }
+        if (a.equipment.isNotEmpty()) {
+            Text("Equipment register", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            a.equipment.forEach { e ->
+                LabeledValue(
+                    e.kind.replaceFirstChar { it.uppercase() },
+                    listOf(e.model, e.serial, e.mac, e.status).filter { it.isNotBlank() }.joinToString("  |  "),
+                )
+            }
         }
     }
 }

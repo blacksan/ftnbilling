@@ -307,6 +307,9 @@ func (s *Server) accountCards(d map[string]any, a store.Account, sc scope) {
 	sort.Slice(stock, func(i, j int) bool { return stock[i].Kind+stock[i].Serial < stock[j].Kind+stock[j].Serial })
 	sort.Slice(notes, func(i, j int) bool { return notes[i].Time.After(notes[j].Time) })
 	d["Cust"], d["Custs"], d["Equip"], d["Stock"], d["Splitters"], d["Notes"] = cust, custs, eq, stock, splitters, notes
+	if dev, ok := s.svc.AccountDevice(a.ID); ok {
+		d["AcctDev"] = dev
+	}
 }
 
 // ---- equipment ------------------------------------------------------------------------

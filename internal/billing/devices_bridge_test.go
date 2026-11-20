@@ -191,3 +191,40 @@ func TestAccountsCannotUseTheRoutersOwnMAC(t *testing.T) {
 		t.Fatalf("an ordinary MAC was refused: %v", err)
 	}
 }
+
+// The account's own MAC: vendor, online state, last seen and the port it sits on come from the pass.
+func TestAccountDeviceHasVendorStateAndPort(t *testing.T) {
+	e := newEnv(t)
+	e.ipoe(t, store.AccessIPoE)
+	const realtek = "00:E0:4C:68:01:02"
+	a := e.flat(t, "Flat 1", realtek)
+	if d, ok := e.svc.AccountDevice(a.ID); !ok || d.Vendor != "Realtek" || d.Online || d.Port != "" || !d.LastSeen.IsZero() {
+		t.Fatalf("before any pass: %+v %v", d, ok)
+	}
+	e.bridgeHost(realtek, "ether3", "false")
+	e.reconcile(t)
+	d, ok := e.svc.AccountDevice(a.ID)
+	if !ok || d.MAC != realtek || d.Vendor != "Realtek" || !d.Online || d.Port != "ether3" || d.LastSeen.IsZero() {
+		t.Fatalf("after the pass: %+v", d)
+	}
+	if rs := e.svc.AccountRouterState(a.ID); rs.Port != "ether3" {
+		t.Fatalf("router state port %q", rs.Port)
+	}
+	// the entry ages out of the bridge table: no port any more (the read worked)
+	e.clearTable("/interface/bridge/host")
+	e.reconcile(t)
+	if d, _ := e.svc.AccountDevice(a.ID); d.Port != "" {
+		t.Fatalf("stale port %q", d.Port)
+	}
+	// a failed bridge-host read keeps what was known
+	e.bridgeHost(realtek, "ether4", "false")
+	e.reconcile(t)
+	e.svc.routers = recSource{map[string]routeros.Client{e.site: hostFail{e.rt}}}
+	e.reconcile(t)
+	if d, _ := e.svc.AccountDevice(a.ID); d.Port != "ether4" {
+		t.Fatalf("a failed read dropped the port: %q", d.Port)
+	}
+	if _, ok := e.svc.AccountDevice("nope"); ok {
+		t.Fatal("unknown account")
+	}
+}

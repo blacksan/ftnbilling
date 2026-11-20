@@ -3,6 +3,7 @@ package web
 import (
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ type apiRouterState struct {
 	SuspendedOnRouter bool   `json:"suspended_on_router"`
 	LeaseStatus       string `json:"lease_status"`
 	LastSeen          any    `json:"last_seen"`
+	Port              string `json:"port"` // the router port the ONT's MAC sits on (bridge host table); "" = not known
 	PendingTask       bool   `json:"pending_task"`
 	LastError         string `json:"last_error"`
 }
@@ -43,6 +45,7 @@ type apiAccount struct {
 	Floor       string         `json:"floor"`
 	MAC         string         `json:"mac"`
 	MACConflict bool           `json:"mac_conflict"`
+	MACVendor   string         `json:"mac_vendor"` // the maker of the MAC, from the compiled-in OUI tables ("" = unknown)
 	IP          string         `json:"ip"`
 	Tenant      string         `json:"tenant"`
 	Phone       string         `json:"phone"`
@@ -95,10 +98,10 @@ func (s *Server) accountsJSON(accts []store.Account) []apiAccount {
 		out = append(out, apiAccount{
 			ID: a.ID, Code: a.Code, SiteID: a.SiteID, SiteName: siteNames[a.SiteID], Flat: a.Flat, Floor: a.Floor,
 			Apartment: aptRefs[a.ApartmentID], Unit: a.Unit, Problem: s.svc.AccountProblem(a.ID),
-			MAC: a.MAC, MACConflict: a.MACConflict, IP: a.IP, Tenant: a.Tenant, Phone: a.Phone, WhatsApp: a.WhatsApp, WASamePhone: a.WASamePhone, Notes: a.Notes,
+			MAC: a.MAC, MACConflict: a.MACConflict, MACVendor: billing.Vendor(a.MAC), IP: a.IP, Tenant: a.Tenant, Phone: a.Phone, WhatsApp: a.WhatsApp, WASamePhone: a.WASamePhone, Notes: a.Notes,
 			State: billing.AccountState(a, now), Suspended: a.Suspended, Package: pkgs[a.SiteID+"|"+a.PackageID], ExpiresAt: tp(a.ExpiresAt),
 			Router: apiRouterState{InSync: rs.InSync, SuspendedOnRouter: rs.SuspendedOnRouter, LeaseStatus: leaseStatus(rs.LeaseStatus),
-				LastSeen: tp(rs.LastSeen), PendingTask: rs.PendingTask, LastError: rs.LastError},
+				LastSeen: tp(rs.LastSeen), Port: rs.Port, PendingTask: rs.PendingTask, LastError: rs.LastError},
 			CustomerID: a.CustomerID, CreatedAt: a.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
@@ -196,6 +199,25 @@ type apiCustomer struct {
 	Email string `json:"email"`
 }
 
+// apiAcctDevice is the account's bound MAC as the "Devices on this account" card shows it.
+type apiAcctDevice struct {
+	MAC      string `json:"mac"`
+	Vendor   string `json:"vendor"`
+	Online   bool   `json:"online"`
+	LastSeen any    `json:"last_seen"`
+	Port     string `json:"port"`
+}
+
+// apiEquipItem is one item of the equipment register installed at the account's house.
+type apiEquipItem struct {
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	Serial string `json:"serial"`
+	MAC    string `json:"mac"`
+	Model  string `json:"model"`
+	Status string `json:"status"`
+}
+
 type apiEvent struct {
 	Time  string `json:"time"`
 	Msg   string `json:"msg"`
@@ -228,6 +250,19 @@ func (s *Server) apiAccount(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 			events = append(events, apiEvent{e.Time.UTC().Format(time.RFC3339), e.Msg, e.Actor})
 		}
 	}
+	var dev *apiAcctDevice
+	if ad, ok := s.svc.AccountDevice(id); ok {
+		dev = &apiAcctDevice{ad.MAC, ad.Vendor, ad.Online, tp(ad.LastSeen), ad.Port}
+	}
+	equip := []apiEquipItem{}
+	s.st.View(func(d *store.Data) {
+		for _, e := range d.Equipment {
+			if e.AccountID == id {
+				equip = append(equip, apiEquipItem{e.ID, e.Kind, e.Serial, e.MAC, e.Model, e.Status})
+			}
+		}
+	})
+	sort.Slice(equip, func(i, j int) bool { return equip[i].Kind+equip[i].Serial < equip[j].Kind+equip[j].Serial })
 	var monthBytes float64
 	if col := s.mgr.Collector(a.SiteID); col != nil {
 		fr := col.BuildFlat(a.Code, "month", s.svc.Now())
@@ -239,7 +274,9 @@ func (s *Server) apiAccount(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 		Payments []apiPayment   `json:"payments"`
 		Events   []apiEvent     `json:"events"`
 		Usage    map[string]any `json:"usage"`
-	}{base, cust, s.paymentsJSON(pays), events, map[string]any{"month_bytes": int64(monthBytes)}})
+		Device   *apiAcctDevice `json:"device"`
+		Equip    []apiEquipItem `json:"equipment"`
+	}{base, cust, s.paymentsJSON(pays), events, map[string]any{"month_bytes": int64(monthBytes)}, dev, equip})
 }
 
 // ---- writes ------------------------------------------------------------------------------

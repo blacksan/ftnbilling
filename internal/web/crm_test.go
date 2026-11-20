@@ -296,3 +296,18 @@ func TestWhatsAppSameAsPhoneIsSavedAndShownTicked(t *testing.T) {
 		t.Fatalf("WhatsApp did not follow the phone: %+v", got)
 	}
 }
+
+func TestAccountPageListsTheDevicesOnTheAccount(t *testing.T) {
+	a := newApp(t, false)
+	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"Flat 5"}, "mac": {"00:E0:4C:68:01:02"}})
+	acct := a.account(t, "Flat 5")
+	page := a.adminGet(t, "/admin/accounts/view?code="+acct.Code)
+	for _, want := range []string{"Devices on this account", "00:E0:4C:68:01:02", "Realtek", "account MAC", "not seen yet", "Equipment register"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+	if strings.Contains(page, "Equipment at this") {
+		t.Error("the old card title is still there")
+	}
+}

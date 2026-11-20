@@ -106,7 +106,13 @@
 <label>Floor<input name="floor" value="{{$A.Floor}}" size="6"></label><label>ODB box<input name="odb" value="{{$A.ODB}}" size="10"></label>
 <label>Splitter<select name="splitter"><option value="">none</option>{{range .Data.Splitters}}<option value="{{.ID}}"{{if eq .ID $A.SplitterID}} selected{{end}}>{{if .Serial}}{{.Serial}}{{else}}{{.Model}}{{end}}</option>{{end}}</select></label>
 <label>Port<input name="port" type="number" min="0" max="128" value="{{if $A.SplitterPort}}{{$A.SplitterPort}}{{end}}" style="width:70px"></label><button>Save</button></form></div></div>
-<div class="card"><b>Equipment at this house</b>
+<div class="card"><b>Devices on this account</b>
+{{with .Data.AcctDev}}<div class="mt-2 tw"><table id="acct-device"><tr><th>MAC</th><th>Vendor</th><th>State</th><th>Last seen</th><th>Port</th></tr>
+<tr><td class="mono" style="font-family:var(--f-mono)">{{.MAC}} <span class="muted">account MAC</span></td><td>{{if .Vendor}}{{.Vendor}}{{else}}<span class="muted">unknown</span>{{end}}</td>
+<td><span class="pill {{if .Online}}online{{else}}offline{{end}}">{{if .Online}}online{{else}}offline{{end}}</span></td>
+<td>{{if .LastSeen.IsZero}}<span class="muted">not seen yet</span>{{else}}{{eats .LastSeen}}{{end}}</td>
+<td>{{if .Port}}{{.Port}}{{else}}<span class="muted">unknown</span>{{end}}</td></tr></table></div>{{else}}<p class="muted" style="margin:4px 0">No MAC address is bound to this account yet.</p>{{end}}
+<p class="muted" style="margin:10px 0 0"><b>Equipment register</b> (installed at this house)</p>
 <div class="mt-2 tw"><table><tr><th>Kind</th><th>Serial</th><th>MAC</th><th>Model</th><th>Status</th><th></th></tr>
 {{range .Data.Equip}}<tr><td>{{.Kind}}</td><td><a href="/admin/equipment/view?id={{.ID}}">{{if .Serial}}{{.Serial}}{{else}}(no serial){{end}}</a></td><td>{{.MAC}}</td><td>{{.Model}}</td><td><span class="pill {{.Status}}">{{stat .Status}}</span></td>
 <td><form method="post" action="/admin/equipment/return" class="row"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><input type="hidden" name="next" value="{{$d.Next}}"><select name="status" aria-label="status"><option value="returned">returned</option><option value="in_stock">in stock</option><option value="faulty">faulty</option><option value="retired">retired</option></select><button>Remove</button></form></td></tr>
