@@ -227,7 +227,11 @@ func (m *Manager) serve(rw http.ResponseWriter, r *http.Request) {
 			if cc != "" {
 				resp.Header.Set("Cache-Control", cc)
 			}
-			if keep && len(resp.Header.Values("Content-Length")) <= 1 {
+			// Kept only when the end of the body can be checked: a known length, or chunked (a cut chunked body
+			// is an error, not EOF). A body that ends when the connection closes could be cut short and still
+			// look complete, and would then be served to every session of this router for a day.
+			framed := resp.ContentLength >= 0 || (len(resp.TransferEncoding) > 0 && resp.TransferEncoding[0] == "chunked")
+			if keep && framed && len(resp.Header.Values("Content-Length")) <= 1 {
 				e := &cacheEntry{key: cacheKey(sess.SiteID, ver, r), site: sess.SiteID, ver: ver,
 					ctype: resp.Header.Get("Content-Type"), enc: resp.Header.Get("Content-Encoding"),
 					etag: resp.Header.Get("Etag"), lastMod: resp.Header.Get("Last-Modified")}

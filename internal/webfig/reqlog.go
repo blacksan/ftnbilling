@@ -114,7 +114,9 @@ func (m *Manager) logRequest(r *http.Request, lw *logWriter, rec *reqRecord) {
 	if code == 0 {
 		code = http.StatusOK // what net/http sends for a handler that wrote nothing
 	}
-	important := code >= 400 || rec.upErr != nil || rec.note != "" ||
+	// A cache hit is routine (a page load is 30 to 50 of them): it must not be a WARN line nor use up the
+	// allowance that the errors need.
+	important := code >= 400 || rec.upErr != nil || (rec.note != "" && rec.note != "cache hit") ||
 		rec.wait >= logSlowWait || (dur >= logSlow && !isJSProxy(r))
 	ok, dropped := m.rl.allow(time.Now(), important)
 	if !ok {
