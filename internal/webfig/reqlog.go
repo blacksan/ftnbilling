@@ -126,9 +126,13 @@ func (m *Manager) logRequest(r *http.Request, lw *logWriter, rec *reqRecord) {
 	if len(proto) > 16 {
 		proto = proto[:16]
 	}
+	fetch := r.Header.Get("Sec-Fetch-Mode") // sent by anyone, with or without a session: kept short
+	if len(fetch) > 16 {
+		fetch = fetch[:16]
+	}
 	attrs := []any{"method", r.Method, "path", pathClass(r.URL.Path), "status", code, "bytes", lw.bytes,
 		"ms", dur.Milliseconds(), "wait_ms", rec.wait.Milliseconds(), "site", rec.site,
-		"proto", proto, "hop", r.Proto, "fetch", r.Header.Get("Sec-Fetch-Mode")}
+		"proto", proto, "hop", r.Proto, "fetch", fetch}
 	if rec.note != "" {
 		attrs = append(attrs, "note", rec.note)
 	}
