@@ -997,15 +997,24 @@ func (s *Server) adminDeletePackage(w http.ResponseWriter, r *http.Request) {
 // can pick the router by itself when there is only one.
 type aptOpt struct {
 	ID, Name string
+	Address  string
 	Routers  []string
-	Only     string // the one router, when there is exactly one
+	// RouterNames are the serving routers' names, shown in the picker pop-up.
+	RouterNames []string
+	// Subscribers counts the accounts living in the apartment.
+	Subscribers int
+	Only        string // the one router, when there is exactly one
 }
 
 func (s *Server) apartmentOptions() []aptOpt {
 	var out []aptOpt
 	s.st.View(func(d *store.Data) {
 		for _, a := range d.ApartmentList() {
-			o := aptOpt{ID: a.ID, Name: a.Name, Routers: d.ApartmentSiteIDs(a.ID)}
+			o := aptOpt{ID: a.ID, Name: a.Name, Address: a.Address, Routers: d.ApartmentSiteIDs(a.ID)}
+			for _, id := range o.Routers {
+				o.RouterNames = append(o.RouterNames, d.Sites[id].Name)
+			}
+			o.Subscribers = len(d.OpenAccountsOfApartment(a.ID))
 			if len(o.Routers) == 1 {
 				o.Only = o.Routers[0]
 			}

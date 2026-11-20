@@ -398,3 +398,36 @@ func TestAPIApartmentGPS(t *testing.T) {
 		t.Errorf("clear: %d %s", x.Status, x.Raw)
 	}
 }
+
+// ---- apartment picker pop-up -----------------------------------------------------------
+
+// The pop-up is progressive enhancement: the page still carries a plain select
+// with every apartment (and the details the pop-up lists), and loads the
+// picker from an external script (CSP: no inline script).
+func TestAdminApartmentPickerMarkup(t *testing.T) {
+	m := newMulti(t)
+	A := m.addSite(t, "Alpha")
+	loc := m.adminPost(t, "/admin/apartments/save", url.Values{"name": {"Rift View"}, "address": {"Ngong Road"}, "router": {A.ID}})
+	if strings.Contains(loc, "Error") {
+		t.Fatalf("save: %s", loc)
+	}
+	page := m.adminGet(t, "/admin/accounts")
+	if !strings.Contains(page, `src="/static/apt-picker.js`) {
+		t.Error("picker script not loaded")
+	}
+	if !strings.Contains(page, `<select name="apartment_id" required data-apt-select>`) {
+		t.Error("plain select fallback is missing")
+	}
+	for _, want := range []string{`data-address="Ngong Road"`, `data-subs="0"`, `data-router-names="Alpha"`, `>Rift View</option>`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+	if strings.Contains(page, "<script>") || strings.Contains(page, "onclick=") {
+		t.Error("inline script")
+	}
+	js := m.adminGet(t, "/static/apt-picker.js")
+	if !strings.Contains(js, "showModal") || !strings.Contains(js, "data-apt-select") {
+		t.Error("picker script not served")
+	}
+}

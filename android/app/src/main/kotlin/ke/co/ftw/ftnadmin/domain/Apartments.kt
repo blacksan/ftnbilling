@@ -3,7 +3,7 @@ package ke.co.ftw.ftnadmin.domain
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-// Apartments (API v6, docs/api/v6-apartments.md). An apartment is a building; customers have a unit in it.
+// Apartments (API v6, docs/api/v6-apartments.md). An apartment is where customers live; each customer has a house number (the unit) in it.
 // Routers and apartments are many to many.
 
 @Serializable
@@ -61,6 +61,27 @@ data class Apartment(
 
     /** The building's point, or null when it has none. */
     val gps: GpsPoint? get() = if (lat != null && lng != null) GpsPoint(lat, lng) else null
+
+    /** Second line of a picker row: "12 subscribers | Router: Alpha, Beta" (or "No router yet"). */
+    val pickerSummary: String
+        get() {
+            val subs = if (accountsTotal == 1) "1 subscriber" else "$accountsTotal subscribers"
+            val rs = routers.map { it.label }.filter { it.isNotBlank() }
+            return subs + "  |  " + if (rs.isEmpty()) "No router yet" else "Router: " + rs.joinToString(", ")
+        }
+}
+
+/** The apartment picker shows a search box only when there are more apartments than this. */
+const val APARTMENT_SEARCH_FROM = 8
+
+/** Apartments whose name, address or router names contain every word of [query] (case-insensitive). Blank query: all. */
+fun List<Apartment>.matching(query: String): List<Apartment> {
+    val words = query.lowercase().split(' ', '\t').filter { it.isNotBlank() }
+    if (words.isEmpty()) return this
+    return filter { a ->
+        val hay = (listOf(a.name, a.address) + a.routers.map { it.label }).joinToString(" ").lowercase()
+        words.all { it in hay }
+    }
 }
 
 @Serializable

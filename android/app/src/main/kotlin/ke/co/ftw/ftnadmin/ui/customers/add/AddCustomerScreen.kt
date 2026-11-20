@@ -33,6 +33,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -45,6 +48,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ke.co.ftw.ftnadmin.data.routers.Client
 import ke.co.ftw.ftnadmin.domain.ServicePackage
+import ke.co.ftw.ftnadmin.ui.common.ApartmentField
+import ke.co.ftw.ftnadmin.ui.common.ApartmentPickerSheet
 import ke.co.ftw.ftnadmin.ui.common.AppTopBar
 import ke.co.ftw.ftnadmin.ui.common.ChipLabel
 import ke.co.ftw.ftnadmin.ui.common.ChipRow
@@ -126,6 +131,7 @@ private fun StepCard(number: Int, title: String, content: @Composable () -> Unit
 
 @Composable
 private fun Form(ui: AddCustomerUiState, vm: AddCustomerViewModel) {
+    var picking by rememberSaveable { mutableStateOf(false) }
     StepCard(1, "Customer") {
         OutlinedTextField(ui.tenant, vm::onTenant, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(
@@ -141,10 +147,17 @@ private fun Form(ui: AddCustomerUiState, vm: AddCustomerViewModel) {
             is Loadable.Ready -> if (a.value.isEmpty()) {
                 Text("No apartments yet. Create one on the Apartments page first.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
-                ChipRow(horizontalPadding = 0.dp) {
-                    a.value.forEach { apt ->
-                        FilterChip(selected = apt.id == ui.apartmentId, onClick = { vm.onApartment(apt.id) }, label = { ChipLabel(apt.name) })
-                    }
+                ApartmentField(selected = ui.apartment, onClick = { picking = true })
+                if (picking) {
+                    ApartmentPickerSheet(
+                        apartments = a.value,
+                        selectedId = ui.apartmentId,
+                        onSelect = { apt ->
+                            vm.onApartment(apt.id)
+                            picking = false
+                        },
+                        onDismiss = { picking = false },
+                    )
                 }
             }
         }

@@ -308,6 +308,7 @@
       if (!op.hidden) only.push(op.value);
     });
     if (only.length === 1) { a.value = only[0]; }
+    a.dispatchEvent(new Event("ftn:aptsync")); // the apartment picker button follows the select
     aptRouters(form);
     var sel = $("[data-router-select]", form); if (sel && sel.value !== siteId && Array.prototype.some.call(sel.options, function (op) { return op.value === siteId; })) sel.value = siteId;
   }

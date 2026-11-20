@@ -44,6 +44,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import ke.co.ftw.ftnadmin.core.network.MacOwner
 import ke.co.ftw.ftnadmin.core.network.UserInfo
 import ke.co.ftw.ftnadmin.domain.Account
+import ke.co.ftw.ftnadmin.ui.common.ApartmentField
+import ke.co.ftw.ftnadmin.ui.common.ApartmentPickerSheet
 import ke.co.ftw.ftnadmin.ui.common.AppTopBar
 import ke.co.ftw.ftnadmin.ui.common.CenteredLoading
 import ke.co.ftw.ftnadmin.ui.common.ErrorState
@@ -357,6 +359,7 @@ private fun MoveDialog(account: Account, ui: DetailUiState, vm: CustomerDetailVi
     var aptId by remember { mutableStateOf(account.apartment?.id.orEmpty()) }
     var unit by remember { mutableStateOf(account.unitLabel) }
     var routerId by remember { mutableStateOf<String?>(null) }
+    var picking by remember { mutableStateOf(false) }
     val list = (ui.apartments as? Loadable.Ready)?.value.orEmpty()
     val chosen = list.firstOrNull { it.id == aptId }
     // One router: the server picks it. Several: the operator chooses.
@@ -374,15 +377,18 @@ private fun MoveDialog(account: Account, ui: DetailUiState, vm: CustomerDetailVi
                 when (val l = ui.apartments) {
                     Loadable.Loading -> LoadingSpinner()
                     is Loadable.Failed -> Text(l.message, color = MaterialTheme.colorScheme.error)
-                    is Loadable.Ready -> FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        l.value.forEach { a ->
-                            FilterChip(
-                                selected = a.id == aptId,
-                                onClick = {
+                    is Loadable.Ready -> {
+                        ApartmentField(selected = chosen, onClick = { picking = true })
+                        if (picking) {
+                            ApartmentPickerSheet(
+                                apartments = l.value,
+                                selectedId = aptId,
+                                onSelect = { a ->
+                                    if (a.id != aptId) routerId = null
                                     aptId = a.id
-                                    routerId = null
+                                    picking = false
                                 },
-                                label = { ChipLabel(a.name) },
+                                onDismiss = { picking = false },
                             )
                         }
                     }
