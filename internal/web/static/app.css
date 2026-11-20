@@ -466,3 +466,8 @@ body.vprint{background:#fff;color:#000;padding:16px;font:14px var(--f-sans)}
 .tw td.act-wrap{white-space:normal;max-width:380px;padding-top:var(--sp-2);padding-bottom:var(--sp-2)}.act-wrap .row{flex-wrap:wrap}
 .panel>h2+.tw,.panel>h2+table,.panel>h2+.chartbox{margin-top:var(--sp-3)}
 .clegend{display:flex;flex-wrap:wrap;gap:var(--sp-1) var(--sp-4);list-style:none;margin:var(--sp-2) 0 0;padding:0;font-size:var(--fs-13);color:var(--ink-2)}.clegend li{display:inline-flex;align-items:center;gap:var(--sp-2)}.clegend svg{flex:0 0 auto}
+
+/* Apartment location: "View on map" link (list, detail). Teal tokens only. */
+.maplink{display:inline-flex;align-items:center;gap:6px;margin-top:2px;font-size:var(--fs-13);font-weight:500;color:var(--brand-ink)}
+.maplink svg,.locrow svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.locrow{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-3);margin:0 0 var(--sp-3)}

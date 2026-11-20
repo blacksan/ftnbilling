@@ -233,6 +233,9 @@ func Validate(d *Data) []string {
 			add("Two apartments are called %q (%s and %s).", a.Name, o, a.ID)
 		}
 		names[k] = a.ID
+		if err := ValidGPS(a.Lat, a.Lng); err != nil {
+			add("The apartment %s has a bad GPS location: %s.", a.Name, err.Error())
+		}
 	}
 	for _, l := range d.ApartmentSites {
 		if _, ok := d.Apartments[l.ApartmentID]; !ok {

@@ -8,8 +8,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"net/netip"
+	"net/url"
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -363,7 +367,58 @@ type Apartment struct {
 	Notes     string           `json:"notes,omitempty"`
 	Caretaker ApartmentContact `json:"caretaker"`
 	Landlord  ApartmentContact `json:"landlord"` // landlord or agent
-	CreatedAt time.Time        `json:"created_at"`
+	// Lat and Lng are the building's GPS point in decimal degrees (WGS84). Both
+	// are nil when unknown, and both are set together: 0,0 is a real point, so
+	// zero never means "unset". Validate with ValidGPS; compare with SameApartment
+	// (the pointers make == compare addresses, not values).
+	Lat       *float64  `json:"lat,omitempty"`
+	Lng       *float64  `json:"lng,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// HasGPS reports whether the apartment has a GPS point.
+func (a Apartment) HasGPS() bool { return a.Lat != nil && a.Lng != nil }
+
+// MapURL is the one-click Google Maps link for the apartment's GPS point, or
+// "" when it has none.
+func (a Apartment) MapURL() string {
+	if !a.HasGPS() {
+		return ""
+	}
+	return GoogleMapsURL(*a.Lat, *a.Lng)
+}
+
+// SameApartment compares two apartments by value (GPS pointers by what they point at).
+func SameApartment(a, b Apartment) bool {
+	return reflect.DeepEqual(a, b)
+}
+
+// GoogleMapsURL is the Google Maps "search" link that drops a pin at lat,lng.
+func GoogleMapsURL(lat, lng float64) string {
+	return "https://www.google.com/maps/search/?api=1&query=" + url.QueryEscape(FormatGPS(lat, lng))
+}
+
+// FormatGPS writes a point as "lat,lng" with up to 7 decimals (about 1 cm), no trailing zeros.
+func FormatGPS(lat, lng float64) string {
+	f := func(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
+	return f(math.Round(lat*1e7)/1e7) + "," + f(math.Round(lng*1e7)/1e7)
+}
+
+// ValidGPS checks a GPS point: both set or both nil, finite, lat in [-90,90], lng in [-180,180].
+func ValidGPS(lat, lng *float64) error {
+	if lat == nil && lng == nil {
+		return nil
+	}
+	if lat == nil || lng == nil {
+		return errors.New("give both latitude and longitude, or neither")
+	}
+	if math.IsNaN(*lat) || math.IsInf(*lat, 0) || *lat < -90 || *lat > 90 {
+		return errors.New("latitude must be between -90 and 90")
+	}
+	if math.IsNaN(*lng) || math.IsInf(*lng, 0) || *lng < -180 || *lng > 180 {
+		return errors.New("longitude must be between -180 and 180")
+	}
+	return nil
 }
 
 // ApartmentSite says that a router (site) serves an apartment.

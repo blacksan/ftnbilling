@@ -12,7 +12,7 @@
 </div>
 <form method="get" action="/admin/apartments" class="row clients-search" role="search"><input type="search" name="q" value="{{.Data.Q}}" placeholder="Search apartment, address, caretaker or landlord" aria-label="Search apartments" autocomplete="off"><button class="ghost">Search</button></form>
 {{if .Data.Rows}}<div class="tw"><table class="rs"><thead><tr><th>Apartment</th><th>Routers</th><th class="n">Flats active / total</th><th class="n">Online now</th><th>Caretaker</th></tr></thead><tbody>
-{{range .Data.Rows}}<tr><td class="who"><b><a href="/admin/apartments/view?id={{.ID}}">{{.Name}}</a></b><span>{{.Address}}</span></td>
+{{range .Data.Rows}}<tr><td class="who"><b><a href="/admin/apartments/view?id={{.ID}}">{{.Name}}</a></b><span>{{.Address}}</span>{{with .MapURL}}<a class="maplink" href="{{.}}" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>View on map</a>{{end}}</td>
 <td data-label="Routers">{{range $i, $r := .Routers}}{{if $i}}, {{end}}<a href="/admin/routers/view?id={{$r.ID}}">{{$r.Name}}</a>{{else}}<span class="pill drift">no router</span>{{end}}</td>
 <td class="n" data-label="Flats">{{.Active}} / {{.Total}}</td><td class="n" data-label="Online">{{.Online}}</td>
 <td data-label="Caretaker">{{if .Caretaker.Name}}{{.Caretaker.Name}}{{if .Caretaker.Phone}} <a href="tel:{{.Caretaker.Phone}}" class="mono">{{.Caretaker.Phone}}</a>{{end}}{{else}}<span class="muted">none</span>{{end}}</td></tr>{{end}}</tbody></table></div>
@@ -35,6 +35,7 @@
 <label class="field">Link a router<select name="site">{{range $a.Unlinked}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label><button>Link</button></form>{{end}}
 <p class="mt-2 muted">A router can serve several apartments, and a large apartment can have several routers. A router cannot be unlinked while flats of this apartment are on it.</p></section>
 <section class="panel"><h2>People</h2>
+{{with $a.MapURL}}<p class="locrow"><a class="btn ghost sm" href="{{.}}" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>View on map</a> <span class="mono muted">{{gps $a.Apartment}}</span></p>{{else}}<p class="muted">Location: not recorded.{{if $d.CanWrite}} <a href="/admin/apartments/edit?id={{$a.ID}}">Add GPS</a>.{{end}}</p>{{end}}
 {{template "contactcard" (dict "Title" "Caretaker" "C" $a.Caretaker)}}
 {{template "contactcard" (dict "Title" "Landlord / agent" "C" $a.Landlord)}}
 {{if $a.Notes}}<p class="mt-3">{{$a.Notes}}</p>{{end}}</section>
@@ -60,9 +61,15 @@
 <div class="two"><label class="field">Apartment name<input name="name" value="{{$c.Name}}" required maxlength="80" placeholder="MG One Central" autofocus></label>
 <label class="field">Address or area<input name="address" value="{{$c.Address}}" maxlength="200" placeholder="Street, estate, town"></label></div>
 <label class="field">Notes<input name="notes" value="{{$c.Notes}}" maxlength="300"></label>
+<div class="field"><label for="gps">GPS location (optional)</label>
+<div class="row"><input id="gps" name="gps" value="{{.Data.GPS}}" maxlength="400" inputmode="text" placeholder="-1.2921, 36.8219" autocomplete="off" spellcheck="false" aria-describedby="gps-help gps-note">
+<button type="button" class="ghost" data-gps-fill="gps" data-gps-note="gps-note" hidden>Use this device's location</button></div>
+<p class="muted" id="gps-help" style="margin:6px 0 0">In Google Maps, right-click the spot and click the numbers to copy them, then paste here. A Google Maps link that shows the coordinates also works. Leave empty if unknown.</p>
+<p class="muted" id="gps-note" role="status" aria-live="polite" style="margin:4px 0 0"></p></div>
 <fieldset class="panel"><legend>Routers that serve it</legend><input type="hidden" name="routers_set" value="{{if not .Data.IsNew}}1{{end}}">
 <div class="stack-col">{{range .Data.AllRouters}}<label class="ck"><input type="checkbox" name="router" value="{{.ID}}"{{if index $d.Data.Linked .ID}} checked{{end}}> {{.Name}}</label>{{else}}<p class="muted nil">No routers yet. Add one first.</p>{{end}}</div></fieldset>
 {{template "contactfields" (dict "Title" "Caretaker" "P" "caretaker" "C" $c.Caretaker)}}
 {{template "contactfields" (dict "Title" "Landlord / agent" "P" "landlord" "C" $c.Landlord)}}
 <div class="row"><button>Save</button><a class="btn ghost" href="{{if $c.ID}}/admin/apartments/view?id={{$c.ID}}{{else}}/admin/apartments{{end}}">Cancel</a></div></form>
+<script src="{{static "gps.js"}}" defer></script>
 {{template "afoot" .}}{{end}}

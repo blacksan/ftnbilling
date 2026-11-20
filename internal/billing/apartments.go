@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/mail"
 	"strings"
 	"time"
@@ -65,6 +66,8 @@ func (c ContactInput) empty() bool {
 type ApartmentInput struct {
 	Name, Address, Notes string
 	Caretaker, Landlord  ContactInput
+	// Lat and Lng are the GPS point; both nil clears it. Checked by store.ValidGPS.
+	Lat, Lng *float64
 }
 
 // NormalizeContactPhone writes a Kenyan mobile number as +254XXXXXXXXX with the
@@ -128,8 +131,19 @@ func (in ApartmentInput) clean() (store.Apartment, error) {
 	if err != nil {
 		return store.Apartment{}, err
 	}
-	return store.Apartment{Name: name, Address: cleanText(in.Address, 200), Notes: cleanText(in.Notes, 500), Caretaker: ct, Landlord: ll}, nil
+	if err := store.ValidGPS(in.Lat, in.Lng); err != nil {
+		return store.Apartment{}, &FieldError{"gps", "GPS location: " + err.Error()}
+	}
+	a := store.Apartment{Name: name, Address: cleanText(in.Address, 200), Notes: cleanText(in.Notes, 500), Caretaker: ct, Landlord: ll}
+	if in.Lat != nil && in.Lng != nil { // copy: the input's pointers stay the caller's
+		lat, lng := roundGPS(*in.Lat), roundGPS(*in.Lng)
+		a.Lat, a.Lng = &lat, &lng
+	}
+	return a, nil
 }
+
+// roundGPS keeps 7 decimals (about 1 cm) so a pasted point round-trips exactly.
+func roundGPS(v float64) float64 { return math.Round(v*1e7) / 1e7 }
 
 func apartmentNameTaken(d *store.Data, name, exceptID string) bool {
 	if o, ok := d.ApartmentByName(name); ok && o.ID != exceptID {
@@ -188,7 +202,7 @@ func (s *Service) UpdateApartment(id string, in ApartmentInput) error {
 			return ErrApartmentExists
 		}
 		a.ID, a.CreatedAt = cur.ID, cur.CreatedAt
-		if a == cur {
+		if store.SameApartment(a, cur) {
 			return store.ErrNoChange
 		}
 		d.Apartments[id] = a

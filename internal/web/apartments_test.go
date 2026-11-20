@@ -259,3 +259,142 @@ func TestAdminDevicesBelongsToAndMove(t *testing.T) {
 	}
 	var _ store.Account
 }
+
+// ---- GPS location of an apartment ------------------------------------------------------
+
+func TestAdminApartmentGPSForm(t *testing.T) {
+	m := newMulti(t)
+	A := m.addSite(t, "Alpha")
+	save := func(name, gps string, extra ...string) string {
+		v := url.Values{"name": {name}, "router": {A.ID}, "gps": {gps}}
+		for i := 0; i+1 < len(extra); i += 2 {
+			v.Set(extra[i], extra[i+1])
+		}
+		return m.adminPost(t, "/admin/apartments/save", v)
+	}
+	idOf := func(loc string) string { return loc[strings.Index(loc, "id=")+3 : strings.Index(loc, "&msg")] }
+	const mapLink = `href="https://www.google.com/maps/search/?api=1&amp;query=-1.2921%2C36.8219"`
+
+	// A plain pair, as pasted from Google Maps.
+	loc := save("Plain", "-1.2921, 36.8219")
+	if strings.Contains(loc, "Error") {
+		t.Fatalf("plain pair: %s", loc)
+	}
+	id := idOf(loc)
+	page := m.adminGet(t, "/admin/apartments/view?id="+id)
+	if !strings.Contains(page, mapLink) || !strings.Contains(page, `target="_blank"`) || !strings.Contains(page, `rel="noopener"`) || !strings.Contains(page, "View on map") {
+		t.Errorf("detail page lacks the map link:\n%s", page)
+	}
+	if list := m.adminGet(t, "/admin/apartments"); !strings.Contains(list, mapLink) || !strings.Contains(list, "View on map") {
+		t.Error("list lacks the map link")
+	}
+	// The edit form shows the stored point, and the helper script is an external file (no inline script).
+	form := m.adminGet(t, "/admin/apartments/edit?id="+id)
+	if !strings.Contains(form, `value="-1.2921,36.8219"`) || !strings.Contains(form, `src="/static/gps.js`) || strings.Contains(form, "onclick=") {
+		t.Errorf("edit form: %s", form)
+	}
+	if strings.Contains(form, "<script>") {
+		t.Error("inline script in the form")
+	}
+
+	// A Google Maps URL: @lat,lng and q=lat,lng.
+	for i, in := range []string{"https://www.google.com/maps/place/Kilimani/@-1.2921,36.8219,17z/data=!3m1", "https://www.google.com/maps?q=-1.2921,36.8219"} {
+		loc := save("Url"+string(rune('A'+i)), in)
+		if strings.Contains(loc, "Error") {
+			t.Fatalf("url %q: %s", in, loc)
+		}
+		if !strings.Contains(m.adminGet(t, "/admin/apartments/view?id="+idOf(loc)), mapLink) {
+			t.Errorf("url %q: point not stored", in)
+		}
+	}
+
+	// Garbage and out-of-range are refused in words, back to the form, and nothing is created.
+	for _, in := range []string{"somewhere near the mall", "95, 36", "-1.29"} {
+		loc := save("Bad "+in, in)
+		if !strings.Contains(loc, "Error") || !strings.Contains(loc, "/admin/apartments/new") {
+			t.Errorf("%q accepted: %s", in, loc)
+		}
+	}
+	if list := m.adminGet(t, "/admin/apartments"); strings.Contains(list, "Bad ") {
+		t.Error("a refused apartment was created")
+	}
+	loc = save("Bad", "nope", "id", id)
+	if !strings.Contains(loc, "Error") || !strings.Contains(loc, "GPS") || !strings.Contains(loc, "/admin/apartments/edit") {
+		t.Errorf("edit with garbage: %s", loc)
+	}
+
+	// Empty clears the point; the link goes away.
+	if loc := save("Plain", "", "id", id); strings.Contains(loc, "Error") {
+		t.Fatalf("clear: %s", loc)
+	}
+	if page := m.adminGet(t, "/admin/apartments/view?id="+id); strings.Contains(page, "View on map") || !strings.Contains(page, "not recorded") {
+		t.Error("link still shown after clearing")
+	}
+
+	// 0,0 is a point, not "unset".
+	loc = save("Null island", "0, 0")
+	if !strings.Contains(m.adminGet(t, "/admin/apartments/view?id="+idOf(loc)), "query=0%2C0") {
+		t.Error("0,0 not kept as a point")
+	}
+}
+
+func TestAPIApartmentGPS(t *testing.T) {
+	r := newAPIRig(t)
+	// Without GPS the fields are null.
+	x := r.call(r.oper.Access, "POST", "/apartments", map[string]any{"name": "Plain"}, nil)
+	if x.Status != 201 {
+		t.Fatalf("create: %d %s", x.Status, x.Raw)
+	}
+	j := x.JSON(t)
+	if v, has := j["lat"]; !has || v != nil || j["lng"] != nil || j["map_url"] != nil {
+		t.Errorf("unset GPS must be null: %v %v %v", j["lat"], j["lng"], j["map_url"])
+	}
+	// With GPS: in on create, out on create, get and list.
+	x = r.call(r.oper.Access, "POST", "/apartments", map[string]any{"name": "Pinned", "lat": -1.2921, "lng": 36.8219}, nil)
+	if x.Status != 201 {
+		t.Fatalf("create with GPS: %d %s", x.Status, x.Raw)
+	}
+	j = x.JSON(t)
+	id := str(j, "id")
+	if j["lat"] != -1.2921 || j["lng"] != 36.8219 || j["map_url"] != "https://www.google.com/maps/search/?api=1&query=-1.2921%2C36.8219" {
+		t.Errorf("response: %v %v %v", j["lat"], j["lng"], j["map_url"])
+	}
+	if x := r.call(r.view.Access, "GET", "/apartments/"+id, nil, nil); x.JSON(t)["lat"] != -1.2921 {
+		t.Errorf("get: %s", x.Raw)
+	}
+	found := false
+	for _, it := range r.call(r.view.Access, "GET", "/apartments?q=Pinned", nil, nil).JSON(t)["items"].([]any) {
+		found = found || it.(map[string]any)["lng"] == 36.8219
+	}
+	if !found {
+		t.Error("list lacks lng")
+	}
+	// PATCH without lat/lng keeps the point (like every other field); a name change must not clear it.
+	if x := r.call(r.oper.Access, "PATCH", "/apartments/"+id, map[string]any{"notes": "gate"}, nil); x.Status != 200 || x.JSON(t)["lat"] != -1.2921 {
+		t.Errorf("patch without gps: %d %s", x.Status, x.Raw)
+	}
+	// PATCH with a new point replaces it; 0,0 is accepted.
+	if x := r.call(r.oper.Access, "PATCH", "/apartments/"+id, map[string]any{"lat": 0, "lng": 0}, nil); x.Status != 200 || x.JSON(t)["lat"] != float64(0) || x.JSON(t)["map_url"] == nil {
+		t.Errorf("patch 0,0: %d %s", x.Status, x.Raw)
+	}
+	// Validation: half, range, wrong type. Nothing changes.
+	for _, body := range []map[string]any{
+		{"lat": 1.0}, {"lng": 1.0}, {"lat": 91, "lng": 0}, {"lat": 0, "lng": -181}, {"lat": "x", "lng": 1}, {"lat": nil, "lng": 5},
+	} {
+		x := r.call(r.oper.Access, "PATCH", "/apartments/"+id, body, nil)
+		if x.Status != 400 || x.errCode(t) != "validation_failed" {
+			t.Errorf("%v: %d %s", body, x.Status, x.Raw)
+		}
+	}
+	if x := r.call(r.oper.Access, "POST", "/apartments", map[string]any{"name": "Off", "lat": 100, "lng": 0}, nil); x.Status != 400 {
+		t.Errorf("create out of range: %d %s", x.Status, x.Raw)
+	}
+	if x := r.call(r.view.Access, "GET", "/apartments/"+id, nil, nil); x.JSON(t)["lat"] != float64(0) {
+		t.Errorf("a refused patch changed the point: %s", x.Raw)
+	}
+	// Both null clears.
+	x = r.call(r.oper.Access, "PATCH", "/apartments/"+id, map[string]any{"lat": nil, "lng": nil}, nil)
+	if j := x.JSON(t); x.Status != 200 || j["lat"] != nil || j["lng"] != nil || j["map_url"] != nil {
+		t.Errorf("clear: %d %s", x.Status, x.Raw)
+	}
+}

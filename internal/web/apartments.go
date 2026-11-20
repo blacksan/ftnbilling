@@ -109,6 +109,10 @@ func (s *Server) adminApartmentForm(w http.ResponseWriter, r *http.Request) {
 		cur.Name = v
 	}
 	p.Data["Cur"], p.Data["Linked"], p.Data["IsNew"] = cur, linked, id == ""
+	p.Data["GPS"] = ""
+	if cur.HasGPS() {
+		p.Data["GPS"] = store.FormatGPS(*cur.Lat, *cur.Lng)
+	}
 	p.Data["AllRouters"] = p.Sites
 	s.render(w, "admin_apartment_form", p)
 }
@@ -122,12 +126,18 @@ func (s *Server) adminApartmentSave(w http.ResponseWriter, r *http.Request) {
 	id := r.PostFormValue("id")
 	in := billing.ApartmentInput{Name: r.PostFormValue("name"), Address: r.PostFormValue("address"), Notes: r.PostFormValue("notes"),
 		Caretaker: contactForm(r, "caretaker"), Landlord: contactForm(r, "landlord")}
+	var gpsErr error
+	in.Lat, in.Lng, gpsErr = store.ParseGPS(r.PostFormValue("gps"))
 	fail := func(err error) {
 		to := "/admin/apartments/new"
 		if id != "" {
 			to = "/admin/apartments/edit?id=" + url.QueryEscape(id)
 		}
 		s.back(w, r, to, "Error: "+err.Error())
+	}
+	if gpsErr != nil {
+		fail(gpsErr)
+		return
 	}
 	if id == "" {
 		a, err := s.svc.CreateApartment(in, r.PostForm["router"])

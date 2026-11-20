@@ -14,6 +14,7 @@ import ke.co.ftw.ftnadmin.data.sites.SitesRepository
 import ke.co.ftw.ftnadmin.domain.Account
 import ke.co.ftw.ftnadmin.domain.Apartment
 import ke.co.ftw.ftnadmin.domain.ApartmentContact
+import ke.co.ftw.ftnadmin.domain.GpsPoint
 import ke.co.ftw.ftnadmin.domain.NewDevice
 import ke.co.ftw.ftnadmin.ui.apartments.ApartmentDetailViewModel
 import ke.co.ftw.ftnadmin.ui.apartments.ApartmentFormViewModel
@@ -310,5 +311,66 @@ class ApartmentsTest {
         assertNull(vm.state.value.sheet!!.error)
         val body = requests("POST /api/v1/unregistered/create").single().body.readUtf8()
         assertTrue(body, body.contains("\"apartment_id\":\"ap1\"") && body.contains("\"unit\":\"B4\""))
+    }
+
+    // ---- GPS location ----
+
+    @Test fun apartmentJsonReadsGpsAndTreatsMissingOrNullAsNoPoint() {
+        val pinned = ApiJson.decodeFromString(
+            Apartment.serializer(),
+            """{"id":"ap1","name":"MG One","lat":-1.2921,"lng":36.8219,"map_url":"https://www.google.com/maps/search/?api=1&query=-1.2921%2C36.8219"}""",
+        )
+        assertEquals(GpsPoint(-1.2921, 36.8219), pinned.gps)
+        assertTrue(pinned.mapUrl!!.startsWith("https://www.google.com/maps/search/"))
+        val nulls = ApiJson.decodeFromString(Apartment.serializer(), """{"id":"ap2","name":"B","lat":null,"lng":null,"map_url":null}""")
+        assertNull(nulls.gps)
+        assertNull("an older server sends no GPS fields", ApiJson.decodeFromString(Apartment.serializer(), apt).gps)
+        val zero = ApiJson.decodeFromString(Apartment.serializer(), """{"id":"ap3","name":"Z","lat":0,"lng":0}""")
+        assertEquals("0,0 is a point, not unset", GpsPoint(0.0, 0.0), zero.gps)
+    }
+
+    @Test fun formShowsStoredGpsAndSavesAPastedMapsLink() = runTest(main.dispatcher) {
+        routes["GET /api/v1/routers"] = ok("""{"items":[{"id":"r1","name":"Kilimani"}]}""")
+        routes["GET /api/v1/apartments/ap1"] = ok(apt.replaceFirst("\"accounts_total\"", "\"lat\":-1.2921,\"lng\":36.8219,\"accounts_total\""))
+        routes["PATCH /api/v1/apartments/ap1"] = ok(apt)
+        val vm = main.track(ApartmentFormViewModel("ap1", ApartmentsRepository(api), SitesRepository(api)))
+        await(vm.state) { !it.loading }
+        assertEquals("-1.2921,36.8219", vm.state.value.gpsText)
+        // Garbage is refused on the phone, with no call to the server.
+        vm.onGps("near the mall")
+        vm.save()
+        assertEquals(GpsPoint.BAD, vm.state.value.fieldErrors["gps"])
+        assertTrue(requests("PATCH /api/v1/apartments/ap1").isEmpty())
+        // A Google Maps link is read and sent as numbers.
+        vm.onGps("https://www.google.com/maps/place/Kilimani/@-1.3000,36.8000,17z/data=!3m1")
+        vm.save()
+        await(vm.state) { it.savedId != null }
+        val body = requests("PATCH /api/v1/apartments/ap1").single().body.readUtf8()
+        assertTrue(body, body.contains("\"lat\":-1.3") && body.contains("\"lng\":36.8") && !body.contains("\"lat\":\""))
+    }
+
+    @Test fun clearingTheGpsBoxSendsNullForBoth() = runTest(main.dispatcher) {
+        routes["GET /api/v1/routers"] = ok("""{"items":[]}""")
+        routes["GET /api/v1/apartments/ap1"] = ok(apt.replaceFirst("\"accounts_total\"", "\"lat\":-1.2921,\"lng\":36.8219,\"accounts_total\""))
+        routes["PATCH /api/v1/apartments/ap1"] = ok(apt)
+        val vm = main.track(ApartmentFormViewModel("ap1", ApartmentsRepository(api), SitesRepository(api)))
+        await(vm.state) { !it.loading }
+        vm.onGps("")
+        vm.save()
+        await(vm.state) { it.savedId != null }
+        val body = requests("PATCH /api/v1/apartments/ap1").single().body.readUtf8()
+        assertTrue(body, body.contains("\"lat\":null") && body.contains("\"lng\":null"))
+    }
+
+    @Test fun serverRefusalOfAPointShowsOnTheGpsField() = runTest(main.dispatcher) {
+        routes["GET /api/v1/routers"] = ok("""{"items":[]}""")
+        routes["POST /api/v1/apartments"] = err(400, "validation_failed", """{"fields":{"lat":"latitude must be between -90 and 90"}}""")
+        val vm = main.track(ApartmentFormViewModel(null, ApartmentsRepository(api), SitesRepository(api)))
+        await(vm.state) { true }
+        vm.onName("Far")
+        vm.onGps("10, 20")
+        vm.save()
+        await(vm.state) { !it.saving && it.fieldErrors.isNotEmpty() }
+        assertEquals("latitude must be between -90 and 90", vm.state.value.fieldErrors["lat"])
     }
 }

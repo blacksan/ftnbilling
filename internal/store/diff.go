@@ -254,7 +254,7 @@ var tables = []table{
 	tbl[Tenancy]{func(d *Data) *map[string]Tenancy { return &d.Tenancies }, func(c *ChangeSet) *Delta[Tenancy] { return &c.Tenancies },
 		eqc[Tenancy], Tenancy.norm, func(v Tenancy) string { return v.ID }, nil},
 	tbl[Apartment]{func(d *Data) *map[string]Apartment { return &d.Apartments }, func(c *ChangeSet) *Delta[Apartment] { return &c.Apartments },
-		eqc[Apartment], Apartment.norm, func(v Apartment) string { return v.ID }, nil},
+		eqDeep[Apartment], Apartment.norm, func(v Apartment) string { return v.ID }, nil},
 	tbl[ApartmentSite]{func(d *Data) *map[string]ApartmentSite { return &d.ApartmentSites }, func(c *ChangeSet) *Delta[ApartmentSite] { return &c.ApartmentSites },
 		eqc[ApartmentSite], ApartmentSite.norm, func(v ApartmentSite) string { return ApartmentSiteKey(v.ApartmentID, v.SiteID) }, nil},
 	tbl[Order]{func(d *Data) *map[string]Order { return &d.Orders }, func(c *ChangeSet) *Delta[Order] { return &c.Orders },

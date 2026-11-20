@@ -52,8 +52,15 @@ data class Apartment(
     @SerialName("accounts_active") val accountsActive: Int = 0,
     @SerialName("online_now") val onlineNow: Int = 0,
     val accounts: List<Account> = emptyList(),
+    /** GPS point of the building; both null when unknown (0,0 is a real point). */
+    val lat: Double? = null,
+    val lng: Double? = null,
+    @SerialName("map_url") val mapUrl: String? = null,
 ) {
     val ref: AptRef get() = AptRef(id, name)
+
+    /** The building's point, or null when it has none. */
+    val gps: GpsPoint? get() = if (lat != null && lng != null) GpsPoint(lat, lng) else null
 }
 
 @Serializable
@@ -92,4 +99,6 @@ data class ApartmentForm(
     val notes: String = "",
     val caretaker: ApartmentContact = ApartmentContact(),
     val landlord: ApartmentContact = ApartmentContact(),
+    /** GPS point; null clears it on the server. */
+    val gps: GpsPoint? = null,
 )

@@ -1,5 +1,10 @@
 package ke.co.ftw.ftnadmin.ui.apartments
 
+import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -17,8 +22,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -44,6 +51,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -53,6 +61,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import ke.co.ftw.ftnadmin.core.network.UserInfo
 import ke.co.ftw.ftnadmin.domain.Apartment
 import ke.co.ftw.ftnadmin.domain.ApartmentContact
+import ke.co.ftw.ftnadmin.domain.GpsPoint
 import ke.co.ftw.ftnadmin.ui.common.AppTopBar
 import ke.co.ftw.ftnadmin.ui.common.CenteredLoading
 import ke.co.ftw.ftnadmin.ui.common.ChipLabel
@@ -142,6 +151,7 @@ private fun ApartmentRow(a: Apartment, onClick: () -> Unit) {
                 if (a.routers.isEmpty()) StatusChip("No router", Tone.Warn) else StatusChip("${a.onlineNow} online", if (a.onlineNow > 0) Tone.Good else Tone.Neutral)
             }
             if (a.address.isNotBlank()) Text(a.address, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
+            a.gps?.let { ViewOnMapChip(a.name, it) }
             Text(
                 listOf(a.routers.joinToString(", ") { it.label }.ifBlank { "no router linked" }, "${a.accountsActive} of ${a.accountsTotal} flats active").joinToString("  |  "),
                 style = MaterialTheme.typography.bodySmall,
@@ -202,6 +212,13 @@ fun ApartmentDetailScreen(
                     LabeledValue("Flats", "${apt.accountsActive} active of ${apt.accountsTotal}")
                     LabeledValue("Online now", apt.onlineNow.toString())
                     if (apt.notes.isNotBlank()) LabeledValue("Notes", apt.notes)
+                    val point = apt.gps
+                    if (point != null) {
+                        LabeledValue("GPS", point.text)
+                        ViewOnMapChip(apt.name, point)
+                    } else {
+                        LabeledValue("GPS", "Not recorded")
+                    }
                 }
                 SectionCard("Routers") {
                     if (apt.routers.isEmpty()) {
@@ -262,6 +279,39 @@ fun ApartmentDetailScreen(
             dismissButton = { TextButton(onClick = { vm.askDelete(false) }) { Text("Cancel") } },
         )
     }
+}
+
+/** "View on map": opens the building's point in the phone's maps app. */
+@Composable
+fun ViewOnMapChip(name: String, point: GpsPoint, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    AssistChip(
+        onClick = { openMap(context, name, point) },
+        label = { ChipLabel("View on map") },
+        leadingIcon = { Icon(Icons.Default.Place, contentDescription = null) },
+        modifier = modifier,
+    )
+}
+
+/**
+ * Opens a maps app on the point with a labelled pin (`geo:` URI). When no app handles `geo:`, falls back to the
+ * Google Maps web link, which the browser opens. A phone with neither must not crash the screen. Returns whether
+ * something opened.
+ */
+internal fun openMap(context: Context, name: String, point: GpsPoint): Boolean {
+    fun view(uri: String): Boolean {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
+        if (context !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return try {
+            context.startActivity(intent)
+            true
+        } catch (_: ActivityNotFoundException) {
+            false
+        } catch (_: SecurityException) {
+            false
+        }
+    }
+    return view(point.geoUri(name)) || view(point.webUrl)
 }
 
 /** Name, phones with tap-to-call and WhatsApp, email and notes of a caretaker or landlord. */
@@ -327,6 +377,18 @@ fun ApartmentFormScreen(id: String?, onBack: () -> Unit, onSaved: (String) -> Un
                 )
                 OutlinedTextField(ui.form.address, vm::onAddress, label = { Text("Address or area") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(ui.form.notes, vm::onNotes, label = { Text("Notes") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(
+                    ui.gpsText, vm::onGps, label = { Text("GPS location (optional)") }, singleLine = true,
+                    placeholder = { Text("-1.2921, 36.8219") },
+                    isError = ui.fieldErrors.containsKey("gps") || ui.fieldErrors.containsKey("lat") || ui.fieldErrors.containsKey("lng"),
+                    supportingText = {
+                        Text(
+                            ui.fieldErrors["gps"] ?: ui.fieldErrors["lat"] ?: ui.fieldErrors["lng"]
+                                ?: "Paste the coordinates or a Google Maps link from the map app. Leave empty if unknown.",
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 if (ui.isNew) {
                     SectionCard("Routers that serve it") {
                         if (ui.allRouters.isEmpty()) Text("No routers yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)

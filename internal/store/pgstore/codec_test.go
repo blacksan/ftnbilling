@@ -38,6 +38,10 @@ func fillValue(v reflect.Value, name string) {
 		fillValue(e, "ov")
 		m.SetMapIndex(k, e)
 		v.Set(m)
+	case reflect.Ptr: // *float64 (apartment GPS): point at a non-zero value
+		p := reflect.New(v.Type().Elem())
+		fillValue(p.Elem(), name)
+		v.Set(p)
 	case reflect.Struct:
 		if v.Type() == reflect.TypeOf(time.Time{}) {
 			v.Set(reflect.ValueOf(time.Date(2026, 2, 3, 4, 5, 6, 789000000, time.UTC)))

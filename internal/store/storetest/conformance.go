@@ -15,6 +15,9 @@ import (
 
 // Fixture fills a store with one row of everything, every field set, through
 // one Update. It returns the time used.
+// fp points at a copy of v (apartment GPS is *float64: nil means unknown).
+func fp(v float64) *float64 { return &v }
+
 func Fixture(t testing.TB, s *store.Store) time.Time {
 	t.Helper()
 	at := time.Date(2026, 3, 4, 5, 6, 7, 123456000, time.UTC)
@@ -48,8 +51,10 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 		d.Apartments["ap1"] = store.Apartment{ID: "ap1", Name: "MG One Central", Address: "Kilimani Rd", Notes: "gate code on the wall",
 			Caretaker: store.ApartmentContact{Name: "Joe", Phone: "+254722000000", Phone2: "+254722000001", Email: "j@example.com", Notes: "n"},
 			Landlord:  store.ApartmentContact{Name: "Mama Wanjiru", Phone: "+254733000000", Phone2: "+254733000001", Email: "w@example.com", Notes: "agent"},
-			CreatedAt: at}
-		d.Apartments["ap2"] = store.Apartment{ID: "ap2", Name: "Second", CreatedAt: at}
+			Lat:       fp(-1.2921), Lng: fp(36.8219), CreatedAt: at}
+		// 0,0 is a real point, not "unset": it must survive a round trip as a point.
+		d.Apartments["ap2"] = store.Apartment{ID: "ap2", Name: "Second", Lat: fp(0), Lng: fp(0), CreatedAt: at}
+		d.Apartments["ap3"] = store.Apartment{ID: "ap3", Name: "No GPS", CreatedAt: at}
 		d.ApartmentSites[store.ApartmentSiteKey("ap1", "s111111")] = store.ApartmentSite{ApartmentID: "ap1", SiteID: "s111111", CreatedAt: at}
 		d.ApartmentSites[store.ApartmentSiteKey("ap1", "s222222")] = store.ApartmentSite{ApartmentID: "ap1", SiteID: "s222222", CreatedAt: at}
 		d.Orders["o1"] = store.Order{ID: "o1", SiteID: "s111111", AccountID: "a1", PackageID: "p1", Phone: "254711000001", Method: "mpesa", AmountKES: 50,
@@ -539,7 +544,7 @@ func Run(t *testing.T) {
 			t.Fatal(err)
 		}
 		s := h.Reopen().Snapshot()
-		if len(s.Devices) != 0 || len(s.Tasks) != 0 || len(s.Vouchers) != 1 || len(s.ApartmentSites) != 1 || len(s.Apartments) != 1 || len(s.Notes) != 0 {
+		if len(s.Devices) != 0 || len(s.Tasks) != 0 || len(s.Vouchers) != 1 || len(s.ApartmentSites) != 1 || len(s.Apartments) != 2 || len(s.Notes) != 0 {
 			t.Fatalf("deletes not persisted: %d %d %d %d %d %d", len(s.Devices), len(s.Tasks), len(s.Vouchers), len(s.ApartmentSites), len(s.Apartments), len(s.Notes))
 		}
 	})

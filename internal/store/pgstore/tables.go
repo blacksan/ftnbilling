@@ -344,16 +344,16 @@ var apartmentsC = (&codec[store.Apartment]{
 	name: "apartments", pk: []string{"id"}, key: func(v store.Apartment) string { return v.ID },
 	cols: []string{"id", "name", "address", "notes",
 		"caretaker_name", "caretaker_phone", "caretaker_phone2", "caretaker_email", "caretaker_notes",
-		"landlord_name", "landlord_phone", "landlord_phone2", "landlord_email", "landlord_notes", "created_at"},
+		"landlord_name", "landlord_phone", "landlord_phone2", "landlord_email", "landlord_notes", "created_at", "lat", "lng"},
 	args: func(v store.Apartment) []any {
 		return []any{v.ID, v.Name, v.Address, v.Notes,
 			v.Caretaker.Name, v.Caretaker.Phone, v.Caretaker.Phone2, v.Caretaker.Email, v.Caretaker.Notes,
-			v.Landlord.Name, v.Landlord.Phone, v.Landlord.Phone2, v.Landlord.Email, v.Landlord.Notes, tm(v.CreatedAt)}
+			v.Landlord.Name, v.Landlord.Phone, v.Landlord.Phone2, v.Landlord.Email, v.Landlord.Notes, tm(v.CreatedAt), v.Lat, v.Lng}
 	},
 	dst: func(v *store.Apartment) []any {
 		return []any{&v.ID, &v.Name, &v.Address, &v.Notes,
 			&v.Caretaker.Name, &v.Caretaker.Phone, &v.Caretaker.Phone2, &v.Caretaker.Email, &v.Caretaker.Notes,
-			&v.Landlord.Name, &v.Landlord.Phone, &v.Landlord.Phone2, &v.Landlord.Email, &v.Landlord.Notes, t_(&v.CreatedAt)}
+			&v.Landlord.Name, &v.Landlord.Phone, &v.Landlord.Phone2, &v.Landlord.Email, &v.Landlord.Notes, t_(&v.CreatedAt), &v.Lat, &v.Lng}
 	},
 }).build()
 

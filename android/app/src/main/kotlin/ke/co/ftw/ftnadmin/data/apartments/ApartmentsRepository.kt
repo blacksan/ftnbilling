@@ -21,7 +21,7 @@ class ApartmentsRepository(private val api: ApiClient) {
     suspend fun create(form: ApartmentForm, routerIds: List<String>): Apartment =
         api.post("apartments", body = body(form, routerIds))
 
-    /** Fields not sent stay as they are; an empty contact section clears it. */
+    /** Fields not sent stay as they are; an empty contact section clears it, and so does a form without GPS (lat and lng go as null). */
     suspend fun update(id: String, form: ApartmentForm): Apartment = api.patch("apartments", id, body = body(form, null))
 
     /** 409 `apartment_in_use` while any account belongs to it. */
@@ -58,6 +58,9 @@ class ApartmentsRepository(private val api: ApiClient) {
         put("notes", f.notes.trim())
         put("caretaker", contact(f.caretaker))
         put("landlord", contact(f.landlord))
+        // Both numbers or both null: the server refuses half a point.
+        put("lat", f.gps?.lat)
+        put("lng", f.gps?.lng)
         if (routerIds != null) putJsonArray("router_ids") { routerIds.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } }
     }
 }
