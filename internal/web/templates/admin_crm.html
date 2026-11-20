@@ -10,22 +10,9 @@
 {{end}}{{end}}
 {{template "afoot" .}}{{end}}
 
-{{define "admin_customers"}}{{template "ahead" .}}
-<form method="get" action="/admin/customers" class="mb-3 row"><label>Find<input name="q" value="{{.Data.Q}}" placeholder="name or phone" size="26"></label>
-<label>Show<select name="state"><option value="current"{{if eq .Data.State "current"}} selected{{end}}>Current tenants</option><option value="former"{{if eq .Data.State "former"}} selected{{end}}>No flat now (former or new)</option><option value="all"{{if eq .Data.State "all"}} selected{{end}}>Everyone</option></select></label><button>Filter</button></form>
-<div class="tw"><table><tr><th>Name</th><th>Phone</th><th>WhatsApp</th><th>Flats</th><th>National ID</th><th>Status</th></tr>
-{{range .Data.Rows}}<tr><td><a href="/admin/customers/view?id={{.C.ID}}"><b>{{.C.Name}}</b></a></td><td>{{.C.Phone}}</td><td>{{.C.WhatsApp}}{{if .C.WAOptOut}} <span class="muted">(opted out)</span>{{end}}</td>
-<td>{{range .Accounts}}<a href="/admin/accounts/view?code={{.Code}}">{{.Flat}}</a> {{end}}</td><td>{{if .C.NationalIDLast4}}<span class="muted">{{if $.Data.SeeID4}}ending {{.C.NationalIDLast4}}{{else}}on file{{end}}</span>{{end}}</td>
-<td>{{if .Former}}<span class="pill ignored">no flat now</span>{{else}}<span class="pill active">current</span>{{end}}</td></tr>
-{{else}}<tr><td colspan="6">No customers match.</td></tr>{{end}}</table></div>
-<div class="card"><b>Add a customer</b> <span class="muted">Link them to a flat afterwards, from their page or from the flat's page.</span>
-<form method="post" action="/admin/customers/save" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}">
-<label>Name<input name="name" required></label><label>Phone<input name="phone" placeholder="0712345678"></label><label>Second phone<input name="phone2"></label><label>WhatsApp<input name="whatsapp"></label><label class="ck muted"><input type="checkbox" name="wa_same" value="1"> WhatsApp is the phone</label><label>Email<input name="email" type="email"></label><button>Add customer</button></form></div>
-{{template "afoot" .}}{{end}}
-
 {{define "admin_customer"}}{{template "ahead" .}}{{$P := .Data.P}}{{$C := $P.Customer}}{{$d := .}}
 <h2>{{$C.Name}} {{if .Data.Anon}}<span class="pill ignored">anonymised</span>{{end}}</h2>
-<p><a href="/admin/customers">&larr; all customers</a>{{if $C.Phone}} &middot; {{$C.Phone}}{{end}}</p>
+<p><a href="/admin/accounts">&larr; subscribers</a>{{if $C.Phone}} &middot; {{$C.Phone}}{{end}}</p>
 <div class="tiles"><div class="tile">Paid in total<b>{{kes $P.Total}}</b><small>{{len $P.Payments}} payments on record</small></div>
 <div class="tile">Flats now<b>{{range $P.Tenancies}}{{if .MoveOut.IsZero}}{{(acctOf $P.Accounts .AccountID).Flat}} {{end}}{{end}}</b><small>{{len $P.Tenancies}} tenancies in all</small></div>
 <div class="tile">Equipment<b>{{len $P.Equipment}}</b><small>items installed at their flats</small></div></div>

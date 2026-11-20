@@ -27,7 +27,6 @@ var pageMetas = map[string]pageMeta{
 	"dashboard":     {"", "Overview", "/admin", "", "", "A quick read on money, routers and who needs you."},
 	"accounts":      {"Customers", "Subscribers", "/admin/accounts", "Your", "subscribers.", "Every flat on the network: what they pay for, when it ends and whether the router has caught up."},
 	"apartments":    {"Customers", "Apartments", "/admin/apartments", "Your", "apartments.", "The blocks you serve, the routers that serve them, their flats and who looks after them."},
-	"customers":     {"Customers", "Contacts", "/admin/customers", "Your", "contacts.", "The people behind the flats, kept when a flat changes hands."},
 	"devices":       {"Customers", "New devices", "/admin/devices", "New", "devices.", "Phones, ONTs and laptops the routers have seen that no flat owns yet."},
 	"live":          {"Network", "Live now", "/admin/live", "Online", "now.", "Who is connected right now and how hard they are pulling. Refreshes every 10 seconds."},
 	"sites":         {"Network", "Routers", "/admin/routers", "Your", "routers.", "One MikroTik per site. Add one, paste a single line, and the server does the rest."},

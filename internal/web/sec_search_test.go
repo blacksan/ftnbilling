@@ -128,7 +128,7 @@ func TestLastFourOfNationalIDHiddenFromViewersAndOperators(t *testing.T) {
 	last4 := secret[4:]
 	for name, w := range map[string]*who{"viewer": r.vwW, "operator": r.operW, "owner": r.ownerW} {
 		b := signIn(t, r.ts, r.srv, r.st, w)
-		for _, p := range []string{"/admin/customers?state=all", "/admin/customers/view?id=" + cid} {
+		for _, p := range []string{"/admin/customers/view?id=" + cid} {
 			code, page := r.webGet(t, b, p)
 			if code != 200 {
 				t.Fatalf("%s %s: %d", name, p, code)
