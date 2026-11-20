@@ -204,3 +204,34 @@ func TestMgmtSubnet(t *testing.T) {
 		}
 	}
 }
+
+func TestWebFigDomainConfig(t *testing.T) {
+	env := func(kv ...string) func(string) string {
+		m := map[string]string{"PUBLIC_BASE_URL": "https://isp.ftw.co.ke"}
+		for i := 0; i+1 < len(kv); i += 2 {
+			m[kv[i]] = kv[i+1]
+		}
+		return func(k string) string { return m[k] }
+	}
+	c, err := Load(env())
+	if err != nil || c.WebFigDomain != "" {
+		t.Fatalf("default: %v %q", err, c.WebFigDomain)
+	}
+	c, err = Load(env("WEBFIG_DOMAIN", "Tech.FTW.co.ke"))
+	if err != nil || c.WebFigDomain != "tech.ftw.co.ke" || c.WebFigListen != "127.0.0.1:8082" {
+		t.Fatalf("on: %v %q %q", err, c.WebFigDomain, c.WebFigListen)
+	}
+	for _, kv := range [][]string{
+		{"WEBFIG_DOMAIN", "isp.ftw.co.ke"},                            // the admin's own host
+		{"WEBFIG_DOMAIN", "tech"},                                     // not a full name
+		{"WEBFIG_DOMAIN", "10.0.0.1"},                                 // an address
+		{"WEBFIG_DOMAIN", "te ch.ftw.co.ke"},                          // not a name
+		{"WEBFIG_DOMAIN", "tech.ftw.co.ke", "WEBFIG_LISTEN", ":8082"}, // not loopback
+		{"WEBFIG_DOMAIN", "tech.ftw.co.ke", "WEBFIG_LISTEN", "0.0.0.0:8082"},
+		{"WEBFIG_DOMAIN", "tech.ftw.co.ke", "WEBFIG_LISTEN", "nonsense"},
+	} {
+		if _, err := Load(env(kv...)); err == nil {
+			t.Errorf("%v was accepted", kv)
+		}
+	}
+}

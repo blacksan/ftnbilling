@@ -106,6 +106,7 @@ a confirmed "Move customer here". The old router contacts screen is gone: contac
 - [ ] App lock: biometric or PIN prompt after the lock timeout.
 - [ ] Home shows the fleet and, per router, live numbers; pull to refresh works.
 - [ ] Router page shows the tunnel address and the remote WinBox line (or the "No report" line).
+- [ ] Router page (owner): "Open WebFig" opens the browser at the admin's step-up page (only when the server has WEBFIG_DOMAIN; operators and viewers do not see it).
 - [ ] A release build offers an update when a higher `android-v*` release exists, downloads it,
       and the system installer opens; a debug build shows the update section as switched off.
 

@@ -225,6 +225,9 @@ func (s *Server) guard(h http.HandlerFunc, allowHalf bool) http.Handler {
 		ctx = context.WithValue(ctx, userKeyCtx{}, user)
 		r = r.WithContext(ctx)
 		h(w, r)
+		if post && (r.URL.Path == "/admin/logout" || strings.HasPrefix(r.URL.Path, "/admin/security/")) {
+			s.webfigRecheck() // sign-out, revoked sessions, password and second-factor changes end WebFig sessions at once
+		}
 		if post && sess.MFA {
 			s.auditPost(w, r, user)
 		}
@@ -261,6 +264,8 @@ func (s *Server) minRole(method, path string) string {
 		path = "/admin/sites" + rest // D8: the new address has the old rules
 	}
 	switch {
+	case strings.HasPrefix(path, "/admin/sites/webfig"):
+		return store.RoleOwner // remote WebFig: owners only, read or write
 	case strings.HasPrefix(path, "/admin/security/users"):
 		return store.RoleOwner
 	case strings.HasPrefix(path, "/admin/security"):

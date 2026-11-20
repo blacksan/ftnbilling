@@ -55,6 +55,13 @@
 #   MGMT_SUBNET (10.98.0.0/24: a private IPv4 prefix, /16 to /29, apart from
 #                WG_SUBNET; the server is .1, each device gets the next free address.
 #                Routers built after this setting is made accept WinBox from it).
+#   WEBFIG_DOMAIN e.g. tech.ftw.co.ke: opens a router's WebFig through this server, from
+#                the router page in the admin (owners only, after a fresh password and
+#                code). Needs its own DNS A record to this VPS (like DOMAIN) and DOMAIN
+#                set. Adds a second Caddy site with its own certificate and makes the
+#                app listen on 127.0.0.1:8082 for it. Unset = off (and an earlier
+#                setting is kept when a later run leaves it out); WEBFIG_DOMAIN=off
+#                switches it off again. ufw is unchanged (443 is already open).
 #   REPO (blacksan/ftnbilling), BRANCH (main), SWAP_MB (1024).
 set -Eeuo pipefail
 
@@ -238,6 +245,34 @@ mgmt_settings() {
   MGMT_SUBNET=$MGMT_NET/${MGMT_SUBNET#*/}
   MGMT_SERVER_IP=$(int2ip_masked "$MGMT_NET" 32 1)
 }
+# webfig_settings: WEBFIG_DOMAIN from the environment, else from the settings file of an
+# earlier install, else off. "off" switches it off. WEBFIG_PORT is the app's loopback port.
+WEBFIG_PORT=8082
+webfig_settings() {
+  local given="${WEBFIG_DOMAIN:-}" main="${DOMAIN:-}" base
+  WEBFIG_DOMAIN="${given:-$(envget WEBFIG_DOMAIN)}"
+  WEBFIG_DOMAIN=$(printf '%s' "$WEBFIG_DOMAIN" | tr '[:upper:]' '[:lower:]')
+  WEBFIG_OFF=0
+  if [ "$WEBFIG_DOMAIN" = off ]; then WEBFIG_DOMAIN=""; WEBFIG_OFF=1; fi
+  [ -n "$WEBFIG_DOMAIN" ] || return 0
+  [[ $WEBFIG_DOMAIN =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "WEBFIG_DOMAIN must be a host name like tech.example.co.ke, got: $WEBFIG_DOMAIN"
+  if [[ $WEBFIG_DOMAIN =~ ^[0-9.]+$ ]]; then die "WEBFIG_DOMAIN must be a host name, not an IP address: $WEBFIG_DOMAIN"; fi
+  if [ -z "$main" ]; then
+    base=$(envget PUBLIC_BASE_URL)
+    case "$base" in https://*) main=${base#https://}; main=${main%%[/:]*} ;; esac
+  fi
+  [ -n "$main" ] || die "WEBFIG_DOMAIN needs DOMAIN (HTTPS) for the admin itself: run again with DOMAIN=your.domain WEBFIG_DOMAIN=$WEBFIG_DOMAIN"
+  [ "$WEBFIG_DOMAIN" != "$main" ] || die "WEBFIG_DOMAIN must differ from DOMAIN ($main): WebFig needs its own host name, so it never shares cookies with the admin"
+}
+# render_webfig_block: the Caddy site for WEBFIG_DOMAIN (its own certificate); empty when off.
+render_webfig_block() {
+  [ -n "${WEBFIG_DOMAIN:-}" ] || return 0
+  printf '\n# Remote WebFig: a router'"'"'s own web page, reached through this server only. The app checks\n'
+  printf '# the one-time ticket an owner gets after a fresh password and code, and proxies to that one\n'
+  printf '# router over the tunnel. Same rule as above: Caddy is the only proxy in front of it. No gzip\n'
+  printf '# here: compressing can hold back WebFig'"'"'s long requests.\n'
+  printf '%s {\n\treverse_proxy 127.0.0.1:%s {\n\t\tflush_interval -1\n\t}\n}\n' "$WEBFIG_DOMAIN" "${WEBFIG_PORT:-8082}"
+}
 # int2ip_masked ADDR BITS [N]: the network address of ADDR/BITS, plus N.
 int2ip_masked() {
   local n mask
@@ -268,6 +303,7 @@ preflight() {
   if [ -f "$ENVF" ]; then UPGRADE=1; note "existing install found: this run is an in-place upgrade"; fi
   recover_domain
   mgmt_settings
+  webfig_settings
   local ID ID_LIKE VERSION_ID PRETTY_NAME
   eval "$( (. /etc/os-release 2>/dev/null; printf 'ID=%q ID_LIKE=%q VERSION_ID=%q PRETTY_NAME=%q' "${ID:-}" "${ID_LIKE:-}" "${VERSION_ID:-}" "${PRETTY_NAME:-}") || true)"
   case "${ID:-}${ID_LIKE:-}" in
@@ -841,6 +877,13 @@ EOF
     [ -z "${ADMIN_PASS:-}" ] || setkv ADMIN_PASS "$ADMIN_PASS"
     BASE=$(envget PUBLIC_BASE_URL)
   fi
+  # Remote WebFig: written only when set (or switched off); a server without it is left as it was.
+  if [ -n "$WEBFIG_DOMAIN" ]; then
+    setkv WEBFIG_DOMAIN "$WEBFIG_DOMAIN"
+    setkv WEBFIG_LISTEN "127.0.0.1:$WEBFIG_PORT"
+  elif [ "$WEBFIG_OFF" = 1 ] && grep -qs '^WEBFIG_DOMAIN=' "$ENVF"; then
+    setkv WEBFIG_DOMAIN ""
+  fi
   # DATA_KEY encrypts the secrets saved in Settings and national IDs. Every
   # install gets one. Losing it makes both unreadable: it is in the Drive
   # backup, and must be restored together with the database.
@@ -1014,7 +1057,7 @@ $CF_SITE {
 $CF_CB
 	reverse_proxy 127.0.0.1:8080
 }
-$CF_CATCHALL
+$CF_CATCHALL$(render_webfig_block)
 EOF
 }
 

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -100,23 +101,68 @@ func payTokenAccount(tok string, now time.Time) (id string, byCode, ok bool) {
 	return f[0], f[2] == "c", true
 }
 
-const payCSRFCookie = "ftn_pay_csrf"
+// The double-submit cookie. Over https it is __Host-ftn_pay_csrf (Path=/, no
+// Domain): a script on a sibling host name of the same site, such as the WebFig
+// host, cannot overwrite it. Plain http (a customer on the router's walled
+// network) cannot carry a __Host- cookie and keeps the plain name. The old name
+// is still read for a while, so forms already on screen keep working; it is
+// never written again over https.
+const (
+	payCSRFCookie     = "ftn_pay_csrf"
+	payCSRFCookieHost = "__Host-ftn_pay_csrf"
+)
+
+func payHTTPS(r *http.Request) bool {
+	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+}
+
+func payCookieName(r *http.Request) string {
+	if payHTTPS(r) {
+		return payCSRFCookieHost
+	}
+	return payCSRFCookie
+}
 
 // payCSRF returns this visitor's token for the page's forms, setting the cookie
 // on first use. The public forms are protected by the usual double submit.
 func (s *Server) payCSRF(w http.ResponseWriter, r *http.Request) string {
-	if c, err := r.Cookie(payCSRFCookie); err == nil && len(c.Value) >= 16 {
+	name := payCookieName(r)
+	if c, err := r.Cookie(name); err == nil && len(c.Value) >= 16 {
 		return c.Value
 	}
 	b := make([]byte, 18)
 	rand.Read(b)
 	v := base64.RawURLEncoding.EncodeToString(b)
-	http.SetCookie(w, &http.Cookie{Name: payCSRFCookie, Value: v, Path: "/pay", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"})
+	path := "/pay"
+	if name == payCSRFCookieHost {
+		path = "/" // the __Host- prefix demands it
+	}
+	http.SetCookie(w, &http.Cookie{Name: name, Value: v, Path: path, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: payHTTPS(r)})
 	return v
 }
 
+// payOriginOK refuses a POST that says it comes from another origin: another
+// site or, with the WebFig host on the same site, a sibling host name.
+func payOriginOK(r *http.Request) bool {
+	if v := r.Header.Get("Sec-Fetch-Site"); v != "" && v != "same-origin" && v != "none" {
+		return false
+	}
+	o := r.Header.Get("Origin")
+	if o == "" {
+		return true
+	}
+	u, err := url.Parse(o)
+	return err == nil && u.Host != "" && strings.EqualFold(u.Host, r.Host)
+}
+
 func payCSRFOK(r *http.Request) bool {
-	c, err := r.Cookie(payCSRFCookie)
+	if !payOriginOK(r) {
+		return false
+	}
+	c, err := r.Cookie(payCookieName(r))
+	if err != nil && payHTTPS(r) {
+		c, err = r.Cookie(payCSRFCookie) // transition: a form served before the rename
+	}
 	f := r.FormValue("_pcsrf")
 	return err == nil && len(c.Value) >= 16 && subtle.ConstantTimeCompare([]byte(c.Value), []byte(f)) == 1
 }
