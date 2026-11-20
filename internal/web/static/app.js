@@ -219,7 +219,7 @@
         li.appendChild(a); cl.appendChild(li); cItems.push(a);
       });
     });
-    if (!any) cl.appendChild(el("li", "none", cq.value ? "Nothing found. Try a flat, phone number, MAC or receipt code." : "Type to search."));
+    if (!any) cl.appendChild(el("li", "none", cq.value ? "Nothing found. Try a house number, phone number, MAC or receipt code." : "Type to search."));
     cSel = 0; cMark();
   }
   function cMark() { cItems.forEach(function (a, i) { a.setAttribute("aria-selected", i === cSel ? "true" : "false"); if (i === cSel) a.scrollIntoView({ block: "nearest" }); }); }
@@ -499,7 +499,7 @@
         var rl = el("span"); if (p.locked) { var lk = el("span", "", "🔒 "); lk.setAttribute("aria-hidden", "true"); rl.appendChild(lk); }
         rl.appendChild(document.createTextNode(p.role_label));
         if (p.locked) rl.appendChild(el("span", "sr-only", " (locked)"));
-        if (p.flats != null) rl.appendChild(el("span", "muted", " " + p.flats + " flat" + (p.flats === 1 ? "" : "s")));
+        if (p.flats != null) rl.appendChild(el("span", "muted", " " + p.flats + " house" + (p.flats === 1 ? "" : "s")));
         if (p.apply && p.apply.state !== "ok") { var ap = el("div", "cport " + p.apply.state, p.apply.state === "applying" ? "applying…" : (p.apply.message || "not applied")); rl.appendChild(ap); }
         td("Role", rl);
         td("Link", p.link || "");
@@ -650,7 +650,7 @@
     if (rf) rf.addEventListener("submit", function (e) {
       e.preventDefault();
       var typed = $("[name=confirm_name]", rf).value.trim();
-      askName("Reset this router?", "The server forgets its tunnel and login. Flats stay. You will make a new line and paste it on the router. Type the router name to confirm.", "Reset router", rname).then(function (nm) {
+      askName("Reset this router?", "The server forgets its tunnel and login. Houses stay. You will make a new line and paste it on the router. Type the router name to confirm.", "Reset router", rname).then(function (nm) {
         if (nm == null) return;
         postForm("/admin/routers/setup/reset", { id: rid, confirm_name: nm || typed }).then(function (r) {
           if (r.__status >= 200 && r.__status < 300) { toast("Router reset. Make a new line."); location.href = "/admin/routers/view?id=" + enc(rid) + "&tab=setup"; }

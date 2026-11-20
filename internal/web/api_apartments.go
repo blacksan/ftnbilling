@@ -404,7 +404,7 @@ func apiGone(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 // apiMACOtherBuilding answers the cross-building refusal.
 func apiMACOtherBuilding(w http.ResponseWriter, dup *billing.DuplicateMACError, mac string) {
 	apiErr(w, http.StatusConflict, codeMACOtherBuilding,
-		"That MAC address belongs to "+dup.CustomerOrCustomer()+" in another apartment ("+dup.ApartmentName+", unit "+dup.Flat+"). Move the customer to this apartment first, or use another device.",
+		"That MAC address belongs to "+dup.CustomerOrCustomer()+" in another apartment ("+dup.ApartmentName+", house number "+dup.Flat+"). Move the customer to this apartment first, or use another device.",
 		map[string]any{"mac": mac, "belongs_to": map[string]any{
 			"account_id": dup.AccountID, "code": dup.Code, "customer": dup.CustomerName,
 			"apartment": map[string]any{"id": dup.ApartmentID, "name": dup.ApartmentName}, "unit": dup.Flat,

@@ -158,14 +158,14 @@ func evalWalled(e *evalCtx, it *CheckItem) {
 	}
 	d := diffWalled(e.sn, w, e.walledIface())
 	if d.ok() {
-		okItem(it, "Unregistered devices and flats with no paid time can only reach DNS and the payment page.")
+		okItem(it, "Unregistered devices and houses with no paid time can only reach DNS and the payment page.")
 		return
 	}
 	it.Status = StatusFail
 	it.Evidence = append(it.Evidence, d.missing...)
 	it.Evidence = append(it.Evidence, d.wrong...)
 	it.Evidence = append(it.Evidence, d.stale...)
-	it.Detail = "The firewall rules that wall unregistered devices and unpaid flats are not as the server writes them (" + d.text() + "), so someone may be online without paying."
+	it.Detail = "The firewall rules that wall unregistered devices and unpaid houses are not as the server writes them (" + d.text() + "), so someone may be online without paying."
 	it.Fix = CheckFix{Kind: FixAuto, Label: "Repair the walled-garden rules", Role: store.RoleOperator}
 }
 
@@ -184,9 +184,9 @@ func evalWalledDNS(e *evalCtx, it *CheckItem) {
 	}
 	it.Evidence = append(it.Evidence, "allow-remote-requests: "+v)
 	it.Status = StatusWarn
-	it.Detail = "A walled flat (unpaid, suspended or not registered) can still look up any name through the router, which is what makes the payment page work. " +
+	it.Detail = "A walled house (unpaid, suspended or not registered) can still look up any name through the router, which is what makes the payment page work. " +
 		"Someone who knows how could tunnel traffic through those lookups (dnstt, iodine) for slow free internet. RouterOS cannot limit DNS to a few names per customer, " +
-		"so nothing is changed on the router. If a walled flat shows heavy DNS traffic, suspend it and ask the tenant to pay."
+		"so nothing is changed on the router. If a walled house shows heavy DNS traffic, suspend it and ask the tenant to pay."
 }
 
 // ---- customer DHCP server ------------------------------------------------------------
@@ -199,7 +199,7 @@ func evalDHCP(e *evalCtx, it *CheckItem) {
 		it.Evidence = append(it.Evidence, fmt.Sprintf("%s on %s", r["name"], r["interface"]))
 		if rowDisabled(r) {
 			it.Status = StatusFail
-			it.Detail = "The customer DHCP server (" + billing.DHCPServerName + ") exists but is switched off, so no flat gets an address."
+			it.Detail = "The customer DHCP server (" + billing.DHCPServerName + ") exists but is switched off, so no house gets an address."
 			it.Fix = CheckFix{Kind: FixAuto, Label: "Turn the customer DHCP server on", Role: store.RoleOperator}
 			return
 		}

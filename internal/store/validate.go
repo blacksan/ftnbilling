@@ -17,7 +17,7 @@ func Validate(d *Data) []string {
 		if s, ok := d.Sites[id]; ok {
 			return s.Name
 		}
-		return "unknown building " + id
+		return "unknown router " + id
 	}
 	// Duplicate account codes (open and closed accounts share the code space).
 	codes := map[string][]Account{}
@@ -34,16 +34,16 @@ func Validate(d *Data) []string {
 			codes[a.Code] = append(codes[a.Code], a)
 		}
 		if _, ok := d.Sites[a.SiteID]; !ok {
-			add("Flat %q (code %s) belongs to a building that does not exist (%q).", a.Flat, a.Code, a.SiteID)
+			add("House %q (code %s) belongs to a router that does not exist (%q).", a.Flat, a.Code, a.SiteID)
 		}
 		if a.PackageID != "" {
 			if _, ok := d.Packages[a.PackageID]; !ok {
-				add("Flat %q in %s has a package that does not exist (%q).", a.Flat, site(a.SiteID), a.PackageID)
+				add("House %q in %s has a package that does not exist (%q).", a.Flat, site(a.SiteID), a.PackageID)
 			}
 		}
 		if a.CustomerID != "" {
 			if _, ok := d.Customers[a.CustomerID]; !ok {
-				add("Flat %q in %s points at a customer that does not exist.", a.Flat, site(a.SiteID))
+				add("House %q in %s points at a customer that does not exist.", a.Flat, site(a.SiteID))
 			}
 		}
 	}
@@ -54,7 +54,7 @@ func Validate(d *Data) []string {
 			for _, a := range as {
 				where = append(where, fmt.Sprintf("%s in %s", a.Flat, site(a.SiteID)))
 			}
-			dup = append(dup, fmt.Sprintf("The account code %s is used by more than one flat (%s). Codes must be unique; change one of them.", c, strings.Join(where, " and ")))
+			dup = append(dup, fmt.Sprintf("The account code %s is used by more than one house (%s). Codes must be unique; change one of them.", c, strings.Join(where, " and ")))
 		}
 	}
 	sort.Strings(dup)
@@ -69,7 +69,7 @@ func Validate(d *Data) []string {
 		}
 		if a.MAC != "" {
 			if !macShape.MatchString(strings.ToUpper(a.MAC)) {
-				add("The ONT MAC %q of flat %q in %s is not written like AA:BB:CC:DD:EE:FF.", a.MAC, a.Flat, site(a.SiteID))
+				add("The ONT MAC %q of house %q in %s is not written like AA:BB:CC:DD:EE:FF.", a.MAC, a.Flat, site(a.SiteID))
 			}
 			k := strings.ToUpper(a.MAC)
 			macs[k] = append(macs[k], a)
@@ -87,7 +87,7 @@ func Validate(d *Data) []string {
 				flats = append(flats, a.Flat+" in "+site(a.SiteID))
 			}
 			sort.Strings(flats)
-			dm = append(dm, fmt.Sprintf("The ONT MAC %s is on more than one open flat (%s). A MAC can belong to only one open flat in all buildings.", as[0].MAC, strings.Join(flats, " and ")))
+			dm = append(dm, fmt.Sprintf("The ONT MAC %s is on more than one open house (%s). A MAC can belong to only one open house anywhere on the network.", as[0].MAC, strings.Join(flats, " and ")))
 		}
 	}
 	for _, as := range ips {
@@ -97,7 +97,7 @@ func Validate(d *Data) []string {
 				flats = append(flats, a.Flat)
 			}
 			sort.Strings(flats)
-			dm = append(dm, fmt.Sprintf("The IP address %s is on more than one open flat in %s (%s).", as[0].IP, site(as[0].SiteID), strings.Join(flats, " and ")))
+			dm = append(dm, fmt.Sprintf("The IP address %s is on more than one open house in %s (%s).", as[0].IP, site(as[0].SiteID), strings.Join(flats, " and ")))
 		}
 	}
 	sort.Strings(dm)
@@ -106,19 +106,19 @@ func Validate(d *Data) []string {
 	tun := map[string]string{}
 	for _, s := range d.Sites {
 		if s.ID == "" {
-			add("A building has no id.")
+			add("A router has no id.")
 		}
 		if s.Mode != SiteModeWG && s.Mode != SiteModeEnv {
-			add("Building %q has mode %q; it must be %q or %q.", s.Name, s.Mode, SiteModeWG, SiteModeEnv)
+			add("Router %q has mode %q; it must be %q or %q.", s.Name, s.Mode, SiteModeWG, SiteModeEnv)
 		}
 		if !s.Removed && s.TunnelIP != "" {
 			if o, ok := tun[s.TunnelIP]; ok {
-				add("Buildings %q and %q have the same tunnel address %s.", o, s.Name, s.TunnelIP)
+				add("Routers %q and %q have the same tunnel address %s.", o, s.Name, s.TunnelIP)
 			}
 			tun[s.TunnelIP] = s.Name
 		}
 		if s.Lat < -90 || s.Lat > 90 || s.Lng < -180 || s.Lng > 180 {
-			add("Building %q has a GPS position outside the valid range.", s.Name)
+			add("Router %q has a GPS position outside the valid range.", s.Name)
 		}
 	}
 	// Ledger.
@@ -142,7 +142,7 @@ func Validate(d *Data) []string {
 		}
 		if p.SiteID != "" {
 			if _, ok := d.Sites[p.SiteID]; !ok {
-				add("Payment %s belongs to a building that does not exist.", p.Key)
+				add("Payment %s belongs to a router that does not exist.", p.Key)
 			}
 		}
 		if p.AccountID != "" {
@@ -170,7 +170,7 @@ func Validate(d *Data) []string {
 		}
 		if o.SiteID != "" {
 			if _, ok := d.Sites[o.SiteID]; !ok {
-				add("Order %s belongs to a building that does not exist.", o.ID)
+				add("Order %s belongs to a router that does not exist.", o.ID)
 			}
 		}
 		if o.PackageID != "" {
@@ -190,13 +190,13 @@ func Validate(d *Data) []string {
 		}
 		if v.SiteID != "" {
 			if _, ok := d.Sites[v.SiteID]; !ok {
-				add("Voucher %s is for a building that does not exist.", v.Code)
+				add("Voucher %s is for a router that does not exist.", v.Code)
 			}
 		}
 	}
 	for _, dv := range d.Devices {
 		if _, ok := d.Sites[dv.SiteID]; !ok {
-			add("An unregistered device (%s) belongs to a building that does not exist.", dv.MAC)
+			add("An unregistered device (%s) belongs to a router that does not exist.", dv.MAC)
 		}
 	}
 	serials := map[string]string{}
@@ -212,7 +212,7 @@ func Validate(d *Data) []string {
 			add("Equipment %s has an unknown status %q.", e.ID, e.Status)
 		}
 		if e.AccountID != "" && e.Status != EqInstalled {
-			add("Equipment %s is assigned to a flat but its status is %q, not installed.", e.ID, e.Status)
+			add("Equipment %s is assigned to a house but its status is %q, not installed.", e.ID, e.Status)
 		}
 		if e.Serial != "" {
 			k := e.Kind + "|" + strings.ToUpper(e.Serial)
@@ -249,7 +249,7 @@ func Validate(d *Data) []string {
 	for _, a := range all {
 		if a.ApartmentID != "" {
 			if _, ok := d.Apartments[a.ApartmentID]; !ok {
-				add("Flat %q (code %s) belongs to an apartment that does not exist (%q).", a.Flat, a.Code, a.ApartmentID)
+				add("House %q (code %s) belongs to an apartment that does not exist (%q).", a.Flat, a.Code, a.ApartmentID)
 			}
 		}
 	}
@@ -259,7 +259,7 @@ func Validate(d *Data) []string {
 		}
 		k := a.ApartmentID + "|" + UnitKey(a.Unit)
 		if o, ok := unitSeen[k]; ok {
-			add("The unit %q is on more than one open account of %s (%s and %s).", a.Unit, d.Apartments[a.ApartmentID].Name, o, a.Code)
+			add("The house number %q is on more than one open account of %s (%s and %s).", a.Unit, d.Apartments[a.ApartmentID].Name, o, a.Code)
 		}
 		unitSeen[k] = a.Code
 	}
@@ -289,7 +289,7 @@ func Validate(d *Data) []string {
 		switch s.AccessMode {
 		case "", AccessIPoE:
 		default:
-			add("Building %q has access mode %q.", s.Name, s.AccessMode)
+			add("Router %q has access mode %q.", s.Name, s.AccessMode)
 		}
 	}
 	for _, t := range d.Tenancies {
@@ -312,9 +312,9 @@ func Conflicts(d *Data) []string {
 	for _, a := range d.MACConflicts() {
 		who := ""
 		if o, ok := d.AccountByMAC(a.MAC); ok && o.ID != a.ID {
-			who = fmt.Sprintf(", used by flat %s (%s) in %s", o.Flat, o.Code, d.Sites[o.SiteID].Name)
+			who = fmt.Sprintf(", used by house %s (%s) in %s", o.Flat, o.Code, d.Sites[o.SiteID].Name)
 		}
-		out = append(out, fmt.Sprintf("Flat %s (%s) in %s has MAC %q%s. Not provisioned until the MAC is fixed.",
+		out = append(out, fmt.Sprintf("House %s (%s) in %s has MAC %q%s. Not provisioned until the MAC is fixed.",
 			a.Flat, a.Code, d.Sites[a.SiteID].Name, a.MAC, who))
 	}
 	return out

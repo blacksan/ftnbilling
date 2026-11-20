@@ -236,7 +236,7 @@ func (s *Server) apiRouterClients(w http.ResponseWriter, r *http.Request, c *api
 	switch kind {
 	case "", "all", "flats", "unregistered":
 	default:
-		validationErr(w, map[string]string{"kind": "must be all, flats or unregistered"})
+		validationErr(w, map[string]string{"kind": "must be all, houses or unregistered"})
 		return
 	}
 	switch online {

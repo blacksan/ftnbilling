@@ -319,7 +319,7 @@ func (d *Data) migrateV5toV6(now time.Time) {
 		a.MACConflict = true
 		d.Accounts[id] = a
 		d.AddEvent(Event{Time: now, SiteID: a.SiteID, Kind: "audit", AccountID: a.ID,
-			Msg: "MAC conflict found by migration 0004: flat " + a.Flat + " (" + a.Code + ") has MAC " + a.MAC +
+			Msg: "MAC conflict found by migration 0004: house " + a.Flat + " (" + a.Code + ") has MAC " + a.MAC +
 				", already used or malformed. It will not be provisioned on IPoE until fixed."})
 	}
 	d.migrateEquipmentMACs(now)
@@ -554,7 +554,7 @@ func (d *Data) migrateV8toV9(now time.Time) {
 				a.Unit += " (" + ref + ")"
 				k = a.ApartmentID + "|" + UnitKey(a.Unit)
 				d.AddEvent(Event{Time: now, SiteID: a.SiteID, Kind: "audit", AccountID: a.ID,
-					Msg: "Unit conflict found by migration 0008: flat " + was + " (" + a.Code + ") shares its label with another open account of the same apartment. Its unit is now " + a.Unit + "."})
+					Msg: "House number conflict found by migration 0008: house " + was + " (" + a.Code + ") shares its label with another open account of the same apartment. Its house number is now " + a.Unit + "."})
 			}
 			units[k] = true
 		}

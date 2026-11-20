@@ -140,7 +140,7 @@ private fun Form(ui: AddCustomerUiState, vm: AddCustomerViewModel) {
             modifier = Modifier.fillMaxWidth(),
         )
     }
-    StepCard(2, "Apartment and unit") {
+    StepCard(2, "Apartment and house number") {
         when (val a = ui.apartments) {
             Loadable.Loading -> LoadingSpinner()
             is Loadable.Failed -> Text(a.message, color = MaterialTheme.colorScheme.error)
@@ -162,7 +162,7 @@ private fun Form(ui: AddCustomerUiState, vm: AddCustomerViewModel) {
             }
         }
         OutlinedTextField(
-            ui.unit, vm::onUnit, label = { Text("Unit (flat), for example B4") }, singleLine = true,
+            ui.unit, vm::onUnit, label = { Text("House number, for example B4") }, singleLine = true,
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
             modifier = Modifier.fillMaxWidth(),
         )
@@ -363,7 +363,7 @@ private fun ResultCard(a: AddedCustomer, onOpen: () -> Unit, onAnother: () -> Un
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Customer created", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold)
             LabeledValue("Apartment", a.account.apartment?.name.orEmpty())
-            LabeledValue("Unit", a.account.unitLabel)
+            LabeledValue("House number", a.account.unitLabel)
             if (a.account.tenant.isNotBlank()) LabeledValue("Name", a.account.tenant)
             LabeledValue("Code", a.account.code)
             LabeledValue("Router", a.account.routerLabel)

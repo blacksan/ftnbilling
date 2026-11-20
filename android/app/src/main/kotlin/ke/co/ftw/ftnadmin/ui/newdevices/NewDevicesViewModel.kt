@@ -190,14 +190,14 @@ class NewDevicesViewModel(
     fun attach() {
         val sh = _state.value.sheet ?: return
         val acc = sh.selected ?: return
-        run(sh, "MAC attached to flat ${acc.flat}") { repo.attach(sh.device.routerKey, sh.device.mac, acc.id) }
+        run(sh, "MAC attached to house ${acc.flat}") { repo.attach(sh.device.routerKey, sh.device.mac, acc.id) }
     }
 
     fun create() {
         val sh = _state.value.sheet ?: return
         val apt = sh.apartmentId ?: return
         if (sh.flat.isBlank()) return
-        run(sh, "Flat ${sh.flat.trim()} created") {
+        run(sh, "House ${sh.flat.trim()} created") {
             repo.create(sh.device.routerKey, apt, sh.device.mac, sh.flat.trim(), sh.tenant.trim(), sh.phone.trim(), sh.packageId)
         }
     }
@@ -237,8 +237,8 @@ class NewDevicesViewModel(
                                 error = when {
                                     api?.code == ErrorCode.MAC_IN_USE && api.macOwner != null -> null
                                     api?.code == ErrorCode.MAC_OTHER_BUILDING && api.macOtherBuilding != null -> null
-                                    api?.code == ErrorCode.UNIT_IN_USE -> "Unit ${sh.flat.trim()} is already used in this apartment. Use Attach instead."
-                                    api?.code == ErrorCode.FLAT_IN_USE -> "Flat ${sh.flat.trim()} already exists on this router. Use Attach instead."
+                                    api?.code == ErrorCode.UNIT_IN_USE -> "House number ${sh.flat.trim()} is already used in this apartment. Use Attach instead."
+                                    api?.code == ErrorCode.FLAT_IN_USE -> "House ${sh.flat.trim()} already exists on this router. Use Attach instead."
                                     else -> e.userMessage()
                                 },
                             ),

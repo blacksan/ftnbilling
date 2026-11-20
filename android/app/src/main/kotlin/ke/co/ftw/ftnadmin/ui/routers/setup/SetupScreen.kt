@@ -329,7 +329,7 @@ internal fun StepList(steps: List<Step>) {
 private fun BenchCard(ui: BenchUiState, vm: BenchViewModel) {
     SectionCard("Bench tools") {
         Text(
-            "Make a test flat from a device learned on the bench port, then check that suspend and unsuspend reach the router.",
+            "Make a test house from a device learned on the bench port, then check that suspend and unsuspend reach the router.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -349,10 +349,10 @@ private fun BenchCard(ui: BenchUiState, vm: BenchViewModel) {
         Text("Package", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         PackagePicker(ui.packages, ui.packageId, vm::setPackage)
         Button(onClick = vm::createTestFlat, enabled = vm.canCreate(), modifier = Modifier.fillMaxWidth()) {
-            Text(if (ui.busy) "Working..." else "Create test flat")
+            Text(if (ui.busy) "Working..." else "Create test house")
         }
         ui.testAccount?.let { a ->
-            LabeledValue("Test flat", a.flat.ifBlank { a.code })
+            LabeledValue("Test house", a.flat.ifBlank { a.code })
             OutlinedButton(onClick = vm::runSuspendTest, enabled = !ui.busy, modifier = Modifier.fillMaxWidth()) { Text("Run suspend test") }
         }
         if (ui.suspendSteps.isNotEmpty()) StepList(ui.suspendSteps)

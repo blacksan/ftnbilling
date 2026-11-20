@@ -524,8 +524,8 @@ var checkDefs = []checkDef{
 	{CheckHooks, "router", "Scripts that run by themselves on the router", false, "", evalHooks},
 	{CheckCustomerIf, "network", "Customer network is on one interface", true, "", evalCustomerIf},
 	{CheckDHCP, "network", "Customer DHCP server is on", true, "", evalDHCP},
-	{CheckWalled, "network", "Unpaid and unregistered flats are walled", true, "", evalWalled},
-	{CheckWalledDNS, "network", "Walled flats can still resolve any name", false, "", evalWalledDNS},
+	{CheckWalled, "network", "Unpaid and unregistered houses are walled", true, "", evalWalled},
+	{CheckWalledDNS, "network", "Walled houses can still resolve any name", false, "", evalWalledDNS},
 	{CheckWAN, "network", "Router has a way to the internet", false, "", evalWAN},
 	{CheckOLT, "network", "Fibre (OLT) port is not stuck in the bridge", true, "", evalOLT},
 	{CheckBench, "network", "Customer port (extra)", false, "", evalBench},
@@ -1199,17 +1199,17 @@ func evalCustDNS(e *evalCtx, it *CheckItem) {
 // ---- customer interface -------------------------------------------------------------
 
 func evalCustomerIf(e *evalCtx, it *CheckItem) {
-	manual := CheckFix{Kind: FixManual, Label: "Fix the building's fields", Role: store.RoleOperator}
+	manual := CheckFix{Kind: FixManual, Label: "Fix the router's fields", Role: store.RoleOperator}
 	if e.planErr != nil {
 		it.Status = StatusFail
-		it.Detail = "The building's customer network is not valid: " + e.planErr.Error()
+		it.Detail = "The router's customer network is not valid: " + e.planErr.Error()
 		it.Fix = manual
 		return
 	}
 	c := e.cust
 	if !c.found {
 		it.Status = StatusFail
-		it.Detail = fmt.Sprintf("No interface on the router carries %s, the gateway address of this building's customer network. Check the building's customer subnet.", e.plan.GatewayIP)
+		it.Detail = fmt.Sprintf("No interface on the router carries %s, the gateway address of this router's customer network. Check the router's customer subnet.", e.plan.GatewayIP)
 		it.Fix = manual
 		return
 	}
@@ -1331,7 +1331,7 @@ func assessOLT(sn *snapshot, site store.Site) portAssess {
 	// OLT port is reported in words by the server's own pass (custport.go), not "fixed" here.
 	a.conflict = len(a.rows) > 0 && site.VLANID > 0
 	if a.conflict && len(a.vlans) == 0 {
-		a.unknown = append(a.unknown, "the building has a VLAN id but no VLAN interface exists on the port yet")
+		a.unknown = append(a.unknown, "the router has a VLAN id but no VLAN interface exists on the port yet")
 	}
 	if len(a.strands) > 0 {
 		a.hard = append(a.hard, "the VLAN interface "+strings.Join(a.strands, ", ")+" is not a bridge port, so removing the port would cut customers off")
@@ -1342,7 +1342,7 @@ func assessOLT(sn *snapshot, site store.Site) portAssess {
 func evalOLT(e *evalCtx, it *CheckItem) {
 	if e.site.OLTInterface == "" {
 		it.Status = StatusInfo
-		it.Detail = "No fibre (OLT) interface is set for this building."
+		it.Detail = "No fibre (OLT) interface is set for this router."
 		return
 	}
 	a := assessOLT(e.sn, e.site)
@@ -1565,7 +1565,7 @@ func evalIPv6(e *evalCtx, it *CheckItem) {
 		return
 	}
 	it.Status = StatusInfo
-	it.Detail = "IPv6 is on. The flats' IPv6 forwarding is dropped, so flats keep IPv4 only."
+	it.Detail = "IPv6 is on. The houses' IPv6 forwarding is dropped, so houses keep IPv4 only."
 }
 
 func evalPublicIP(e *evalCtx, it *CheckItem) {

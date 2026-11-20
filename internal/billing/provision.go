@@ -125,11 +125,11 @@ type AccountRouterState struct {
 // serve its apartment. "" means nothing stands in the way. Call it inside View.
 func provisionBlock(d *store.Data, a store.Account) string {
 	if a.ApartmentID == "" {
-		return "no apartment: choose the building this customer lives in, then it is provisioned"
+		return "no apartment: choose the apartment this customer lives in, then it is provisioned"
 	}
 	apt, ok := d.Apartments[a.ApartmentID]
 	if !ok {
-		return "its apartment no longer exists: choose the building this customer lives in"
+		return "its apartment no longer exists: choose the apartment this customer lives in"
 	}
 	if !d.ApartmentServedBy(a.ApartmentID, a.SiteID) {
 		return fmt.Sprintf("not provisioned: router %s does not serve %s. Link the router to the apartment, or move the customer to a router of %s", d.Sites[a.SiteID].Name, apt.Name, apt.Name)
@@ -638,7 +638,7 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 		var mine []routeros.Row
 		for _, r := range ourLeases[a.Code] {
 			if evicted[r[routeros.RowID]] {
-				rm(pathLease, r, a.Code, "lease "+r["address"]+" (address or MAC wanted by another flat)")
+				rm(pathLease, r, a.Code, "lease "+r["address"]+" (address or MAC wanted by another house)")
 				continue
 			}
 			mine = append(mine, r)

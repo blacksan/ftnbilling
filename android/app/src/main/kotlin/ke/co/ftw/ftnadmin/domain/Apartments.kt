@@ -108,7 +108,7 @@ data class BelongsTo(
     val text: String
         get() {
             val who = customer.ifBlank { "a customer" }
-            val where = listOf(apartment.name, "unit ${unit.ifBlank { "?" }}").filter { it.isNotBlank() }.joinToString(", ")
+            val where = listOf(apartment.name, "house number ${unit.ifBlank { "?" }}").filter { it.isNotBlank() }.joinToString(", ")
             return "Belongs to $who ($where)"
         }
 }

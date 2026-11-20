@@ -235,7 +235,7 @@ func TestAdminDevicesBelongsToAndMove(t *testing.T) {
 	}
 	m.svc.NoteDevice(B.ID, acct.MAC, "10.5.50.40", "dhcp")
 	page := m.adminGet(t, "/admin/devices")
-	if !strings.Contains(page, "Belongs to Wanjiru (Alpha, unit A-1)") || !strings.Contains(page, "Move customer here") {
+	if !strings.Contains(page, "Belongs to Wanjiru (Alpha, house number A-1)") || !strings.Contains(page, "Move customer here") {
 		t.Fatalf("devices page: %s", page)
 	}
 	if strings.Contains(page, `data-open="addcustomer" data-mac="`+acct.MAC) {

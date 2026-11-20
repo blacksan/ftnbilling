@@ -341,7 +341,7 @@ func (p *Prober) applyLocked(r result, now time.Time) {
 	case st.Status != Down && st.Fails >= failsToDown:
 		st.Status, st.Since = Down, st.FirstFail
 		p.d.Outages = append(p.d.Outages, Outage{SiteID: r.id, Start: st.FirstFail, Cause: causeOf(st)})
-		p.o.Log.Warn("building down", "site", r.id, "cause", causeOf(st))
+		p.o.Log.Warn("router down", "site", r.id, "cause", causeOf(st))
 	case st.Status == Down && st.Oks >= oksToUp:
 		st.Status, st.Since = Up, st.FirstOK
 		for i := range p.d.Outages {
@@ -349,7 +349,7 @@ func (p *Prober) applyLocked(r result, now time.Time) {
 				o.End = st.FirstOK
 			}
 		}
-		p.o.Log.Info("building back up", "site", r.id)
+		p.o.Log.Info("router back up", "site", r.id)
 	case st.Status == Unknown && st.Oks >= oksToUp:
 		st.Status, st.Since = Up, st.FirstOK
 	}

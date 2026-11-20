@@ -113,7 +113,7 @@ func (s *Service) LinkCustomer(accountID, customerID string, moveIn time.Time) e
 			return ErrNotFound
 		}
 		if !c.AnonymizedAt.IsZero() {
-			return errors.New("an anonymised customer cannot be linked to a flat")
+			return errors.New("an anonymised customer cannot be linked to a house")
 		}
 		if cur, has := d.OpenTenancy(accountID); has && cur.CustomerID == customerID {
 			return store.ErrNoChange

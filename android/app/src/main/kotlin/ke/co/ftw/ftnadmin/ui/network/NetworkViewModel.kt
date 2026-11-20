@@ -30,7 +30,7 @@ enum class NetworkTab(val label: String) { Clients("Clients"), Interfaces("Inter
 /** Filter chips of the clients list. Each maps to the server's `kind` / `online` query. */
 enum class ClientFilter(val label: String, val kind: String?, val online: Boolean?) {
     All("All", null, null),
-    Flats("Flats", "flats", null),
+    Flats("Houses", "flats", null),
     Unregistered("Unregistered", "unregistered", null),
     Online("Online", null, true),
 }

@@ -188,7 +188,7 @@ func (s *Server) adminCustomerLink(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = s.svc.LinkCustomer(r.PostFormValue("account"), cid, at)
 	}
-	s.back(w, r, "/admin/customers/view?id="+url.QueryEscape(cid), msgOr(err, "Linked to the flat"))
+	s.back(w, r, "/admin/customers/view?id="+url.QueryEscape(cid), msgOr(err, "Linked to the house"))
 }
 
 func (s *Server) adminCustomerMoveOut(w http.ResponseWriter, r *http.Request) {
@@ -200,7 +200,7 @@ func (s *Server) adminCustomerMoveOut(w http.ResponseWriter, r *http.Request) {
 	if to == "" || !strings.HasPrefix(to, "/admin/") {
 		to = "/admin/accounts"
 	}
-	s.back(w, r, to, msgOr(err, "Moved out. The flat is vacant."))
+	s.back(w, r, to, msgOr(err, "Moved out. The house is vacant."))
 }
 
 func (s *Server) adminCustomerNote(w http.ResponseWriter, r *http.Request) {
@@ -560,7 +560,7 @@ func (s *Server) backupStatus() BackupStatus {
 // csvPayments writes the filtered ledger.
 func (s *Server) writePaymentsCSV(w http.ResponseWriter, rows []store.Payment, names map[string]string) {
 	cw := csv.NewWriter(w)
-	cw.Write([]string{"key", "paid_at_eat", "recorded_at_eat", "method", "status", "amount_kes", "account_code", "flat", "building", "package", "payer_phone", "payer_name", "bill_ref", "order_id", "customer", "note"})
+	cw.Write([]string{"key", "paid_at_eat", "recorded_at_eat", "method", "status", "amount_kes", "account_code", "house_number", "router", "package", "payer_phone", "payer_name", "bill_ref", "order_id", "customer", "note"})
 	f := func(t time.Time) string {
 		if t.IsZero() {
 			return ""

@@ -344,7 +344,7 @@ func TestMetricsPageRendersEmptyWithRouterDown(t *testing.T) {
 			}
 		}
 	}
-	if r := a.admin("GET", "/admin/metrics.csv", nil); r.StatusCode != 200 || !strings.HasPrefix(body(t, r), "flat,account_code") {
+	if r := a.admin("GET", "/admin/metrics.csv", nil); r.StatusCode != 200 || !strings.HasPrefix(body(t, r), "house_number,account_code") {
 		t.Error("csv header")
 	}
 	if r := a.admin("GET", "/admin/metrics/flat?code=NOPE", nil); r.StatusCode != 404 {
@@ -361,7 +361,7 @@ func TestMetricsPageWithDemoDataDrillDownSortAndCSV(t *testing.T) {
 	}
 	a.adminPost(t, "/admin/metrics/demo", url.Values{"period": {"7d"}})
 	h := a.adminGet(t, "/admin/metrics?period=7d")
-	for _, want := range []string{"Top 10 flats by download", "Services", "YouTube", "Flat 3B", "Mbps", "Download GB", "Time at cap", "Busy hours", "capacity 500", "Things to look at", "fair-use", "Packet loss", "WAN busy hours"} {
+	for _, want := range []string{"Top 10 houses by download", "Services", "YouTube", "Flat 3B", "Mbps", "Download GB", "Time at cap", "Busy hours", "capacity 500", "Things to look at", "fair-use", "Packet loss", "WAN busy hours"} {
 		if !strings.Contains(h, want) {
 			t.Errorf("demo page lacks %q", want)
 		}

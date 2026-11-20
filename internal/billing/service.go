@@ -23,8 +23,8 @@ var (
 	ErrDuplicateEquipmentMAC = store.ErrDuplicateEquipmentMAC
 	ErrDuplicateKey          = errors.New("that transaction code is already recorded")
 	ErrBadState              = errors.New("that payment is not waiting for a decision")
-	ErrVoucherSite           = errors.New("this voucher is for another building")
-	ErrNoSite                = errors.New("choose a building")
+	ErrVoucherSite           = errors.New("this voucher is for another router")
+	ErrNoSite                = errors.New("choose a router")
 )
 
 // DuplicateMACError says which open account already owns a MAC. It matches
@@ -55,7 +55,7 @@ func (e *DuplicateMACError) Error() string {
 		where = e.ApartmentName
 	}
 	if e.OtherBuilding {
-		return fmt.Sprintf("that MAC address already belongs to %s in another building (%s, unit %s, code %s): move the customer here first, or use another device", e.who(), where, e.Flat, e.Code)
+		return fmt.Sprintf("that MAC address already belongs to %s in another apartment (%s, house number %s, code %s): move the customer here first, or use another device", e.who(), where, e.Flat, e.Code)
 	}
 	return fmt.Sprintf("%s (%s in %s, code %s)", ErrDuplicateMAC.Error(), e.Flat, where, e.Code)
 }
@@ -95,7 +95,7 @@ func accountCustomerName(d *store.Data, a store.Account) string {
 }
 
 // ErrMACOtherBuilding matches (errors.Is) a DuplicateMACError whose owner is in another apartment.
-var ErrMACOtherBuilding = errors.New("that MAC address belongs to a customer in another building")
+var ErrMACOtherBuilding = errors.New("that MAC address belongs to a customer in another apartment")
 
 // Is lets errors.Is(err, ErrMACOtherBuilding) tell the cross-building case.
 func (e *DuplicateMACError) Is(target error) bool {
@@ -270,7 +270,7 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 		unit = cleanText(in.Flat, 40)
 	}
 	if unit == "" {
-		return store.Account{}, errors.New("the unit (flat or door number) is required, e.g. B4")
+		return store.Account{}, errors.New("the house number is required, e.g. B4")
 	}
 	mac, err := NormalizeMAC(in.MAC)
 	if err != nil {
@@ -327,7 +327,7 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 // caller that does something irreversible first (a move) can refuse the whole request up front.
 func (s *Service) ValidateAccountEdit(flat, phone string) error {
 	if cleanText(flat, 40) == "" {
-		return errors.New("the unit (flat or door number) is required")
+		return errors.New("the house number is required")
 	}
 	_, err := normPhone(phone)
 	return err
@@ -336,7 +336,7 @@ func (s *Service) ValidateAccountEdit(flat, phone string) error {
 func (s *Service) UpdateAccount(id, flat, tenant, phone, notes string) error {
 	unit := cleanText(flat, 40)
 	if unit == "" {
-		return errors.New("the unit (flat or door number) is required")
+		return errors.New("the house number is required")
 	}
 	ph, err := normPhone(phone)
 	if err != nil {
@@ -382,7 +382,7 @@ func (s *Service) ChangeMAC(ctx context.Context, id, rawMAC string) error {
 		// free (checked above) and was refused otherwise.
 		msg := fmt.Sprintf("%s: ONT MAC changed %s -> %s", a.Flat, a.MAC, mac)
 		if strings.EqualFold(a.MAC, mac) {
-			msg = fmt.Sprintf("%s: ONT MAC %s checked, no other flat uses it", a.Flat, mac)
+			msg = fmt.Sprintf("%s: ONT MAC %s checked, no other house uses it", a.Flat, mac)
 		}
 		d.AddEvent(store.Event{Time: s.now(), SiteID: a.SiteID, Kind: "info", AccountID: id, Msg: msg})
 		a.MAC, a.MACConflict = mac, false

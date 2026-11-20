@@ -33,7 +33,7 @@ func (s *Service) ChangePackage(ctx context.Context, id, pkgID string, keepTime 
 				return store.ErrNoChange
 			}
 			if !a.ExpiresAt.After(now) {
-				return errors.New("this flat has no time left to keep; choose \"start fresh from now\" instead")
+				return errors.New("this house has no time left to keep; choose \"start fresh from now\" instead")
 			}
 		} else {
 			a.ExpiresAt = now.Add(time.Duration(pkg.DurationMin) * time.Minute)
@@ -149,7 +149,7 @@ func (s *Service) DeletePackage(_ context.Context, id string) error {
 			}
 		}
 		if n > 0 {
-			return fmt.Errorf("%d flat(s) still have time on %s. Change their package or wait for it to expire, or untick it in the portal with Disabled", n, p.Name)
+			return fmt.Errorf("%d house(s) still have time on %s. Change their package or wait for it to expire, or untick it in the portal with Disabled", n, p.Name)
 		}
 		for _, v := range d.Vouchers {
 			if v.PackageID == id && !v.Used {
@@ -213,7 +213,7 @@ func (s *Service) MoveAccount(ctx context.Context, id, toSiteID string) error {
 		delete(d.Devices, store.DeviceKey(toSiteID, a.MAC))
 		for k, o := range d.Orders {
 			if o.AccountID == id && (o.Status == store.OrderPending || o.Status == store.OrderExpired) {
-				o.Status, o.Reason = store.OrderFailed, "account moved to another building"
+				o.Status, o.Reason = store.OrderFailed, "account moved to another apartment"
 				d.Orders[k] = o
 			}
 		}

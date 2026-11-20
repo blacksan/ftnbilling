@@ -1138,7 +1138,7 @@ func (m *Mpesa) c2b(ctx context.Context, body []byte) (C2BResponse, error) {
 		if held, _, err := m.c.Credit(ctx, billing.CreditInput{Key: p.TransID, Method: "mpesa-c2b", AccountID: acct.ID, PackageID: pkg.ID,
 			AmountKES: amount, Phone: p.MSISDN, Name: name, BillRef: p.BillRefNumber, PaidAt: paidAt}); err == nil {
 			if held.Status == store.PayUnmatched && strings.HasPrefix(held.Note, "possible duplicate of manual payment") && m.firstAlert(held.Key) {
-				m.tell("M-Pesa payment " + held.Key + " (KES " + strconv.Itoa(amount) + ") for flat " + acct.Flat + " is held, not credited: " + held.Note + " Open Unmatched payments.")
+				m.tell("M-Pesa payment " + held.Key + " (KES " + strconv.Itoa(amount) + ") for house " + acct.Flat + " is held, not credited: " + held.Note + " Open Unmatched payments.")
 			}
 		} else {
 			if IsPersistError(err) {

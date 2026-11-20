@@ -126,7 +126,7 @@ fun ApartmentsScreen(user: UserInfo, onBack: () -> Unit, onOpen: (String) -> Uni
                 is Loadable.Failed -> ErrorState(items.message, vm::retry)
                 is Loadable.Ready -> PullToRefreshBox(isRefreshing = ui.refreshing, onRefresh = vm::refresh, modifier = Modifier.fillMaxSize()) {
                     if (items.value.isEmpty()) {
-                        EmptyState(if (ui.query.isBlank()) "No apartments yet. An apartment is a building: add one, link its routers, then add customers to it." else "No apartment matches.")
+                        EmptyState(if (ui.query.isBlank()) "No apartments yet. Add an apartment, link its routers, then add customers to it with their house numbers." else "No apartment matches.")
                     } else {
                         LazyColumn(
                             Modifier.fillMaxSize(),
@@ -153,7 +153,7 @@ private fun ApartmentRow(a: Apartment, onClick: () -> Unit) {
             if (a.address.isNotBlank()) Text(a.address, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
             a.gps?.let { ViewOnMapChip(a.name, it) }
             Text(
-                listOf(a.routers.joinToString(", ") { it.label }.ifBlank { "no router linked" }, "${a.accountsActive} of ${a.accountsTotal} flats active").joinToString("  |  "),
+                listOf(a.routers.joinToString(", ") { it.label }.ifBlank { "no router linked" }, "${a.accountsActive} of ${a.accountsTotal} houses active").joinToString("  |  "),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -209,7 +209,7 @@ fun ApartmentDetailScreen(
                 val apt = a.value
                 SectionCard("Overview") {
                     if (apt.address.isNotBlank()) LabeledValue("Address", apt.address)
-                    LabeledValue("Flats", "${apt.accountsActive} active of ${apt.accountsTotal}")
+                    LabeledValue("Houses", "${apt.accountsActive} active of ${apt.accountsTotal}")
                     LabeledValue("Online now", apt.onlineNow.toString())
                     if (apt.notes.isNotBlank()) LabeledValue("Notes", apt.notes)
                     val point = apt.gps
@@ -223,7 +223,7 @@ fun ApartmentDetailScreen(
                 SectionCard("Routers") {
                     if (apt.routers.isEmpty()) {
                         Text(
-                            "No router serves this apartment, so none of its flats can be set up on a router.",
+                            "No router serves this apartment, so none of its houses can be set up on a router.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.error,
                         )
@@ -231,7 +231,7 @@ fun ApartmentDetailScreen(
                     apt.routers.forEach { r ->
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             TextButton(onClick = { onOpenRouter(r.key) }, modifier = Modifier.weight(1f)) {
-                                Text("${r.label}  (${r.accounts} flats)", maxLines = 1)
+                                Text("${r.label}  (${r.accounts} houses)", maxLines = 1)
                             }
                             if (user.canWrite) TextButton(onClick = { vm.askUnlink(r.key) }, enabled = !ui.busy) { Text("Unlink") }
                         }
@@ -249,8 +249,8 @@ fun ApartmentDetailScreen(
                     ContactBlock("Caretaker", apt.caretaker)
                     ContactBlock("Landlord / agent", apt.landlord)
                 }
-                SectionCard("Flats (${apt.accounts.size})") {
-                    if (apt.accounts.isEmpty()) Text("No flats yet.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                SectionCard("Houses (${apt.accounts.size})") {
+                    if (apt.accounts.isEmpty()) Text("No houses yet.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 apt.accounts.forEach { acc -> AccountRow(acc) { onOpenAccount(acc.id) } }
                 if (user.isOwner) {
@@ -265,7 +265,7 @@ fun ApartmentDetailScreen(
         AlertDialog(
             onDismissRequest = { vm.askUnlink(null) },
             title = { Text("Unlink $name?") },
-            text = { Text("The router stops serving this apartment. It is refused while flats of this apartment are still on it: move them first.") },
+            text = { Text("The router stops serving this apartment. It is refused while houses of this apartment are still on it: move them first.") },
             confirmButton = { TextButton(onClick = vm::unlink) { Text("Unlink") } },
             dismissButton = { TextButton(onClick = { vm.askUnlink(null) }) { Text("Cancel") } },
         )

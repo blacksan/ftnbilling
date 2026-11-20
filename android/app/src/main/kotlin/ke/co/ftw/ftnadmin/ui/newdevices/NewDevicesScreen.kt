@@ -128,7 +128,7 @@ private fun DeviceRow(d: NewDevice, onClick: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                    listOf(d.routerLabel, if (d.online) "online" else "seen ${formatAge(d.lastSeen)}", d.suggestedAccount?.let { "looks like flat ${it.flat}" }).filterNotNull().filter { it.isNotBlank() }.joinToString("  |  "),
+                    listOf(d.routerLabel, if (d.online) "online" else "seen ${formatAge(d.lastSeen)}", d.suggestedAccount?.let { "looks like house ${it.flat}" }).filterNotNull().filter { it.isNotBlank() }.joinToString("  |  "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -183,7 +183,7 @@ private fun DeviceSheetContent(
                         suggested = d.suggestedAccount?.let { ke.co.ftw.ftnadmin.domain.Account(id = it.id, code = it.code, flat = it.flat, siteId = d.routerKey) },
                     )
                     Button(onClick = vm::attach, enabled = sheet.selected != null && !sheet.busy, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (sheet.busy) "Attaching..." else "Attach to flat ${sheet.selected?.flat.orEmpty()}".trim())
+                        Text(if (sheet.busy) "Attaching..." else "Attach to house ${sheet.selected?.flat.orEmpty()}".trim())
                     }
                 }
                 SheetTab.Create -> {
@@ -200,7 +200,7 @@ private fun DeviceSheetContent(
                             FilterChip(sheet.apartmentId == a.id, { vm.setApartment(a.id) }, label = { ChipLabel(a.name) })
                         }
                     }
-                    OutlinedTextField(sheet.flat, vm::setFlat, label = { Text("Unit (flat)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(sheet.flat, vm::setFlat, label = { Text("House number") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(sheet.tenant, vm::setTenant, label = { Text("Tenant (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(
                         sheet.phone, vm::setPhone, label = { Text("Phone (optional)") }, singleLine = true,

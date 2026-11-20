@@ -257,7 +257,7 @@ class ApartmentsTest {
         vm.onMac("AA:BB:CC:DD:EE:09")
         vm.submit()
         await(vm.state) { !it.submitting && it.macOther != null }
-        assertEquals("Belongs to Wanjiru (Hilltop, unit D2)", vm.state.value.macOther!!.text)
+        assertEquals("Belongs to Wanjiru (Hilltop, house number D2)", vm.state.value.macOther!!.text)
         assertNull("shown as its own notice, not a generic error", vm.state.value.error)
         assertNull(vm.state.value.added)
         val body = requests("POST /api/v1/accounts").single().body.readUtf8()
@@ -279,7 +279,7 @@ class ApartmentsTest {
         val vm = devicesVm()
         await(vm.state) { it.devices is Loadable.Ready }
         val d = (vm.state.value.devices as Loadable.Ready<List<NewDevice>>).value.single()
-        assertEquals("Belongs to Wanjiru (Hilltop, unit A-1)", d.belongsTo!!.text)
+        assertEquals("Belongs to Wanjiru (Hilltop, house number A-1)", d.belongsTo!!.text)
         vm.open(d)
         assertEquals("the only apartment the router serves is preselected", "ap2", vm.state.value.sheet!!.moveApartmentId)
         vm.askMove()

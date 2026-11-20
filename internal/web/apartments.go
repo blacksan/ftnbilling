@@ -103,7 +103,7 @@ func (s *Server) adminApartmentForm(w http.ResponseWriter, r *http.Request) {
 		}
 		p.H1a, p.H1b, p.Lead = "Edit", "apartment.", det.Name
 	} else {
-		p.H1a, p.H1b, p.Lead = "New", "apartment.", "An apartment block. Link the routers that serve it; add the caretaker and landlord if you have them."
+		p.H1a, p.H1b, p.Lead = "New", "apartment.", "Name and address of the place your customers live in. Link the routers that serve it; add the caretaker and landlord if you have them."
 	}
 	if v := r.URL.Query().Get("name"); v != "" && id == "" { // kept after a form error
 		cur.Name = v
@@ -192,7 +192,7 @@ func (s *Server) adminAccountApartment(w http.ResponseWriter, r *http.Request) {
 		ApartmentID: r.PostFormValue("apartment_id"), SiteID: r.PostFormValue("site"), Unit: r.PostFormValue("unit")})
 	var ue *billing.UnitTakenError
 	if errors.As(err, &ue) {
-		err = errors.New("that unit is already taken in this apartment")
+		err = errors.New("that house number is already taken in this apartment")
 	}
 	s.back(w, r, s.accountURL(id), msgOr(err, "Moved. The router change is applied within a minute and is in the account history."))
 }

@@ -81,7 +81,7 @@ func (s *Server) adminMetrics(w http.ResponseWriter, r *http.Request) {
 		Series: []metrics.LineSeries{mbpsSeries("download", metrics.ColDown, rep.WAN.Vals["down"]), mbpsSeries("upload", metrics.ColUp, rep.WAN.Vals["up"])},
 		Empty:  "No WAN data yet. It appears once the router answers."})
 	olt := metrics.LineChart(metrics.LineOpts{T: rep.OLT.T, XLayout: lay, Unit: "Mbps",
-		Series: []metrics.LineSeries{mbpsSeries("to flats", metrics.ColDown, rep.OLT.Vals["down"]), mbpsSeries("from flats", metrics.ColUp, rep.OLT.Vals["up"])},
+		Series: []metrics.LineSeries{mbpsSeries("to houses", metrics.ColDown, rep.OLT.Vals["down"]), mbpsSeries("from houses", metrics.ColUp, rep.OLT.Vals["up"])},
 		Empty:  "No OLT port data yet."})
 
 	// Top 10 flats by download.
@@ -95,7 +95,7 @@ func (s *Server) adminMetrics(w http.ResponseWriter, r *http.Request) {
 		bars = append(bars, metrics.BarRow{Label: f.Flat, Value: f.DownGB, Text: fmt.Sprintf("%s · %.0f%%", tbText(f.DownGB), f.SharePct),
 			Href: "/admin/metrics/flat?code=" + f.Code + "&period=" + string(period)})
 	}
-	topChart := metrics.BarsH(bars, metrics.ColDown, "No flat traffic recorded for this period yet.")
+	topChart := metrics.BarsH(bars, metrics.ColDown, "No house traffic recorded for this period yet.")
 
 	cols := []string{metrics.ColViol, metrics.ColAqua, metrics.ColMag}
 	var lat []metrics.LineSeries
@@ -163,7 +163,7 @@ func (s *Server) adminMetricsFlat(w http.ResponseWriter, r *http.Request) {
 	lay := metrics.XLayout(fr.Tier, period)
 	line := metrics.LineChart(metrics.LineOpts{T: fr.Series.T, XLayout: lay, Unit: "Mbps", CapLine: fr.Row.CapMbps, CapLabel: fmt.Sprintf("package %.0f", fr.Row.CapMbps),
 		Series: []metrics.LineSeries{mbpsSeries("download", metrics.ColDown, fr.Series.Vals["down"]), mbpsSeries("upload", metrics.ColUp, fr.Series.Vals["up"])},
-		Empty:  "No traffic recorded for this flat in this period."})
+		Empty:  "No traffic recorded for this house in this period."})
 	pg.Data = map[string]any{"F": fr, "Row": fr.Row, "Period": string(period), "Periods": metrics.Periods,
 		"Chart": line, "SvcChart": svcBars(fr.Services)}
 	s.render(w, "admin_metrics_flat", pg)
@@ -178,9 +178,9 @@ func (s *Server) adminMetricsCSV(w http.ResponseWriter, r *http.Request) {
 	rep := col.BuildReport(period, s.svc.Now())
 	metrics.SortFlats(rep.Flats, r.URL.Query().Get("sort"))
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="flat-usage-`+string(period)+`.csv"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="house-usage-`+string(period)+`.csv"`)
 	cw := csv.NewWriter(w)
-	cw.Write([]string{"flat", "account_code", "package", "state", "download_gb", "upload_gb", "share_pct", "peak_mbps", "pct_time_at_cap", "online_hours", "current_mbps", "top_services"})
+	cw.Write([]string{"house_number", "account_code", "package", "state", "download_gb", "upload_gb", "share_pct", "peak_mbps", "pct_time_at_cap", "online_hours", "current_mbps", "top_services"})
 	for _, f := range rep.Flats {
 		var tops []string
 		for _, t := range f.Top {

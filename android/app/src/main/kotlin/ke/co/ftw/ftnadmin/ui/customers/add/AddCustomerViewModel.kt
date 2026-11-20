@@ -245,7 +245,7 @@ class AddCustomerViewModel(
                             api != null && api.code == ErrorCode.MAC_OTHER_BUILDING && api.macOtherBuilding != null ->
                                 it.copy(submitting = false, macOther = api.macOtherBuilding)
                             api != null && (api.code == ErrorCode.UNIT_IN_USE || api.code == ErrorCode.FLAT_IN_USE) ->
-                                it.copy(submitting = false, error = "Unit ${s.unit.trim()} is already used in this apartment. Open that customer instead.")
+                                it.copy(submitting = false, error = "House number ${s.unit.trim()} is already used in this apartment. Open that customer instead.")
                             else -> it.copy(submitting = false, error = e.userMessage())
                         }
                     }

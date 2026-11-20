@@ -61,7 +61,7 @@ fun AccountPicker(
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
-            label = { Text("Search flat, tenant or phone") },
+            label = { Text("Search house number, tenant or phone") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -75,7 +75,7 @@ fun AccountPicker(
                     RadioButton(selected = a.id == selectedId, onClick = null)
                     Column(Modifier.padding(start = 12.dp)) {
                         Text(
-                            "Flat ${a.flat}${if (a.id == suggested?.id) "  (suggested)" else ""}",
+                            "House ${a.flat}${if (a.id == suggested?.id) "  (suggested)" else ""}",
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurface,
                         )

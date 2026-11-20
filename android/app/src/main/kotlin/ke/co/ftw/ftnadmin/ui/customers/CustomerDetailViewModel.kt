@@ -188,7 +188,7 @@ class CustomerDetailViewModel(
                 val d = cur.dialog
                 cur.copy(busy = false, dialog = if (d == DetailDialog.Extend) cur.pendingLowerPlan(api) else d, error = null)
             }
-            ErrorCode.UNIT_IN_USE -> cur.copy(busy = false, error = "That unit is already used by another customer of the apartment.")
+            ErrorCode.UNIT_IN_USE -> cur.copy(busy = false, error = "That house number is already used by another customer of the apartment.")
             ErrorCode.VALIDATION_FAILED ->
                 cur.copy(busy = false, macFieldError = api.fieldErrors["mac"], error = if (api.fieldErrors["mac"] == null) e.userMessage() else null)
             else -> cur.copy(busy = false, error = e.userMessage())

@@ -103,7 +103,7 @@ class ViewModelsTest {
         val s = vm.state.value
         assertEquals(DetailDialog.EditMac, s.dialog)
         val text = macConflictText(s.macOwner!!)
-        assertTrue(text, text.contains("flat C7"))
+        assertTrue(text, text.contains("house C7"))
         assertTrue(text, text.contains("Lavington Court"))
         assertTrue(text, text.contains("FTN-2"))
         assertNull("conflict is shown as its own notice, not a generic error", s.error)

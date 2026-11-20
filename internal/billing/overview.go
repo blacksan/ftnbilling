@@ -228,7 +228,7 @@ func (s *Service) Overview(in OverviewInput) Overview {
 	}
 	for _, p := range pays {
 		if p.Status == store.PayUnmatched && !p.PaidAt.Before(dayStart) {
-			feed = append(feed, OverviewFeedItem{Time: p.PaidAt.UTC().Format(time.RFC3339), Kind: "unmatched", Text: kes(p.AmountKES) + " received, not matched to a flat yet", RouterID: p.SiteID})
+			feed = append(feed, OverviewFeedItem{Time: p.PaidAt.UTC().Format(time.RFC3339), Kind: "unmatched", Text: kes(p.AmountKES) + " received, not matched to a house yet", RouterID: p.SiteID})
 		}
 		if !CountsAsRevenue(p) {
 			continue
@@ -247,7 +247,7 @@ func (s *Service) Overview(in OverviewInput) Overview {
 			}
 		}
 		if !p.PaidAt.Before(dayStart) {
-			who := "a flat"
+			who := "a house"
 			if a, ok := acctFlat[p.AccountID]; ok {
 				who = a.Flat
 			}
@@ -371,8 +371,8 @@ func (s *Service) Overview(in OverviewInput) Overview {
 	add("unmatched_payments", countText(unmatched, "payment is", "payments are")+" waiting to be matched", unmatched, "/admin/payments?tab=unmatched")
 	add("new_devices", countText(s.UnregisteredOnline(has), "new device is", "new devices are")+" online without an account", s.UnregisteredOnline(has), "/admin/devices")
 	add("renewals", countText(len(o.Renewals48h), "plan ends", "plans end")+" in the next 48 hours", len(o.Renewals48h), "/admin/subscribers?tab=active")
-	add("mac_conflicts", countText(macConflicts, "flat needs", "flats need")+" a MAC address fixed", macConflicts, "/admin/subscribers?tab=mac_conflict")
-	add("no_plan", countText(newAccts, "flat has", "flats have")+" no plan yet", newAccts, "/admin/subscribers?tab=new")
+	add("mac_conflicts", countText(macConflicts, "house needs", "houses need")+" a MAC address fixed", macConflicts, "/admin/subscribers?tab=mac_conflict")
+	add("no_plan", countText(newAccts, "house has", "houses have")+" no plan yet", newAccts, "/admin/subscribers?tab=new")
 	add("router_tasks", countText(pendingTasks, "change is", "changes are")+" waiting to reach a router", pendingTasks, "/admin/routers")
 	return o
 }

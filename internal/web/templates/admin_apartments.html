@@ -5,46 +5,46 @@
 
 {{define "admin_apartments"}}{{template "ahead" .}}
 <div class="stats">
-{{template "stat" (dict "K" "Apartments" "V" .Data.Count "S" "buildings" "Icon" "apartments" "Feature" true)}}
-{{template "stat" (dict "K" "Flats" "V" .Data.Flats "S" "open accounts" "Icon" "accounts" "Tone" "info")}}
+{{template "stat" (dict "K" "Apartments" "V" .Data.Count "S" "you serve" "Icon" "apartments" "Feature" true)}}
+{{template "stat" (dict "K" "Houses" "V" .Data.Flats "S" "open accounts" "Icon" "accounts" "Tone" "info")}}
 {{template "stat" (dict "K" "Active" "V" .Data.ActiveN "S" "with paid time" "Icon" "check" "Tone" "ok")}}
 {{template "stat" (dict "K" "Online now" "V" .Data.OnlineN "S" "connected" "Icon" "live")}}
 </div>
 <form method="get" action="/admin/apartments" class="row clients-search" role="search"><input type="search" name="q" value="{{.Data.Q}}" placeholder="Search apartment, address, caretaker or landlord" aria-label="Search apartments" autocomplete="off"><button class="ghost">Search</button></form>
-{{if .Data.Rows}}<div class="tw"><table class="rs"><thead><tr><th>Apartment</th><th>Routers</th><th class="n">Flats active / total</th><th class="n">Online now</th><th>Caretaker</th></tr></thead><tbody>
+{{if .Data.Rows}}<div class="tw"><table class="rs"><thead><tr><th>Apartment</th><th>Routers</th><th class="n">Houses active / total</th><th class="n">Online now</th><th>Caretaker</th></tr></thead><tbody>
 {{range .Data.Rows}}<tr><td class="who"><b><a href="/admin/apartments/view?id={{.ID}}">{{.Name}}</a></b><span>{{.Address}}</span>{{with .MapURL}}<a class="maplink" href="{{.}}" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>View on map</a>{{end}}</td>
 <td data-label="Routers">{{range $i, $r := .Routers}}{{if $i}}, {{end}}<a href="/admin/routers/view?id={{$r.ID}}">{{$r.Name}}</a>{{else}}<span class="pill drift">no router</span>{{end}}</td>
-<td class="n" data-label="Flats">{{.Active}} / {{.Total}}</td><td class="n" data-label="Online">{{.Online}}</td>
+<td class="n" data-label="Houses">{{.Active}} / {{.Total}}</td><td class="n" data-label="Online">{{.Online}}</td>
 <td data-label="Caretaker">{{if .Caretaker.Name}}{{.Caretaker.Name}}{{if .Caretaker.Phone}} <a href="tel:{{.Caretaker.Phone}}" class="mono">{{.Caretaker.Phone}}</a>{{end}}{{else}}<span class="muted">none</span>{{end}}</td></tr>{{end}}</tbody></table></div>
-{{else}}{{template "empty" (dict "Title" "No apartments yet." "Text" "An apartment is a building. Add one, link the routers that serve it, then add customers to it." "Acts" (acts "New apartment|/admin/apartments/new"))}}{{end}}
+{{else}}{{template "empty" (dict "Title" "No apartments yet." "Text" "Add an apartment, link the routers that serve it, then add customers to it with their house numbers." "Acts" (acts "New apartment|/admin/apartments/new"))}}{{end}}
 {{template "afoot" .}}{{end}}
 
 {{define "admin_apartment_view"}}{{template "ahead" .}}{{$d := .}}{{$a := .Data.A}}
 <div class="stats">
-{{template "stat" (dict "K" "Flats" "V" $a.Total "S" "open accounts" "Icon" "accounts" "Feature" true)}}
+{{template "stat" (dict "K" "Houses" "V" $a.Total "S" "open accounts" "Icon" "accounts" "Feature" true)}}
 {{template "stat" (dict "K" "Active" "V" $a.Active "S" "with paid time" "Icon" "check" "Tone" "ok")}}
 {{template "stat" (dict "K" "Online now" "V" $a.Online "S" "connected" "Icon" "live")}}
-{{template "stat" (dict "K" "Routers" "V" (len $a.Routers) "S" "serving this building" "Icon" "sites" "Tone" (cond (gt (len $a.Routers) 0) "info" "warn"))}}
+{{template "stat" (dict "K" "Routers" "V" (len $a.Routers) "S" "serving this apartment" "Icon" "sites" "Tone" (cond (gt (len $a.Routers) 0) "info" "warn"))}}
 </div>
 <div class="grid c2">
 <section class="panel"><h2>Routers</h2><table>
-{{range $a.Routers}}<tr><td><a href="/admin/routers/view?id={{.ID}}">{{.Name}}</a></td><td class="muted">{{index $a.AccountRouters .ID}} flats</td>
+{{range $a.Routers}}<tr><td><a href="/admin/routers/view?id={{.ID}}">{{.Name}}</a></td><td class="muted">{{index $a.AccountRouters .ID}} houses</td>
 <td>{{if $d.CanWrite}}<form method="post" action="/admin/apartments/unlink" class="i" data-confirm="Stop {{.Name}} serving {{$a.Name}}?"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$a.ID}}"><input type="hidden" name="site" value="{{.ID}}"><button class="ghost sm">Unlink</button></form>{{end}}</td></tr>
-{{else}}<tr><td class="muted">No router serves this apartment, so none of its flats can be provisioned.</td></tr>{{end}}</table>
+{{else}}<tr><td class="muted">No router serves this apartment, so none of its houses can be provisioned.</td></tr>{{end}}</table>
 {{if and $d.CanWrite $a.Unlinked}}<form method="post" action="/admin/apartments/link" class="mt-3 row"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$a.ID}}">
 <label class="field">Link a router<select name="site">{{range $a.Unlinked}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label><button>Link</button></form>{{end}}
-<p class="mt-2 muted">A router can serve several apartments, and a large apartment can have several routers. A router cannot be unlinked while flats of this apartment are on it.</p></section>
+<p class="mt-2 muted">A router can serve several apartments, and a large apartment can have several routers. A router cannot be unlinked while houses of this apartment are on it.</p></section>
 <section class="panel"><h2>People</h2>
 {{with $a.MapURL}}<p class="locrow"><a class="btn ghost sm" href="{{.}}" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>View on map</a> <span class="mono muted">{{gps $a.Apartment}}</span></p>{{else}}<p class="muted">Location: not recorded.{{if $d.CanWrite}} <a href="/admin/apartments/edit?id={{$a.ID}}">Add GPS</a>.{{end}}</p>{{end}}
 {{template "contactcard" (dict "Title" "Caretaker" "C" $a.Caretaker)}}
 {{template "contactcard" (dict "Title" "Landlord / agent" "C" $a.Landlord)}}
 {{if $a.Notes}}<p class="mt-3">{{$a.Notes}}</p>{{end}}</section>
 </div>
-<section class="mt-4 panel"><h2>Flats</h2>
-{{if $a.Accounts}}<div class="tw"><table class="rs"><thead><tr><th>Unit</th><th>Customer</th><th>Router</th><th>State</th><th>Problem</th></tr></thead><tbody>
+<section class="mt-4 panel"><h2>Houses</h2>
+{{if $a.Accounts}}<div class="tw"><table class="rs"><thead><tr><th>House number</th><th>Customer</th><th>Router</th><th>State</th><th>Problem</th></tr></thead><tbody>
 {{range $a.Accounts}}<tr><td class="who"><b><a href="/admin/accounts/view?code={{.Code}}">{{.Unit}}</a></b><span>{{.Code}}</span></td><td data-label="Customer">{{.Tenant}}</td><td data-label="Router">{{index $a.RouterOf .ID}}</td>
 <td data-label="State"><span class="pill {{state .}}">{{state .}}</span></td><td data-label="Problem">{{with index $d.Data.Issue .ID}}<span class="bad">{{.}}</span>{{end}}</td></tr>{{end}}</tbody></table></div>
-{{else}}<p class="muted nil">No flats yet. Use Add customer and pick this apartment.</p>{{end}}</section>
+{{else}}<p class="muted nil">No houses yet. Use Add customer and pick this apartment.</p>{{end}}</section>
 {{if $d.CanWrite}}<section class="mt-4 panel danger"><h2 class="bad">Remove apartment</h2><p class="muted" style="margin:6px 0 10px">Only possible when no account, open or closed, belongs to it.</p>
 <form method="post" action="/admin/apartments/delete" data-confirm="Remove {{$a.Name}}?"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$a.ID}}"><button>Remove</button></form></section>{{end}}
 {{template "afoot" .}}{{end}}

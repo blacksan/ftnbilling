@@ -7,7 +7,7 @@ import (
 
 // ErrNoRouter is returned by every call on the client given out for a site
 // that does not exist, is not joined yet, or is paused.
-var ErrNoRouter = errors.New("no router is available for this building")
+var ErrNoRouter = errors.New("no router is available")
 
 type noRouter struct{}
 

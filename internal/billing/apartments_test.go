@@ -354,7 +354,7 @@ func TestMoveCustomerHereReprovisionsAndRecordsHistory(t *testing.T) {
 	evs, _ := e.st.Events(ctx, store.EventQuery{AccountID: f1.ID})
 	found := false
 	for _, ev := range evs {
-		if strings.Contains(ev.Msg, "moved from Block A unit Flat 1 on Block A to Block B unit Flat 1 on Block B") {
+		if strings.Contains(ev.Msg, "moved from Block A house number Flat 1 on Block A to Block B house number Flat 1 on Block B") {
 			found = true
 		}
 	}

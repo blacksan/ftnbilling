@@ -469,7 +469,7 @@ func (s *Server) adminAccount(w http.ResponseWriter, r *http.Request) {
 		tab = "overview"
 	}
 	p.Data["Tab"] = tab
-	p.Detail, p.H1a, p.H1b, p.Lead = a.Flat, "Flat", a.Flat+".", ""
+	p.Detail, p.H1a, p.H1b, p.Lead = a.Flat, "House", a.Flat+".", ""
 	p.Label, p.Href, p.Group = "Subscribers", "/admin/accounts", "Customers"
 	var evs []store.Event
 	s.st.View(func(d *store.Data) {
@@ -570,7 +570,7 @@ func (s *Server) adminAccountPackage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminAccountEndPlan(w http.ResponseWriter, r *http.Request) {
 	id := r.PostFormValue("id")
-	s.back(w, r, s.accountURL(id), msgOr(s.svc.EndPlan(r.Context(), id), "Plan ended. The flat is offline until it buys again."))
+	s.back(w, r, s.accountURL(id), msgOr(s.svc.EndPlan(r.Context(), id), "Plan ended. The house is offline until it buys again."))
 }
 
 func (s *Server) adminAccountDelete(w http.ResponseWriter, r *http.Request) {
@@ -772,7 +772,7 @@ func (s *Server) adminRecordPost(w http.ResponseWriter, r *http.Request) {
 		PackageID: r.PostFormValue("package"), Force: r.PostFormValue("force") == "1", PaidAt: paid, Note: r.PostFormValue("note"),
 	})
 	if errors.Is(err, billing.ErrLowerPlan) {
-		s.back(w, r, "/admin/unmatched", "This flat is active on a faster plan, so the payment was put in the Unmatched list instead of lowering the speed. Assign it there, or record it again with \"apply even if lower speed\" ticked.")
+		s.back(w, r, "/admin/unmatched", "This house is active on a faster plan, so the payment was put in the Unmatched list instead of lowering the speed. Assign it there, or record it again with \"apply even if lower speed\" ticked.")
 		return
 	}
 	if err != nil {

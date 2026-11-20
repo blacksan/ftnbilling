@@ -1,13 +1,13 @@
 {{define "admin_site_view"}}{{template "ahead" .}}{{$s := .Data.Site}}{{$d := .}}{{$tab := .Data.Tab}}{{$X := .Data.Stats}}
-<div class="rhead"><span class="pill {{.Data.State}}">{{.Data.State}}</span>{{if $s.Disabled}}<span class="pill suspended">paused</span>{{end}}<span class="muted">{{.Data.Accounts}} flats</span>
-<a class="btn ghost sm" href="/admin/site/select?site={{$s.ID}}&amp;next=/admin/accounts">Open its flats</a></div>
+<div class="rhead"><span class="pill {{.Data.State}}">{{.Data.State}}</span>{{if $s.Disabled}}<span class="pill suspended">paused</span>{{end}}<span class="muted">{{.Data.Accounts}} houses</span>
+<a class="btn ghost sm" href="/admin/site/select?site={{$s.ID}}&amp;next=/admin/accounts">Open its houses</a></div>
 <nav class="tabs" aria-label="Router sections">{{range .Data.Tabs}}<a class="tab" href="/admin/routers/view?id={{$s.ID}}&amp;tab={{.Key}}"{{if eq .Key $tab}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}</nav>
 
 {{if eq $tab "overview"}}
 <div id="rt-live" data-refresh="15">
-{{if not $X.Reachable}}<p class="flash bad" role="status">The router could not be read just now, so CPU, memory and uptime are blank. The flats and money below are the server's own numbers.</p>{{end}}
+{{if not $X.Reachable}}<p class="flash bad" role="status">The router could not be read just now, so CPU, memory and uptime are blank. The houses and money below are the server's own numbers.</p>{{end}}
 <div class="stats">
-{{template "stat" (dict "K" "Flats online" "V" $X.FlatsOn "S" (printf "%s, pulling traffic now" $X.FlatsSub) "Icon" "live" "Feature" true)}}
+{{template "stat" (dict "K" "Houses online" "V" $X.FlatsOn "S" (printf "%s, pulling traffic now" $X.FlatsSub) "Icon" "live" "Feature" true)}}
 {{template "stat" (dict "K" "WAN" "V" $X.WAN "S" $X.WANSub "Icon" "metrics" "Tone" "info")}}
 {{template "stat" (dict "K" "Tunnel" "V" $X.Tunnel "S" $X.TunnelSub "Icon" "pulse" "Tone" "ok")}}
 {{template "stat" (dict "K" "CPU" "V" $X.CPU "S" (printf "memory %s %s" $X.Mem $X.MemSub) "Icon" "sites")}}
@@ -26,8 +26,8 @@
 <dt>Equipment</dt><dd>{{$X.Equip}}</dd>
 {{if $X.UnregOnline}}<dt>Devices not registered</dt><dd><a href="/admin/routers/view?id={{$s.ID}}&amp;tab=clients">{{$X.UnregOnline}} online now</a></dd>{{end}}
 {{if $X.OpenAlerts}}<dt>Open alerts</dt><dd><a href="/admin/alerts">{{$X.OpenAlerts}}</a></dd>{{end}}</dl></section>
-{{with .Data.Rep}}<section class="panel"><h2>Flats and money</h2><dl class="kv">
-<dt>Flats</dt><dd>{{.Flats}} <span class="muted">{{.Occupied}} occupied, {{.Vacant}} vacant</span></dd>
+{{with .Data.Rep}}<section class="panel"><h2>Houses and money</h2><dl class="kv">
+<dt>Houses</dt><dd>{{.Flats}} <span class="muted">{{.Occupied}} occupied, {{.Vacant}} vacant</span></dd>
 <dt>Active</dt><dd>{{.Active}} <span class="muted">{{.Expired}} expired, {{.Suspended}} suspended, {{.New}} new</span></dd>
 <dt>Revenue this month</dt><dd>{{kes .ThisMonth}} <span class="muted">last month {{kes .LastMonth}}</span></dd>
 <dt>Equipment</dt><dd>{{index .ByStatus "installed"}} installed <span class="muted">{{index .ByStatus "in_stock"}} in stock, {{index .ByStatus "faulty"}} faulty</span></dd></dl></section>{{end}}
@@ -66,7 +66,7 @@
 <p class="muted">{{eat .At}}{{if .ROS}} &middot; RouterOS {{.ROS}}{{end}}</p><pre class="rep">{{range .Lines}}{{.}}
 {{end}}</pre></section>{{end}}
 {{if eq .Role "owner"}}<section class="panel danger"><div class="panel-h"><h2 class="bad">Reset router</h2></div>
-<p class="muted">Forgets this router's tunnel key, API password and join state on the server, and queues every flat again for when the router is set up. Accounts are kept. The router itself is not touched: pasting a new line erases and rebuilds it. Type the router name to confirm.</p>
+<p class="muted">Forgets this router's tunnel key, API password and join state on the server, and queues every house again for when the router is set up. Accounts are kept. The router itself is not touched: pasting a new line erases and rebuilds it. Type the router name to confirm.</p>
 <form method="post" action="/admin/routers/setup/reset" class="row" data-reset-router><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
 <input name="confirm_name" placeholder="{{$s.Name}}" required autocomplete="off" aria-label="Type the router name to reset it"><button class="ghost">Reset router</button></form></section>{{end}}
 </div>
@@ -129,7 +129,7 @@
 <form method="post" action="/admin/routers/reboot" class="mt-3 row" data-reboot><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
 <input name="confirm_name" placeholder="{{$s.Name}}" required autocomplete="off" aria-label="Type the router name to reboot it"><button class="ghost">Reboot router</button></form>
 <p class="mt-2 muted">Type the router name. Customers lose their connection for a minute or two. Not possible while the router is being set up, and once every 10 minutes.</p></section>
-<section class="panel danger"><h2 class="bad">Remove router</h2><p class="muted" style="margin:6px 0 10px">Only possible when it has no flats. Its payments stay in the ledger. Type the router name to confirm.</p>
+<section class="panel danger"><h2 class="bad">Remove router</h2><p class="muted" style="margin:6px 0 10px">Only possible when it has no houses. Its payments stay in the ledger. Type the router name to confirm.</p>
 <form method="post" action="/admin/routers/remove" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input name="confirm" placeholder="{{$s.Name}}" required autocomplete="off" aria-label="Router name"><button>Remove</button></form></section>
 </div>
 {{end}}
@@ -138,18 +138,18 @@
 {{define "rt_clients"}}{{$d := .}}
 <div id="rt-live" data-refresh="10">
 <form method="get" action="/admin/routers/view" class="row clients-search" role="search"><input type="hidden" name="id" value="{{.Data.Site.ID}}"><input type="hidden" name="tab" value="clients">
-<input type="search" name="q" value="{{.Data.Q}}" placeholder="Search flat, tenant, code, IP, MAC, vendor" aria-label="Search clients" data-clients-q autocomplete="off"><button class="ghost">Search</button>
-{{with .Data.Counts}}<span class="muted">{{.Flats}} flats, {{.Online}} online, {{.Unregistered}} not registered</span>{{end}}</form>
+<input type="search" name="q" value="{{.Data.Q}}" placeholder="Search house number, tenant, code, IP, MAC, vendor" aria-label="Search clients" data-clients-q autocomplete="off"><button class="ghost">Search</button>
+{{with .Data.Counts}}<span class="muted">{{.Flats}} houses, {{.Online}} online, {{.Unregistered}} not registered</span>{{end}}</form>
 {{if not .Data.Reachable}}<p class="flash bad" role="status">The router could not be read just now. Rates and devices are the last ones the server kept.</p>{{end}}
-{{if .Data.Clients}}<div class="tw tall"><table class="rs"><thead><tr><th>Flat</th><th>State</th><th>IP</th><th>MAC</th><th>Port</th><th>Speed</th><th class="n">Down / Up</th><th class="n">Today / month</th><th>On router</th></tr></thead><tbody>
+{{if .Data.Clients}}<div class="tw tall"><table class="rs"><thead><tr><th>House number</th><th>State</th><th>IP</th><th>MAC</th><th>Port</th><th>Speed</th><th class="n">Down / Up</th><th class="n">Today / month</th><th>On router</th></tr></thead><tbody>
 {{range .Data.Clients}}<tr>{{if eq .Kind "flat"}}<td class="who"><b><a href="/admin/accounts/view?code={{.Code}}">{{.Flat}}</a></b><span>{{if .Online}}<span class="pill online">online</span> {{end}}{{.Tenant}}</span></td><td data-label="State"><span class="pill {{.State}}">{{.State}}</span></td>
 {{else}}<td class="who"><b>{{if .HostName}}{{.HostName}}{{else}}Not registered{{end}}</b><span>{{if .Online}}<span class="pill online">online</span> {{end}}{{.Vendor}}</span></td><td data-label="State">{{if $d.CanWrite}}<button type="button" class="sm" data-open="addcustomer" data-mac="{{.MAC}}" data-site="{{$d.Data.Site.ID}}">Create customer</button>{{end}}</td>
 {{end}}<td class="mono" data-label="IP">{{.IP}}</td><td class="mono" data-label="MAC">{{.MAC}}</td><td data-label="Port">{{.Port}}</td><td data-label="Speed">{{.QueueLimit}}</td><td class="n" data-label="Down / Up">{{bps (f64 .DownBps)}} / {{bps (f64 .UpBps)}}</td><td class="n" data-label="Today / month">{{if eq .Kind "flat"}}{{bytes .UsageTodayBytes}} / {{bytes .UsageMonthBytes}}{{end}}</td>
 <td data-label="On router">{{if eq .Kind "flat"}}<span class="pill {{if .InSync}}synced{{else}}drift{{end}}">{{if .SuspendedOnRouter}}suspended{{else if .InSync}}in sync{{else}}{{.LeaseStatus}}{{end}}</span>{{end}}</td></tr>{{end}}</tbody></table></div>
 {{if .Data.Truncated}}<p class="muted">Showing the first 1000. Search to narrow the list.</p>{{end}}
 <p class="muted">Read from the router {{.Data.ClientsAt}}.</p>
-{{else if .Data.Q}}{{template "empty" (dict "Title" "Nothing matches that search." "Text" "Try part of a flat name, a phone's MAC or an IP address.")}}
-{{else}}{{template "empty" (dict "Title" "No flats on this router yet." "Text" "Add a customer and pick this router. Its ONT shows here once it connects." "Acts" (acts "Add customer|#modal:addcustomer"))}}{{end}}
+{{else if .Data.Q}}{{template "empty" (dict "Title" "Nothing matches that search." "Text" "Try part of a house number, a phone's MAC or an IP address.")}}
+{{else}}{{template "empty" (dict "Title" "No houses on this router yet." "Text" "Add a customer and pick this router. Its ONT shows here once it connects." "Acts" (acts "Add customer|#modal:addcustomer"))}}{{end}}
 </div>
 {{end}}
 

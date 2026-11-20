@@ -456,8 +456,8 @@ func TestFlagsFire(t *testing.T) {
 	if lv["WAN busy hours"].Level != "warn" || !strings.Contains(lv["WAN busy hours"].Text, "may feel slow") {
 		t.Errorf("%+v", lv["WAN busy hours"])
 	}
-	if lv["Flats at their speed cap"].Level != "warn" || !strings.Contains(lv["Flats at their speed cap"].Text, "Flat 3B") {
-		t.Errorf("%+v", lv["Flats at their speed cap"])
+	if lv["Houses at their speed cap"].Level != "warn" || !strings.Contains(lv["Houses at their speed cap"].Text, "Flat 3B") {
+		t.Errorf("%+v", lv["Houses at their speed cap"])
 	}
 	if lv["Packet loss"].Level != "warn" {
 		t.Errorf("%+v", lv["Packet loss"])

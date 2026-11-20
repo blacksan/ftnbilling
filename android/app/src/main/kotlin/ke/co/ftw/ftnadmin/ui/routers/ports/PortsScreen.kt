@@ -167,7 +167,7 @@ private fun PortCard(p: PortRow, busy: Boolean, onToggle: () -> Unit, onRole: (S
                 p.link.ifBlank { null },
                 p.mac.ifBlank { null },
                 if (p.rxBps != null && p.txBps != null) "rx ${formatBps(p.rxBps)}  tx ${formatBps(p.txBps)}" else null,
-                p.flats?.let { "$it flats" },
+                p.flats?.let { "$it houses" },
                 p.comment.ifBlank { null },
             )
             if (detail.isNotEmpty()) {

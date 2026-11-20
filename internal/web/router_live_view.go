@@ -104,7 +104,7 @@ func statsOf(lv sites.RouterLive) rtStats {
 		x.TunnelSub = fmt.Sprintf("handshake %d s ago", *lv.Tunnel.HandshakeAgeS)
 	}
 	x.FlatsOn = fmt.Sprint(lv.Flats.Online)
-	x.FlatsSub = fmt.Sprintf("of %d flats", lv.Flats.Total)
+	x.FlatsSub = fmt.Sprintf("of %d houses", lv.Flats.Total)
 	x.Equip = fmt.Sprintf("%d OLT, %d ONT (%d bound)", lv.Equipment.OLT, lv.Equipment.ONT, lv.ONTsBound)
 	x.OpenAlerts, x.UnregOnline = lv.OpenAlerts, lv.UnregisteredOnline
 	x.Revenue = fmt.Sprintf("KES %d today, KES %d this month", lv.Revenue.TodayKES, lv.Revenue.MonthKES)

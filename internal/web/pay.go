@@ -330,7 +330,7 @@ func (s *Server) payFind(w http.ResponseWriter, r *http.Request) {
 		for _, x := range amb {
 			p.Choices = append(p.Choices, payChoice{ID: x.ApartmentID, Name: s.apartmentName(x.ApartmentID)})
 		}
-		s.payFail(w, r, http.StatusConflict, p, "More than one flat on this network has that number. Choose your apartment, or enter your account number.")
+		s.payFail(w, r, http.StatusConflict, p, "More than one house on this network has that number. Choose your apartment, or enter your account number.")
 		return
 	}
 	if !ok {

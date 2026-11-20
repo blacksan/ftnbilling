@@ -235,7 +235,7 @@ func RenderBootstrap(in BootstrapInput) ([]byte, error) {
 		return nil, fmt.Errorf("bootstrap script: REST user %q is not a safe name", s.RESTUser)
 	}
 	if ip, err := netip.ParseAddr(in.PublicIP); err != nil || !ip.Is4() {
-		return nil, errors.New("bootstrap script: PUBLIC_IP is not set on the server: the walled flats could not reach the payment page")
+		return nil, errors.New("bootstrap script: PUBLIC_IP is not set on the server: the walled houses could not reach the payment page")
 	}
 	plan, err := PlanSubnet(s.CustomerSubnet)
 	if err != nil {

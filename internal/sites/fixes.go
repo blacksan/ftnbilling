@@ -147,7 +147,7 @@ func (w *fixWriter) allowedRow(path string, row routeros.Row) error {
 		case (w.custPorts[iface] || w.stale[iface]) && row["bridge"] == CustomerBridge:
 		case (w.lanPorts[iface] || w.staleLAN[iface]) && row["bridge"] == LANBridge:
 		default:
-			return forbid("bridge port " + iface + " (bridge " + row["bridge"] + ") is not a customer port of this building")
+			return forbid("bridge port " + iface + " (bridge " + row["bridge"] + ") is not a customer port of this router")
 		}
 	case "/interface":
 		if !physicalType(row["type"]) || row["name"] == "" || row["name"] == w.wan || !w.offPorts[row["name"]] {
@@ -187,19 +187,19 @@ func (w *fixWriter) addRow(ctx context.Context, path string, body map[string]str
 	case "/interface/bridge/port":
 		if body["bridge"] == LANBridge {
 			if !w.lanPorts[body["interface"]] || body["interface"] == "" || len(body) != 3 || body["comment"] != LANPortComment {
-				return forbid("a bridge port row that is not " + LANPortComment + " in " + LANBridge + " for an admin LAN port of this building")
+				return forbid("a bridge port row that is not " + LANPortComment + " in " + LANBridge + " for an admin LAN port of this router")
 			}
 			break
 		}
 		if !w.custPorts[body["interface"]] || body["interface"] == "" {
-			return forbid("bridge port " + body["interface"] + " is not a customer port of this building")
+			return forbid("bridge port " + body["interface"] + " is not a customer port of this router")
 		}
 		if len(body) != 4 || body["bridge"] != CustomerBridge || body["horizon"] != "1" || body["comment"] != CustPortComment {
 			return forbid("a bridge port row that is not " + CustPortComment + " in " + CustomerBridge + " with horizon=1")
 		}
 	case "/interface/vlan":
 		if w.vlanName == "" || body["name"] != w.vlanName || body["interface"] != w.oltPort || body["comment"] != CustVLANComment || len(body) != 4 {
-			return forbid("a VLAN interface that is not the building's customer VLAN on its OLT port")
+			return forbid("a VLAN interface that is not the router's customer VLAN on its OLT port")
 		}
 	case "/ip/traffic-flow/target":
 		if w.serverIP == "" || body["dst-address"] != w.serverIP {
@@ -283,7 +283,7 @@ func (w *fixWriter) setRow(ctx context.Context, path string, row routeros.Row, d
 	case "/interface/bridge/port":
 		if row["bridge"] == LANBridge {
 			if !w.lanPorts[row["interface"]] {
-				return forbid("only an admin LAN port of this building may be changed in " + LANBridge)
+				return forbid("only an admin LAN port of this router may be changed in " + LANBridge)
 			}
 			for k, v := range diff {
 				if !(k == "comment" && v == LANPortComment) && !(k == "disabled" && v == "no") {

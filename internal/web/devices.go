@@ -203,14 +203,14 @@ func (s *Server) adminDeviceAttach(w http.ResponseWriter, r *http.Request) {
 	site := s.siteFor(r)
 	a, ok, amb := s.resolveFlat(site, r.PostFormValue("acct"), r.PostFormValue("apartment_id"))
 	if len(amb) > 0 {
-		s.back(w, r, "/admin/devices", "Error: more than one flat of this router has that number ("+s.ambiguousText(amb)+"). Type the account code instead")
+		s.back(w, r, "/admin/devices", "Error: more than one house of this router has that number ("+s.ambiguousText(amb)+"). Type the account code instead")
 		return
 	}
 	if id := r.PostFormValue("account"); !ok && id != "" { // account id, as older forms sent it
 		a, ok = s.svc.GetAccount(id)
 	}
 	if !ok {
-		s.back(w, r, "/admin/devices", "Error: choose a flat of this router (type its name or code)")
+		s.back(w, r, "/admin/devices", "Error: choose a house of this router (type its name or code)")
 		return
 	}
 	if _, err := s.svc.AttachDevice(r.Context(), site, r.PostFormValue("mac"), a.ID); err != nil {
@@ -245,7 +245,7 @@ func (s *Server) adminDeviceMove(w http.ResponseWriter, r *http.Request) {
 func (s *Server) ambiguousText(list []store.Account) string {
 	var parts []string
 	for _, a := range list {
-		parts = append(parts, s.apartmentName(a.ApartmentID)+", unit "+a.Unit+" ("+a.Code+")")
+		parts = append(parts, s.apartmentName(a.ApartmentID)+", house number "+a.Unit+" ("+a.Code+")")
 	}
 	return strings.Join(parts, "; ")
 }

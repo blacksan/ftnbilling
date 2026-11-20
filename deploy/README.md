@@ -1,7 +1,7 @@
 # Online billing server for many routers (VPS + WireGuard)
 
 One VPS runs billing, the payment page and the admin pages for every router.
-Each router is a MikroTik serving its flats over IPoE (one fixed address and one speed queue per flat). Routers join a
+Each router is a MikroTik serving its houses over IPoE (one fixed address and one speed queue per house). Routers join a
 private WireGuard network at the VPS; the VPS reaches each router's REST API
 through its tunnel address.
 
@@ -16,14 +16,14 @@ through its tunnel address.
 | Path | How |
 |---|---|
 | VPS to router REST API | Over the tunnel, to the router's tunnel address (`10.99.0.x:8081`). The router allows REST only from `10.99.0.1`. |
-| Tenants to the payment page | Public internet, `https://DOMAIN/pay`. A flat that has not paid is walled by the router: it can reach only the VPS payment page. |
+| Tenants to the payment page | Public internet, `https://DOMAIN/pay`. A house that has not paid is walled by the router: it can reach only the VPS payment page. |
 | Router to NetFlow | Through the tunnel, to `10.99.0.1:2055`. The server tells routers apart by the tunnel source address. |
 | You to admin | Public, over HTTPS: `https://DOMAIN/admin` (password, then an authenticator code) and `https://DOMAIN/api` for the operator app. Caddy proxies both; the app listens on `127.0.0.1:8080` only, and refuses `/admin` and `/api` from the routers' tunnel. There is no admin VPN any more. |
 
-Design size: about 40 routers and 1500 flats on a 1 vCPU / 2 GB VPS. The
+Design size: about 40 routers and 1500 houses on a 1 vCPU / 2 GB VPS. The
 service runs with `GOMEMLIMIT=600MiB GOGC=50`.
 
-The payment page is public. A tenant finds their flat by account number (or by flat label when the visit comes from a known router), and the page never shows a phone number, a MAC or a name.
+The payment page is public. A tenant finds their house by account number (or by house number when the visit comes from a known router), and the page never shows a phone number, a MAC or a name.
 
 ## 1. New server in one command
 
@@ -93,7 +93,7 @@ Run the installer as above. On such a server it does this, in order, and every s
 1. Takes a database dump before anything changes and keeps a copy as `/var/backups/ftnbilling/pre-upgrade-<time>.dump`. If the dump fails, it stops.
 2. Moves `/etc/wireguard/wg-admin.conf` and `/root/ftnbilling-admin-*.conf` into `/root/ftnbilling-removed-<date>/` (mode 700; delete the folder when you are sure), then runs `systemctl disable --now wg-quick@wg-admin` and removes `/usr/local/sbin/ftnbilling-admin-peer`.
 3. Sets `LISTEN_ADDR=127.0.0.1:8080`, rewrites the Caddyfile (`/admin` and `/api` proxied, plain-HTTP catch-all to `https://DOMAIN/pay`) and removes the firewall rules for UDP 51821 and every rule `on wg-admin`.
-4. Runs the database migrations, restarts the service, and prints the report of flats that share a MAC address (they are not provisioned until fixed).
+4. Runs the database migrations, restarts the service, and prints the report of houses that share a MAC address (they are not provisioned until fixed).
 5. Prints a one-time admin setup code (needs a program built with the new sign-in; an older program just skips this with a note).
 
 `wg0`, the router peers and their keys are not touched.
@@ -115,7 +115,7 @@ sudo ftnbilling-admin-reset --revoke-sessions   # sign everything out
 
 ### Start fresh (delete all data)
 
-`sudo ftnbilling-wipe` lists what it would delete, asks you to type `WIPE` (or pass `--yes`), saves a backup to `/var/backups/ftnbilling/pre-wipe-<UTC time>.dump` (`.json` on the JSON file) and aborts if that fails, then stops the service, deletes every customer, flat, router, payment and log, starts it again and removes the old routers from `wg0`.
+`sudo ftnbilling-wipe` lists what it would delete, asks you to type `WIPE` (or pass `--yes`), saves a backup to `/var/backups/ftnbilling/pre-wipe-<UTC time>.dump` (`.json` on the JSON file) and aborts if that fails, then stops the service, deletes every customer, house, router, payment and log, starts it again and removes the old routers from `wg0`.
 Admin users, Settings (M-Pesa, branding) and `DATA_KEY` are kept; everybody signs in again, and you add the routers again with the one-line bootstrap.
 
 ### Check the server: the doctor
@@ -125,7 +125,7 @@ sudo ftnbilling-doctor        # PASS / WARN / FAIL for everything; exit status 1
 sudo ftnbilling-doctor -q     # only warnings and failures
 ```
 
-It checks every program the installer put in, every service, timer and port, PostgreSQL (reachable, the app role connects, migrations current or `db-check`), `wg0` and `wg-mgmt` up (a warning, not a failure, on an install from before remote WinBox), `ip_forward` and the remote-WinBox forwarding rules, the public `/admin/login` page (200 over https), no retired admin VPN on UDP 51821, the app bound to loopback, flats that share a MAC address, the schema version, Caddy, the app's `/healthz` (including `db_ok`), the dump, restore-drill and Drive backup timers and their last results, whether Google Drive is set up, the ufw rules, disk, RAM, swap and clock sync. The installer runs it at the end. A fresh install normally shows one warning: Drive backup is not set up yet.
+It checks every program the installer put in, every service, timer and port, PostgreSQL (reachable, the app role connects, migrations current or `db-check`), `wg0` and `wg-mgmt` up (a warning, not a failure, on an install from before remote WinBox), `ip_forward` and the remote-WinBox forwarding rules, the public `/admin/login` page (200 over https), no retired admin VPN on UDP 51821, the app bound to loopback, houses that share a MAC address, the schema version, Caddy, the app's `/healthz` (including `db_ok`), the dump, restore-drill and Drive backup timers and their last results, whether Google Drive is set up, the ufw rules, disk, RAM, swap and clock sync. The installer runs it at the end. A fresh install normally shows one warning: Drive backup is not set up yet.
 
 ### Restore on a new server (manual steps)
 
@@ -141,7 +141,7 @@ To restore from a local dump on the same server instead: `sudo systemctl stop ft
 1. Open the admin and go to **Routers, Add router**. Give the name; the router layout defaults suit a standard install (WAN `ether1`, OLT port `sfp-sfpplus1`). Change the WAN mode (dhcp, static or pppoe), the admin LAN ports, the VLAN, the customer subnet or the bench port there if this router differs. A PPPoE password is write-only: the page shows that one is set, never the password.
 2. The dialog then shows the **one line** to paste. It is shown once, works once, and expires after 30 minutes. (On the router page, Setup, **Make the line** makes a new one.)
 3. Paste it in the router's terminal (WinBox, New Terminal). The router fetches its setup script, **erases itself and builds itself again** (WAN, admin LAN, customer network, DHCP, firewall, WireGuard tunnel, the API login), and reports back. The server generates the router's WireGuard private key when the router fetches the script, serves it once inside that script and does not store it (it keeps only the public key); the script deletes itself from the router. Nothing else is typed on the router, and the server never changes its users, services, tunnel, routes or WAN afterwards.
-4. The router page, Setup, shows four steps that refresh by themselves: the router fetched the script, the tunnel is up, the server can log in, the checks are green. When all four are done the server gives every flat its address and queue.
+4. The router page, Setup, shows four steps that refresh by themselves: the router fetched the script, the tunnel is up, the server can log in, the checks are green. When all four are done the server gives every house its address and queue.
 
 If the line fails with a certificate error, correct the router's clock; the page also offers the same line without the certificate check for a router that cannot have a right clock.
 
@@ -208,7 +208,7 @@ How it is kept narrow: the profile routes only the routers' tunnel range (`WG_SU
 - `curl -s localhost:8080/healthz` on the VPS shows `sites_total`, `sites_online` and `router_ok` (and `db_ok` on builds that report it).
 - `wg show wg0` on the VPS lists one peer per joined router.
 - The router page shows the router, the WireGuard handshake and the payment page address.
-- A flat that has not paid, on that router, should reach the payment page and nothing else.
+- A house that has not paid, on that router, should reach the payment page and nothing else.
 
 | Symptom | Fix |
 |---|---|
@@ -217,8 +217,8 @@ How it is kept narrow: the profile routes only the routers' tunnel range (`WG_SU
 | Tunnel never comes up | UDP 51820 must reach the VPS (`ufw status`, provider firewall). `WG_ENDPOINT` in the env file must be the VPS public address. Check `wg show wg0`. |
 | `/admin` does not open | `sudo ftnbilling-doctor` shows which part fails (Caddy, the app, DNS). The app must answer on `127.0.0.1:8080`; `curl -I https://DOMAIN/admin/login` should say 200. Locked out: `sudo ftnbilling-admin-reset --setup-code`. |
 | Tunnel up but the router is "not reachable" | The router firewall must accept `10.99.0.1` to port 8081 (the setup script adds this). Paste a new line to rebuild it. |
-| A paused flat sees an error instead of the payment page | The flat must be in the router's `ftn-suspended` address list, and the router must be able to reach `https://DOMAIN/pay`. The router page, Setup, checks list what is wrong; paste a new line if the router drifted. |
-| A paying tenant is still walled | Admin, Routers, the router page: Clients shows "On router" for the flat. A flat is un-walled by the server within about a minute of the payment; if the router is down the change is queued and retried. |
+| A paused house sees an error instead of the payment page | The house must be in the router's `ftn-suspended` address list, and the router must be able to reach `https://DOMAIN/pay`. The router page, Setup, checks list what is wrong; paste a new line if the router drifted. |
+| A paying tenant is still walled | Admin, Routers, the router page: Clients shows "On router" for the house. A house is un-walled by the server within about a minute of the payment; if the router is down the change is queued and retried. |
 | No traffic charts | Check `/ip/traffic-flow/target/print` (should be `10.99.0.1:2055`). The admin Settings page counts NetFlow packets from unknown sources. |
 
 ## 4. Alerts, email and WhatsApp
@@ -241,7 +241,7 @@ Locked out of the admin: `sudo ftnbilling-admin-reset` (or `--generate`). `sudo 
 2. A dedicated phone number registered to the Cloud API. It cannot also be in use in the WhatsApp app or WhatsApp Business app.
 3. A System User with a permanent token that has the `whatsapp_business_messaging` and `whatsapp_business_management` permissions. Put the token in Settings > WhatsApp, and the phone number's ID (not the number) in the phone number ID field.
 4. A payment method on the WABA.
-5. The tenants' consent to receive messages. Collect it when you take the flat's details, and keep a record.
+5. The tenants' consent to receive messages. Collect it when you take the house's details, and keep a record.
 6. Create the six templates below, category **Utility**, language **English (`en`)**, and wait for approval. The wording and the number of parameters must match exactly, or Meta refuses the message (error 132000 or 132001, shown on the Messages page as failed).
 7. The five tenant templates carry the footer **Reply STOP to opt out**.
 8. Put your own number(s) in the admin numbers field of Settings > WhatsApp, save, and press **Send test** there.
@@ -250,14 +250,14 @@ Templates to create (`{{1}}` and so on are the parameters; the wording and the n
 
 | Name | Body | Parameters |
 |---|---|---|
-| `ftn_expiry_reminder` | Hello, your {{1}} internet plan for {{2}} ends on {{3}}. To stay connected, pay KES {{4}} via {{5}}, account number {{6}}. Thank you. | package, flat + router, expiry, price, pay hint, account code |
-| `ftn_plan_expired` | Hello, the internet plan for {{1}} ended on {{2}}. To reconnect, pay via {{3}}, account number {{4}}. You will be reconnected automatically. | flat + router, expiry, pay hint, code |
-| `ftn_payment_received` | Payment received: KES {{1}}, reference {{2}}. Your {{3}} plan for {{4}} is active until {{5}}. Thank you. | amount, receipt, package, flat + router, expiry |
+| `ftn_expiry_reminder` | Hello, your {{1}} internet plan for {{2}} ends on {{3}}. To stay connected, pay KES {{4}} via {{5}}, account number {{6}}. Thank you. | package, house number + router, expiry, price, pay hint, account code |
+| `ftn_plan_expired` | Hello, the internet plan for {{1}} ended on {{2}}. To reconnect, pay via {{3}}, account number {{4}}. You will be reconnected automatically. | house number + router, expiry, pay hint, code |
+| `ftn_payment_received` | Payment received: KES {{1}}, reference {{2}}. Your {{3}} plan for {{4}} is active until {{5}}. Thank you. | amount, receipt, package, house number + router, expiry |
 | `ftn_outage_notice` | Hello, we are aware of an internet outage at {{1}} since {{2}}. Our team is working on it. We apologise for the inconvenience. | router, start |
 | `ftn_outage_resolved` | Internet service at {{1}} was restored at {{2}}. Thank you for your patience. | router, time |
 | `ftn_admin_alert` | Network alert, {{1}}: {{2}} at {{3}}. Details: {{4}}. Time: {{5}}. End of alert. | PROBLEM/RECOVERED, rule, router, detail, time |
 
-A tenant only gets messages if the account has a WhatsApp number (Accounts, the flat's page; "same as phone" copies the phone number) and has not been opted out. Messages go out between 07:00 and 21:00 EAT for reminders; payment confirmations and outage notices go at once. At most `WA_DAILY_LIMIT` (240) tenant messages are sent per day; admin alerts are not counted. Failed sends retry with growing waits (30 s up to 1 h, 8 tries). A rejected token pauses the channel and shows a banner on the Messages page.
+A tenant only gets messages if the account has a WhatsApp number (Accounts, the house's page; "same as phone" copies the phone number) and has not been opted out. Messages go out between 07:00 and 21:00 EAT for reminders; payment confirmations and outage notices go at once. At most `WA_DAILY_LIMIT` (240) tenant messages are sent per day; admin alerts are not counted. Failed sends retry with growing waits (30 s up to 1 h, 8 tries). A rejected token pauses the channel and shows a banner on the Messages page.
 
 Optional inbound replies (BALANCE, STATUS, STOP, START): set `WA_APP_SECRET` and `WA_VERIFY_TOKEN`, set the Meta app's webhook to `https://YOUR-DOMAIN/wa/webhook` with the same verify token, and subscribe to `messages`. The webhook is the only part of this server besides the portal and the payment callbacks that is reachable from the internet; it refuses anything without a valid `X-Hub-Signature-256`.
 

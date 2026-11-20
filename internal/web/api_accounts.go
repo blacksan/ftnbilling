@@ -293,7 +293,7 @@ func (s *Server) apiAccountCreate(w http.ResponseWriter, r *http.Request, c *api
 		req.Unit = req.Flat
 	}
 	if strings.TrimSpace(req.Unit) == "" {
-		fields["unit"] = "a unit is required, e.g. B4"
+		fields["unit"] = "a house number is required, e.g. B4"
 	}
 	mac, merr := billing.NormalizeMAC(req.MAC)
 	if merr != nil {
@@ -354,7 +354,7 @@ func (s *Server) apiAccountPatch(w http.ResponseWriter, r *http.Request, c *apiC
 		notes = *req.Notes
 	}
 	if strings.TrimSpace(flat) == "" {
-		validationErr(w, map[string]string{"unit": "a unit is required, e.g. B4"})
+		validationErr(w, map[string]string{"unit": "a house number is required, e.g. B4"})
 		return
 	}
 	// Everything that can be refused for its own form is checked BEFORE a move is committed: a request that

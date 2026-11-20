@@ -397,7 +397,7 @@ func (m *Manager) decoratePort(pi *PortInfo, site store.Site, viewerRole string)
 		pi.DisableWarning, pi.RoleWarning = "The OLT uplink is not switched off here. Move the OLT role to another port or unplug the OLT instead.", WarnOLT
 	case PortRoleCustomer:
 		if pi.Flats != nil && *pi.Flats > 0 {
-			pi.DisableWarning = fmt.Sprintf("%d flat(s) with leases are seen on this port and go offline.", *pi.Flats)
+			pi.DisableWarning = fmt.Sprintf("%d house(s) with leases are seen on this port and go offline.", *pi.Flats)
 		}
 	}
 	if !pi.CanChange {

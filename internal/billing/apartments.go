@@ -31,9 +31,9 @@ type UnitTakenError struct{ Unit, Apartment, Customer, Code string }
 
 func (e *UnitTakenError) Error() string {
 	if e.Customer != "" {
-		return fmt.Sprintf("unit %s in %s is already used by %s (%s)", e.Unit, e.Apartment, e.Customer, e.Code)
+		return fmt.Sprintf("house number %s in %s is already used by %s (%s)", e.Unit, e.Apartment, e.Customer, e.Code)
 	}
-	return fmt.Sprintf("unit %s in %s is already used by account %s", e.Unit, e.Apartment, e.Code)
+	return fmt.Sprintf("house number %s in %s is already used by account %s", e.Unit, e.Apartment, e.Code)
 }
 
 // Unwrap makes errors.Is(err, store.ErrDuplicateUnit) true.
@@ -597,7 +597,7 @@ func (s *Service) MoveToApartment(ctx context.Context, in MoveInput) (store.Acco
 			}
 			for k, o := range d.Orders {
 				if o.AccountID == a.ID && (o.Status == store.OrderPending || o.Status == store.OrderExpired) {
-					o.Status, o.Reason = store.OrderFailed, "account moved to another building"
+					o.Status, o.Reason = store.OrderFailed, "account moved to another apartment"
 					d.Orders[k] = o
 				}
 			}
@@ -608,7 +608,7 @@ func (s *Service) MoveToApartment(ctx context.Context, in MoveInput) (store.Acco
 		delete(d.Devices, store.DeviceKey(a.SiteID, a.MAC))
 		s.enqueueLocked(d, a, "account moved in")
 		d.AddEvent(store.Event{Time: s.now(), SiteID: a.SiteID, Kind: "info", AccountID: a.ID,
-			Msg: fmt.Sprintf("%s (%s): moved from %s unit %s on %s to %s unit %s on %s", unit, a.Code, nameOr(oldApt.Name, "no apartment"), was, nameOr(old.Name, "?"),
+			Msg: fmt.Sprintf("%s (%s): moved from %s house number %s on %s to %s house number %s on %s", unit, a.Code, nameOr(oldApt.Name, "no apartment"), was, nameOr(old.Name, "?"),
 				d.Apartments[aptID].Name, unit, d.Sites[siteID].Name)})
 		out = a
 		return nil

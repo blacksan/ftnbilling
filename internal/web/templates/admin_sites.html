@@ -25,14 +25,14 @@
 {{template "stat" (dict "K" "Routers" "V" .Data.All "S" "linked to the server" "Icon" "sites" "Feature" true)}}
 {{template "stat" (dict "K" "Routers online" "V" .Data.Online "S" "answering now" "Icon" "check" "Tone" "ok")}}
 {{template "stat" (dict "K" "Offline" "V" .Data.Offline "S" "not answering" "Icon" "warn" "Tone" (cond (gt .Data.Offline 0) "bad" ""))}}
-{{template "stat" (dict "K" "Flats online" "V" .Data.FlatsOn "S" "across all routers" "Icon" "live" "Href" "/admin/live")}}
+{{template "stat" (dict "K" "Houses online" "V" .Data.FlatsOn "S" "across all routers" "Icon" "live" "Href" "/admin/live")}}
 {{template "stat" (dict "K" "Need a look" "V" .Data.Attn "S" "down or out of sync" "Icon" "pulse" "Tone" (cond (gt .Data.Attn 0) "warn" "info"))}}
 </div>
 <nav class="tabs" aria-label="Filter routers">{{range $t := (seq "all|All" "online|Online" "offline|Offline" "setting|Setting up")}}{{$k := index (split $t "|") 0}}{{$l := index (split $t "|") 1}}<a class="tab" href="/admin/routers?tab={{$k}}"{{if eq $k $d.Data.Tab}} aria-current="page"{{end}}>{{$l}}<span class="n">{{index $c $k}}</span></a>{{end}}</nav>
-{{if .Data.Rows}}<div class="tw"><table class="rs"><thead><tr><th>Router</th><th>State</th><th>Setup</th><th class="n">Flats</th><th class="n">Online</th><th>WAN</th><th>Tunnel</th><th>Seen</th><th></th></tr></thead><tbody>
+{{if .Data.Rows}}<div class="tw"><table class="rs"><thead><tr><th>Router</th><th>State</th><th>Setup</th><th class="n">Houses</th><th class="n">Online</th><th>WAN</th><th>Tunnel</th><th>Seen</th><th></th></tr></thead><tbody>
 {{range .Data.Rows}}<tr><td class="who"><b><a href="/admin/routers/view?id={{.S.ID}}">{{.S.Name}}</a></b><span>{{.Detail}}</span></td>
 <td data-label="State"><span class="pill {{.State}}">{{.State}}</span></td><td data-label="Setup"><span class="pill {{.SetupTone}}">{{.Setup}}</span></td>
-<td class="n" data-label="Flats">{{.Flats}}</td><td class="n" data-label="Online">{{.Online}}</td>
+<td class="n" data-label="Houses">{{.Flats}}</td><td class="n" data-label="Online">{{.Online}}</td>
 <td data-label="WAN">{{if .WAN}}{{.WAN}}{{if .WANPct}}<div class="meter" role="img" aria-label="{{f0 .WANPct}} percent of capacity"><i style="width:{{f0 .WANPct}}%"></i></div>{{end}}{{else}}<span class="muted">none yet</span>{{end}}</td>
 <td data-label="Tunnel">{{if .Tunnel}}{{.Tunnel}}{{else}}<span class="muted">none</span>{{end}}</td><td data-label="Seen">{{.Seen}}</td>
 <td><a class="btn ghost sm" href="/admin/site/select?site={{.S.ID}}&amp;next=/admin">Open</a></td></tr>{{end}}</tbody></table></div>
@@ -40,6 +40,6 @@
 {{else}}{{template "empty" (dict "Title" "No router in this view." "Text" "Try another tab." "Acts" (acts "Show all|/admin/routers"))}}{{end}}
 {{if .Data.Notices}}<section class="panel"><h2>Tenants waiting on a router</h2><p class="muted" style="margin:6px 0 10px">These routers are down. Send tenants a WhatsApp notice once per outage.</p>
 {{range .Data.Notices}}<form method="post" action="/admin/sites/outage-notice" class="row" data-confirm="Send a WhatsApp outage notice to every tenant of {{.S.Name}} who has a WhatsApp number?"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{.S.ID}}"><b>{{.S.Name}}</b><span class="muted">{{.Cause}}</span><button class="sm">Tell tenants about the outage</button>{{if .Notified}} <span class="muted">{{.Notified}} notices already sent</span>{{end}}</form>{{end}}</section>{{end}}
-<p class="muted">Flat labels and ONT MACs only need to be unique inside a router. Account codes are unique everywhere, so a Paybill payment always finds its flat.</p>
+<p class="muted">House numbers and ONT MACs only need to be unique inside a router. Account codes are unique everywhere, so a Paybill payment always finds its house.</p>
 {{if .Data.AutoOpen}}<span hidden data-autoopen="addrouter"></span>{{end}}
 {{template "afoot" .}}{{end}}

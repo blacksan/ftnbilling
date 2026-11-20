@@ -120,7 +120,7 @@ func topoSVG(rows []mapRouter, brand string) template.HTML {
 	}
 	h := 330
 	var b strings.Builder
-	fmt.Fprintf(&b, `<svg class="topo" viewBox="0 0 %d %d" role="img" aria-label="Server, then each router, its OLT and its flats"><title>Network topology</title>`, w, h)
+	fmt.Fprintf(&b, `<svg class="topo" viewBox="0 0 %d %d" role="img" aria-label="Server, then each router, its OLT and its houses"><title>Network topology</title>`, w, h)
 	cx := w / 2
 	// edges first so nodes draw over them
 	for i, mr := range rows {
@@ -147,7 +147,7 @@ func topoSVG(rows []mapRouter, brand string) template.HTML {
 			esc(mr.S.ID), cls, x-82, top+120, x, top+140, esc(clip(mr.S.Name, 20)), x, top+155, esc(mr.State))
 		fmt.Fprintf(&b, `<rect class="nd" x="%d" y="%d" width="96" height="40" rx="12"/><text x="%d" y="%d" text-anchor="middle">OLT</text><text class="sm" x="%d" y="%d" text-anchor="middle">%s</text>`,
 			x-48, top+210, x, top+228, x, top+242, esc(clip(oltName(mr.S), 14)))
-		fmt.Fprintf(&b, `<text x="%d" y="%d" text-anchor="middle">%d flats</text><text class="sm" x="%d" y="%d" text-anchor="middle">%d online now</text>`, x, top+292, mr.Accounts, x, top+308, mr.Online)
+		fmt.Fprintf(&b, `<text x="%d" y="%d" text-anchor="middle">%d houses</text><text class="sm" x="%d" y="%d" text-anchor="middle">%d online now</text>`, x, top+292, mr.Accounts, x, top+308, mr.Online)
 	}
 	b.WriteString(`</svg>`)
 	return template.HTML(b.String())

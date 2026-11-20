@@ -132,7 +132,7 @@ func TestPortsCountFlatsSeenOnCustomerPorts(t *testing.T) {
 	m.SeedRow("/interface/bridge/host", R{"mac-address": "AA:BB:CC:00:00:02", "on-interface": "sfp-sfpplus1", "bridge": "br-customers"})
 	v, _ := f.m.Ports(context.Background(), s.ID, store.RoleOperator)
 	p := portByName(t, v, "ether3")
-	if p.Flats == nil || *p.Flats != 1 || !strings.Contains(p.DisableWarning, "1 flat") {
+	if p.Flats == nil || *p.Flats != 1 || !strings.Contains(p.DisableWarning, "1 house") {
 		t.Fatalf("%+v", p)
 	}
 }

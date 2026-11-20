@@ -292,7 +292,7 @@ func (s *Server) apiUnregCreate(w http.ResponseWriter, r *http.Request, c *apiCt
 		req.Unit = req.Flat
 	}
 	if strings.TrimSpace(req.Unit) == "" {
-		fields["unit"] = "a unit (flat) label is required"
+		fields["unit"] = "a house number is required"
 	}
 	if strings.TrimSpace(req.ApartmentID) == "" {
 		fields["apartment_id"] = "an apartment is required"

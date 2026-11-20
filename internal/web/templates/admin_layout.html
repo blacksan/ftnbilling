@@ -58,7 +58,7 @@
 
 {{define "afoot"}}</main></div></div>
 {{if .CanWrite}}{{template "m_addcustomer" .}}{{template "m_addrouter" .}}{{end}}
-<dialog id="cmdk" aria-label="Search"><div class="mcard"><input id="cmdk-q" type="search" placeholder="Search a customer, flat, MAC, router or receipt" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="cmdk-list" aria-label="Search"><ul id="cmdk-list" role="listbox"></ul></div></dialog>
+<dialog id="cmdk" aria-label="Search"><div class="mcard"><input id="cmdk-q" type="search" placeholder="Search a customer, house number, MAC, router or receipt" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="cmdk-list" aria-label="Search"><ul id="cmdk-list" role="listbox"></ul></div></dialog>
 <div id="toasts" role="status" aria-live="polite"></div>
 </body></html>{{end}}
 
@@ -67,7 +67,7 @@
 <div class="stack" data-step="form">
 <div class="two"><label class="field">Name<input name="tenant" autocomplete="off" placeholder="Jane Wanjiru"></label><label class="field">Phone<input name="phone" inputmode="tel" autocomplete="off" placeholder="0712 345 678"></label></div>
 <div class="two"><label class="field">Apartment<select name="apartment_id" required data-apt-select><option value="">Choose an apartment</option>{{range .Data.AptOpts}}<option value="{{.ID}}" data-routers="{{range $i, $r := .Routers}}{{if $i}},{{end}}{{$r}}{{end}}" data-address="{{.Address}}" data-subs="{{.Subscribers}}" data-router-names="{{range $i, $r := .RouterNames}}{{if $i}}, {{end}}{{$r}}{{end}}">{{.Name}}</option>{{end}}</select></label>
-<label class="field">Unit<input name="unit" required autocomplete="off" placeholder="B4"></label></div>
+<label class="field">House number<input name="unit" required autocomplete="off" placeholder="e.g. B4"></label></div>
 {{if not .Data.AptOpts}}<p class="hint">No apartments yet. <a href="/admin/apartments/new">Create one</a> first.</p>{{end}}
 <fieldset class="field" style="border:0;padding:0;margin:0"><legend style="font:600 13px var(--f-sans);padding:0;margin-bottom:6px">Plan</legend>
 <div class="pkgs">{{range .Pkgs}}<label class="pkg"><input type="radio" name="package" value="{{.ID}}"><b>{{.Name}}</b><span>{{.SpeedMbps}} Mbps &middot; {{dur .DurationMin}}</span><em>{{kes .PriceKES}}</em></label>{{else}}<p class="muted">No plans yet. <a href="/admin/packages">Create one</a> first.</p>{{end}}</div></fieldset>

@@ -135,7 +135,7 @@ fun MoreScreen(
 
             Heading("Manage")
             ActionCard("Routers", "All routers, status and Add router", Icons.Default.Place, s.primaryContainer, s.onPrimaryContainer, s.primary, s.onPrimary, onClick = onRouters)
-            ActionCard("Apartments", "Buildings, their routers, flats, caretaker and landlord", Icons.Default.Home, s.tertiaryContainer, s.onTertiaryContainer, s.tertiary, s.onTertiary, onClick = onApartments)
+            ActionCard("Apartments", "Apartments, their routers, houses, caretaker and landlord", Icons.Default.Home, s.tertiaryContainer, s.onTertiaryContainer, s.tertiary, s.onTertiary, onClick = onApartments)
             ActionCard("Alerts", "Open alerts and muted routers", Icons.Default.Notifications, x.warningContainer, x.onWarningContainer, x.warning, x.onWarning, onClick = onAlertList)
             ActionCard("App settings", "Theme, app lock, updates, devices and sign out", Icons.Default.Settings, s.secondaryContainer, s.onSecondaryContainer, s.secondary, s.onSecondary, onClick = onSettings)
         }
