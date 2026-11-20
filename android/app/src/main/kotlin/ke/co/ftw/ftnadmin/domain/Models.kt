@@ -371,6 +371,38 @@ data class SuggestedAccount(
     val flat: String = "",
 )
 
+/** A device the walled-off captive page could offer to the owner as "this is probably their phone". */
+@Serializable
+data class RegistrationCandidate(
+    val mac: String = "",
+    val vendor: String = "",
+    @SerialName("host_name") val hostName: String = "",
+    val online: Boolean = false,
+    val ip: String = "",
+    val port: String = "",
+)
+
+/**
+ * Someone who filled in the self-registration form on the captive page. Nothing is set up until the owner approves it
+ * with the device's MAC. [mac] is blank because the server cannot see the visitor's MAC; [guessMac] is only a hint.
+ */
+@Serializable
+data class PendingRegistration(
+    val id: String = "",
+    @SerialName("site_id") val siteId: String = "",
+    @SerialName("site_name") val siteName: String = "",
+    @SerialName("apartment_id") val apartmentId: String = "",
+    @SerialName("apartment_name") val apartmentName: String = "",
+    val unit: String = "",
+    val name: String = "",
+    val phone: String = "",
+    val email: String = "",
+    val mac: String = "",
+    @SerialName("guess_mac") val guessMac: String = "",
+    @SerialName("created_at") val createdAt: String? = null,
+    val candidates: List<RegistrationCandidate> = emptyList(),
+)
+
 /** A MAC that is connected to a router's network but not configured on any account. */
 @Serializable
 data class NewDevice(

@@ -80,3 +80,12 @@
 <div class="row"><label>Router<select name="site">{{range .Data.Sites}}<option value="{{.ID}}"{{if eq .ID $.Data.SiteID}} selected{{end}}>{{.Name}}</option>{{end}}</select></label><label style="flex:1">Command<input name="cmd" value="{{.Data.Cmd}}" style="width:100%;font-family:monospace" placeholder="/ip/dhcp-server/lease/print" autocomplete="off"></label></div>
 <div class="mt-2 row"><label>To change something: type the router name<input name="confirm_site" autocomplete="off"></label><label>Current admin password<input type="password" name="current_password" autocomplete="current-password"></label><button>Run</button></div></form></div>{{end}}
 {{template "afoot" .}}{{end}}
+
+{{define "admin_settings_support"}}{{template "ahead" .}}{{template "set_tabs" .}}
+<p class="muted">The contacts on every page a walled device sees (the payment, waiting, receipt and registration pages). Changes apply at once. Leave a box empty to hide that contact.</p>
+{{template "set_form" (dict "P" . "Fields" .Data.Fields "Action" "/admin/settings/support")}}
+<div class="card"><b>What visitors see</b>
+<table><tr><td>Call</td><td>{{if .Data.Phone}}{{.Data.Phone}}{{else}}<span class="muted">hidden</span>{{end}}</td></tr>
+<tr><td>Email</td><td>{{if .Data.Email}}{{.Data.Email}}{{else}}<span class="muted">hidden</span>{{end}}</td></tr>
+<tr><td>WhatsApp us</td><td>{{if .Data.WhatsApp}}wa.me/{{.Data.WhatsApp}}{{else}}<span class="muted">hidden</span>{{end}}</td></tr></table></div>
+{{template "afoot" .}}{{end}}

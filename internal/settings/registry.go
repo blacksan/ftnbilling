@@ -18,6 +18,7 @@ const (
 	SecWhatsApp = "whatsapp"
 	SecMpesa    = "mpesa"
 	SecEmail    = "email"
+	SecSupport  = "support"
 )
 
 // Kind tells the page which input to draw.
@@ -212,6 +213,48 @@ func plain(max int, what string) func(string) (string, error) {
 	}
 }
 
+// supportPhone accepts what people write on a door: digits, spaces, + and -.
+func supportPhone(v string) (string, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "", nil
+	}
+	digits := 0
+	for _, r := range v {
+		switch {
+		case r >= '0' && r <= '9':
+			digits++
+		case r == ' ' || r == '+' || r == '-':
+		default:
+			return "", fmt.Errorf("the support phone may hold only digits, spaces, + and -")
+		}
+	}
+	if digits < 7 || digits > 15 || len(v) > 24 {
+		return "", fmt.Errorf("the support phone must have 7 to 15 digits")
+	}
+	return v, nil
+}
+
+func supportEmail(v string) (string, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "", nil
+	}
+	a, err := mail.ParseAddress(v)
+	if err != nil || a.Name != "" || !strings.Contains(a.Address, "@") || len(a.Address) > 120 {
+		return "", fmt.Errorf("the support email must look like support@example.com")
+	}
+	return a.Address, nil
+}
+
+func supportWhatsApp(v string) (string, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "", nil
+	}
+	return config.NormalizeWANumber(v)
+}
+
 // Registry lists every editable setting, in display order.
 var Registry = buildRegistry()
 
@@ -304,6 +347,17 @@ func buildRegistry() []Def {
 		Help: "Tick for port 465. Port 465 always uses it, whatever this says.", Norm: boolNorm}, g, s)
 	g, s = list(func(c *config.Config) *[]string { return &c.AlertEmailTo })
 	add(Def{Key: "alert.email_to", Env: "ALERT_EMAIL_TO", Section: SecEmail, Label: "Send alerts to", Kind: KArea, Help: "One address per line.", Norm: emails}, g, s)
+
+	// ---- Support contacts (the captive pages)
+	g, s = str(func(c *config.Config) *string { return &c.SupportPhone })
+	add(Def{Key: "support.phone", Env: "SUPPORT_PHONE", Section: SecSupport, Label: "Support phone", Kind: KText, Placeholder: "0100133133",
+		Help: "Shown as a call link on the pages a walled device sees. A router can have its own number (Routers > settings). Empty hides it.", Norm: supportPhone}, g, s)
+	g, s = str(func(c *config.Config) *string { return &c.SupportEmail })
+	add(Def{Key: "support.email", Env: "SUPPORT_EMAIL", Section: SecSupport, Label: "Support email", Kind: KText, Placeholder: "support@example.com",
+		Help: "Shown as a mail link. Empty hides it.", Norm: supportEmail}, g, s)
+	g, s = str(func(c *config.Config) *string { return &c.SupportWhatsApp })
+	add(Def{Key: "support.whatsapp", Env: "SUPPORT_WHATSAPP", Section: SecSupport, Label: "Support WhatsApp number", Kind: KText, Placeholder: "254100133133",
+		Help: "International digits (0100133133 is turned into 254100133133). The \"WhatsApp us\" button opens a chat with it. Empty hides the button.", Norm: supportWhatsApp}, g, s)
 	return r
 }
 

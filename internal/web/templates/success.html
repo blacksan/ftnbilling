@@ -6,14 +6,14 @@
 <p class="flat m-flat">{{.Acct.Flat}}</p>
 <p class="muted m-tight">Account number (use it as the Paybill account)</p><div class="code">{{.Acct.Code}}</div>
 <p>Package: <b>{{.Pkg.Name}}</b><br>Valid until: <b>{{eat .Expires}}</b></p></div>
-{{if .Support}}<p class="muted" id="help">Help: {{.Support}}</p>{{end}}
+{{template "contacts" .Contacts}}
 <script>
 (function(){var u="/api/orders/{{.Order}}",t0=Date.now(),m=document.getElementById("msg"),s=document.getElementById("sub");
 function p(){var x=new XMLHttpRequest();x.open("GET",u);
 x.onload=function(){try{var r=JSON.parse(x.responseText);
 if(r.online){m.textContent="You're back online";m.parentNode.className="card ok";s.textContent="You can close this page and carry on browsing. If a page does not load, turn Wi-Fi off and on once.";return}
 }catch(e){}later()};x.onerror=later;x.send()}
-function later(){if(Date.now()-t0>120000){m.textContent="Payment received, but your internet has not switched on yet.";s.textContent="Restart your router, and if it is still paused call us on {{.Support}}.";return}setTimeout(p,3000)}
+function later(){if(Date.now()-t0>120000){m.textContent="Payment received, but your internet has not switched on yet.";s.textContent="Restart your router, and if it is still paused contact us with the details below.";return}setTimeout(p,3000)}
 setTimeout(p,1500)})();
 </script>
 {{template "foot"}}{{end}}

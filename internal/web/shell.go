@@ -47,6 +47,7 @@ var pageMetas = map[string]pageMeta{
 	"set-whatsapp":  {"System", "WhatsApp", "/admin/settings/whatsapp", "WhatsApp", "settings.", "Where tenant messages and alerts are sent from."},
 	"set-mpesa":     {"System", "M-Pesa", "/admin/settings/mpesa", "M-Pesa", "settings.", "Daraja credentials, callback addresses and test payments."},
 	"set-email":     {"System", "Email", "/admin/settings/email", "Email", "settings.", "Outgoing mail for receipts and alerts."},
+	"set-support":   {"System", "Support contacts", "/admin/settings/support", "Support", "settings.", "The phone, email and WhatsApp shown on the pages a walled device sees."},
 	"set-equipment": {"System", "Equipment tools", "/admin/settings/equipment", "Equipment", "tools.", "Look up a serial or MAC against the vendor lists."},
 	"security":      {"System", "Security", "/admin/security", "Account", "security.", "Password, authenticator, signed-in devices and who else can sign in."},
 	"set-tools":     {"System", "Tools", "/admin/tools", "Router", "tools.", "Ping, trace and run a read-only command from the server."},

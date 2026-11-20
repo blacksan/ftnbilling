@@ -519,6 +519,7 @@ func (s *Server) apiRoutes(mux *http.ServeMux) {
 	h("GET /api/v1/payments", viewer, s.apiPayments)
 	h("GET /api/v1/alerts", viewer, s.apiAlerts)
 	h("GET /api/v1/unregistered", viewer, s.apiUnregistered)
+	s.registrationRoutes(h)
 	h("GET /api/v1/search", viewer, s.apiSearch)
 	h("GET /api/v1/audit", owner, s.apiAudit)
 

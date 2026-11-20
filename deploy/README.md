@@ -49,7 +49,17 @@ To preview without changing anything: `DRY_RUN=1` (works without root and prints
 curl -fsSL -H "Authorization: Bearer $GH" https://raw.githubusercontent.com/blacksan/ftnbilling/main/deploy/install.sh | DRY_RUN=1 bash
 ```
 
-Options (environment variables): `DOMAIN`, `GH_TOKEN`, `VERSION` (a release tag; default is the latest release), `FROM_SOURCE=1` (build on the server instead of using a release), `NO_POSTGRES=1`, `NO_FIREWALL=1`, `DRY_RUN=1`, `PUBLIC_IP`, `ADMIN_PASS`, `BRAND_NAME`, `SUPPORT_PHONE`, `WG_PORT`, `WG_SUBNET`, `MGMT_PORT` (UDP, default 51821) and `MGMT_SUBNET` (default `10.98.0.0/24`) for remote WinBox, `WEBFIG_DOMAIN` for remote WebFig (below), `SWAP_MB`. The header of `install.sh` lists them.
+Options (environment variables): `DOMAIN`, `GH_TOKEN`, `VERSION` (a release tag; default is the latest release), `FROM_SOURCE=1` (build on the server instead of using a release), `NO_POSTGRES=1`, `NO_FIREWALL=1`, `DRY_RUN=1`, `PUBLIC_IP`, `ADMIN_PASS`, `BRAND_NAME`, `SUPPORT_PHONE`, `SUPPORT_EMAIL`, `SUPPORT_WHATSAPP`, `WG_PORT`, `WG_SUBNET`, `MGMT_PORT` (UDP, default 51821) and `MGMT_SUBNET` (default `10.98.0.0/24`) for remote WinBox, `WEBFIG_DOMAIN` for remote WebFig (below), `SWAP_MB`. The header of `install.sh` lists them.
+
+### Support contacts on the captive pages
+
+Every page a walled device sees (pay, waiting, receipt, registration) ends with the contacts: a call link, a "WhatsApp us" button (`https://wa.me/<digits>`) and an email link. They come from `SUPPORT_PHONE` (default `0100133133`; a router's own support phone, set in Routers, wins for its building), `SUPPORT_EMAIL` (default `support@ftw.co.ke`) and `SUPPORT_WHATSAPP` (default `254100133133`, international digits; `0100133133` is accepted and turned into `254100133133`). An empty or `none` setting hides that contact. The installer writes the values you pass into `/etc/ftnbilling/ftnbilling.env`; **Settings > Support contacts** edits them later without a restart and wins over the file.
+
+### Self-registration on the captive page
+
+A visitor on a walled device can register at `/pay/register`: full name, phone, apartment (only the apartments the visitor's router serves), house number, an optional email and a tick for the privacy notice (Kenya Data Protection Act, 2019). The request waits as *pending* in **New devices** (and counts on the Overview); the owner picks the device and approves it, which creates the account, or rejects it, which erases the details. The device has no internet until then.
+
+The server cannot see a walled device's MAC: its HTTP is sent to the server through the router's WAN with masquerade, so the server sees the router's address only. A registration is therefore bound to the *building* (the router's WireGuard peer address), and the owner chooses the device when approving; the form is never trusted for a MAC. When exactly one unknown device was online on the router when the form arrived, it is preselected as "likely", and the owner still confirms it. Showing the device to the server would need the walled HTTP to go through the tunnel without masquerade (the customer subnet in the peer's AllowedIPs, impossible when two buildings share a subnet) or a conntrack read per page view; neither is done.
 
 ### Where the program comes from
 

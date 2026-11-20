@@ -165,6 +165,40 @@ class ViewModelsTest {
         assertEquals(listOf("03", "02", "01"), macs)
     }
 
+    private val pendingReg = """{"id":"r1","site_id":"s1","site_name":"Kilimani","apartment_id":"ap1","apartment_name":"Hilltop","unit":"B7","name":"Njeri Mwangi","phone":"254722111222","guess_mac":"00:E0:4C:68:01:02","candidates":[{"mac":"00:E0:4C:68:01:02","vendor":"Realtek","online":true}]}"""
+
+    @Test fun selfRegistrationsListPreselectTheGuessAndApproveWithTheMac() = runTest(main.dispatcher) {
+        routes["GET /api/v1/unregistered"] = ok("""{"items":[]}""")
+        routes["GET /api/v1/packages"] = ok("""{"items":[]}""")
+        routes["GET /api/v1/registrations"] = ok("""{"items":[$pendingReg],"count":1}""")
+        routes["POST /api/v1/registrations/r1/approve"] = ok("""{"id":"a1"}""")
+        val vm = main.track(NewDevicesViewModel(null, NewDevicesRepository(api), SitesRepository(api), AccountsRepository(api)))
+        await(vm.state) { it.devices is Loadable.Ready && it.registrations.isNotEmpty() }
+        val r = vm.state.value.registrations.single()
+        assertEquals("Njeri Mwangi", r.name)
+        vm.askApprove(r)
+        assertEquals("the likely device is preselected", "00:E0:4C:68:01:02", vm.state.value.approveMac)
+        assertTrue(requests("POST /api/v1/registrations/r1/approve").isEmpty())
+        vm.approve()
+        await(vm.state) { it.approving == null && it.message != null }
+        val body = requests("POST /api/v1/registrations/r1/approve").single().body.readUtf8()
+        assertTrue(body, body.contains("\"mac\":\"00:E0:4C:68:01:02\""))
+    }
+
+    @Test fun selfRegistrationCanBeRejectedAfterAConfirm() = runTest(main.dispatcher) {
+        routes["GET /api/v1/unregistered"] = ok("""{"items":[]}""")
+        routes["GET /api/v1/packages"] = ok("""{"items":[]}""")
+        routes["GET /api/v1/registrations"] = ok("""{"items":[$pendingReg],"count":1}""")
+        routes["POST /api/v1/registrations/r1/reject"] = ok("""{}""")
+        val vm = main.track(NewDevicesViewModel(null, NewDevicesRepository(api), SitesRepository(api), AccountsRepository(api)))
+        await(vm.state) { it.registrations.isNotEmpty() }
+        vm.askReject(vm.state.value.registrations.single())
+        assertTrue(requests("POST /api/v1/registrations/r1/reject").isEmpty())
+        vm.reject()
+        await(vm.state) { it.rejecting == null && it.message != null }
+        assertEquals(1, requests("POST /api/v1/registrations/r1/reject").size)
+    }
+
     @Test fun attachConflictNamesTheOwner() = runTest(main.dispatcher) {
         routes["GET /api/v1/unregistered"] = ok(
             """{"items":[{"site_id":"s1","site_name":"Kilimani","mac":"AA:BB:CC:DD:EE:05","online":true,"suggested_account":{"id":"a1","code":"FTN-1","flat":"A1"}}]}""",

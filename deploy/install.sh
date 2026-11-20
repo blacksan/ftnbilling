@@ -49,7 +49,10 @@
 #                 have verified with Safaricom. A suggested list is in a comment
 #                 near mpesa_cb_block below (unverified). CADDY_MPESA_IPS=any is the
 #                 same as unset, written down on purpose.
-#   SUPPORT_PHONE, BRAND_NAME, PUBLIC_IP (skip auto-detection of this VPS's IPv4).
+#   SUPPORT_PHONE (0100133133), SUPPORT_EMAIL (support@ftw.co.ke) and SUPPORT_WHATSAPP
+#                 (254100133133, international digits): the contacts on every page a walled
+#                 device sees. Give "none" to hide one; Settings > Support contacts edits them later.
+#   BRAND_NAME, PUBLIC_IP (skip auto-detection of this VPS's IPv4).
 #   WG_PORT (51820), WG_SUBNET (10.99.0.0/22),
 #   MGMT_PORT (51821, udp: the remote-WinBox WireGuard interface wg-mgmt),
 #   MGMT_SUBNET (10.98.0.0/24: a private IPv4 prefix, /16 to /29, apart from
@@ -826,6 +829,8 @@ ADMIN_PASS=$pass
 PUBLIC_BASE_URL=$BASE
 PUBLIC_IP=$PUBIP
 SUPPORT_PHONE=${SUPPORT_PHONE:-}
+SUPPORT_EMAIL=${SUPPORT_EMAIL:-}
+SUPPORT_WHATSAPP=${SUPPORT_WHATSAPP:-}
 
 # Routers connect over WireGuard. Add each router in Admin > Routers.
 WG_PUBLIC_KEY=$WG_PUB

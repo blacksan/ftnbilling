@@ -290,6 +290,8 @@ var tables = []table{
 		eqDeep[AdminUser], AdminUser.norm, func(v AdminUser) string { return v.ID }, cloneAdminUser},
 	tbl[AdminSession]{func(d *Data) *map[string]AdminSession { return &d.AdminSessions }, func(c *ChangeSet) *Delta[AdminSession] { return &c.AdminSessions },
 		eqc[AdminSession], AdminSession.norm, func(v AdminSession) string { return v.ID }, nil},
+	tbl[Registration]{func(d *Data) *map[string]Registration { return &d.Registrations }, func(c *ChangeSet) *Delta[Registration] { return &c.Registrations },
+		eqc[Registration], Registration.norm, func(v Registration) string { return v.ID }, nil},
 	tbl[APIDevice]{func(d *Data) *map[string]APIDevice { return &d.APIDevices }, func(c *ChangeSet) *Delta[APIDevice] { return &c.APIDevices },
 		eqDeep[APIDevice], APIDevice.norm, func(v APIDevice) string { return v.ID }, cloneAPIDevice},
 }
@@ -473,7 +475,7 @@ func cloneData(d *Data) Data {
 		Payments: cloneMap(d.Payments, nil), Devices: cloneMap(d.Devices, nil), Tasks: cloneMap(d.Tasks, nil),
 		Customers: cloneMap(d.Customers, nil), Tenancies: cloneMap(d.Tenancies, nil), Apartments: cloneMap(d.Apartments, nil), ApartmentSites: cloneMap(d.ApartmentSites, nil),
 		Equipment: cloneMap(d.Equipment, nil), EquipmentEvents: cloneMap(d.EquipmentEvents, nil), Notes: cloneMap(d.Notes, nil), Settings: cloneMap(d.Settings, nil),
-		AdminUsers: cloneMap(d.AdminUsers, cloneAdminUser), AdminSessions: cloneMap(d.AdminSessions, nil), APIDevices: cloneMap(d.APIDevices, cloneAPIDevice),
+		AdminUsers: cloneMap(d.AdminUsers, cloneAdminUser), AdminSessions: cloneMap(d.AdminSessions, nil), APIDevices: cloneMap(d.APIDevices, cloneAPIDevice), Registrations: cloneMap(d.Registrations, nil),
 		Events: append([]Event(nil), d.Events...),
 	}
 }

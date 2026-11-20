@@ -426,6 +426,17 @@ var tasksC = (&codec[store.Task]{
 	},
 }).build()
 
+var registrationsC = (&codec[store.Registration]{
+	name: "registrations", pk: []string{"id"}, key: func(v store.Registration) string { return v.ID },
+	cols: []string{"id", "site_id", "apartment_id", "unit", "name", "phone", "email", "mac", "guess_mac", "status", "consent_at", "created_at", "decided_at", "decided_by", "account_id"},
+	args: func(v store.Registration) []any {
+		return []any{v.ID, v.SiteID, v.ApartmentID, v.Unit, v.Name, v.Phone, v.Email, v.MAC, v.GuessMAC, v.Status, nt(v.ConsentAt), tm(v.CreatedAt), nt(v.DecidedAt), v.DecidedBy, v.AccountID}
+	},
+	dst: func(v *store.Registration) []any {
+		return []any{&v.ID, &v.SiteID, &v.ApartmentID, &v.Unit, &v.Name, &v.Phone, &v.Email, &v.MAC, &v.GuessMAC, &v.Status, t_(&v.ConsentAt), t_(&v.CreatedAt), t_(&v.DecidedAt), &v.DecidedBy, &v.AccountID}
+	},
+}).build()
+
 var eqEventsC = (&codec[store.EquipmentEvent]{
 	name: "equipment_events", pk: []string{"id"}, key: func(v store.EquipmentEvent) string { return v.ID },
 	cols: []string{"id", "equipment_id", "time", "kind", "from_status", "to_status", "site_id", "account_id", "customer_id", "note"},

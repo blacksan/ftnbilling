@@ -100,6 +100,7 @@ type ChangeSet struct {
 	AdminUsers      Delta[AdminUser]
 	AdminSessions   Delta[AdminSession]
 	APIDevices      Delta[APIDevice]
+	Registrations   Delta[Registration]
 	NewEvents       []Event
 }
 
@@ -109,7 +110,7 @@ func (c *ChangeSet) Empty() bool {
 		c.Accounts.Empty() && c.Tenancies.Empty() && c.Apartments.Empty() && c.ApartmentSites.Empty() && c.Orders.Empty() &&
 		c.Vouchers.Empty() && c.Payments.Empty() && c.Devices.Empty() && c.Tasks.Empty() &&
 		c.EquipmentEvents.Empty() && c.Notes.Empty() && c.Settings.Empty() &&
-		c.AdminUsers.Empty() && c.AdminSessions.Empty() && c.APIDevices.Empty() && len(c.NewEvents) == 0
+		c.AdminUsers.Empty() && c.AdminSessions.Empty() && c.APIDevices.Empty() && c.Registrations.Empty() && len(c.NewEvents) == 0
 }
 
 // Summary is a short human description (counts only, never row contents).
@@ -129,7 +130,8 @@ func (c *ChangeSet) Summary() string {
 		n("equipment_events", len(c.EquipmentEvents.Upsert), len(c.EquipmentEvents.Delete)) + n("notes", len(c.Notes.Upsert), len(c.Notes.Delete)) +
 		n("settings", len(c.Settings.Upsert), len(c.Settings.Delete)) +
 		n("admin_users", len(c.AdminUsers.Upsert), len(c.AdminUsers.Delete)) + n("admin_sessions", len(c.AdminSessions.Upsert), len(c.AdminSessions.Delete)) +
-		n("api_devices", len(c.APIDevices.Upsert), len(c.APIDevices.Delete))
+		n("api_devices", len(c.APIDevices.Upsert), len(c.APIDevices.Delete)) +
+		n("registrations", len(c.Registrations.Upsert), len(c.Registrations.Delete))
 	if len(c.NewEvents) > 0 {
 		s += fmt.Sprintf(" events+%d", len(c.NewEvents))
 	}

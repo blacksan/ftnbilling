@@ -578,6 +578,9 @@ type Data struct {
 	AdminUsers    map[string]AdminUser    `json:"admin_users"`
 	AdminSessions map[string]AdminSession `json:"admin_sessions"`
 	APIDevices    map[string]APIDevice    `json:"api_devices"`
+
+	// Registrations are the captive page's self-registrations (pending, approved, rejected).
+	Registrations map[string]Registration `json:"registrations"`
 }
 
 func (d *Data) init() {
@@ -605,6 +608,9 @@ func (d *Data) init() {
 	}
 	if d.Tasks == nil {
 		d.Tasks = map[string]Task{}
+	}
+	if d.Registrations == nil {
+		d.Registrations = map[string]Registration{}
 	}
 	if d.ClosedAccounts == nil {
 		d.ClosedAccounts = map[string]Account{}

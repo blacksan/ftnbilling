@@ -13,6 +13,7 @@ import ke.co.ftw.ftnadmin.data.sites.NewDevicesRepository
 import ke.co.ftw.ftnadmin.data.sites.SitesRepository
 import ke.co.ftw.ftnadmin.domain.Account
 import ke.co.ftw.ftnadmin.domain.NewDevice
+import ke.co.ftw.ftnadmin.domain.PendingRegistration
 import ke.co.ftw.ftnadmin.domain.ServicePackage
 import ke.co.ftw.ftnadmin.ui.common.Loadable
 import ke.co.ftw.ftnadmin.ui.common.apiResult
@@ -59,6 +60,13 @@ data class NewDevicesUiState(
     val sheet: DeviceSheet? = null,
     val packages: List<ServicePackage> = emptyList(),
     val message: String? = null,
+    /** People who registered on the captive page and wait for approval. */
+    val registrations: List<PendingRegistration> = emptyList(),
+    /** The registration being approved (its device picker is open) and the MAC chosen for it. */
+    val approving: PendingRegistration? = null,
+    val approveMac: String = "",
+    val rejecting: PendingRegistration? = null,
+    val decideBusy: Boolean = false,
 )
 
 class NewDevicesViewModel(
@@ -97,6 +105,8 @@ class NewDevicesViewModel(
     }
 
     private suspend fun fetch() {
+        // Best effort: the waiting list must never stop the device list from showing.
+        apiResult { repo.registrations(siteId) }.getOrNull()?.let { l -> _state.update { it.copy(registrations = l) } }
         val r = apiResult { repo.list(siteId) }
         _state.update { cur ->
             r.fold(
@@ -110,6 +120,48 @@ class NewDevicesViewModel(
     }
 
     fun clearMessage() = _state.update { it.copy(message = null) }
+
+    fun askApprove(r: PendingRegistration) =
+        _state.update { it.copy(approving = r, approveMac = r.mac.ifBlank { r.guessMac }) }
+
+    fun setApproveMac(mac: String) = _state.update { it.copy(approveMac = mac) }
+
+    fun cancelApprove() = _state.update { it.copy(approving = null, approveMac = "") }
+
+    fun askReject(r: PendingRegistration) = _state.update { it.copy(rejecting = r) }
+
+    fun cancelReject() = _state.update { it.copy(rejecting = null) }
+
+    fun approve() {
+        val r = _state.value.approving ?: return
+        val mac = _state.value.approveMac.trim()
+        if (mac.isEmpty() || _state.value.decideBusy) return
+        _state.update { it.copy(decideBusy = true) }
+        viewModelScope.launch {
+            apiResult { repo.approveRegistration(r.id, mac) }.fold(
+                {
+                    _state.update { it.copy(approving = null, approveMac = "", decideBusy = false, message = "Approved. House ${r.unit} is set up.") }
+                    fetch()
+                },
+                { e -> _state.update { it.copy(decideBusy = false, message = e.userMessage()) } },
+            )
+        }
+    }
+
+    fun reject() {
+        val r = _state.value.rejecting ?: return
+        if (_state.value.decideBusy) return
+        _state.update { it.copy(decideBusy = true) }
+        viewModelScope.launch {
+            apiResult { repo.rejectRegistration(r.id) }.fold(
+                {
+                    _state.update { it.copy(rejecting = null, decideBusy = false, message = "Registration rejected. The details were erased.") }
+                    fetch()
+                },
+                { e -> _state.update { it.copy(decideBusy = false, message = e.userMessage()) } },
+            )
+        }
+    }
 
     fun open(d: NewDevice) {
         val b = d.belongsTo

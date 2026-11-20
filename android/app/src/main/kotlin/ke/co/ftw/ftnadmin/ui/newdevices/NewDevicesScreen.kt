@@ -51,6 +51,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ke.co.ftw.ftnadmin.core.network.UserInfo
 import ke.co.ftw.ftnadmin.domain.NewDevice
+import ke.co.ftw.ftnadmin.domain.PendingRegistration
 import ke.co.ftw.ftnadmin.ui.common.AccountPicker
 import ke.co.ftw.ftnadmin.ui.common.AppTopBar
 import ke.co.ftw.ftnadmin.ui.common.CenteredLoading
@@ -91,7 +92,7 @@ fun NewDevicesScreen(siteId: String?, user: UserInfo, onBack: () -> Unit, onOpen
             Loadable.Loading -> CenteredLoading(Modifier.padding(inner))
             is Loadable.Failed -> ErrorState(d.message, vm::retry, Modifier.padding(inner))
             is Loadable.Ready -> PullToRefreshBox(ui.refreshing, vm::refresh, Modifier.padding(inner).fillMaxSize()) {
-                if (d.value.isEmpty()) {
+                if (d.value.isEmpty() && ui.registrations.isEmpty()) {
                     // Scrollable so pull-to-refresh still works on an empty list.
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                         EmptyState("No unconfigured devices. Everything connected has an account.\nPull down to check the routers again.")
@@ -102,6 +103,25 @@ fun NewDevicesScreen(siteId: String?, user: UserInfo, onBack: () -> Unit, onOpen
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
+                        if (ui.registrations.isNotEmpty()) {
+                            item(key = "regs-title") {
+                                Text(
+                                    "Waiting for approval",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                            items(ui.registrations, key = { "reg-" + it.id }) { r ->
+                                RegistrationRow(r, canDecide = user.canWrite, onApprove = { vm.askApprove(r) }, onReject = { vm.askReject(r) })
+                            }
+                            item(key = "devices-title") {
+                                Text(
+                                    "Devices not on an account",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                        }
                         items(d.value, key = { it.routerKey + it.mac }) { dev -> DeviceRow(dev, onClick = { if (user.canWrite) vm.open(dev) }) }
                     }
                 }
@@ -110,6 +130,74 @@ fun NewDevicesScreen(siteId: String?, user: UserInfo, onBack: () -> Unit, onOpen
     }
 
     ui.sheet?.let { sheet -> DeviceSheetContent(sheet, ui.packages, vm, onOpenAccount) }
+    ui.approving?.let { r -> ApproveDialog(r, ui.approveMac, ui.decideBusy, vm) }
+    ui.rejecting?.let { r ->
+        AlertDialog(
+            onDismissRequest = vm::cancelReject,
+            title = { Text("Reject ${r.name}?") },
+            text = { Text("Their details are erased. The device stays offline. They can register again.") },
+            confirmButton = { TextButton(onClick = vm::reject, enabled = !ui.decideBusy) { Text("Reject") } },
+            dismissButton = { TextButton(onClick = vm::cancelReject) { Text("Cancel") } },
+        )
+    }
+}
+
+/** One person who registered on the captive page. Approve asks which device is theirs. */
+@Composable
+private fun RegistrationRow(r: PendingRegistration, canDecide: Boolean, onApprove: () -> Unit, onReject: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(r.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+            Text(
+                listOf(r.apartmentName, "house ${r.unit}", r.siteName).filter { it.isNotBlank() }.joinToString("  |  "),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            Text(
+                listOf(r.phone, r.email).filter { it.isNotBlank() }.joinToString("  |  "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            if (canDecide) {
+                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onApprove) { Text("Approve", maxLines = 1) }
+                    OutlinedButton(onClick = onReject) { Text("Reject", maxLines = 1) }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The server cannot see the visitor's MAC, so the owner names the device: one of the router's unconfigured devices
+ * (the likely one is preselected) or a MAC typed in.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ApproveDialog(r: PendingRegistration, mac: String, busy: Boolean, vm: NewDevicesViewModel) {
+    AlertDialog(
+        onDismissRequest = vm::cancelApprove,
+        title = { Text("Approve ${r.name}?") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("House ${r.unit} gets an account on the device you pick. It comes online on the next router check.", style = MaterialTheme.typography.bodyMedium)
+                if (r.candidates.isNotEmpty()) {
+                    ChipRow(horizontalPadding = 0.dp) {
+                        r.candidates.forEach { c ->
+                            FilterChip(
+                                mac.equals(c.mac, ignoreCase = true),
+                                { vm.setApproveMac(c.mac) },
+                                label = { ChipLabel(listOf(c.mac, c.vendor, c.hostName).filter { it.isNotBlank() }.joinToString(" ")) },
+                            )
+                        }
+                    }
+                }
+                OutlinedTextField(mac, vm::setApproveMac, label = { Text("Device MAC") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = { TextButton(onClick = vm::approve, enabled = mac.isNotBlank() && !busy) { Text(if (busy) "Approving..." else "Approve") } },
+        dismissButton = { TextButton(onClick = vm::cancelApprove) { Text("Cancel") } },
+    )
 }
 
 @Composable

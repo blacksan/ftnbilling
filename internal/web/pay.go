@@ -20,9 +20,6 @@ import (
 	"ispbill/internal/store"
 )
 
-// defaultSupport is shown when neither the building nor the server config has a support phone.
-const defaultSupport = "0100133133"
-
 // Payment prompts cost the payer a PIN screen, so they are limited per
 // address and per account (the limiters live here: server.go is not ours).
 var (
@@ -181,6 +178,7 @@ func (s *Server) payRoutes(mux *http.ServeMux) {
 // visitor already named by its code.
 type payPage struct {
 	Brand, Support, SiteName, Site string
+	Contacts                       supportContacts
 	Error                          string
 	Detected                       bool   // the building was recognised from the visitor's address
 	Code                           string // shown only when the visitor typed the code
@@ -266,18 +264,16 @@ func (s *Server) siteByAddr(ip string) (store.Site, bool) {
 }
 
 func (s *Server) payBase(r *http.Request) payPage {
-	p := payPage{Brand: s.cfg.BrandName, Support: s.cfg.SupportPhone,
+	p := payPage{Brand: s.cfg.BrandName,
 		Mpesa: s.providers["mpesa"] != nil && s.providers["mpesa"].Enabled(),
 		Test:  s.providers["test"] != nil && s.providers["test"].Enabled()}
+	siteID := ""
 	if st, ok := s.siteByAddr(realIP(r)); ok {
 		p.Site, p.SiteName, p.Detected = st.ID, st.Name, true
-		if st.SupportPhone != "" {
-			p.Support = st.SupportPhone
-		}
+		siteID = st.ID
 	}
-	if p.Support == "" {
-		p.Support = defaultSupport
-	}
+	p.Contacts = s.contacts(siteID)
+	p.Support = p.Contacts.Words()
 	return p
 }
 
@@ -355,15 +351,14 @@ func (s *Server) payChoose(w http.ResponseWriter, r *http.Request, p payPage, a 
 	p.Site, p.Found, p.Flat, p.Error, p.ByCode = a.SiteID, true, a.Flat, errMsg, byCode
 	p.Tok = payToken(a.ID, s.svc.Now(), byCode)
 	p.CSRF = s.payCSRF(w, r)
+	p.Contacts = s.contacts(a.SiteID)
+	p.Support = p.Contacts.Words()
 	if byCode {
 		p.Code, p.ExpiresAt, p.State = a.Code, a.ExpiresAt, billing.AccountState(a, s.svc.Now())
 	}
 	s.st.View(func(d *store.Data) {
 		st := d.Sites[a.SiteID]
 		p.SiteName = st.Name
-		if st.SupportPhone != "" {
-			p.Support = st.SupportPhone
-		}
 		p.Groups = packageGroups(d.EffectivePackages(a.SiteID))
 	})
 	if a.Suspended {

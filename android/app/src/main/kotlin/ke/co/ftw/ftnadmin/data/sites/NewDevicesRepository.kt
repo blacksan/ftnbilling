@@ -5,6 +5,7 @@ import ke.co.ftw.ftnadmin.data.putIfNotBlank
 import ke.co.ftw.ftnadmin.domain.Account
 import ke.co.ftw.ftnadmin.domain.ItemList
 import ke.co.ftw.ftnadmin.domain.NewDevice
+import ke.co.ftw.ftnadmin.domain.PendingRegistration
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -74,4 +75,17 @@ class NewDevicesRepository(private val api: ApiClient) {
             putIfNotBlank("apartment_id", apartmentId)
         },
     )
+
+    /** Self-registrations from the captive page that wait for the owner (GET /registrations). */
+    suspend fun registrations(siteId: String? = null): List<PendingRegistration> =
+        api.get<ItemList<PendingRegistration>>("registrations", query = mapOf("router" to siteId)).items
+
+    /** Creates the account, the customer and the device. [mac] is the device the owner picked in the list. */
+    suspend fun approveRegistration(id: String, mac: String) = api.send(
+        "POST", "registrations", id, "approve",
+        body = buildJsonObject { put("mac", mac) },
+    )
+
+    /** Declines the registration; the server erases the person's details. */
+    suspend fun rejectRegistration(id: String) = api.send("POST", "registrations", id, "reject", body = buildJsonObject {})
 }

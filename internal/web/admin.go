@@ -94,6 +94,8 @@ type adminPage struct {
 	OpenAlerts, FailedMsgs     int    // sidebar badges
 	FlashBad                   bool
 	UnregCount, UnmatchedCount int
+	PendingRegs                int // self-registrations waiting for the owner
+	NavDevices                 int // the badge of "New devices": online unknown devices plus waiting registrations
 	Data                       map[string]any
 
 	// Shell and hero (see nav.go): what the sidebar, breadcrumb and page
@@ -134,6 +136,8 @@ func (s *Server) page(r *http.Request, active string) adminPage {
 		p.FailedMsgs = s.ops.Box.Counts()["failed"]
 	}
 	p.UnregCount = s.svc.UnregisteredOnline(sc.Has) // online, unregistered devices only
+	p.PendingRegs = s.svc.PendingRegistrationCount(sc.Has)
+	p.NavDevices = p.UnregCount + p.PendingRegs
 	p.CanWrite = p.Role == store.RoleOwner || p.Role == store.RoleOperator
 	p.Initial = initialOf(p.User)
 	if p.CanWrite {

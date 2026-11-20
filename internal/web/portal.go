@@ -21,6 +21,7 @@ func (s *Server) portalRoutes(mux *http.ServeMux) {
 		mux.HandleFunc("GET "+probe, captiveToPay)
 	}
 	s.payRoutes(mux)
+	s.registerRoutes(mux)
 	mux.HandleFunc("GET /brand/{name}", func(w http.ResponseWriter, r *http.Request) {
 		b, err := logoFS.ReadFile("static/" + r.PathValue("name"))
 		if err != nil || !strings.HasPrefix(r.PathValue("name"), "logo-") {
@@ -62,7 +63,8 @@ func (s *Server) portalWait(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/portal/success?order="+o.ID, http.StatusSeeOther)
 		return
 	}
-	s.render(w, "wait", map[string]any{"Brand": s.cfg.BrandName, "SiteName": s.siteName(o.SiteID), "Order": o, "Test": o.Method == "test"})
+	s.render(w, "wait", map[string]any{"Brand": s.cfg.BrandName, "SiteName": s.siteName(o.SiteID), "Order": o, "Test": o.Method == "test",
+		"Contacts": s.contacts(o.SiteID)})
 }
 
 func (s *Server) apiOrder(w http.ResponseWriter, r *http.Request) {
@@ -88,16 +90,11 @@ func (s *Server) portalSuccess(w http.ResponseWriter, r *http.Request) {
 	}
 	a, _ := s.svc.GetAccount(o.AccountID)
 	var pkg store.Package
-	support := s.cfg.SupportPhone
-	s.st.View(func(d *store.Data) {
-		pkg = d.Packages[a.PackageID]
-		if sp := d.Sites[o.SiteID].SupportPhone; sp != "" {
-			support = sp
-		}
-	})
+	s.st.View(func(d *store.Data) { pkg = d.Packages[a.PackageID] })
+	c := s.contacts(o.SiteID)
 	s.render(w, "success", map[string]any{
 		"Brand": s.cfg.BrandName, "SiteName": s.siteName(o.SiteID), "Acct": a, "Pkg": pkg,
-		"Support": support, "Expires": a.ExpiresAt, "Order": o.ID,
+		"Support": c.Words(), "Contacts": c, "Expires": a.ExpiresAt, "Order": o.ID,
 	})
 }
 

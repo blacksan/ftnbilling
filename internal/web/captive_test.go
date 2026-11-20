@@ -84,7 +84,10 @@ func (c *captive) advance(d time.Duration) {
 	c.mu.Unlock()
 }
 
-func newCaptive(t *testing.T, mpesaOn bool) *captive {
+func newCaptive(t *testing.T, mpesaOn bool) *captive { return newCaptiveCfg(t, mpesaOn, nil) }
+
+// newCaptiveCfg is newCaptive with the chance to change the server config (the support contacts, say).
+func newCaptiveCfg(t *testing.T, mpesaOn bool, mod func(*config.Config)) *captive {
 	t.Helper()
 	dir := t.TempDir()
 	_, pub, _ := wg.GenerateKeypair()
@@ -94,6 +97,9 @@ func newCaptive(t *testing.T, mpesaOn bool) *captive {
 		NetflowAddr: "off", PingTargets: []string{"8.8.8.8"}, WGPublicKey: pub, WGEndpoint: "203.0.113.10:51820", WGSubnet: "10.99.0.0/22",
 		DataKey: testKey, JoinTokenTTL: 30 * time.Minute, PublicIP: "203.0.113.10", PublicBaseURL: "https://isp.ftw.co.ke", DataDir: dir, WGDumpPath: c.dump,
 		FlowEvery: time.Hour, PortEvery: time.Hour, PingEvery: time.Hour, DNSEvery: time.Hour, SaveEvery: time.Hour}
+	if mod != nil {
+		mod(&cfg)
+	}
 	st, _ := storetest.Open(t, dir)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	c.rt = routeros.NewMock()

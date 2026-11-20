@@ -18,6 +18,8 @@ func (s *Server) deviceRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/devices/attach", s.adminDeviceAttach)
 	post("/admin/devices/dismiss", s.adminDeviceDismiss)
 	post("/admin/devices/move", s.adminDeviceMove)
+	post("/admin/registrations/approve", s.adminRegApprove)
+	post("/admin/registrations/reject", s.adminRegReject)
 	get("/admin/sites/devices.json", s.adminRouterDevices)
 }
 
@@ -127,6 +129,7 @@ func (s *Server) adminDevices(w http.ResponseWriter, r *http.Request) {
 			suggested++
 		}
 	}
+	p.Data["Regs"] = s.svc.PendingRegistrations(sc.Has)
 	p.Data["Rows"], p.Data["Pkgs"], p.Data["OnlineOnly"], p.Data["Count"] = rows, pkgs, onlineOnly, len(rows)
 	p.Data["OnlineN"], p.Data["Today"], p.Data["Suggested"] = onlineN, today, suggested
 	s.render(w, "admin_devices", p)
@@ -239,6 +242,53 @@ func (s *Server) adminDeviceMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.back(w, r, s.accountURL(a.ID), "Moved "+a.Tenant+" to this apartment. The router is updating.")
+}
+
+// adminRegApprove makes the account of a pending registration with the MAC the owner picked (or typed).
+func (s *Server) adminRegApprove(w http.ResponseWriter, r *http.Request) {
+	id := r.PostFormValue("id")
+	reg, ok := s.svc.GetRegistration(id)
+	if !ok || !s.scopeAllows(r, reg.SiteID) {
+		http.NotFound(w, r)
+		return
+	}
+	mac := strings.TrimSpace(r.PostFormValue("mac_typed"))
+	if mac == "" {
+		mac = r.PostFormValue("mac")
+	}
+	a, err := s.svc.ApproveRegistration(r.Context(), id, mac, s.actorOf(r))
+	if err != nil {
+		s.back(w, r, "/admin/devices", "Error: "+err.Error())
+		return
+	}
+	s.back(w, r, s.accountURL(a.ID), "Approved. The account is made; the device leaves the wall when the router's next pass has run.")
+}
+
+func (s *Server) adminRegReject(w http.ResponseWriter, r *http.Request) {
+	id := r.PostFormValue("id")
+	reg, ok := s.svc.GetRegistration(id)
+	if !ok || !s.scopeAllows(r, reg.SiteID) {
+		http.NotFound(w, r)
+		return
+	}
+	s.back(w, r, "/admin/devices", msgOr(s.svc.RejectRegistration(id, s.actorOf(r)), "Rejected. The details were erased."))
+}
+
+// scopeAllows: the router is one of the live routers (the web admin has one role set for all of them).
+func (s *Server) scopeAllows(r *http.Request, siteID string) bool {
+	for _, st := range s.scopeOf(r).Sites {
+		if st.ID == siteID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) actorOf(r *http.Request) string {
+	if u, ok := userOf(r); ok {
+		return u.Username
+	}
+	return ""
 }
 
 // ambiguousText lists "apartment, unit (code)" for the accounts a typed label matched.
