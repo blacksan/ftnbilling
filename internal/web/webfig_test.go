@@ -40,7 +40,8 @@ type wfRig struct {
 	hold     chan struct{}
 	now      atomic.Int64 // unix nanos; 0 = real time
 	clientIP string
-	holding  atomic.Bool // a test holds requests in flight on purpose
+	holding  atomic.Bool  // a test holds requests in flight on purpose
+	tag      atomic.Value // string
 }
 
 func (r *wfRig) clock() time.Time {
@@ -61,6 +62,9 @@ func newWF(t *testing.T) *wfRig {
 		r.hits.Add(1)
 		switch q.URL.Path {
 		case "/jsproxy":
+			if q.Header.Get("X-Hold") != "" {
+				<-r.hold
+			}
 			b, _ := io.ReadAll(q.Body)
 			w.Header().Set("Content-Type", "application/octet-stream")
 			w.Write(append([]byte("echo:"), b...))
@@ -88,11 +92,27 @@ func newWF(t *testing.T) *wfRig {
 		case "/hold":
 			<-r.hold
 			fmt.Fprint(w, "held")
+		case "/webfig/cookie.js":
+			w.Header().Add("Set-Cookie", "session=abc; Path=/")
+			w.Header().Set("Content-Type", "application/javascript")
+			fmt.Fprint(w, "// cookie")
+		case "/webfig/strict.js":
+			w.Header().Set("Cache-Control", "no-store")
+			fmt.Fprint(w, "// strict")
+		case "/webfig/list", "/webfig/big.js":
+			w.Header().Set("Content-Type", "text/plain")
+			fmt.Fprint(w, "list "+q.URL.Path+strings.Repeat("x", 1000))
 		case "/webfig/":
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprint(w, `<!doctype html><title>WebFig</title><button id="go">go</button><pre id="out"></pre>`+
 				`<script>document.getElementById("go").onclick=async()=>{const r=await fetch("/jsproxy",{method:"POST",body:"hello-jsproxy"});document.getElementById("out").textContent=await r.text()}</script>`)
 		default:
+			if strings.HasPrefix(q.URL.Path, "/webfig/") && strings.HasSuffix(q.URL.Path, ".js") {
+				w.Header().Set("Content-Type", "application/javascript")
+				w.Header().Set("Content-Encoding", "identity-test")
+				fmt.Fprint(w, "// file "+q.URL.Path+" site "+tagOf(r))
+				return
+			}
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprintf(w, `<!doctype html><title>WebFig</title><body id="webfig">RouterOS WebFig on %s</body>`, q.Host)
 		}
@@ -1086,3 +1106,171 @@ func TestAdminGETsDoNotChangeState(t *testing.T) {
 		t.Error("GET /admin/logout ended the session")
 	}
 }
+
+// ---- speed: separate /jsproxy pool, static-file cache ----------------------------------
+
+// Held /jsproxy calls must not stop the page's files from loading.
+func TestWebFigFilesLoadWhileJSProxyIsHeld(t *testing.T) {
+	r := newWF(t)
+	wc := r.open(t, r.br, r.owner, r.site)
+	r.holding.Store(true)
+	var wg sync.WaitGroup
+	for i := 0; i < webfig.JSProxyPerSession; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp := r.techReq("POST", "/jsproxy", r.clientIP, strings.NewReader("x"), map[string]string{"X-Hold": "1"}, wc)
+			resp.Body.Close()
+		}()
+	}
+	waitFor(t, func() bool { return r.hits.Load() >= int64(webfig.JSProxyPerSession) })
+	start := time.Now()
+	var fw sync.WaitGroup
+	var bad atomic.Int64
+	for i := 0; i < 20; i++ {
+		fw.Add(1)
+		go func(i int) {
+			defer fw.Done()
+			resp := r.techReq("GET", fmt.Sprintf("/webfig/pkg%d.js", i), r.clientIP, nil, nil, wc)
+			resp.Body.Close()
+			if resp.StatusCode != 200 {
+				bad.Add(1)
+			}
+		}(i)
+	}
+	fw.Wait()
+	if bad.Load() != 0 || time.Since(start) >= wfSlotWait {
+		t.Fatalf("20 files behind held /jsproxy: %d failed, took %s", bad.Load(), time.Since(start))
+	}
+	// a fifth /jsproxy in the same session waits for its own pool (503 after the wait), files still load
+	resp := r.techReq("POST", "/jsproxy", r.clientIP, strings.NewReader("x"), nil, wc)
+	resp.Body.Close()
+	if resp.StatusCode != 503 {
+		t.Fatalf("a fifth /jsproxy in one session: %d", resp.StatusCode)
+	}
+	if resp := r.techReq("GET", "/webfig/other.js", r.clientIP, nil, nil, wc); resp.StatusCode != 200 {
+		t.Fatalf("file after the jsproxy pool filled: %d", resp.StatusCode)
+	}
+	close(r.hold)
+	wg.Wait()
+}
+
+func TestWebFigStaticCache(t *testing.T) {
+	r := newWF(t)
+	wc := r.open(t, r.br, r.owner, r.site)
+	get := func(p string, c *http.Cookie, hdr map[string]string) (*http.Response, string) {
+		resp := r.techReq("GET", p, r.clientIP, nil, hdr, c)
+		b, _ := io.ReadAll(resp.Body)
+		return resp, string(b)
+	}
+	before := r.hits.Load()
+	resp, b1 := get("/webfig/a.js?v=1", wc, nil)
+	if resp.StatusCode != 200 || resp.Header.Get("Cache-Control") != "private, max-age=86400" || resp.Header.Get("Content-Encoding") != "identity-test" ||
+		resp.Header.Get("Content-Type") != "application/javascript" {
+		t.Fatalf("miss: %d %v", resp.StatusCode, resp.Header)
+	}
+	if resp.Header.Get("X-Ftn-Cache") != "" {
+		t.Fatal("first load claims to be a hit")
+	}
+	if r.hits.Load() != before+1 {
+		t.Fatal("first load did not reach the router")
+	}
+	// hit: no upstream call, no slot, same headers and body
+	resp, b2 := get("/webfig/a.js?v=1", wc, map[string]string{"Accept-Encoding": "identity-test, gzip"})
+	if r.hits.Load() != before+1 || resp.Header.Get("X-Ftn-Cache") != "hit" || b1 != b2 ||
+		resp.Header.Get("Content-Encoding") != "identity-test" || resp.Header.Get("Cache-Control") != "private, max-age=86400" ||
+		resp.Header.Get("X-Frame-Options") != "DENY" || resp.Header.Get("Referrer-Policy") != "no-referrer" {
+		t.Fatalf("hit: hits %d, %v", r.hits.Load()-before, resp.Header)
+	}
+	// a client that cannot take the stored encoding goes to the router
+	if resp, _ = get("/webfig/a.js?v=1", wc, map[string]string{"Accept-Encoding": "br"}); resp.Header.Get("X-Ftn-Cache") != "" {
+		t.Fatal("served an encoding the client did not accept")
+	}
+	// another query is another file
+	n := r.hits.Load()
+	get("/webfig/a.js?v=2", wc, nil)
+	if r.hits.Load() != n+1 {
+		t.Fatal("a different query was served from the cache")
+	}
+	// a hit takes no slot: serve it while the router's slots are all held
+	r.holding.Store(true)
+	var wg sync.WaitGroup
+	for i := 0; i < webfig.PerRouterMax; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp := r.techReq("GET", "/hold", r.clientIP, nil, nil, wc)
+			resp.Body.Close()
+		}()
+	}
+	waitFor(t, func() bool { return r.srv.WebFigBusy() >= webfig.PerRouterMax })
+	if resp, _ = get("/webfig/a.js?v=1", wc, map[string]string{"Accept-Encoding": "identity-test"}); resp.StatusCode != 200 || resp.Header.Get("X-Ftn-Cache") != "hit" {
+		t.Fatalf("hit while every slot is held: %d", resp.StatusCode)
+	}
+	close(r.hold)
+	wg.Wait()
+	r.holding.Store(false)
+
+	// never cached: Set-Cookie, no-store from the router, /jsproxy, the list and the index
+	for _, p := range []string{"/webfig/cookie.js", "/webfig/strict.js", "/webfig/list", "/webfig/"} {
+		h := r.hits.Load()
+		get(p, wc, nil)
+		resp, _ := get(p, wc, nil)
+		if r.hits.Load() != h+2 || resp.Header.Get("X-Ftn-Cache") != "" {
+			t.Errorf("%s was cached", p)
+		}
+		if resp.Header.Get("Cache-Control") != "no-store" {
+			t.Errorf("%s Cache-Control %q", p, resp.Header.Get("Cache-Control"))
+		}
+	}
+	if resp, _ := get("/webfig/cookie.js", wc, nil); resp.Header.Get("Set-Cookie") == "" {
+		t.Error("the router's cookie was dropped")
+	}
+	h := r.hits.Load()
+	for i := 0; i < 2; i++ {
+		resp := r.techReq("POST", "/jsproxy", r.clientIP, strings.NewReader("x"), nil, wc)
+		resp.Body.Close()
+	}
+	if r.hits.Load() != h+2 {
+		t.Error("/jsproxy was cached")
+	}
+}
+
+// A cached file never goes to a request without a valid WebFig session, and
+// never from one router to another.
+func TestWebFigCacheNeedsSessionAndIsPerRouter(t *testing.T) {
+	r := newWF(t)
+	wc := r.open(t, r.br, r.owner, r.site)
+	r.tag.Store("A")
+	resp := r.techReq("GET", "/webfig/a.js", r.clientIP, nil, nil, wc)
+	a, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(a), "site A") {
+		t.Fatalf("setup: %s", a)
+	}
+	resp = r.techReq("GET", "/webfig/a.js", r.clientIP, nil, nil)
+	if resp.StatusCode != 401 {
+		t.Fatalf("cached file without a session: %d", resp.StatusCode)
+	}
+	resp = r.techReq("GET", "/webfig/a.js", r.clientIP, nil, nil, &http.Cookie{Name: wc.Name, Value: "bogus"})
+	if resp.StatusCode != 401 {
+		t.Fatalf("cached file with a bad cookie: %d", resp.StatusCode)
+	}
+	// another router, same path: its own copy
+	id2 := seedSite(t, r.st, "Block B")
+	wc2 := r.open(t, r.br, r.owner, id2)
+	r.tag.Store("B")
+	n := r.hits.Load()
+	resp = r.techReq("GET", "/webfig/a.js", r.clientIP, nil, nil, wc2)
+	b, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(b), "site B") || r.hits.Load() != n+1 || resp.Header.Get("X-Ftn-Cache") != "" {
+		t.Fatalf("router B got router A's file: %s", b)
+	}
+	// once the session ended the file is not served either
+	r.advance(webfig.IdleTimeout + time.Minute)
+	resp = r.techReq("GET", "/webfig/a.js", r.clientIP, nil, nil, wc2)
+	if resp.StatusCode != 401 {
+		t.Fatalf("cached file after the session ended: %d", resp.StatusCode)
+	}
+}
+
+func tagOf(r *wfRig) string { v, _ := r.tag.Load().(string); return v }

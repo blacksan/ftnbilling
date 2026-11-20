@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -155,7 +156,22 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request) {
 		plain(w, http.StatusUnauthorized, "")
 		return
 	}
-	release, ok := m.acquireWait(r.Context(), sess.SiteID)
+	// Static WebFig files are served from the cache when we have them: no slot, no router call. The
+	// session was checked above, before this lookup, and the key holds the router.
+	static := m.cache != nil && staticRequest(r)
+	var ver string
+	if m.o.Version != nil {
+		ver = m.o.Version(sess.SiteID)
+	}
+	if static {
+		if e := m.cache.get(sess.SiteID, ver, r); e != nil {
+			m.serveCached(w, e)
+			m.touch(sess.hash)
+			return
+		}
+	}
+	// /jsproxy calls are long-lived: they have their own small pools so the files never wait behind them.
+	release, ok := m.acquireWait(r.Context(), sess.SiteID, sess.hash, isJSProxy(r))
 	if !ok {
 		w.Header().Set("Retry-After", "5")
 		plain(w, http.StatusServiceUnavailable, "Too many WebFig requests at once for this router. Wait a moment and reload.")
@@ -179,7 +195,30 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request) {
 			pr.Out.Header.Del("Referer")
 			stripOurCookies(pr.Out)
 		},
-		ModifyResponse: func(resp *http.Response) error { return m.fixResponse(resp, tg) },
+		ModifyResponse: func(resp *http.Response) error {
+			// Decide on the router's own headers before fixResponse replaces them.
+			var cc string
+			var keep bool
+			if static {
+				cc, keep = staticPolicy(resp)
+			}
+			if err := m.fixResponse(resp, tg); err != nil {
+				return err
+			}
+			if cc != "" {
+				resp.Header.Set("Cache-Control", cc)
+			}
+			if keep && len(resp.Header.Values("Content-Length")) <= 1 {
+				e := &cacheEntry{key: cacheKey(sess.SiteID, ver, r), site: sess.SiteID, ver: ver,
+					ctype: resp.Header.Get("Content-Type"), enc: resp.Header.Get("Content-Encoding"),
+					etag: resp.Header.Get("Etag"), lastMod: resp.Header.Get("Last-Modified")}
+				resp.Body = &captureBody{rc: resp.Body, want: resp.ContentLength, done: func(b []byte) {
+					e.body = b
+					m.cache.put(e)
+				}}
+			}
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			m.baseHeaders(w)
 			plain(w, http.StatusBadGateway, "The router did not answer on its web port. Check that the router is online, then reload.")
@@ -191,6 +230,35 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request) {
 		delete(w.Header(), k)
 	}
 	rp.ServeHTTP(w, r.WithContext(ctx))
+}
+
+func isJSProxy(r *http.Request) bool {
+	return r.URL.Path == "/jsproxy" || strings.HasPrefix(r.URL.Path, "/jsproxy/")
+}
+
+// serveCached answers from the cache. baseHeaders already ran; the router's
+// own responses carry no nosniff (see fixResponse), so neither do these.
+func (m *Manager) serveCached(w http.ResponseWriter, e *cacheEntry) {
+	h := w.Header()
+	h.Del("X-Content-Type-Options")
+	h.Set("Cache-Control", StaticCacheControl)
+	if e.ctype != "" {
+		h.Set("Content-Type", e.ctype)
+	}
+	if e.enc != "" {
+		h.Set("Content-Encoding", e.enc)
+		h.Add("Vary", "Accept-Encoding")
+	}
+	if e.etag != "" {
+		h.Set("Etag", e.etag)
+	}
+	if e.lastMod != "" {
+		h.Set("Last-Modified", e.lastMod)
+	}
+	h.Set("Content-Length", strconv.Itoa(len(e.body)))
+	h.Set("X-Ftn-Cache", "hit")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(e.body)
 }
 
 // stripOurCookies removes this server's cookies (the WebFig session and any

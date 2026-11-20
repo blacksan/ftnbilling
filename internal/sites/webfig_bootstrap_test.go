@@ -18,7 +18,7 @@ func TestBootstrapKeepsWebFigForTheAdminLANAndTheServerOnly(t *testing.T) {
 	if len(files) == 0 {
 		t.Fatal("no golden files")
 	}
-	www := regexp.MustCompile(`/ip/service set www port=(\d+) address=(\S+) disabled=no`)
+	www := regexp.MustCompile(`/ip/service set www port=(\d+) address=(\S+) max-sessions=40 disabled=no`)
 	wwwSSL := regexp.MustCompile(`/ip/service set www-ssl address=(\S+) disabled=yes`)
 	rest := regexp.MustCompile(`chain=input action=accept protocol=tcp in-interface=wg-ftn src-address=(\S+) dst-port=(\d+) comment="ftn: wg rest"`)
 	for _, f := range files {

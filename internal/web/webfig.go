@@ -59,6 +59,7 @@ func (s *Server) initWebFig() {
 	s.wf.mgr = webfig.New(webfig.Options{
 		Domain: s.cfg.WebFigDomain, Secure: true, Tunnel: tunnel, ServerIP: srvIP,
 		Resolve:   s.webfigTarget,
+		Version:   s.webfigVersion,
 		AdminLive: func(id string) bool { return s.authn.SessionLive(id) },
 		UserOK:    func(id string) bool { u, ok := s.userByID(id); return ok && !u.Disabled && u.Role == store.RoleOwner },
 		ClientIP:  realIP,
@@ -106,6 +107,21 @@ func (s *Server) webfigTarget(id string) (webfig.Target, bool) {
 		port = sites.DefaultREST
 	}
 	return webfig.Target{IP: st.TunnelIP, Port: port, Name: st.Name}, true
+}
+
+// webfigVersion is what the cached WebFig files of a router belong to: the
+// RouterOS version its bootstrap reported plus when that bootstrap ran, so a
+// re-bootstrap (or an upgrade followed by one) starts the cache afresh.
+func (s *Server) webfigVersion(id string) string {
+	st, ok := s.siteByID(id)
+	if !ok {
+		return ""
+	}
+	v := ""
+	if jr, ok := s.mgr.JoinReport(id); ok {
+		v = jr.ROS
+	}
+	return v + "@" + strconv.FormatInt(st.Join.UsedAt.Unix(), 10)
 }
 
 // WebFigHandler is the handler for WEBFIG_DOMAIN; nil when the feature is off.

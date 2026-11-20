@@ -241,7 +241,8 @@
   /ip/service set api-ssl disabled=yes
   # WebFig (www, and www-ssl if it is ever switched on) answers the admin LAN and the billing server's tunnel address only.
   /ip/service set www-ssl address=192.168.88.0/24,10.99.0.1/32 disabled=yes
-  /ip/service set www port=8729 address=192.168.88.0/24,10.99.0.1/32 disabled=no
+  # max-sessions 40: WebFig loads 15-25 files at once and shares the www session limit (default 20) with the server's REST calls.
+  /ip/service set www port=8729 address=192.168.88.0/24,10.99.0.1/32 max-sessions=40 disabled=no
   /ip/service set ssh address=192.168.88.0/24 disabled=no
   # Remote WinBox: the LAN, plus the admin devices of the server's wg-mgmt interface (through the tunnel).
   # MAC-WinBox below stays LAN-only.

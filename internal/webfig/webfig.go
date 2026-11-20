@@ -25,12 +25,21 @@ import (
 
 // Lifetimes and limits.
 const (
-	TicketTTL    = 60 * time.Second
-	IdleTimeout  = 30 * time.Minute
-	MaxLife      = 2 * time.Hour
-	PerRouterMax = 8                // concurrent proxied requests per router (WebFig loads several scripts at once)
-	TotalMax     = 32               // concurrent proxied requests overall
-	SlotWait     = 20 * time.Second // how long a request waits for a free slot before 503
+	TicketTTL   = 60 * time.Second
+	IdleTimeout = 30 * time.Minute
+	MaxLife     = 2 * time.Hour
+	// PerRouterMax is the concurrent proxied requests per router for everything but /jsproxy: WebFig loads its
+	// engine, /webfig/list and one file per package (15 to 25) in parallel. RouterOS www max-sessions defaults
+	// to 20 and is shared with the server's own REST calls (2 reads + 1 write per router): the bootstrap raises
+	// it to 40 on new routers, and 16 here leaves the REST budget room even on an old router with 20.
+	PerRouterMax = 16
+	TotalMax     = 64 // concurrent proxied requests overall
+	// The long-lived /jsproxy calls have their own small pools, so they never take the slots the files need:
+	// at most JSProxyPerSession per WebFig session, JSProxyPerRouter per router, JSProxyTotal overall.
+	JSProxyPerSession = 4
+	JSProxyPerRouter  = 6
+	JSProxyTotal      = 24
+	SlotWait          = 20 * time.Second // how long a request waits for a free slot before 503
 )
 
 // Reasons a session ends (shown in the activity record).
@@ -90,6 +99,11 @@ type Options struct {
 	Now      func() time.Time
 	// Limits (zero = defaults above).
 	PerRouter, Total int
+	// Version is the router's RouterOS version (with whatever changes when it is re-bootstrapped), "" if
+	// unknown. It is part of the static-file cache key; a change drops the router's cached files.
+	Version func(siteID string) string
+	// CacheBytes bounds the static-file cache (0 = DefaultCacheBytes, negative = no cache).
+	CacheBytes int64
 	// SlotWait is how long a request over a limit waits for a free slot (default SlotWait).
 	SlotWait time.Duration
 }
@@ -132,7 +146,12 @@ type Manager struct {
 	sessions map[string]*Session // by cookie hash
 	perSite  map[string]int
 	total    int
-	px       *proxyState
+	// /jsproxy pools (see JSProxyPerSession).
+	jsSess  map[string]int
+	jsSite  map[string]int
+	jsTotal int
+	px      *proxyState
+	cache   *fileCache
 }
 
 // New returns a Manager.
@@ -158,7 +177,14 @@ func New(o Options) *Manager {
 			return h
 		}
 	}
-	m := &Manager{o: o, tickets: map[string]ticket{}, sessions: map[string]*Session{}, perSite: map[string]int{}}
+	m := &Manager{o: o, tickets: map[string]ticket{}, sessions: map[string]*Session{}, perSite: map[string]int{},
+		jsSess: map[string]int{}, jsSite: map[string]int{}}
+	switch {
+	case o.CacheBytes == 0:
+		m.cache = newFileCache(DefaultCacheBytes, CacheTTL, o.Now)
+	case o.CacheBytes > 0:
+		m.cache = newFileCache(o.CacheBytes, CacheTTL, o.Now)
+	}
 	m.px = newProxyState(m)
 	return m
 }
@@ -451,26 +477,49 @@ func (m *Manager) End(siteID, publicID, reason string) (Session, bool) {
 	return ended, true
 }
 
-// acquire takes one proxy slot for the router; release returns it.
-func (m *Manager) acquire(siteID string) (release func(), ok bool) {
+// acquire takes one proxy slot for the router; release returns it. A /jsproxy
+// call (js) takes from its own small pools (per session, per router, overall)
+// and never from the pool the static files use.
+func (m *Manager) acquire(siteID, sessHash string, js bool) (release func(), ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	var once sync.Once
+	if js {
+		if m.jsTotal >= JSProxyTotal || m.jsSite[siteID] >= JSProxyPerRouter || m.jsSess[sessHash] >= JSProxyPerSession {
+			return nil, false
+		}
+		m.jsTotal++
+		m.jsSite[siteID]++
+		m.jsSess[sessHash]++
+		return func() {
+			once.Do(func() {
+				m.mu.Lock()
+				m.jsTotal--
+				dec(m.jsSite, siteID)
+				dec(m.jsSess, sessHash)
+				m.mu.Unlock()
+			})
+		}, true
+	}
 	if m.total >= m.o.Total || m.perSite[siteID] >= m.o.PerRouter {
 		return nil, false
 	}
 	m.total++
 	m.perSite[siteID]++
-	var once sync.Once
 	return func() {
 		once.Do(func() {
 			m.mu.Lock()
 			m.total--
-			if m.perSite[siteID]--; m.perSite[siteID] <= 0 {
-				delete(m.perSite, siteID)
-			}
+			dec(m.perSite, siteID)
 			m.mu.Unlock()
 		})
 	}, true
+}
+
+func dec(mp map[string]int, k string) {
+	if mp[k]--; mp[k] <= 0 {
+		delete(mp, k)
+	}
 }
 
 // SetSlotWait changes how long a request waits for a slot (a test hook).
@@ -483,7 +532,7 @@ func (m *Manager) SetSlotWait(d time.Duration) {
 // acquireWait waits for a proxy slot instead of refusing at once: WebFig's page
 // fetches its scripts in parallel, and one refused script leaves it stuck on
 // "Connecting". It gives up when the request ends or after SlotWait.
-func (m *Manager) acquireWait(ctx context.Context, siteID string) (release func(), ok bool) {
+func (m *Manager) acquireWait(ctx context.Context, siteID, sessHash string, js bool) (release func(), ok bool) {
 	m.mu.Lock()
 	wait := m.o.SlotWait
 	m.mu.Unlock()
@@ -492,7 +541,7 @@ func (m *Manager) acquireWait(ctx context.Context, siteID string) (release func(
 	tick := time.NewTicker(25 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if rel, ok := m.acquire(siteID); ok {
+		if rel, ok := m.acquire(siteID, sessHash, js); ok {
 			return rel, true
 		}
 		select {
@@ -510,7 +559,22 @@ func (m *Manager) acquireWait(ctx context.Context, siteID string) (release func(
 func (m *Manager) Busy() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.total
+	return m.total + m.jsTotal
+}
+
+// PurgeCache drops a router's cached WebFig files (the router was re-bootstrapped).
+func (m *Manager) PurgeCache(siteID string) {
+	if m.cache != nil {
+		m.cache.purgeSite(siteID)
+	}
+}
+
+// CacheStats is the number of cached files and their bytes (tests).
+func (m *Manager) CacheStats() (entries int, bytes int64) {
+	if m.cache == nil {
+		return 0, 0
+	}
+	return m.cache.stats()
 }
 
 // OpenURL is the address an admin is sent to with a ticket.
