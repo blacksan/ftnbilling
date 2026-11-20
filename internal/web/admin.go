@@ -658,8 +658,10 @@ func (s *Server) adminPayments(w http.ResponseWriter, r *http.Request) {
 			case pay.Status == store.PayRefunded:
 				pc["refunded"]++
 			}
-			switch pay.Method {
-			case "mpesa", "cash", "voucher":
+			switch {
+			case billing.MethodMatches("mpesa", pay.Method):
+				pc["mpesa"]++
+			case pay.Method == "cash" || pay.Method == "voucher":
 				pc[pay.Method]++
 			}
 			if !countsAsRevenue(pay) {
@@ -673,7 +675,7 @@ func (s *Server) adminPayments(w http.ResponseWriter, r *http.Request) {
 			}
 			if !pay.PaidAt.Before(monthStart) {
 				pMonth += pay.AmountKES
-				if pay.Method == "mpesa" {
+				if billing.MethodMatches("mpesa", pay.Method) {
 					pMpesa += pay.AmountKES
 				}
 			}
@@ -809,7 +811,35 @@ func (s *Server) adminUnmatched(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminUnmatchedAssign(w http.ResponseWriter, r *http.Request) {
-	err := s.svc.AssignPayment(r.Context(), r.PostFormValue("key"), r.PostFormValue("account"), r.PostFormValue("package"), r.PostFormValue("note"))
+	key, acct, pkg, note := r.PostFormValue("key"), r.PostFormValue("account"), r.PostFormValue("package"), r.PostFormValue("note")
+	lower := r.PostFormValue("lower")
+	if lower != billing.AssignSwitchPlan && lower != billing.AssignAddTime {
+		lower = billing.AssignRefuseLower
+	}
+	err := s.svc.AssignPaymentOpts(r.Context(), key, acct, pkg, note, billing.AssignOpts{Lower: lower, AcceptDuplicate: r.PostFormValue("dup") == "1"})
+	var dup *billing.DuplicateError
+	if errors.As(err, &dup) {
+		// The account has a "Mark paid" payment of the same amount: this may be
+		// that money. Ask before crediting it a second time.
+		p := s.page(r, "unmatched")
+		p.Data["Key"], p.Data["Account"], p.Data["Package"], p.Data["Note"], p.Data["Lower"] = key, acct, pkg, note, lower
+		p.Data["Manual"], p.Data["DupNote"] = dup.ManualKey, billing.ManualDupNote
+		w.WriteHeader(http.StatusConflict)
+		s.render(w, "admin_assign_dup", p)
+		return
+	}
+	if errors.Is(err, billing.ErrLowerPlan) {
+		// Do not downgrade silently: ask which way the admin wants it.
+		a, _ := s.svc.GetAccount(acct)
+		var cur, want store.Package
+		s.st.View(func(d *store.Data) { cur, want = d.Packages[a.PackageID], d.Packages[pkg] })
+		p := s.page(r, "unmatched")
+		p.Data["Key"], p.Data["Account"], p.Data["Package"], p.Data["Note"], p.Data["Dup"] = key, acct, pkg, note, r.PostFormValue("dup")
+		p.Data["Flat"], p.Data["Cur"], p.Data["Want"], p.Data["Expires"] = a.Flat, cur, want, a.ExpiresAt
+		w.WriteHeader(http.StatusConflict)
+		s.render(w, "admin_assign_lower", p)
+		return
+	}
 	s.back(w, r, "/admin/unmatched", msgOr(err, "Payment assigned and applied"))
 }
 
@@ -922,6 +952,7 @@ func (s *Server) adminVouchers(w http.ResponseWriter, r *http.Request) {
 			v = v[:500]
 		}
 		p.Data["Vouchers"] = v
+		p.Data["SeeCodes"] = p.CanWrite // viewers get masked codes: an unused code is prepaid value
 		p.Data["Pkgs"] = d.PackageList()
 		p.Data["PkgMap"] = d.Packages
 	})
@@ -952,6 +983,9 @@ func (s *Server) adminPrintVouchers(w http.ResponseWriter, r *http.Request) {
 			pkgs[k] = v
 		}
 	})
+	if u, ok := userOf(r); ok {
+		s.authn.AuditNow(u.Username, realIP(r), fmt.Sprintf("voucher sheet printed: batch %s, %d unused codes", batch, len(list)))
+	}
 	s.render(w, "admin_print", map[string]any{"Brand": s.cfg.BrandName, "Vouchers": list, "Pkgs": pkgs, "Batch": batch, "Support": s.cfg.SupportPhone})
 }
 

@@ -3,13 +3,22 @@
 {{if eq .Order.Status "failed"}}
 <p class="err">Payment was not completed{{if .Order.Reason}}: {{.Order.Reason}}{{end}}.</p>
 <a class="btn" href="/pay">Try again</a>
+{{else if eq .Order.Status "expired"}}
+<div class="card"><b>We have not received your payment yet.</b>
+<p class="muted">If you did pay, keep this page open: your internet turns on as soon as the payment reaches us. If you did not, you can try again.</p></div>
+<a class="btn" href="/pay">Try again</a>
+<script>
+(function(){var u="/api/orders/{{.Order.ID}}";function p(){var x=new XMLHttpRequest();x.open("GET",u);
+x.onload=function(){try{var r=JSON.parse(x.responseText);if(r.status==="paid"){location.href="/portal/success?order={{.Order.ID}}"}else{setTimeout(p,5000)}}catch(e){setTimeout(p,8000)}};
+x.onerror=function(){setTimeout(p,8000)};x.send()}setTimeout(p,3000)})();
+</script>
 {{else}}
 <div class="card"><b id="msg">{{if .Test}}Simulated payment in progress...{{else}}Check your phone and enter your M-Pesa PIN.{{end}}</b>
 <p class="muted">Amount: {{kes .Order.AmountKES}}. This page updates by itself.</p></div>
 <script>
 (function(){var u="/api/orders/{{.Order.ID}}";function p(){var x=new XMLHttpRequest();x.open("GET",u);
 x.onload=function(){try{var r=JSON.parse(x.responseText);if(r.status==="paid"){location.href="/portal/success?order={{.Order.ID}}"}
-else if(r.status==="failed"){location.reload()}else{setTimeout(p,2000)}}catch(e){setTimeout(p,3000)}};
+else if(r.status==="failed"||r.status==="expired"){location.reload()}else{setTimeout(p,2000)}}catch(e){setTimeout(p,3000)}};
 x.onerror=function(){setTimeout(p,3000)};x.send()}setTimeout(p,1500)})();
 </script>
 {{end}}

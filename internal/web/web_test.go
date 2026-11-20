@@ -43,6 +43,7 @@ type app struct {
 	srv    *web.Server
 	owner  *who
 	br     *browser
+	mp     *payments.Mpesa
 }
 
 func newApp(t *testing.T, testMode bool) *app { return newAppCfg(t, testMode, nil) }
@@ -79,7 +80,7 @@ func newAppCfg(t *testing.T, testMode bool, mut func(*config.Config)) *app {
 	srv := web.New(cfg, st, svc, prov, mp, mgr, log)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	a := &app{ts: ts, st: st, svc: svc, rt: rt, mgr: mgr, site: envID, srv: srv,
+	a := &app{ts: ts, st: st, svc: svc, rt: rt, mgr: mgr, site: envID, srv: srv, mp: mp,
 		cl: &http.Client{CheckRedirect: noRedirect}, tp: tp}
 	a.owner = seedUser(t, srv, st, "admin", store.RoleOwner, pw)
 	a.br = signIn(t, ts, srv, st, a.owner)

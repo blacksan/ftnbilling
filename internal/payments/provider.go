@@ -22,10 +22,13 @@ type Provider interface {
 // Completer is implemented by billing.Service.
 type Completer interface {
 	CompleteOrder(ctx context.Context, orderID, receipt string) error
+	CompleteOrderAt(ctx context.Context, orderID, receipt string, paidAt time.Time) error
+	CompleteOrderSTK(ctx context.Context, orderID, receipt string, paidAt time.Time) error
 	FailOrder(ctx context.Context, orderID, reason string) error
 	SetCheckoutID(orderID, checkoutID string) error
 	Credit(ctx context.Context, in billing.CreditInput) (store.Payment, bool, error)
 	RecordUnmatched(in billing.UnmatchedInput) (bool, error)
+	PossibleManualDuplicate(accountID string, amount int, paidAt time.Time) (key string, ok bool)
 	PackageForAmount(siteID string, amount int) (store.Package, bool)
 }
 

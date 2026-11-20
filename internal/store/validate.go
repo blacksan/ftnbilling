@@ -164,7 +164,7 @@ func Validate(d *Data) []string {
 	for _, k := range oids {
 		o := d.Orders[k]
 		switch o.Status {
-		case OrderPending, OrderPaid, OrderFailed:
+		case OrderPending, OrderPaid, OrderFailed, OrderExpired:
 		default:
 			add("Order %s has an unknown status %q.", o.ID, o.Status)
 		}

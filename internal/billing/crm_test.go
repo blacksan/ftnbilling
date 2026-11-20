@@ -341,30 +341,30 @@ func TestSearchNormalisation(t *testing.T) {
 		"aabbccddee0a": "account", "AA-BB-CC-DD-EE-0A": "account", "ee0a": "account",
 		"ztegc123": "equipment", "ztegc": "equipment", "block a": "building",
 	} {
-		r := e.svc.Search(q, all)
+		r := e.svc.Search(q, all, true)
 		found := map[string]bool{"customer": len(r.Customers) > 0, "account": len(r.Accounts) > 0, "equipment": len(r.Equipment) > 0, "building": len(r.Buildings) > 0}
 		if !found[want] {
 			t.Errorf("search %q should find a %s: %+v", q, want, r)
 		}
 	}
-	if r := e.svc.Search("12345", all); len(r.Customers) != 0 {
+	if r := e.svc.Search("12345", all, true); len(r.Customers) != 0 {
 		t.Error("fewer than 6 digits is not a phone suffix")
 	}
-	if r := e.svc.Search(a.Code, all); r.Total() != 1 {
+	if r := e.svc.Search(a.Code, all, true); r.Total() != 1 {
 		t.Errorf("exact code should be a single hit: %d", r.Total())
 	} else if k, id, _ := r.Single(); k != "account" || id != a.Code {
 		t.Errorf("single: %s %s", k, id)
 	}
-	r := e.svc.Search("ZTEGC123", all)
+	r := e.svc.Search("ZTEGC123", all, true)
 	if k, id, ok := r.Single(); !ok || k != "equipment" || id != ont.ID {
 		t.Errorf("serial single: %v %v %v", k, id, ok)
 	}
-	if r := e.svc.Search("wanjiku", func(string) bool { return false }); len(r.Accounts) != 0 {
+	if r := e.svc.Search("wanjiku", func(string) bool { return false }, true); len(r.Accounts) != 0 {
 		t.Error("scope must hide other buildings' accounts")
 	}
 	pay := e.st.Snapshot().Payments
 	for k := range pay {
-		if r := e.svc.Search(k, all); len(r.Payments) != 1 {
+		if r := e.svc.Search(k, all, true); len(r.Payments) != 1 {
 			t.Errorf("receipt %s not found", k)
 		}
 	}

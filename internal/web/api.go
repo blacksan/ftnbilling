@@ -441,6 +441,8 @@ func (s *Server) billingErr(w http.ResponseWriter, err error, mac string) {
 		validationErr(w, map[string]string{"mac": "must be 12 hex digits, like AA:BB:CC:DD:EE:FF"})
 	case errors.Is(err, billing.ErrNotFound):
 		apiErr(w, http.StatusNotFound, codeNotFound, "Not found.", nil)
+	case errors.Is(err, billing.ErrPossibleDuplicate):
+		apiErr(w, http.StatusConflict, "possible_duplicate", err.Error()+". Send accept_duplicate: true to assign it anyway, or resolve it as ignored.", nil)
 	case errors.Is(err, billing.ErrLowerPlan):
 		apiErr(w, http.StatusConflict, codeLowerPlan, "The account is active on a faster plan. A slower one waits for it to end (use force to change the speed now).", nil)
 	case errors.Is(err, billing.ErrDuplicateKey):

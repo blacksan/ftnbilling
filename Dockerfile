@@ -2,7 +2,7 @@
 # made by tools/mkimage (no Docker needed).
 #
 #   docker buildx build --platform linux/arm64 -t ispbill:latest --output type=docker,dest=ispbill-arm64.tar .
-FROM --platform=$BUILDPLATFORM golang:1.24 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26 AS build
 ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY . .

@@ -40,6 +40,7 @@ const (
 	OrderPending = "pending"
 	OrderPaid    = "paid"
 	OrderFailed  = "failed"
+	OrderExpired = "expired" // no payment within the wait; a late confirmation still credits it
 
 	PayApplied   = "applied"
 	PayUnmatched = "unmatched"

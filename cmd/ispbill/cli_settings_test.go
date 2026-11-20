@@ -343,3 +343,49 @@ func TestJSONRefusesWhileServiceRuns(t *testing.T) {
 		}
 	}
 }
+
+// The doctor reads the "receipt confirmation:" line of settings-check.
+func TestSettingsCheckReportsReceiptConfirmation(t *testing.T) {
+	mp := map[string]string{"MPESA_CONSUMER_KEY": "key-12345678", "MPESA_CONSUMER_SECRET": "secret-12345678", "MPESA_SHORTCODE": "174379",
+		"MPESA_PASSKEY": "passkey-0123456789abc", "MPESA_CALLBACK_TOKEN": "token-0123456789abcdef"}
+	run := func(extra map[string]string) string {
+		base := cliEnv(t.TempDir())
+		env := func(k string) string {
+			if v, ok := extra[k]; ok {
+				return v
+			}
+			if v, ok := mp[k]; ok {
+				return v
+			}
+			return base(k)
+		}
+		out, err := cli(t, env, "settings-check")
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return out
+	}
+	cred := map[string]string{"MPESA_INITIATOR_NAME": "apiop", "MPESA_SECURITY_CREDENTIAL": strings.Repeat("Q", 64)}
+	with := func(mode string) map[string]string {
+		m := map[string]string{"MPESA_CONFIRM_RECEIPTS": mode}
+		for k, v := range cred {
+			m[k] = v
+		}
+		return m
+	}
+	if out := run(nil); !strings.Contains(out, "receipt confirmation: OFF") || !strings.Contains(out, "MPESA_INITIATOR_NAME") {
+		t.Errorf("without initiator settings:\n%s", out)
+	}
+	// Default off even with credentials set: they have not been tested yet.
+	if out := run(cred); !strings.Contains(out, "receipt confirmation: OFF") || !strings.Contains(out, "Test receipt confirmation") || !strings.Contains(out, "MPESA_CONFIRM_RECEIPTS=auto") {
+		t.Errorf("credentials set, mode unset:\n%s", out)
+	}
+	for _, mode := range []string{"auto", "on"} {
+		if out := run(with(mode)); !strings.Contains(out, "receipt confirmation: on") {
+			t.Errorf("%s with initiator settings:\n%s", mode, out)
+		}
+	}
+	if out := run(with("off")); !strings.Contains(out, "receipt confirmation: OFF") {
+		t.Errorf("explicitly off:\n%s", out)
+	}
+}

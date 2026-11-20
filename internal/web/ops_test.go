@@ -445,3 +445,32 @@ func TestWebhookNotRegisteredWithoutSecrets(t *testing.T) {
 		t.Fatalf("the route must not exist: %d", resp.StatusCode)
 	}
 }
+
+// L-5: an operator cannot cancel a queued alert to the owners; an owner can.
+func TestOperatorCannotCancelAdminAlerts(t *testing.T) {
+	r := newOpsRig(t)
+	op := seedUser(t, r.srv, r.st, "olga", store.RoleOperator, longPW)
+	ob := signIn(t, r.ts, r.srv, r.st, op)
+	cl := &http.Client{CheckRedirect: noRedirect}
+	box := r.ops.Box
+	alert, _ := box.Enqueue(notify.Message{Channel: notify.ChanEmail, To: "ops@ftn.example", Kind: notify.KindAdminAlert, Text: "3 wrong authenticator codes", NotBefore: time.Now().Add(time.Hour)})
+	note, _ := box.Enqueue(notify.Message{Channel: notify.ChanEmail, To: "t@example.com", Kind: notify.KindExpiryReminder, Text: "expiring", NotBefore: time.Now().Add(time.Hour)})
+	resp := ob.Do(cl, r.ts.URL, "POST", "/admin/messages/cancel", url.Values{"id": {alert.ID}})
+	resp.Body.Close()
+	if g, _ := box.Get(alert.ID); g.Status != notify.StatusQueued {
+		t.Fatalf("an operator cancelled an alert to the owners: %s", g.Status)
+	}
+	if !strings.Contains(resp.Header.Get("Location"), "Error") {
+		t.Errorf("no error shown: %q", resp.Header.Get("Location"))
+	}
+	resp = ob.Do(cl, r.ts.URL, "POST", "/admin/messages/cancel", url.Values{"id": {note.ID}})
+	resp.Body.Close()
+	if g, _ := box.Get(note.ID); g.Status != notify.StatusCancelled {
+		t.Errorf("operators may still cancel tenant messages: %s", g.Status)
+	}
+	resp = r.admin("POST", "/admin/messages/cancel", url.Values{"id": {alert.ID}})
+	resp.Body.Close()
+	if g, _ := box.Get(alert.ID); g.Status != notify.StatusCancelled {
+		t.Errorf("the owner could not cancel: %s", g.Status)
+	}
+}

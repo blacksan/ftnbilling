@@ -56,6 +56,7 @@ const (
 	CheckIPv6         = "ipv6"
 	CheckPublicIP     = "server.public_ip"
 	CheckWalled       = "walled.rules"
+	CheckWalledDNS    = "walled.dns"
 	CheckDHCP         = "dhcp.ftn"
 	CheckWAN          = "wan.internet"
 	CheckBootFile     = "bootstrap.file"
@@ -499,6 +500,7 @@ var needs = map[string][]string{
 	CheckWWW:         {"/ip/service"},
 	CheckIPv6:        {"/ipv6/settings"},
 	CheckWalled:      {"/ip/firewall/filter", "/ip/firewall/nat"},
+	CheckWalledDNS:   {"/ip/dns"},
 	CheckDHCP:        {"/ip/dhcp-server"},
 	CheckWAN:         {"/ip/route"},
 	CheckBootFile:    {"/file"},
@@ -523,6 +525,7 @@ var checkDefs = []checkDef{
 	{CheckCustomerIf, "network", "Customer network is on one interface", true, "", evalCustomerIf},
 	{CheckDHCP, "network", "Customer DHCP server is on", true, "", evalDHCP},
 	{CheckWalled, "network", "Unpaid and unregistered flats are walled", true, "", evalWalled},
+	{CheckWalledDNS, "network", "Walled flats can still resolve any name", false, "", evalWalledDNS},
 	{CheckWAN, "network", "Router has a way to the internet", false, "", evalWAN},
 	{CheckOLT, "network", "Fibre (OLT) port is not stuck in the bridge", true, "", evalOLT},
 	{CheckBench, "network", "Customer port (extra)", false, "", evalBench},

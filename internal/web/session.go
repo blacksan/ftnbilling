@@ -277,6 +277,10 @@ func (s *Server) minRole(method, path string) string {
 		return store.RoleOperator
 	case strings.HasPrefix(path, "/admin/settings"), strings.HasPrefix(path, "/admin/tools"):
 		return store.RoleOwner
+	case path == "/admin/audit":
+		return store.RoleOwner // like GET /api/v1/audit: usernames, addresses and security events
+	case path == "/admin/vouchers/print":
+		return store.RoleOperator // unused voucher codes are prepaid value
 	case path == "/admin/apartments/delete":
 		return store.RoleOwner // like DELETE /api/v1/apartments/{id}
 	case strings.HasPrefix(path, "/admin/sites/contacts"):

@@ -97,6 +97,8 @@ func run(log *slog.Logger) error {
 	mp := payments.NewMpesa(mpesaConf(setm.Effective()), svc, st, log)
 	// Callbacks the database could not take are kept on disk and replayed.
 	mp.SetSpool(payments.NewSpool(filepath.Join(cfg.DataDir, "spool")))
+	mp.SetLegacyQueryUntil(payments.LegacyQueryDeadline(cfg.DataDir, time.Now(), log.Warn))
+	defer mp.Close()
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -115,6 +117,9 @@ func run(log *slog.Logger) error {
 			}
 			if n, err := mp.Replay(ctx); n > 0 || err != nil {
 				log.Info("replayed spooled payment callbacks", "applied", n, "err", err)
+			}
+			if n, err := svc.ExpireOrders(); n > 0 || err != nil { // waiting checkouts end as "expired", not "failed"
+				log.Info("expired unpaid portal orders", "count", n, "err", err)
 			}
 		}
 	}()
@@ -145,6 +150,7 @@ func run(log *slog.Logger) error {
 	}
 	webSrv := web.New(cfg, st, svc, providers, mp, mgr, log)
 	webSrv.SetSettings(setm)
+	mp.SetAlert(webSrv.PaymentAlert)
 	webSrv.SetOps(ops)
 	wg.Add(1)
 	go func() {

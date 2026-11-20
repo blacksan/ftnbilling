@@ -67,6 +67,7 @@ type Server struct {
 	authn     *authn.Service
 	alertSink func(string) // tests: take security alerts instead of the outbox
 	idem      *idemStore
+	searchRL  *limiter    // search, by signed-in user (web and API)
 	refreshRL *limiter    // /api/v1/auth/refresh by client address
 	reboots   rebootGuard // one router reboot per 10 minutes per router (api_live.go)
 
@@ -98,24 +99,26 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 	a.SetAlert(s.securityAlert)
 	s.idem = newIdemStore()
 	s.refreshRL = newLimiter(30, time.Minute)
+	s.searchRL = newLimiter(searchPerMinute, time.Minute)
 	funcs := template.FuncMap{
-		"kes":    func(n int) string { return "KES " + itoa(n) },
-		"dur":    billing.DescribeMinutes,
-		"eat":    func(t time.Time) string { return t.In(billing.EAT).Format("Mon 2 Jan 2006, 15:04") + " EAT" },
-		"eats":   func(t time.Time) string { return t.In(billing.EAT).Format("2 Jan 2006, 15:04") },
-		"left":   func(t time.Time) string { return billing.Remaining(t, svc.Now()) },
-		"pkgOf":  func(m map[string]store.Package, id string) store.Package { return m[id] },
-		"acctOf": func(m map[string]store.Account, id string) store.Account { return m[id] },
-		"state":  func(a store.Account) string { return billing.AccountState(a, svc.Now()) },
-		"f1":     func(v float64) string { return fmt.Sprintf("%.1f", v) },
-		"f0":     func(v float64) string { return fmt.Sprintf("%.0f", v) },
-		"f2":     func(v float64) string { return fmt.Sprintf("%.2f", v) },
-		"eatNow": func() string { return svc.Now().In(billing.EAT).Format("2006-01-02T15:04") },
-		"inc":    func(i int) int { return i + 1 },
-		"day":    day,
-		"stat":   func(v string) string { return strings.ReplaceAll(v, "_", " ") },
-		"deref":  func(b *bool) bool { return b != nil && *b },
-		"last4":  lastFour,
+		"kes":      func(n int) string { return "KES " + itoa(n) },
+		"dur":      billing.DescribeMinutes,
+		"eat":      func(t time.Time) string { return t.In(billing.EAT).Format("Mon 2 Jan 2006, 15:04") + " EAT" },
+		"eats":     func(t time.Time) string { return t.In(billing.EAT).Format("2 Jan 2006, 15:04") },
+		"left":     func(t time.Time) string { return billing.Remaining(t, svc.Now()) },
+		"pkgOf":    func(m map[string]store.Package, id string) store.Package { return m[id] },
+		"acctOf":   func(m map[string]store.Account, id string) store.Account { return m[id] },
+		"state":    func(a store.Account) string { return billing.AccountState(a, svc.Now()) },
+		"f1":       func(v float64) string { return fmt.Sprintf("%.1f", v) },
+		"f0":       func(v float64) string { return fmt.Sprintf("%.0f", v) },
+		"f2":       func(v float64) string { return fmt.Sprintf("%.2f", v) },
+		"eatNow":   func() string { return svc.Now().In(billing.EAT).Format("2006-01-02T15:04") },
+		"inc":      func(i int) int { return i + 1 },
+		"day":      day,
+		"stat":     func(v string) string { return strings.ReplaceAll(v, "_", " ") },
+		"deref":    func(b *bool) bool { return b != nil && *b },
+		"last4":    lastFour,
+		"maskCode": maskCode,
 		"pct": func(a, b float64) float64 {
 			if b <= 0 {
 				return 0

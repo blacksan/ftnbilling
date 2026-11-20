@@ -666,3 +666,41 @@ func TestMpesaURLsPageIsNotADeadEnd(t *testing.T) {
 		t.Fatalf("revealed page: %d, next field wrong", resp.StatusCode)
 	}
 }
+
+// M-2: the STK callback carries its token in the path. The old query-string form
+// still lands for the grace period, then is refused; C2B URLs are unaffected.
+func TestSTKCallbackQueryFormEndsAfterGracePeriod(t *testing.T) {
+	r := newSetRig(t)
+	post := func(path string) int {
+		resp, err := http.Post(r.ts.URL+path, "application/json", strings.NewReader(`{"Body":{"stkCallback":{"CheckoutRequestID":"nope","ResultCode":1032}}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	r.mp.SetConfig(payments.MpesaConfig{Enabled: true, CallbackToken: "tok", PublicBaseURL: "https://x.example"})
+	if c := post("/pay/cb/t/tok/stk"); c != 200 {
+		t.Fatalf("path form: %d", c)
+	}
+	if c := post("/pay/cb/stk?t=tok"); c != 404 {
+		t.Fatalf("query form with no grace period: %d", c)
+	}
+	r.mp.SetLegacyQueryUntil(time.Now().Add(24 * time.Hour))
+	if c := post("/pay/cb/stk?t=tok"); c != 200 {
+		t.Fatalf("query form inside the grace period: %d", c)
+	}
+	r.mp.SetLegacyQueryUntil(time.Now().Add(-time.Minute))
+	if c := post("/pay/cb/stk?t=tok"); c != 404 {
+		t.Fatalf("query form after the grace period: %d", c)
+	}
+	if c := post("/pay/cb/c2b/validate?t=tok"); c != 200 {
+		t.Fatalf("C2B query form must keep working: %d", c)
+	}
+	if c := post("/pay/cb/t/tok/txstatus/result"); c != 200 {
+		t.Fatalf("receipt-check result URL: %d", c)
+	}
+	if c := post("/pay/cb/t/bad/txstatus/result"); c != 404 {
+		t.Fatalf("receipt-check result URL without the token: %d", c)
+	}
+}

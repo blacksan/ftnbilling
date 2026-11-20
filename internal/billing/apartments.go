@@ -582,7 +582,7 @@ func (s *Service) MoveToApartment(ctx context.Context, in MoveInput) (store.Acco
 				return err
 			}
 			for k, o := range d.Orders {
-				if o.AccountID == a.ID && o.Status == store.OrderPending {
+				if o.AccountID == a.ID && (o.Status == store.OrderPending || o.Status == store.OrderExpired) {
 					o.Status, o.Reason = store.OrderFailed, "account moved to another building"
 					d.Orders[k] = o
 				}

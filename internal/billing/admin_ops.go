@@ -110,7 +110,7 @@ func (s *Service) DeleteAccount(ctx context.Context, id, confirm string) error {
 			}
 		}
 		for k, o := range d.Orders {
-			if o.AccountID == id && o.Status == store.OrderPending {
+			if o.AccountID == id && (o.Status == store.OrderPending || o.Status == store.OrderExpired) {
 				o.Status, o.Reason = store.OrderFailed, "account deleted"
 				d.Orders[k] = o
 			}
@@ -212,7 +212,7 @@ func (s *Service) MoveAccount(ctx context.Context, id, toSiteID string) error {
 		d.Accounts[id] = a
 		delete(d.Devices, store.DeviceKey(toSiteID, a.MAC))
 		for k, o := range d.Orders {
-			if o.AccountID == id && o.Status == store.OrderPending {
+			if o.AccountID == id && (o.Status == store.OrderPending || o.Status == store.OrderExpired) {
 				o.Status, o.Reason = store.OrderFailed, "account moved to another building"
 				d.Orders[k] = o
 			}
