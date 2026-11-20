@@ -1274,3 +1274,15 @@ func TestWebFigCacheNeedsSessionAndIsPerRouter(t *testing.T) {
 }
 
 func tagOf(r *wfRig) string { v, _ := r.tag.Load().(string); return v }
+// Chrome checks form-action against where a form's redirect lands. "Open WebFig"
+// posts to the admin and is redirected to the WebFig host, so admin pages must
+// allow that host in form-action, or Chrome blocks the redirect.
+func TestAdminCSPAllowsWebFigHostInFormAction(t *testing.T) {
+	r := newWF(t)
+	resp := r.adminReq(r.br, "GET", "/admin/routers/view?id="+r.site, nil)
+	resp.Body.Close()
+	csp := resp.Header.Get("Content-Security-Policy")
+	if !strings.Contains(csp, "form-action 'self' https://"+wfDomain+";") {
+		t.Fatalf("admin CSP misses the WebFig host in form-action: %q", csp)
+	}
+}

@@ -41,8 +41,34 @@ func (s *Server) securityHeaders(h http.Header, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(p, "/admin") {
-		h.Set("Content-Security-Policy", cspAdmin)
+		h.Set("Content-Security-Policy", s.adminCSP())
 		return
 	}
 	h.Set("Content-Security-Policy", cspPages)
+}
+
+// adminCSP is cspAdmin, plus the remote WebFig host in form-action when it is on.
+// "Open WebFig" posts to /admin/routers/webfig, which answers with a redirect to
+// https://<WEBFIG_DOMAIN>/_ftn/open; Chrome checks form-action against the
+// redirect target too, so without this it blocks the redirect (Firefox lets it through).
+func (s *Server) adminCSP() string {
+	d := s.cfg.WebFigDomain
+	if d == "" || !hostnameOK(d) {
+		return cspAdmin
+	}
+	return strings.Replace(cspAdmin, "form-action 'self'", "form-action 'self' https://"+d, 1)
+}
+
+// hostnameOK accepts a plain DNS name (letters, digits, dots and hyphens), so a
+// misconfigured value can never add anything else to the header.
+func hostnameOK(h string) bool {
+	if len(h) == 0 || len(h) > 253 {
+		return false
+	}
+	for _, c := range h {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
