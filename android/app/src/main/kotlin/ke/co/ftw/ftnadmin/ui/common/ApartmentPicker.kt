@@ -71,9 +71,6 @@ fun ApartmentField(
     }
 }
 
-// Box.matchParentSize is only in BoxScope; the overlay is built inside the Box above through this tiny shim.
-private fun Modifier.matchParentSize(): Modifier = this.fillMaxWidth()
-
 /**
  * Bottom sheet listing all [apartments]: name, address, subscribers and routers. A search box appears when there
  * are more than [APARTMENT_SEARCH_FROM] of them. Tapping a row calls [onSelect] and closes the sheet.

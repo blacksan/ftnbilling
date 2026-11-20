@@ -469,7 +469,7 @@ func (s *Server) adminAccount(w http.ResponseWriter, r *http.Request) {
 		tab = "overview"
 	}
 	p.Data["Tab"] = tab
-	p.Detail, p.H1a, p.H1b, p.Lead = a.Flat, "House", a.Flat+".", ""
+	p.Detail, p.H1a, p.H1b, p.Lead = a.Flat, "", a.Flat+".", ""
 	p.Label, p.Href, p.Group = "Subscribers", "/admin/accounts", "Customers"
 	var evs []store.Event
 	s.st.View(func(d *store.Data) {

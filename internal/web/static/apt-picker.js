@@ -41,6 +41,18 @@
     sel.classList.add("aptpick-native");
     sel.tabIndex = -1;
     sel.setAttribute("aria-hidden", "true");
+    // Required but empty: the browser would focus the invisible select. Show the problem on the picker instead.
+    var err = el("span", "aptpick-err", "Choose an apartment."); err.id = id + "-err"; err.hidden = true; err.setAttribute("role", "alert");
+    sel.parentNode.insertBefore(err, sel.nextSibling);
+    function clearErr() { err.hidden = true; btn.removeAttribute("aria-invalid"); btn.removeAttribute("aria-describedby"); }
+    sel.addEventListener("invalid", function (e) {
+      e.preventDefault();
+      err.hidden = false;
+      btn.setAttribute("aria-invalid", "true");
+      btn.setAttribute("aria-describedby", err.id);
+      btn.focus();
+    });
+    sel.addEventListener("change", clearErr);
 
     function placeholder() {
       var first = sel.options[0];

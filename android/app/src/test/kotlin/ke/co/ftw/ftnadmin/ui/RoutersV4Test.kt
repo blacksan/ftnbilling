@@ -175,7 +175,7 @@ class RoutersV4Test {
         assertEquals(2, c.items.size)
         assertEquals(1, c.counts.unregistered)
         assertTrue(c.items[0].isFlat && !c.items[1].isFlat)
-        assertEquals("House A1", c.items[0].title)
+        assertEquals("A1", c.items[0].title)
         assertEquals("ont-9", c.items[1].title)
 
         vm.onQuery("aa:bb:cc:dd:ee:09")

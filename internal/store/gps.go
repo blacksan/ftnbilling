@@ -11,6 +11,10 @@ import (
 // ErrBadGPS is returned by ParseGPS for text that holds no usable point.
 var ErrBadGPS = errors.New(`GPS location not understood: paste "lat, lng" such as -1.2921, 36.8219, or a Google Maps link that contains the coordinates`)
 
+// ErrGPSDecimals is returned for a pair where a number has no decimal point: "1,5" could be
+// (1, 5) or 1.5 with a comma decimal, and a wrong guess puts the pin in another country.
+var ErrGPSDecimals = errors.New("GPS location is ambiguous: use dot decimals, e.g. -1.2921, 36.8219")
+
 const gpsNum = `[-+]?\d{1,3}(?:\.\d+)?`
 
 var (
@@ -37,6 +41,10 @@ func ParseGPS(s string) (lat, lng *float64, err error) {
 	}
 	if a == "" {
 		return nil, nil, ErrBadGPS
+	}
+	// Google Maps always gives decimals. A number without a '.' ("1,5", "-1,29") is refused.
+	if !strings.Contains(a, ".") || !strings.Contains(b, ".") {
+		return nil, nil, ErrGPSDecimals
 	}
 	la, e1 := strconv.ParseFloat(a, 64)
 	lo, e2 := strconv.ParseFloat(b, 64)

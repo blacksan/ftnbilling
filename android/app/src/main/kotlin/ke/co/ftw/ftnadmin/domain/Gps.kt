@@ -32,6 +32,8 @@ data class GpsPoint(val lat: Double, val lng: Double) {
     companion object {
         const val BAD = "Not understood. Paste the coordinates like -1.2921, 36.8219 or a Google Maps link that contains them."
 
+        const val NEEDS_DOTS = "Use dot decimals, e.g. -1.2921, 36.8219"
+
         private const val NUM = "[-+]?\\d{1,3}(?:\\.\\d+)?"
         private val pair = Regex("^\\s*($NUM)\\s*[,;\\s]\\s*($NUM)\\s*$")
         private val at = Regex("@($NUM),($NUM)")
@@ -48,6 +50,8 @@ data class GpsPoint(val lat: Double, val lng: Double) {
             val nums: Pair<String, String>? = pair.matchEntire(s)?.let { it.groupValues[1] to it.groupValues[2] }
                 ?: if (s.startsWith("http://", true) || s.startsWith("https://", true)) fromUrl(s) else null
             nums ?: return Gps.Bad(BAD)
+            // Google Maps always gives decimals; "1,5" could be (1, 5) or 1.5, so a number without a '.' is refused.
+            if ('.' !in nums.first || '.' !in nums.second) return Gps.Bad(NEEDS_DOTS)
             val lat = nums.first.toDoubleOrNull() ?: return Gps.Bad(BAD)
             val lng = nums.second.toDoubleOrNull() ?: return Gps.Bad(BAD)
             if (abs(lat) > 90) return Gps.Bad("Latitude must be between -90 and 90.")

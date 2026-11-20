@@ -156,7 +156,7 @@ func (s *Service) AssignEquipment(ctx context.Context, id, accountID, siteID str
 				return ErrNotFound
 			}
 			if e.Kind == store.KindSplitter {
-				return errors.New("a splitter belongs to a router: set it as the house's splitter in the location card")
+				return errors.New("a splitter is shared by several houses: set it as the house's splitter in the location card")
 			}
 			e.AccountID, e.SiteID = a.ID, a.SiteID
 			if useAsMAC && e.Kind == store.KindONT && e.MAC != "" {

@@ -75,7 +75,7 @@ fun AccountPicker(
                     RadioButton(selected = a.id == selectedId, onClick = null)
                     Column(Modifier.padding(start = 12.dp)) {
                         Text(
-                            "House ${a.flat}${if (a.id == suggested?.id) "  (suggested)" else ""}",
+                            "${a.flat}${if (a.id == suggested?.id) "  (suggested)" else ""}",
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurface,
                         )

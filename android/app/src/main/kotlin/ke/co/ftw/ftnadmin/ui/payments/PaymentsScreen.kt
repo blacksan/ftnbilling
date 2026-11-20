@@ -188,7 +188,7 @@ private fun PaymentRow(p: Payment, canAssign: Boolean, onAssign: () -> Unit) {
                 )
             }
             Text(
-                listOf(if (p.flat.isNotBlank()) "House ${p.flat}" else "", p.name, p.phone, p.method).filter { it.isNotBlank() }.joinToString("  |  "),
+                listOf(if (p.flat.isNotBlank()) p.flat else "", p.name, p.phone, p.method).filter { it.isNotBlank() }.joinToString("  |  "),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface,
             )

@@ -332,7 +332,7 @@ func TestAdminApartmentGPSForm(t *testing.T) {
 	}
 
 	// 0,0 is a point, not "unset".
-	loc = save("Null island", "0, 0")
+	loc = save("Null island", "0.0, 0.0")
 	if !strings.Contains(m.adminGet(t, "/admin/apartments/view?id="+idOf(loc)), "query=0%2C0") {
 		t.Error("0,0 not kept as a point")
 	}
@@ -429,5 +429,27 @@ func TestAdminApartmentPickerMarkup(t *testing.T) {
 	js := m.adminGet(t, "/static/apt-picker.js")
 	if !strings.Contains(js, "showModal") || !strings.Contains(js, "data-apt-select") {
 		t.Error("picker script not served")
+	}
+}
+
+// Geolocation is blocked on every page except the apartment form, which hosts the
+// "Use this device's location" button.
+func TestGeolocationPolicyOnlyOnApartmentForm(t *testing.T) {
+	m := newMulti(t)
+	m.addSite(t, "Alpha")
+	policy := func(path string) string {
+		r := m.admin("GET", path, nil)
+		defer r.Body.Close()
+		return r.Header.Get("Permissions-Policy")
+	}
+	for _, p := range []string{"/admin/apartments/new", "/admin/apartments/edit"} {
+		if got := policy(p); !strings.Contains(got, "geolocation=(self)") || !strings.Contains(got, "camera=()") {
+			t.Errorf("%s: Permissions-Policy = %q, want geolocation=(self)", p, got)
+		}
+	}
+	for _, p := range []string{"/admin/apartments", "/admin", "/admin/accounts", "/admin/login"} {
+		if got := policy(p); !strings.Contains(got, "geolocation=()") || strings.Contains(got, "geolocation=(self)") {
+			t.Errorf("%s: Permissions-Policy = %q, want geolocation=()", p, got)
+		}
 	}
 }

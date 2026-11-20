@@ -368,7 +368,7 @@ class ApartmentsTest {
         val vm = main.track(ApartmentFormViewModel(null, ApartmentsRepository(api), SitesRepository(api)))
         await(vm.state) { true }
         vm.onName("Far")
-        vm.onGps("10, 20")
+        vm.onGps("10.0, 20.0")
         vm.save()
         await(vm.state) { !it.saving && it.fieldErrors.isNotEmpty() }
         assertEquals("latitude must be between -90 and 90", vm.state.value.fieldErrors["lat"])

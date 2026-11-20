@@ -233,6 +233,19 @@ func cloneSite(s Site) Site {
 	return s
 }
 
+// cloneApartment gives the copy its own Lat/Lng values, so a snapshot never shares them.
+func cloneApartment(a Apartment) Apartment {
+	if a.Lat != nil {
+		v := *a.Lat
+		a.Lat = &v
+	}
+	if a.Lng != nil {
+		v := *a.Lng
+		a.Lng = &v
+	}
+	return a
+}
+
 func cloneAdminUser(u AdminUser) AdminUser {
 	if u.RecoveryCodes != nil {
 		u.RecoveryCodes = append([]string(nil), u.RecoveryCodes...)
@@ -254,7 +267,7 @@ var tables = []table{
 	tbl[Tenancy]{func(d *Data) *map[string]Tenancy { return &d.Tenancies }, func(c *ChangeSet) *Delta[Tenancy] { return &c.Tenancies },
 		eqc[Tenancy], Tenancy.norm, func(v Tenancy) string { return v.ID }, nil},
 	tbl[Apartment]{func(d *Data) *map[string]Apartment { return &d.Apartments }, func(c *ChangeSet) *Delta[Apartment] { return &c.Apartments },
-		eqDeep[Apartment], Apartment.norm, func(v Apartment) string { return v.ID }, nil},
+		eqDeep[Apartment], Apartment.norm, func(v Apartment) string { return v.ID }, cloneApartment},
 	tbl[ApartmentSite]{func(d *Data) *map[string]ApartmentSite { return &d.ApartmentSites }, func(c *ChangeSet) *Delta[ApartmentSite] { return &c.ApartmentSites },
 		eqc[ApartmentSite], ApartmentSite.norm, func(v ApartmentSite) string { return ApartmentSiteKey(v.ApartmentID, v.SiteID) }, nil},
 	tbl[Order]{func(d *Data) *map[string]Order { return &d.Orders }, func(c *ChangeSet) *Delta[Order] { return &c.Orders },

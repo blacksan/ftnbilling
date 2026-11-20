@@ -159,7 +159,7 @@ data class Client(
 
     val title: String
         get() = when {
-            isFlat && flat.isNotBlank() -> "House $flat"
+            isFlat && flat.isNotBlank() -> flat
             hostName.isNotBlank() -> hostName
             vendor.isNotBlank() -> vendor
             else -> mac.ifBlank { "Unknown device" }

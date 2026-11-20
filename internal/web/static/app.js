@@ -100,6 +100,8 @@
         aptsFor(f, o.getAttribute("data-site"));
         var fl = o.getAttribute("data-flat"); if (fl) { var ui = $("input[name=unit]", f); if (ui) ui.value = fl; }
         step(f, "form"); devsFor(f);
+      } else if (dlg) {
+        var f0 = $("form", dlg); if (f0) aptsFor(f0, ""); // not from a device row: show every apartment again
       }
       openDlg(dlg); return;
     }
@@ -299,7 +301,12 @@
   }
   /* A device row knows its router: offer the apartments that router serves, and take the only one. */
   function aptsFor(form, siteId) {
-    var a = $("[data-apt-select]", form); if (!a || !siteId) return;
+    var a = $("[data-apt-select]", form); if (!a) return;
+    if (!siteId) { // opened from anywhere else: offer every apartment again
+      Array.prototype.forEach.call(a.options, function (op) { op.hidden = false; op.disabled = false; });
+      a.dispatchEvent(new Event("ftn:aptsync"));
+      return;
+    }
     var only = [];
     Array.prototype.forEach.call(a.options, function (op) {
       if (!op.value) return;

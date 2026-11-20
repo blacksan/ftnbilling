@@ -20,8 +20,8 @@ func TestParseGPS(t *testing.T) {
 		{"  -1.2921 36.8219 ", -1.2921, 36.8219},
 		{"-1.2921; 36.8219", -1.2921, 36.8219},
 		{"+1.5, -179.9", 1.5, -179.9},
-		{"0,0", 0, 0},
-		{"90, 180", 90, 180},
+		{"0.0,0.0", 0, 0},
+		{"90.0, 180.0", 90, 180},
 		{"https://www.google.com/maps/@-1.2921,36.8219,15z", -1.2921, 36.8219},
 		{"https://www.google.com/maps?q=-1.2921,36.8219", -1.2921, 36.8219},
 		{"https://www.google.com/maps/search/?api=1&query=-1.2921%2C36.8219", -1.2921, 36.8219},
@@ -39,9 +39,14 @@ func TestParseGPS(t *testing.T) {
 		t.Errorf("empty input must mean no point: %v %v %v", lat, lng, err)
 	}
 	for _, in := range []string{"garbage", "-1.29", "1,2,3", "36.8219, -1.2921x", "91, 10", "-91, 10", "10, 181", "10, -181",
-		"https://maps.app.goo.gl/abc123", "https://example.com/?q=hello", "javascript:alert(1)", "NaN, 1", "1e2, 3"} {
+		"https://maps.app.goo.gl/abc123", "https://example.com/?q=hello", "javascript:alert(1)", "NaN, 1", "1e2, 3", "1,5", "-1,29", "1, 2", "-1.2921, 36", "-1, 36.8219"} {
 		if lat, lng, err := ParseGPS(in); err == nil || lat != nil || lng != nil {
 			t.Errorf("ParseGPS(%q) accepted: %v %v", in, lat, lng)
+		}
+	}
+	for _, in := range []string{"1,5", "-1,29", "0,0", "-1.2921, 36", "90, 180"} {
+		if _, _, err := ParseGPS(in); err != ErrGPSDecimals {
+			t.Errorf("ParseGPS(%q) error = %v, want the dot-decimals error", in, err)
 		}
 	}
 	if _, _, err := ParseGPS("garbage"); err != ErrBadGPS {

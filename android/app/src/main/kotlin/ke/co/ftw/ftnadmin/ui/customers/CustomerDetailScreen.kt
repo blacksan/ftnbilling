@@ -76,7 +76,7 @@ fun CustomerDetailScreen(id: String, user: UserInfo, onBack: () -> Unit, onOpenO
             vm.clearInfo()
         }
     }
-    val title = (ui.account as? Loadable.Ready)?.value?.let { "House ${it.flat}" } ?: "Customer"
+    val title = (ui.account as? Loadable.Ready)?.value?.let { it.flat } ?: "Customer"
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -158,7 +158,7 @@ fun CustomerDetailScreen(id: String, user: UserInfo, onBack: () -> Unit, onOpenO
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SummaryCard(a: Account) {
-    SectionCard("House ${a.unitLabel}${if (a.floor.isNotBlank()) ", floor ${a.floor}" else ""}") {
+    SectionCard("${a.unitLabel}${if (a.floor.isNotBlank()) ", floor ${a.floor}" else ""}") {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             StatusChip(accountStateLabel(a), accountTone(a))
             if (a.macConflict) StatusChip("Not provisioned", Tone.Bad)
@@ -230,7 +230,7 @@ private fun DetailDialogs(ui: DetailUiState, vm: CustomerDetailViewModel, onOpen
         DetailDialog.Move -> MoveDialog(account, ui, vm)
         is DetailDialog.ConfirmSuspend -> AlertDialog(
             onDismissRequest = vm::dismiss,
-            title = { Text(if (d.suspend) "Suspend House ${account.flat}?" else "Unsuspend House ${account.flat}?") },
+            title = { Text(if (d.suspend) "Suspend ${account.flat}?" else "Unsuspend ${account.flat}?") },
             text = {
                 Text(
                     if (d.suspend) "Internet is cut off until you unsuspend. The router is updated within seconds."
@@ -295,7 +295,7 @@ private fun PackageDialog(
 private fun MacDialog(account: Account, ui: DetailUiState, vm: CustomerDetailViewModel, onOpenOther: (String) -> Unit) {
     AlertDialog(
         onDismissRequest = vm::dismiss,
-        title = { Text("Edit MAC for House ${account.flat}") },
+        title = { Text("Edit MAC for ${account.flat}") },
         text = {
             androidx.compose.foundation.layout.Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
@@ -336,7 +336,7 @@ fun MacConflictNotice(owner: MacOwner, onOpen: ((String) -> Unit)? = null) {
             Text("MAC already in use", style = MaterialTheme.typography.titleSmall)
             Text(macConflictText(owner), style = MaterialTheme.typography.bodyMedium)
             if (onOpen != null && owner.accountId.isNotBlank()) {
-                TextButton(onClick = { onOpen(owner.accountId) }) { Text("Open House ${owner.flat}") }
+                TextButton(onClick = { onOpen(owner.accountId) }) { Text("Open ${owner.flat}") }
             }
         }
     }
@@ -366,7 +366,7 @@ private fun MoveDialog(account: Account, ui: DetailUiState, vm: CustomerDetailVi
     val needsRouter = (chosen?.routers?.size ?: 0) > 1
     AlertDialog(
         onDismissRequest = vm::dismiss,
-        title = { Text("Move House ${account.unitLabel}") },
+        title = { Text("Move ${account.unitLabel}") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(

@@ -15,9 +15,15 @@ class GpsPointTest {
     @Test fun plainPairsAsPastedFromGoogleMaps() {
         val want = GpsPoint(-1.2921, 36.8219)
         for (s in listOf("-1.2921, 36.8219", "-1.2921,36.8219", "  -1.2921 36.8219 ", "-1.2921; 36.8219")) assertEquals(s, want, ok(s))
-        assertEquals(GpsPoint(0.0, 0.0), ok("0,0"))
-        assertEquals(GpsPoint(90.0, 180.0), ok("90, 180"))
+        assertEquals(GpsPoint(0.0, 0.0), ok("0.0,0.0"))
+        assertEquals(GpsPoint(90.0, 180.0), ok("90.0, 180.0"))
         assertEquals(GpsPoint(1.5, -179.9), ok("+1.5, -179.9"))
+    }
+
+    @Test fun numbersWithoutADotAreRefused() {
+        for (s in listOf("1,5", "-1,29", "0,0", "90, 180", "-1.2921, 36", "-1, 36.8219")) {
+            assertEquals(s, GpsPoint.NEEDS_DOTS, (GpsPoint.parse(s) as? Gps.Bad)?.message)
+        }
     }
 
     @Test fun googleMapsLinks() {
@@ -32,8 +38,8 @@ class GpsPointTest {
     @Test fun emptyIsNoPointAndGarbageIsRefusedInWords() {
         assertEquals(Gps.Empty, GpsPoint.parse("   "))
         for (s in listOf("garbage", "-1.29", "1,2,3", "36.8219, -1.2921x", "https://maps.app.goo.gl/abc123", "https://example.com/?q=hello", "1e2, 3")) bad(s)
-        assertEquals("Latitude must be between -90 and 90.", (GpsPoint.parse("91, 10") as Gps.Bad).message)
-        assertEquals("Longitude must be between -180 and 180.", (GpsPoint.parse("10, -181") as Gps.Bad).message)
+        assertEquals("Latitude must be between -90 and 90.", (GpsPoint.parse("91.0, 10.0") as Gps.Bad).message)
+        assertEquals("Longitude must be between -180 and 180.", (GpsPoint.parse("10.0, -181.0") as Gps.Bad).message)
         assertEquals(GpsPoint.BAD, (GpsPoint.parse("somewhere") as Gps.Bad).message)
     }
 
