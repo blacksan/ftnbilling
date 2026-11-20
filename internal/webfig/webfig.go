@@ -39,6 +39,7 @@ const (
 	EndReplaced = "replaced by a new WebFig session in the same browser"
 	EndOwner    = "ended by an owner"
 	EndRouter   = "the router or the user changed"
+	EndAdmin    = "the admin session that opened it ended"
 )
 
 // Cookie names: the __Host- prefix makes the browser insist on Secure, Path=/
@@ -52,6 +53,8 @@ const (
 var (
 	ErrTicket = errors.New("webfig: ticket invalid, used, expired or from another address")
 	ErrRouter = errors.New("webfig: router not available")
+	// ErrAddress: the ticket was fine but redeemed from another client address.
+	ErrAddress = errors.New("webfig: ticket redeemed from another address")
 )
 
 // Target is where a router's WebFig lives: its tunnel address and www port.
@@ -74,6 +77,9 @@ type Options struct {
 	Resolve func(siteID string) (Target, bool)
 	// UserOK says whether the user may still use WebFig (an enabled owner).
 	UserOK func(userID string) bool
+	// AdminLive says whether the admin session (by id) that opened a WebFig
+	// session is still signed in.
+	AdminLive func(adminSession string) bool
 	// OnOpen and OnEnd write the activity record.
 	OnOpen func(s Session)
 	OnEnd  func(s Session, reason string, at time.Time)
@@ -87,15 +93,16 @@ type Options struct {
 
 // Session is one WebFig session: one browser, one router.
 type Session struct {
-	PublicID  string
-	UserID    string
-	User      string
-	SiteID    string
-	IP        string // client address that redeemed the ticket
-	Started   time.Time
-	LastSeen  time.Time
-	hash      string
-	connected int
+	PublicID     string
+	UserID       string
+	User         string
+	SiteID       string
+	IP           string // client address that redeemed the ticket
+	AdminSession string // id of the admin session that opened it
+	Started      time.Time
+	LastSeen     time.Time
+	hash         string
+	connected    int
 }
 
 // Expires is when the session ends if nothing happens: idle or max, the sooner.
@@ -109,8 +116,8 @@ func (s Session) Expires() time.Time {
 }
 
 type ticket struct {
-	userID, user, siteID, ip string
-	exp                      time.Time
+	userID, user, siteID, ip, adminSess string
+	exp                                 time.Time
 }
 
 // Manager keeps tickets and sessions in memory (a restart ends them all: the
@@ -176,7 +183,7 @@ func randToken(n int) string {
 
 // Mint makes a one-time ticket bound to the admin user, the router and the
 // client address, valid for TicketTTL. The router must be openable now.
-func (m *Manager) Mint(userID, user, siteID, ip string) (string, error) {
+func (m *Manager) Mint(userID, user, siteID, ip, adminSess string) (string, error) {
 	if _, ok := m.target(siteID); !ok {
 		return "", ErrRouter
 	}
@@ -192,7 +199,7 @@ func (m *Manager) Mint(userID, user, siteID, ip string) (string, error) {
 	if len(m.tickets) > 2000 {
 		return "", errors.New("webfig: too many open tickets")
 	}
-	m.tickets[hashOf(tok)] = ticket{userID: userID, user: user, siteID: siteID, ip: ip, exp: now.Add(TicketTTL)}
+	m.tickets[hashOf(tok)] = ticket{userID: userID, user: user, siteID: siteID, ip: ip, adminSess: adminSess, exp: now.Add(TicketTTL)}
 	return tok, nil
 }
 
@@ -221,29 +228,32 @@ func (m *Manager) target(siteID string) (Target, bool) {
 
 // Redeem exchanges a ticket for a session. The ticket dies whether or not the
 // exchange succeeds. oldCookie (the browser's current WebFig cookie, if any)
-// is ended: one session per browser.
+// is ended: one session per browser. Store lookups happen outside the lock.
 func (m *Manager) Redeem(tok, ip, oldCookie string) (cookie string, s Session, err error) {
 	now := m.o.Now()
-	var ended []Session
 	m.mu.Lock()
 	t, ok := m.tickets[hashOf(tok)]
 	delete(m.tickets, hashOf(tok))
-	if !ok || !now.Before(t.exp) || subtle.ConstantTimeCompare([]byte(t.ip), []byte(ip)) != 1 {
-		m.mu.Unlock()
+	m.mu.Unlock()
+	if !ok || !now.Before(t.exp) {
 		return "", Session{}, ErrTicket
 	}
-	if _, f := m.target(t.siteID); !f || (m.o.UserOK != nil && !m.o.UserOK(t.userID)) {
-		m.mu.Unlock()
+	if subtle.ConstantTimeCompare([]byte(t.ip), []byte(ip)) != 1 {
+		return "", Session{}, ErrAddress
+	}
+	if _, f := m.target(t.siteID); !f || !m.userLive(t.userID, t.adminSess) {
 		return "", Session{}, ErrRouter
 	}
+	cookie = randToken(32)
+	ns := &Session{PublicID: hex.EncodeToString([]byte(randToken(6))[:6]), UserID: t.userID, User: t.user, SiteID: t.siteID, IP: ip,
+		AdminSession: t.adminSess, Started: now, LastSeen: now, hash: hashOf(cookie)}
+	var ended []Session
+	m.mu.Lock()
 	if oldCookie != "" {
 		if old, f := m.sessions[hashOf(oldCookie)]; f {
 			ended = append(ended, m.dropLocked(old))
 		}
 	}
-	cookie = randToken(32)
-	ns := &Session{PublicID: hex.EncodeToString([]byte(randToken(6))[:6]), UserID: t.userID, User: t.user, SiteID: t.siteID, IP: ip,
-		Started: now, LastSeen: now, hash: hashOf(cookie)}
 	m.sessions[ns.hash] = ns
 	s = *ns
 	m.mu.Unlock()
@@ -254,6 +264,17 @@ func (m *Manager) Redeem(tok, ip, oldCookie string) (cookie string, s Session, e
 		m.o.OnOpen(s)
 	}
 	return cookie, s, nil
+}
+
+// userLive: the user may still use WebFig and the admin session that opened it is alive.
+func (m *Manager) userLive(userID, adminSess string) bool {
+	if m.o.UserOK != nil && !m.o.UserOK(userID) {
+		return false
+	}
+	if m.o.AdminLive != nil && !m.o.AdminLive(adminSess) {
+		return false
+	}
+	return true
 }
 
 func (m *Manager) dropLocked(s *Session) Session {
@@ -267,17 +288,38 @@ func (m *Manager) fireEnd(s Session, reason string, at time.Time) {
 	}
 }
 
+// endHash ends a session by its hash if it is still there.
+func (m *Manager) endHash(hash, reason string, at time.Time) {
+	m.mu.Lock()
+	s, ok := m.sessions[hash]
+	var ended Session
+	if ok {
+		ended = m.dropLocked(s)
+	}
+	m.mu.Unlock()
+	if ok {
+		m.fireEnd(ended, reason, at)
+	}
+}
+
 // lookup finds the live session for a cookie value and touches it. Expired
-// sessions and sessions whose router or user no longer qualify end here.
+// sessions, sessions whose admin session is over and sessions whose router or
+// user no longer qualify end here. The session is copied out under the lock;
+// the store is asked outside it.
 func (m *Manager) lookup(cookie string) (Session, Target, bool) {
 	if cookie == "" || len(cookie) > 200 {
 		return Session{}, Target{}, false
 	}
 	now := m.o.Now()
+	h := hashOf(cookie)
 	m.mu.Lock()
-	s, ok := m.sessions[hashOf(cookie)]
+	sp, ok := m.sessions[h]
+	var s Session
+	if ok {
+		s = *sp
+	}
+	m.mu.Unlock()
 	if !ok {
-		m.mu.Unlock()
 		return Session{}, Target{}, false
 	}
 	reason := ""
@@ -290,20 +332,31 @@ func (m *Manager) lookup(cookie string) (Session, Target, bool) {
 	var tg Target
 	if reason == "" {
 		var f bool
-		if tg, f = m.target(s.SiteID); !f || (m.o.UserOK != nil && !m.o.UserOK(s.UserID)) {
+		tg, f = m.target(s.SiteID)
+		switch {
+		case !f:
 			reason = EndRouter
+		case m.o.UserOK != nil && !m.o.UserOK(s.UserID):
+			reason = EndRouter
+		case m.o.AdminLive != nil && !m.o.AdminLive(s.AdminSession):
+			reason = EndAdmin
 		}
 	}
 	if reason != "" {
-		ended := m.dropLocked(s)
-		m.mu.Unlock()
-		m.fireEnd(ended, reason, now)
+		m.endHash(h, reason, now)
 		return Session{}, Target{}, false
 	}
-	s.LastSeen = now
-	out := *s
+	m.mu.Lock()
+	sp, still := m.sessions[h]
+	if still {
+		sp.LastSeen = now
+		s = *sp
+	}
 	m.mu.Unlock()
-	return out, tg, true
+	if !still {
+		return Session{}, Target{}, false
+	}
+	return s, tg, true
 }
 
 func (m *Manager) touch(hash string) {
@@ -314,7 +367,8 @@ func (m *Manager) touch(hash string) {
 	m.mu.Unlock()
 }
 
-// Sweep ends the sessions that ran out of time. Call it every minute.
+// Sweep ends the sessions that ran out of time or whose admin session or user
+// is gone. Call it every minute (and after a sign-out).
 func (m *Manager) Sweep() {
 	now := m.o.Now()
 	type e struct {
@@ -322,6 +376,7 @@ func (m *Manager) Sweep() {
 		r string
 	}
 	var out []e
+	var check []Session
 	m.mu.Lock()
 	for _, s := range m.sessions {
 		switch {
@@ -329,6 +384,8 @@ func (m *Manager) Sweep() {
 			out = append(out, e{*s, EndMax})
 		case now.Sub(s.LastSeen) >= IdleTimeout:
 			out = append(out, e{*s, EndIdle})
+		default:
+			check = append(check, *s)
 		}
 	}
 	for _, x := range out {
@@ -342,6 +399,15 @@ func (m *Manager) Sweep() {
 	m.mu.Unlock()
 	for _, x := range out {
 		m.fireEnd(x.s, x.r, now)
+	}
+	for _, s := range check { // store lookups, outside the lock
+		if !m.userLive(s.UserID, s.AdminSession) {
+			reason := EndAdmin
+			if m.o.UserOK != nil && !m.o.UserOK(s.UserID) {
+				reason = EndRouter
+			}
+			m.endHash(s.hash, reason, now)
+		}
 	}
 }
 

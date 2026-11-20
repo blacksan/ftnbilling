@@ -589,6 +589,9 @@ func TestInstallCaddyfileWithWebFig(t *testing.T) {
 	if strings.Count(on, "reverse_proxy 127.0.0.1:8080") != 1 || !strings.Contains(on, "tech.ftw.co.ke {") || !strings.Contains(on, "reverse_proxy 127.0.0.1:8082") {
 		t.Errorf("Caddyfile with WebFig:\n%s", on)
 	}
+	if wf := on[strings.Index(on, "tech.ftw.co.ke {"):]; strings.Contains(wf, "encode") {
+		t.Errorf("the WebFig site must not compress (long requests):\n%s", wf)
+	}
 	if site := on[strings.Index(on, "tech.ftw.co.ke {"):]; strings.Contains(site, "header_up") || strings.Contains(site, "trusted_proxies") {
 		t.Errorf("the WebFig site must not touch X-Forwarded-For handling:\n%s", on)
 	}

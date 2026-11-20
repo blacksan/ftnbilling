@@ -11,6 +11,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -58,6 +62,13 @@ func newWF(t *testing.T) *wfRig {
 			w.Write(append([]byte("echo:"), b...))
 		case "/redir":
 			http.Redirect(w, q, "http://"+q.Host+"/webfig/", http.StatusFound)
+		case "/redir-bs":
+			w.Header().Set("Location", `/\evil.example/x`)
+			w.WriteHeader(302)
+		case "/refresh":
+			w.Header().Set("Refresh", "0; url=http://evil.example/")
+			w.Header().Set("Service-Worker-Allowed", "/")
+			fmt.Fprint(w, "ok")
 		case "/redir-out":
 			w.Header().Set("Location", "http://evil.example/steal")
 			w.WriteHeader(302)
@@ -821,5 +832,233 @@ func TestWebFigURLInTheRouterAPI(t *testing.T) {
 	tok2 := off.apiLogin(t, off.owner, "p2")
 	if v := off.call(tok2.Access, "GET", "/sites/"+s2.ID, nil, nil).JSON(t)["webfig_url"]; v != "" {
 		t.Fatalf("feature off: %v", v)
+	}
+}
+
+func TestWebFigOneOriginHardening(t *testing.T) {
+	r := newWF(t)
+	wc := r.open(t, r.br, r.owner, r.site)
+	// the open response wipes what an earlier router left in this browser
+	tok := ticketOf(t, r.adminReq(r.br, "POST", "/admin/routers/webfig", url.Values{"id": {r.site}}))
+	resp := r.techReq("GET", "/_ftn/open?t="+tok, r.clientIP, nil, nil, wc)
+	if got := resp.Header.Get("Clear-Site-Data"); got != `"cache", "storage"` {
+		t.Fatalf("open: Clear-Site-Data %q", got)
+	}
+	wc = nil
+	for _, c := range resp.Cookies() {
+		if strings.HasSuffix(c.Name, "ftn_wf") && c.Value != "" {
+			wc = c
+		}
+	}
+	// a service worker script fetch is refused before the router sees it
+	before := r.hits.Load()
+	resp = r.techReq("GET", "/sw.js", r.clientIP, nil, map[string]string{"Service-Worker": "script"}, wc)
+	if resp.StatusCode != 403 || r.hits.Load() != before {
+		t.Fatalf("Service-Worker request: %d", resp.StatusCode)
+	}
+	// and a router cannot widen a worker's scope or refresh the page elsewhere
+	resp = r.techReq("GET", "/refresh", r.clientIP, nil, nil, wc)
+	if resp.Header.Get("Service-Worker-Allowed") != "" || resp.Header.Get("Refresh") != "" {
+		t.Fatalf("headers kept: %v", resp.Header)
+	}
+	// slash-backslash is another site to a browser
+	for _, p := range []string{"/redir-bs"} {
+		resp = r.techReq("GET", p, r.clientIP, nil, nil, wc)
+		if resp.Header.Get("Location") != "/" {
+			t.Fatalf("%s: Location %q", p, resp.Header.Get("Location"))
+		}
+	}
+	// the router's REST API is not WebFig
+	before = r.hits.Load()
+	for _, p := range []string{"/rest", "/rest/system/resource", "/rest/user"} {
+		resp = r.techReq("GET", p, r.clientIP, nil, nil, wc)
+		if resp.StatusCode != 403 {
+			t.Fatalf("%s: %d", p, resp.StatusCode)
+		}
+	}
+	if r.hits.Load() != before {
+		t.Fatal("/rest reached the router")
+	}
+	// a session that ended wipes the browser's copy too
+	r.advance(31 * time.Minute)
+	resp = r.techReq("GET", "/", r.clientIP, nil, nil, wc)
+	if resp.StatusCode != 401 || resp.Header.Get("Clear-Site-Data") != `"cache", "storage"` {
+		t.Fatalf("ended session: %d %q", resp.StatusCode, resp.Header.Get("Clear-Site-Data"))
+	}
+	// a request with no cookie at all gets no wipe header
+	if resp = r.techReq("GET", "/", r.clientIP, nil, nil); resp.Header.Get("Clear-Site-Data") != "" {
+		t.Fatal("wipe header without a session cookie")
+	}
+}
+
+func TestWebFigSessionEndsWithItsAdminSession(t *testing.T) {
+	r := newWF(t)
+	count := func(want string) int {
+		n := 0
+		r.st.View(func(d *store.Data) {
+			for _, e := range d.Events {
+				if strings.Contains(e.Msg, want) {
+					n++
+				}
+			}
+		})
+		return n
+	}
+	// sign-out
+	b2 := signIn(t, r.ts, r.srv, r.st, r.owner)
+	wc := r.open(t, b2, r.owner, r.site)
+	if resp := r.techReq("GET", "/", r.clientIP, nil, nil, wc); resp.StatusCode != 200 {
+		t.Fatalf("%d", resp.StatusCode)
+	}
+	resp := r.adminReq(b2, "POST", "/admin/logout", url.Values{})
+	resp.Body.Close()
+	if n := count("admin session that opened it ended"); n != 1 {
+		t.Fatalf("sign-out was recorded %d times", n)
+	}
+	if resp := r.techReq("GET", "/", r.clientIP, nil, nil, wc); resp.StatusCode != 401 {
+		t.Fatalf("WebFig survived the admin sign-out: %d", resp.StatusCode)
+	}
+	// the other admin session's WebFig is untouched
+	wc1 := r.open(t, r.br, r.owner, r.site)
+	b3 := signIn(t, r.ts, r.srv, r.st, r.owner)
+	wc3 := r.open(t, b3, r.owner, r.site)
+	_ = wc3
+	if resp := r.techReq("GET", "/", r.clientIP, nil, nil, wc1); resp.StatusCode != 200 {
+		t.Fatalf("another admin session's WebFig died: %d", resp.StatusCode)
+	}
+	// revoking every session (password change, revoke) ends it on the next request, with no sweep needed
+	if _, err := r.srv.Auth().RevokeSessions(r.owner.ID, "", "test", "test", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []*http.Cookie{wc1, wc3} {
+		if resp := r.techReq("GET", "/", r.clientIP, nil, nil, c); resp.StatusCode != 401 {
+			t.Fatalf("WebFig survived revoked sessions: %d", resp.StatusCode)
+		}
+	}
+	// plain expiry of the admin session
+	b4 := signIn(t, r.ts, r.srv, r.st, r.owner)
+	wc4 := r.open(t, b4, r.owner, r.site)
+	sess, _, _ := r.srv.Auth().Session(b4.Cookie.Value)
+	r.st.Update(func(d *store.Data) error {
+		x := d.AdminSessions[sess.ID]
+		x.ExpiresAt = time.Now().Add(-time.Minute)
+		d.AdminSessions[sess.ID] = x
+		return nil
+	})
+	if resp := r.techReq("GET", "/", r.clientIP, nil, nil, wc4); resp.StatusCode != 401 {
+		t.Fatalf("WebFig survived the admin session's expiry: %d", resp.StatusCode)
+	}
+	// the sweep records an end nobody asked for
+	b5 := signIn(t, r.ts, r.srv, r.st, r.owner)
+	r.open(t, b5, r.owner, r.site)
+	sess, _, _ = r.srv.Auth().Session(b5.Cookie.Value)
+	r.srv.Auth().DeleteSession(sess.ID)
+	before := count("admin session that opened it ended")
+	r.srv.WebFigSweep()
+	if count("admin session that opened it ended") != before+1 {
+		t.Fatal("the sweep did not record the end")
+	}
+}
+
+func TestWebFigNetworkChangedPage(t *testing.T) {
+	r := newWF(t)
+	tok := ticketOf(t, r.stepUp(t, r.br, r.owner, r.site))
+	resp := r.techReq("GET", "/_ftn/open?t="+tok, "198.51.100.9", nil, nil)
+	if b := body(t, resp); resp.StatusCode != 403 || !strings.Contains(b, "Your network changed between the admin and WebFig") {
+		t.Fatalf("%d %s", resp.StatusCode, b)
+	}
+	// the ticket is gone all the same
+	resp = r.techReq("GET", "/_ftn/open?t="+tok, r.clientIP, nil, nil)
+	if b := body(t, resp); resp.StatusCode != 403 || strings.Contains(b, "network changed") {
+		t.Fatalf("second try: %d %s", resp.StatusCode, b)
+	}
+}
+
+func TestWebFigURLOnlyForOwners(t *testing.T) {
+	m := newMultiOps(t, func(c *config.Config) { c.WebFigDomain = wfDomain }, nil)
+	site := m.addSite(t, "Alpha")
+	m.st.Update(func(d *store.Data) error {
+		x := d.Sites[site.ID]
+		x.TunnelIP = "10.99.0.12"
+		d.Sites[site.ID] = x
+		return nil
+	})
+	m.mgr.Reload(site.ID)
+	op := seedUser(t, m.srv, m.st, "olga", store.RoleOperator, longPW)
+	vw := seedUser(t, m.srv, m.st, "vic", store.RoleViewer, longPW)
+	for name, w := range map[string]*who{"owner": m.owner, "operator": op, "viewer": vw} {
+		tok := m.apiLogin(t, w, "i-"+name)
+		for _, path := range []string{"/sites/" + site.ID, "/sites"} {
+			j := m.call(tok.Access, "GET", path, nil, nil).JSON(t)
+			item := j
+			if its, ok := j["items"].([]any); ok {
+				item = its[0].(map[string]any)
+				for _, it := range its {
+					if it.(map[string]any)["id"] == site.ID {
+						item = it.(map[string]any)
+					}
+				}
+			}
+			_, has := item["webfig_url"]
+			if has != (name == "owner") {
+				t.Errorf("%s %s: webfig_url present=%v", name, path, has)
+			}
+		}
+	}
+}
+
+// Nothing a browser can be sent to with a plain link (a GET) may change state:
+// router script on the WebFig host is same-site with the admin and its
+// requests carry the admin's SameSite=Strict cookies.
+func TestAdminGETsDoNotChangeState(t *testing.T) {
+	r := newWF(t)
+	files, _ := filepath.Glob("*.go")
+	re := regexp.MustCompile(`(?:\bget\(|"GET )"?(/admin[^" ?]*)`)
+	paths := map[string]bool{"/admin/logout": true}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, _ := os.ReadFile(f)
+		for _, m := range re.FindAllStringSubmatch(string(b), -1) {
+			paths[m[1]] = true
+		}
+	}
+	if len(paths) < 40 {
+		t.Fatalf("only %d admin GET routes found: the scan is broken", len(paths))
+	}
+	snap := func() string {
+		var out string
+		r.st.View(func(d *store.Data) {
+			cp := *d
+			cp.AdminSessions = nil // last-seen times move on every request
+			b, _ := json.Marshal(cp)
+			out = string(b)
+		})
+		return out
+	}
+	var list []string
+	for p := range paths {
+		list = append(list, p)
+	}
+	sort.Strings(list)
+	t.Logf("%d admin GET routes: %s", len(list), strings.Join(list, " "))
+	for _, p := range list {
+		if p == "/admin/logout" || strings.Contains(p, "{") {
+			continue
+		}
+		before := snap()
+		resp := r.adminReq(r.br, "GET", p+"?id="+r.site, nil)
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if after := snap(); after != before {
+			t.Errorf("GET %s changed stored data", p)
+		}
+	}
+	// logout by GET only redirects
+	resp := r.adminReq(r.br, "GET", "/admin/logout", nil)
+	resp.Body.Close()
+	if _, _, ok := r.srv.Auth().Session(r.br.Cookie.Value); !ok {
+		t.Error("GET /admin/logout ended the session")
 	}
 }

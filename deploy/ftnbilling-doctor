@@ -295,6 +295,15 @@ if [ -n "$WFDOM" ]; then
   if [ -z "$wfip" ]; then fail "WebFig DNS" "$WFDOM does not resolve: add an A record for it to ${pubip:-this server}"
   elif [ -n "$pubip" ] && [ "$wfip" != "$pubip" ]; then warn "WebFig DNS" "$WFDOM points to $wfip, this server is $pubip"
   else pass "WebFig DNS" "$WFDOM -> $wfip"; fi
+  # A ticket is bound to the client address; a phone that reaches the two names over different
+  # address families or routes would see "your network changed". Both names must resolve alike.
+  ahost=$(envval PUBLIC_BASE_URL); ahost=${ahost#https://}; ahost=${ahost%%[/:]*}
+  if [ -n "$ahost" ]; then
+    aset=$(getent ahosts "$ahost" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')
+    wset=$(getent ahosts "$WFDOM" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')
+    if [ -n "$aset" ] && [ "$aset" = "$wset" ]; then pass "WebFig and admin names alike" "$ahost and $WFDOM both resolve to ${aset% }"
+    else warn "WebFig and admin names alike" "$ahost resolves to [${aset% }] but $WFDOM to [${wset% }]: add the same A (and AAAA) records to both, or WebFig may say your network changed"; fi
+  fi
   if have curl; then
     wurl=${FTN_WEBFIG_URL:-https://$WFDOM/_ftn/open}
     code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$wurl" 2>/dev/null || true)

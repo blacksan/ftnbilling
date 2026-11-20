@@ -58,10 +58,11 @@ func (s *Server) initWebFig() {
 	}
 	s.wf.mgr = webfig.New(webfig.Options{
 		Domain: s.cfg.WebFigDomain, Secure: true, Tunnel: tunnel, ServerIP: srvIP,
-		Resolve:  s.webfigTarget,
-		UserOK:   func(id string) bool { u, ok := s.userByID(id); return ok && !u.Disabled && u.Role == store.RoleOwner },
-		ClientIP: realIP,
-		Now:      s.wfNow,
+		Resolve:   s.webfigTarget,
+		AdminLive: func(id string) bool { return s.authn.SessionLive(id) },
+		UserOK:    func(id string) bool { u, ok := s.userByID(id); return ok && !u.Disabled && u.Role == store.RoleOwner },
+		ClientIP:  realIP,
+		Now:       s.wfNow,
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if s.wf.dial != nil {
 				return s.wf.dial(ctx, network, addr)
@@ -137,6 +138,15 @@ func (s *Server) SetWebFigDial(f func(ctx context.Context, network, addr string)
 	s.wf.dial = f
 }
 func (s *Server) SetWebFigClock(f func() time.Time) { s.wf.now = f }
+
+// webfigRecheck ends WebFig sessions whose admin session just ended (sign-out,
+// revoked sessions, password or second-factor reset). The proxy checks on every
+// request anyway; this writes the record at once.
+func (s *Server) webfigRecheck() {
+	if s.webfigOn() {
+		s.wf.mgr.Sweep()
+	}
+}
 
 // WebFigBusy is the number of proxied WebFig requests in flight (tests).
 func (s *Server) WebFigBusy() int {
@@ -273,7 +283,7 @@ func (s *Server) webfigPost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	tok, err := s.wf.mgr.Mint(u.ID, u.Username, st.ID, ip)
+	tok, err := s.wf.mgr.Mint(u.ID, u.Username, st.ID, ip, sess.ID)
 	if err != nil {
 		s.webfigMsg(w, http.StatusConflict, "WebFig cannot be opened for this router right now.")
 		return

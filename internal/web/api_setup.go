@@ -270,7 +270,7 @@ func (s *Server) apiRouterCreate(w http.ResponseWriter, r *http.Request, c *apiC
 	c.audit(s, "router "+st.Name+" added")
 	w.Header().Set("Cache-Control", "no-store")
 	h := s.siteHealths(r.Context(), []store.Site{st})[st.ID]
-	writeJSON(w, http.StatusCreated, map[string]any{"router": s.siteJSON(st, h, nil), "join": join})
+	writeJSON(w, http.StatusCreated, map[string]any{"router": s.siteJSONFor(c, st, h, nil), "join": join})
 }
 
 func (s *Server) apiRouterPatch(w http.ResponseWriter, r *http.Request, c *apiCtx) {
@@ -305,7 +305,7 @@ func (s *Server) apiRouterPatch(w http.ResponseWriter, r *http.Request, c *apiCt
 	c.audit(s, "router "+st.Name+" edited")
 	st, _ = s.site404(w, st.ID)
 	h := s.siteHealths(r.Context(), []store.Site{st})[st.ID]
-	writeJSON(w, http.StatusOK, s.siteJSON(st, h, s.siteCounts()[st.ID]))
+	writeJSON(w, http.StatusOK, s.siteJSONFor(c, st, h, s.siteCounts()[st.ID]))
 }
 
 // apiRouterReset is POST /routers/{id}/actions/reset: forget the router on the
@@ -342,7 +342,7 @@ func (s *Server) apiRouterReset(w http.ResponseWriter, r *http.Request, c *apiCt
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	h := s.siteHealths(r.Context(), []store.Site{st})[st.ID]
-	writeJSON(w, http.StatusOK, map[string]any{"router": s.siteJSON(st, h, s.siteCounts()[st.ID]), "join": join})
+	writeJSON(w, http.StatusOK, map[string]any{"router": s.siteJSONFor(c, st, h, s.siteCounts()[st.ID]), "join": join})
 }
 
 // apiRouterScript is POST /routers/{id}/script: the same script as the paste line fetches, as a file download

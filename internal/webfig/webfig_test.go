@@ -3,7 +3,9 @@ package webfig
 import (
 	"net/http"
 	"net/url"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestRewriteLocation(t *testing.T) {
@@ -44,5 +46,54 @@ func TestBadPath(t *testing.T) {
 	r.RequestURI = "http://evil.example/x"
 	if !badPath(r) {
 		t.Error("absolute-form accepted")
+	}
+}
+
+func TestRewriteLocationBackslashForms(t *testing.T) {
+	tg := Target{IP: "10.99.0.2", Port: 8081}
+	for _, in := range []string{`/\evil.example`, `/\\evil.example`, `\\evil.example`, `/ok\path`, "/a\r\nSet-Cookie: x=1", `//evil.example`, "/a\x00b"} {
+		if got := rewriteLocation(in, tg); got != "/" {
+			t.Errorf("%q -> %q, want /", in, got)
+		}
+	}
+}
+
+// The store is asked outside the manager's lock: a slow user lookup must not
+// stop the manager answering for every other session.
+func TestStoreLookupsAreOutsideTheLock(t *testing.T) {
+	var slow atomic.Bool
+	block, entered := make(chan struct{}), make(chan struct{}, 4)
+	m := New(Options{Domain: "tech.example.co.ke", Secure: true,
+		Resolve: func(string) (Target, bool) { return Target{IP: "10.99.0.2", Port: 8081}, true },
+		UserOK: func(string) bool {
+			if slow.Load() {
+				entered <- struct{}{}
+				<-block
+			}
+			return true
+		},
+		AdminLive: func(string) bool { return true }})
+	tok, err := m.Mint("u1", "admin", "s1", "1.2.3.4", "a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, _, err := m.Redeem(tok, "1.2.3.4", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	slow.Store(true)
+	done := make(chan bool)
+	go func() { _, _, ok := m.lookup(cookie); done <- ok }()
+	<-entered
+	got := make(chan struct{})
+	go func() { m.List("s1"); m.Busy(); _, _ = m.Mint("u1", "admin", "s1", "1.2.3.4", "a1"); close(got) }()
+	select {
+	case <-got:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the manager is locked while a user lookup runs")
+	}
+	close(block)
+	if !<-done {
+		t.Fatal("lookup failed")
 	}
 }

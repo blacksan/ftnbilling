@@ -8,7 +8,7 @@ Router JSON (`GET /api/v1/sites`, `GET /api/v1/sites/{id}`, and the `/routers` t
 
 | Field | Type | Meaning |
 |---|---|---|
-| `webfig_url` | string | `<PUBLIC_BASE_URL>/admin/routers/webfig?id=<router id>`: the admin's own step-up page for this router. Empty when `WEBFIG_DOMAIN` is not set, when `PUBLIC_BASE_URL` is empty, or when the router has no tunnel address yet. It is not a secret and carries no ticket. |
+| `webfig_url` | string | `<PUBLIC_BASE_URL>/admin/routers/webfig?id=<router id>`: the admin's own step-up page for this router. Sent to owners only (absent for operators and viewers). Empty when `WEBFIG_DOMAIN` is not set, when `PUBLIC_BASE_URL` is empty, or when the router has no tunnel address yet. It is not a secret and carries no ticket. |
 
 There is no other API endpoint. The step-up needs a browser session, which a bearer token does not give, so a client opens `webfig_url` in the system browser. The app shows the button to owners only (the server refuses everyone else on that page).
 
@@ -27,6 +27,8 @@ There is no other API endpoint. The step-up needs a browser session, which a bea
 - `GET /_ftn/open?t=` exchanges the ticket for the session cookie `__Host-ftn_wf` and answers `303 /`. A used, expired, unknown or other-address ticket gets 403 and a plain page.
 - Any other path under `/_ftn/` is 404 and never proxied.
 - Every other request is proxied to `http://<router tunnel IP>:<router www port>/` when it carries a live session cookie; without one: 401 and the page "Open WebFig from the router page in the admin."
+- 403 for `/rest` and for any request with a `Service-Worker` header; the open response and the ended-session page send `Clear-Site-Data: "cache", "storage"`.
+- A session also ends when the admin session that opened it ends.
 - 421 for another `Host`, 400 for a bad request target, 405 for `CONNECT` and `TRACE`, 503 over the connection limit (4 per router, 16 overall), 502 when the router does not answer.
 
 ## Router page

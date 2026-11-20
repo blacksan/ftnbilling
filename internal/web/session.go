@@ -225,6 +225,9 @@ func (s *Server) guard(h http.HandlerFunc, allowHalf bool) http.Handler {
 		ctx = context.WithValue(ctx, userKeyCtx{}, user)
 		r = r.WithContext(ctx)
 		h(w, r)
+		if post && (r.URL.Path == "/admin/logout" || strings.HasPrefix(r.URL.Path, "/admin/security/")) {
+			s.webfigRecheck() // sign-out, revoked sessions, password and second-factor changes end WebFig sessions at once
+		}
 		if post && sess.MFA {
 			s.auditPost(w, r, user)
 		}

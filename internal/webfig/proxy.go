@@ -45,6 +45,10 @@ func newProxyState(m *Manager) *proxyState {
 	}}
 }
 
+// clearSiteData wipes caches, storage and service workers of the WebFig origin
+// (not cookies: the open response sets the new one).
+const clearSiteData = `"cache", "storage"`
+
 const noSessionPage = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>WebFig</title>` +
 	`<body style="font:16px system-ui;background:#0d1117;color:#e6e9ef;display:grid;place-items:center;height:90vh"><p>Open WebFig from the router page in the admin.</p>`
 
@@ -114,6 +118,12 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request) {
 		plain(w, http.StatusMisdirectedRequest, "Unknown host.")
 		return
 	}
+	// One origin serves every router, so router script must not install a worker
+	// that would outlive its session and watch the next router's pages.
+	if r.Header.Get("Service-Worker") != "" {
+		plain(w, http.StatusForbidden, "Service workers are not allowed on the WebFig host.")
+		return
+	}
 	if badPath(r) {
 		plain(w, http.StatusBadRequest, "Bad request.")
 		return
@@ -126,6 +136,11 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// WebFig only: the router's REST API is for the billing server alone.
+	if r.URL.Path == "/rest" || strings.HasPrefix(r.URL.Path, "/rest/") {
+		plain(w, http.StatusForbidden, "The router's API is not available through WebFig.")
+		return
+	}
 	var cv string
 	if c, err := r.Cookie(m.CookieName()); err == nil {
 		cv = c.Value
@@ -133,7 +148,9 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request) {
 	sess, tg, ok := m.lookup(cv)
 	if !ok {
 		if cv != "" {
+			// The session ended: drop the cookie and what the router left in this browser.
 			http.SetCookie(w, m.cookie("", -1))
+			w.Header().Set("Clear-Site-Data", clearSiteData)
 		}
 		plain(w, http.StatusUnauthorized, "")
 		return
@@ -207,6 +224,8 @@ func (m *Manager) fixResponse(resp *http.Response, tg Target) error {
 	if m.o.Secure {
 		h.Set("Strict-Transport-Security", "max-age=31536000")
 	}
+	h.Del("Service-Worker-Allowed")
+	h.Del("Refresh") // a refresh header can send the browser anywhere
 	for _, name := range []string{"Location", "Content-Location"} {
 		if loc := h.Get(name); loc != "" {
 			h.Set(name, rewriteLocation(loc, tg))
@@ -236,6 +255,9 @@ func rewriteLocation(loc string, tg Target) string {
 	u, err := url.Parse(loc)
 	if err != nil {
 		return "/"
+	}
+	if strings.ContainsAny(loc, "\\\x00\r\n") || strings.HasPrefix(loc, "//") {
+		return "/" // a browser reads "/\\host" and "//host" as another site
 	}
 	if u.Host == "" && u.Scheme == "" {
 		return loc // already relative to this host
@@ -273,10 +295,16 @@ func (m *Manager) open(w http.ResponseWriter, r *http.Request) {
 		old = c.Value
 	}
 	cookie, _, err := m.Redeem(r.URL.Query().Get("t"), m.o.ClientIP(r), old)
+	if errors.Is(err, ErrAddress) {
+		plain(w, http.StatusForbidden, "Your network changed between the admin and WebFig. Open WebFig again from the router page in the admin.")
+		return
+	}
 	if err != nil {
 		plain(w, http.StatusForbidden, "This WebFig link expired or was already used. Open WebFig again from the router page in the admin.")
 		return
 	}
+	// Whatever a previous router left behind in this browser goes before the new session starts.
+	w.Header().Set("Clear-Site-Data", clearSiteData)
 	http.SetCookie(w, m.cookie(cookie, int(MaxLife/time.Second)))
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
