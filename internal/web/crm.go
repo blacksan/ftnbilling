@@ -38,8 +38,9 @@ func (s *Server) crmRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/equipment/return", s.adminEquipmentReturn)
 	post("/admin/equipment/note", s.adminEquipmentNote)
 	post("/admin/sites/profile", s.adminSiteProfile)
-	post("/admin/sites/contacts/save", s.adminContactSave)
-	post("/admin/sites/contacts/delete", s.adminContactDelete)
+	// Router contacts were replaced by the apartment's caretaker and landlord.
+	post("/admin/sites/contacts/save", s.adminContactGone)
+	post("/admin/sites/contacts/delete", s.adminContactGone)
 }
 
 // parseDay reads an EAT calendar day (2026-11-17); empty is the zero time.
@@ -88,6 +89,8 @@ func (s *Server) adminSearch(w http.ResponseWriter, r *http.Request) {
 			to = "/admin/equipment/view?id=" + url.QueryEscape(id)
 		case "payment":
 			to = "/admin/payments?q=" + url.QueryEscape(id)
+		case "apartment":
+			to = aptURL(id)
 		case "building":
 			to = "/admin/routers/view?id=" + url.QueryEscape(id)
 		}
@@ -479,16 +482,9 @@ func parseCoord(v string) (float64, error) {
 	return strconv.ParseFloat(v, 64)
 }
 
-func (s *Server) adminContactSave(w http.ResponseWriter, r *http.Request) {
-	site := r.PostFormValue("site")
-	_, err := s.svc.SaveContact(billing.ContactInput{ID: r.PostFormValue("cid"), SiteID: site, Role: r.PostFormValue("role"),
-		Name: r.PostFormValue("name"), Phone: r.PostFormValue("phone"), Email: r.PostFormValue("email"), Notes: r.PostFormValue("notes")})
-	s.back(w, r, "/admin/sites/view?id="+url.QueryEscape(site), msgOr(err, "Contact saved"))
-}
-
-func (s *Server) adminContactDelete(w http.ResponseWriter, r *http.Request) {
-	site := r.PostFormValue("site")
-	s.back(w, r, "/admin/sites/view?id="+url.QueryEscape(site), msgOr(s.svc.DeleteContact(site, r.PostFormValue("cid")), "Contact removed"))
+// adminContactGone answers the removed router contacts forms with 410 Gone.
+func (s *Server) adminContactGone(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, "Router contacts were removed. The caretaker and landlord are now part of each apartment: open Apartments.", http.StatusGone)
 }
 
 // ---- payment filters -----------------------------------------------------------------

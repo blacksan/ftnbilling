@@ -96,7 +96,8 @@ func TestCodecsCoverEveryField(t *testing.T) {
 	guardCodec(t, equipmentC)
 	guardCodec(t, accountsC)
 	guardCodec(t, tenanciesC)
-	guardCodec(t, contactsC)
+	guardCodec(t, apartmentsC)
+	guardCodec(t, apartmentSitesC)
 	guardCodec(t, ordersC)
 	guardCodec(t, vouchersC)
 	guardCodec(t, paymentsC)
@@ -138,7 +139,7 @@ func TestCodecColumnsExist(t *testing.T) {
 		all.WriteString(m.sql)
 	}
 	for name, cols := range map[string][]string{"sites": sitesC.cols, "packages": packagesC.cols, "customers": customersC.cols, "equipment": equipmentC.cols,
-		"accounts": accountsC.cols, "tenancies": tenanciesC.cols, "site_contacts": contactsC.cols, "orders": ordersC.cols, "vouchers": vouchersC.cols,
+		"accounts": accountsC.cols, "tenancies": tenanciesC.cols, "apartments": apartmentsC.cols, "apartment_sites": apartmentSitesC.cols, "orders": ordersC.cols, "vouchers": vouchersC.cols,
 		"payments": paymentsC.cols, "devices": devicesC.cols, "tasks": tasksC.cols, "equipment_events": eqEventsC.cols, "notes": notesC.cols, "settings": settingsC.cols, "events": eventsC.cols,
 		"admin_users": adminUsersC.cols, "admin_sessions": adminSessionsC.cols, "api_devices": apiDevicesC.cols} {
 		i := strings.Index(all.String(), "CREATE TABLE "+name+" (")
@@ -230,7 +231,8 @@ func TestCodecRoundTripEveryField(t *testing.T) {
 	roundTrip(t, ctx, tx, equipmentC, func(v *store.Equipment) { v.Kind, v.Status = "ont", "installed" }, store.Equipment.Norm)
 	roundTrip(t, ctx, tx, accountsC, func(v *store.Account) { v.MAC = "AA:BB:CC:DD:EE:FF"; v.IP = "10.20.0.7" }, store.Account.Norm)
 	roundTrip(t, ctx, tx, tenanciesC, func(v *store.Tenancy) { v.MoveOut = v.MoveIn.Add(time.Hour) }, store.Tenancy.Norm)
-	roundTrip(t, ctx, tx, contactsC, func(v *store.Contact) { v.Role = "agent" }, store.Contact.Norm)
+	roundTrip(t, ctx, tx, apartmentsC, nil, store.Apartment.Norm)
+	roundTrip(t, ctx, tx, apartmentSitesC, nil, store.ApartmentSite.Norm)
 	roundTrip(t, ctx, tx, ordersC, func(v *store.Order) { v.Status = "paid" }, store.Order.Norm)
 	roundTrip(t, ctx, tx, vouchersC, nil, store.Voucher.Norm)
 	roundTrip(t, ctx, tx, paymentsC, func(v *store.Payment) { v.Key, v.Status = "KEY1", "applied" }, store.Payment.Norm)

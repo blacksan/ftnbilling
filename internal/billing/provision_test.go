@@ -487,6 +487,12 @@ func TestMoveAccountReallocatesAddress(t *testing.T) {
 	if a.IP != "10.5.50.60" || other.IP != "10.5.50.60" {
 		t.Fatalf("addresses are per building: %q %q", a.IP, other.IP)
 	}
+	if err := e.svc.MoveAccount(context.Background(), a.ID, b); !errors.Is(err, ErrRouterNotLinked) {
+		t.Fatalf("a router that does not serve the apartment is refused: %v", err)
+	}
+	if err := e.svc.LinkRouter(store.MigratedApartmentID(e.site), b); err != nil {
+		t.Fatal(err)
+	}
 	if err := e.svc.MoveAccount(context.Background(), a.ID, b); err != nil {
 		t.Fatal(err)
 	}
@@ -497,7 +503,7 @@ func TestMoveAccountReallocatesAddress(t *testing.T) {
 	if err := e.svc.DeleteAccount(context.Background(), a.ID, a.Code); err != nil {
 		t.Fatal(err)
 	}
-	n, err := e.svc.CreateAccount(AccountInput{SiteID: b, Flat: "Flat Y", MAC: macA})
+	n, err := e.svc.CreateAccount(AccountInput{ApartmentID: store.MigratedApartmentID(e.site), SiteID: b, Flat: "Flat Y", MAC: macA})
 	if err != nil || n.IP != "10.5.50.61" {
 		t.Fatalf("%+v %v", n, err)
 	}

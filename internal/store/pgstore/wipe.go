@@ -26,7 +26,8 @@ var WipeTables = []string{
 	"equipment",        // ONTs, splitters, routers as stock items
 	"accounts",         // flats, open and closed (the leases/IPs/MACs live on the row)
 	"tenancies",        // who lived in which flat
-	"site_contacts",    // building contacts
+	"apartments",       // buildings customers live in, with their caretaker and landlord contacts
+	"apartment_sites",  // which router serves which apartment
 	"orders",           // pay-page orders and M-Pesa callbacks results
 	"vouchers",         // voucher codes
 	"payments",         // the ledger (M-Pesa receipts, cash, refunds)
@@ -62,7 +63,7 @@ var wipeCounts = []struct{ kind, sql string }{
 	{store.WipeTenancies, "SELECT count(*) FROM tenancies"},
 	{store.WipeEquipment, "SELECT count(*) FROM equipment"},
 	{store.WipeEquipmentEvents, "SELECT count(*) FROM equipment_events"},
-	{store.WipeContacts, "SELECT count(*) FROM site_contacts"},
+	{store.WipeApartments, "SELECT (SELECT count(*) FROM apartments) + (SELECT count(*) FROM apartment_sites)"},
 	{store.WipeOrders, "SELECT count(*) FROM orders"},
 	{store.WipeVouchers, "SELECT count(*) FROM vouchers"},
 	{store.WipePayments, "SELECT count(*) FROM payments"},

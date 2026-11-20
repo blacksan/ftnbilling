@@ -57,6 +57,7 @@ func (m *multi) addSite(t *testing.T, name string) store.Site {
 		return nil
 	})
 	m.mgr.Reload(st.ID)
+	apartmentFor(t, m.st, st.ID, name)
 	return st
 }
 
@@ -157,7 +158,7 @@ func TestAdminSwitcherFiltersLists(t *testing.T) {
 		t.Fatal("building B view is not filtered")
 	}
 	// A new flat in this view lands in the selected building.
-	m.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"Flat B3"}, "mac": {"AA:BB:CC:00:00:03"}})
+	m.adminPost(t, "/admin/accounts/create", url.Values{"apartment_id": {aptOf(t, m.st, B.ID)}, "flat": {"Flat B3"}, "mac": {"AA:BB:CC:00:00:03"}})
 	if m.account(t, "Flat B3").SiteID != B.ID {
 		t.Fatal("account created in the wrong building")
 	}
@@ -173,6 +174,10 @@ func TestMoveAccountThroughTheAdmin(t *testing.T) {
 	m := newMulti(t)
 	A, B := m.addSite(t, "Alpha"), m.addSite(t, "Beta")
 	a, _ := m.svc.CreateAccount(billing.AccountInput{SiteID: A.ID, Flat: "Flat 1", MAC: "AA:BB:CC:00:00:09"})
+	// Router moves stay inside the apartment: Beta must serve it first.
+	if err := m.svc.LinkRouter(a.ApartmentID, B.ID); err != nil {
+		t.Fatal(err)
+	}
 	loc := m.adminPost(t, "/admin/accounts/move", url.Values{"id": {a.ID}, "to": {B.ID}, "confirm": {"WRONG"}})
 	if !strings.Contains(loc, "Error") {
 		t.Fatalf("move without the code was allowed: %s", loc)

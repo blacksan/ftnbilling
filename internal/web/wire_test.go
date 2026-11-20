@@ -67,6 +67,7 @@ func TestWireAddCustomerReportsTheRealRouterState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	apartmentFor(t, m.st, fresh.ID, "Unjoined")
 	code, j = m.postJSON(t, "/admin/accounts/create", url.Values{"site": {fresh.ID}, "flat": {"Flat Q1"}, "package": {pkg}, "mac": {"AA:BB:CC:00:00:74"}})
 	if code != 201 {
 		t.Fatalf("%d %v", code, j)

@@ -23,6 +23,9 @@ func checkAccountInvariants(d *Data, cs *ChangeSet) error {
 			return fmt.Errorf("%w: %q on flat %s", ErrBadMAC, a.MAC, a.Flat)
 		}
 	}
+	if err := checkUnitInvariant(d, cs); err != nil {
+		return err
+	}
 	if cs.Accounts.Empty() {
 		return nil
 	}
@@ -143,6 +146,75 @@ func checkOtherInvariants(d *Data, cs *ChangeSet) error {
 				}
 				t.m[t.h] = id
 			}
+		}
+	}
+	return nil
+}
+
+// checkUnitInvariant: among open accounts, a unit is used once per apartment
+// (ignoring case). Like the MAC rule it only judges accounts the change
+// touches. The Postgres schema has the same rule as a partial unique index.
+func checkUnitInvariant(d *Data, cs *ChangeSet) error {
+	if cs.Accounts.Empty() {
+		return nil
+	}
+	want := map[string]bool{}
+	for _, a := range cs.Accounts.Upsert {
+		if a.ClosedAt.IsZero() && a.ApartmentID != "" && a.Unit != "" {
+			want[a.ApartmentID+"|"+UnitKey(a.Unit)] = true
+		}
+	}
+	if len(want) == 0 {
+		return nil
+	}
+	by := map[string][]string{}
+	for id, a := range d.Accounts {
+		if a.ApartmentID == "" || a.Unit == "" {
+			continue
+		}
+		if k := a.ApartmentID + "|" + UnitKey(a.Unit); want[k] {
+			by[k] = append(by[k], id)
+		}
+	}
+	var keys []string
+	for k, ids := range by {
+		if len(ids) > 1 {
+			sort.Strings(ids)
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	sort.Strings(keys)
+	k := keys[0]
+	return fmt.Errorf("%w (unit %q is on accounts %s)", ErrDuplicateUnit, d.Accounts[by[k][0]].Unit, strings.Join(by[k], " and "))
+}
+
+// checkApartmentInvariants covers the apartment tables for the JSON backend
+// (Postgres has a unique index on the lower-cased name and foreign keys).
+func checkApartmentInvariants(d *Data, cs *ChangeSet) error {
+	if len(cs.Apartments.Upsert) > 0 {
+		seen := map[string]string{}
+		ids := make([]string, 0, len(d.Apartments))
+		for id := range d.Apartments {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			k := apartmentNameKey(d.Apartments[id].Name)
+			if o, dup := seen[k]; dup {
+				return fmt.Errorf("%w (%q is on apartments %s and %s)", ErrDuplicateApartment, d.Apartments[id].Name, o, id)
+			}
+			seen[k] = id
+		}
+	}
+	for _, l := range cs.ApartmentSites.Upsert {
+		if _, ok := d.Apartments[l.ApartmentID]; !ok {
+			return ErrBadApartmentLink
+		}
+		if _, ok := d.Sites[l.SiteID]; !ok {
+			return ErrBadApartmentLink
 		}
 	}
 	return nil

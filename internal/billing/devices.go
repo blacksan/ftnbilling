@@ -126,8 +126,8 @@ func (s *Service) noteDevices(siteID string, obs []devObs) {
 		changed := false
 		seen := map[string]bool{}
 		for _, o := range obs {
-			if len(d.OpenAccountsByMAC(o.mac)) > 0 {
-				continue // already somebody's ONT (here or in another building)
+			if own := d.OpenAccountsByMAC(o.mac); len(own) > 0 && own[0].SiteID == siteID {
+				continue // already somebody's ONT here. On another router it is listed as "belongs to", never provisioned here.
 			}
 			key := store.DeviceKey(siteID, o.mac)
 			seen[key] = true
@@ -182,12 +182,31 @@ type SuggestedAccount struct {
 	Reason              string
 }
 
+// BelongsTo says that an unregistered device is the ONT of an open account
+// that is served somewhere else: it is never provisioned on the router that
+// sees it. The operator can move the customer here (MoveCustomerHere).
+type BelongsTo struct {
+	AccountID, Code, Customer string
+	ApartmentID, Apartment    string
+	Unit                      string
+	SiteID, SiteName          string // the account's own router
+	// SameApartment: the router that sees the device serves the account's
+	// apartment too (a second router of a large apartment); moving then only
+	// changes the account's router.
+	SameApartment bool
+	// ApartmentChoices are the apartments the seeing router serves, to move
+	// the customer into (empty when SameApartment).
+	ApartmentChoices []store.Apartment
+}
+
 // UnregDevice is one row of the unregistered devices list.
 type UnregDevice struct {
 	store.Device
 	SiteName  string
 	Online    bool // seen within the last few minutes
 	Suggested *SuggestedAccount
+	// BelongsTo is set when the MAC is the ONT of an open account on another router.
+	BelongsTo *BelongsTo
 }
 
 // Unregistered lists the devices that have no account, online first, then by
@@ -197,11 +216,19 @@ func (s *Service) Unregistered(siteID string, onlineOnly bool) []UnregDevice {
 	var out []UnregDevice
 	var devs []store.Device
 	names := map[string]string{}
+	belongs := map[string]*BelongsTo{}
 	s.st.View(func(d *store.Data) {
 		for _, dv := range d.DeviceList() {
 			if (siteID == "" || dv.SiteID == siteID) && dv.Source != SourceDismissed {
+				b, own := belongsToLocked(d, dv)
+				if own {
+					continue // the account is on this very router: not an unknown device
+				}
 				devs = append(devs, dv)
 				names[dv.SiteID] = d.Sites[dv.SiteID].Name
+				if b != nil {
+					belongs[store.DeviceKey(dv.SiteID, dv.MAC)] = b
+				}
 			}
 		}
 	})
@@ -213,7 +240,7 @@ func (s *Service) Unregistered(siteID string, onlineOnly bool) []UnregDevice {
 		if dv.Vendor == "" {
 			dv.Vendor = Vendor(dv.MAC)
 		}
-		out = append(out, UnregDevice{Device: dv, SiteName: names[dv.SiteID], Online: online})
+		out = append(out, UnregDevice{Device: dv, SiteName: names[dv.SiteID], Online: online, BelongsTo: belongs[store.DeviceKey(dv.SiteID, dv.MAC)]})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Online != out[j].Online {
@@ -223,6 +250,84 @@ func (s *Service) Unregistered(siteID string, onlineOnly bool) []UnregDevice {
 	})
 	s.suggest(out)
 	return out
+}
+
+// belongsToLocked tells whether the device's MAC is the ONT of an open account.
+// own is true when that account is served by the router that sees the device
+// (then the device is not unknown at all).
+func belongsToLocked(d *store.Data, dv store.Device) (b *BelongsTo, own bool) {
+	owners := d.OpenAccountsByMAC(dv.MAC)
+	if len(owners) == 0 || owners[0].MACConflict {
+		return nil, false
+	}
+	a := owners[0]
+	if a.SiteID == dv.SiteID {
+		return nil, true
+	}
+	b = &BelongsTo{AccountID: a.ID, Code: a.Code, Customer: accountCustomerName(d, a), ApartmentID: a.ApartmentID,
+		Apartment: d.Apartments[a.ApartmentID].Name, Unit: a.Unit, SiteID: a.SiteID, SiteName: d.Sites[a.SiteID].Name,
+		SameApartment: a.ApartmentID != "" && d.ApartmentServedBy(a.ApartmentID, dv.SiteID)}
+	if b.Unit == "" {
+		b.Unit = a.Flat
+	}
+	if !b.SameApartment {
+		for _, id := range d.SiteApartmentIDs(dv.SiteID) {
+			b.ApartmentChoices = append(b.ApartmentChoices, d.Apartments[id])
+		}
+	}
+	return b, false
+}
+
+// DeviceOwnership reports, for a MAC seen on a router, which open account it
+// belongs to when that account is served by another router (b), or that it is
+// the ONT of an account of this very router (own), in which case it is not an
+// unknown device at all.
+func (s *Service) DeviceOwnership(siteID, mac string) (b *BelongsTo, own bool) {
+	s.st.View(func(d *store.Data) {
+		b, own = belongsToLocked(d, store.Device{SiteID: siteID, MAC: mac})
+	})
+	return
+}
+
+// MoveCustomerHere is the operator action on a device that belongs to a
+// customer of another building: it changes the account's apartment (and
+// router) to the router that sees the device. apartmentID may be empty when
+// the router serves exactly one apartment, or the account's apartment is
+// already served here (then only the router changes).
+func (s *Service) MoveCustomerHere(ctx context.Context, siteID, rawMAC, apartmentID string) (store.Account, error) {
+	mac, err := NormalizeMAC(rawMAC)
+	if err != nil {
+		return store.Account{}, err
+	}
+	var owner store.Account
+	var served bool
+	var choices []string
+	s.st.View(func(d *store.Data) {
+		if a, ok := d.AccountByMAC(mac); ok {
+			owner = a
+			served = a.ApartmentID != "" && d.ApartmentServedBy(a.ApartmentID, siteID)
+		}
+		choices = d.SiteApartmentIDs(siteID)
+	})
+	if owner.ID == "" {
+		return store.Account{}, errors.New("that device does not belong to any customer")
+	}
+	if owner.SiteID == siteID {
+		return store.Account{}, store.ErrNoChange
+	}
+	target := apartmentID
+	switch {
+	case target != "":
+	case served:
+		target = owner.ApartmentID
+	case len(choices) == 1:
+		target = choices[0]
+	case len(choices) == 0:
+		return store.Account{}, fmt.Errorf("%w: this router serves no apartment yet", ErrApartmentNoRoute)
+	default:
+		return store.Account{}, ErrNoApartment
+	}
+	return s.MoveToApartment(ctx, MoveInput{AccountID: owner.ID, ApartmentID: target, SiteID: siteID, ExpectMAC: mac})
 }
 
 // UnregisteredOnline counts the online unregistered devices of a building
@@ -289,7 +394,7 @@ func (s *Service) suggest(list []UnregDevice) {
 	now := s.now()
 	perSite := map[string][]int{} // site -> indexes of online devices
 	for i, u := range list {
-		if u.Online {
+		if u.Online && u.BelongsTo == nil {
 			perSite[u.SiteID] = append(perSite[u.SiteID], i)
 		}
 	}
@@ -400,8 +505,19 @@ func (s *Service) AttachDevice(ctx context.Context, siteID, rawMAC, accountID st
 	if !ok {
 		return store.Account{}, ErrNotFound
 	}
+	// A MAC that is some other open account's ONT is refused first, and in
+	// words that say whether that account lives in another building.
+	var dupErr error
+	s.st.View(func(d *store.Data) {
+		if owner, ok := d.AccountByMAC(mac); ok && owner.ID != accountID {
+			dupErr = duplicateMAC(d, owner, a.ApartmentID)
+		}
+	})
+	if dupErr != nil {
+		return store.Account{}, dupErr
+	}
 	if siteID != "" && a.SiteID != siteID {
-		return store.Account{}, errors.New("that flat is in another building than the device")
+		return store.Account{}, errors.New("that account is served by another router than the device: pick an account of this router")
 	}
 	if err := s.ChangeMAC(ctx, accountID, mac); err != nil {
 		return store.Account{}, err
@@ -412,21 +528,23 @@ func (s *Service) AttachDevice(ctx context.Context, siteID, rawMAC, accountID st
 
 // DeviceAccountInput creates an account from an unregistered device.
 type DeviceAccountInput struct {
-	SiteID, MAC, Flat, Tenant, Phone, PackageID string
+	SiteID, ApartmentID, Unit, MAC, Flat, Tenant, Phone, PackageID string
 }
 
 // CreateFromDevice creates a flat with the device's MAC. A package, when
 // given, is set as the flat's plan (no time is granted: it is paid for as
 // usual); the router gets the lease and queue at once.
 func (s *Service) CreateFromDevice(ctx context.Context, in DeviceAccountInput) (store.Account, error) {
-	a, _, err := s.CreateCustomer(ctx, AddCustomerInput{SiteID: in.SiteID, MAC: in.MAC, Flat: in.Flat, Tenant: in.Tenant, Phone: in.Phone, PackageID: in.PackageID})
+	a, _, err := s.CreateCustomer(ctx, AddCustomerInput{SiteID: in.SiteID, ApartmentID: in.ApartmentID, Unit: in.Unit, MAC: in.MAC, Flat: in.Flat, Tenant: in.Tenant, Phone: in.Phone, PackageID: in.PackageID})
 	return a, err
 }
 
 // AddCustomerInput is the one "add customer" form: the flat, the tenant, the
 // device's MAC, a package and whether to grant its time now.
 type AddCustomerInput struct {
-	SiteID, Flat, Tenant, Phone, MAC, PackageID string
+	// ApartmentID, SiteID (the router: empty = the apartment's only router) and
+	// Unit say where the customer lives. Flat is the older name of Unit.
+	ApartmentID, SiteID, Unit, Flat, Tenant, Phone, MAC, PackageID string
 	// Activate grants the package's time at once (an admin grant, like
 	// ExtendAccount). Without it the package is only set as the flat's plan
 	// and the tenant pays on the payment page: the flat gets its lease and
@@ -448,12 +566,19 @@ func (s *Service) CreateCustomer(ctx context.Context, in AddCustomerInput) (stor
 	}
 	if in.PackageID != "" { // checked first: a bad package must not leave a half-made flat behind
 		ok := false
-		s.st.View(func(d *store.Data) { p, found := d.EffectivePackage(in.SiteID, in.PackageID); ok = found && !p.Deleted })
+		pkgSite := in.SiteID
+		s.st.View(func(d *store.Data) {
+			if ids := d.ApartmentSiteIDs(in.ApartmentID); pkgSite == "" && len(ids) == 1 {
+				pkgSite = ids[0] // the router the account will get
+			}
+			p, found := d.EffectivePackage(pkgSite, in.PackageID)
+			ok = found && !p.Deleted
+		})
 		if !ok {
 			return store.Account{}, AccountRouterState{}, fmt.Errorf("choose a package from the list")
 		}
 	}
-	a, err := s.CreateAccount(AccountInput{SiteID: in.SiteID, Flat: in.Flat, MAC: in.MAC, Tenant: in.Tenant, Phone: in.Phone, Notes: in.Note})
+	a, err := s.CreateAccount(AccountInput{ApartmentID: in.ApartmentID, SiteID: in.SiteID, Unit: in.Unit, Flat: in.Flat, MAC: in.MAC, Tenant: in.Tenant, Phone: in.Phone, Notes: in.Note})
 	if err != nil {
 		return store.Account{}, AccountRouterState{}, err
 	}

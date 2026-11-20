@@ -313,7 +313,6 @@ func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site,
 	if rep, ok := s.svc.Building(st.ID); ok {
 		p.Data["Rep"] = rep
 	}
-	p.Data["Roles"] = []string{store.RoleLandlord, store.RoleCaretaker, store.RoleAgent, store.RoleSecurity, store.RoleOther}
 
 	// header
 	p.Detail = st.Name

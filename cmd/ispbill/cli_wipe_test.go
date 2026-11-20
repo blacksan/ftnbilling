@@ -116,7 +116,7 @@ func wipeScenario(t *testing.T, dir string, env func(string) string, open func()
 	after := st.Snapshot()
 	for name, n := range map[string]int{"sites": len(after.Sites), "packages": len(after.Packages), "accounts": len(after.Accounts), "closed": len(after.ClosedAccounts),
 		"orders": len(after.Orders), "vouchers": len(after.Vouchers), "payments": len(after.Payments), "devices": len(after.Devices), "tasks": len(after.Tasks),
-		"events": len(after.Events), "customers": len(after.Customers), "tenancies": len(after.Tenancies), "contacts": len(after.Contacts),
+		"events": len(after.Events), "customers": len(after.Customers), "tenancies": len(after.Tenancies), "apartments": len(after.Apartments), "apartment links": len(after.ApartmentSites),
 		"equipment": len(after.Equipment), "equipment events": len(after.EquipmentEvents), "notes": len(after.Notes),
 		"sessions": len(after.AdminSessions), "phones": len(after.APIDevices)} {
 		if n != 0 {

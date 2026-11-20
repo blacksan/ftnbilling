@@ -222,12 +222,43 @@ func Validate(d *Data) []string {
 			serials[k] = e.ID
 		}
 	}
-	for _, c := range d.Contacts {
-		switch c.Role {
-		case RoleLandlord, RoleCaretaker, RoleAgent, RoleSecurity, RoleOther:
-		default:
-			add("Contact %q has an unknown role %q.", c.Name, c.Role)
+	names := map[string]string{}
+	for _, a := range d.ApartmentList() {
+		if a.ID == "" || strings.TrimSpace(a.Name) == "" {
+			add("An apartment has no id or no name.")
+			continue
 		}
+		k := apartmentNameKey(a.Name)
+		if o, ok := names[k]; ok {
+			add("Two apartments are called %q (%s and %s).", a.Name, o, a.ID)
+		}
+		names[k] = a.ID
+	}
+	for _, l := range d.ApartmentSites {
+		if _, ok := d.Apartments[l.ApartmentID]; !ok {
+			add("A router link points at an apartment that does not exist (%s).", l.ApartmentID)
+		}
+		if _, ok := d.Sites[l.SiteID]; !ok {
+			add("The apartment %s is linked to a router that does not exist (%s).", d.Apartments[l.ApartmentID].Name, l.SiteID)
+		}
+	}
+	unitSeen := map[string]string{}
+	for _, a := range all {
+		if a.ApartmentID != "" {
+			if _, ok := d.Apartments[a.ApartmentID]; !ok {
+				add("Flat %q (code %s) belongs to an apartment that does not exist (%q).", a.Flat, a.Code, a.ApartmentID)
+			}
+		}
+	}
+	for _, a := range all {
+		if !a.ClosedAt.IsZero() || a.ApartmentID == "" || a.Unit == "" {
+			continue
+		}
+		k := a.ApartmentID + "|" + UnitKey(a.Unit)
+		if o, ok := unitSeen[k]; ok {
+			add("The unit %q is on more than one open account of %s (%s and %s).", a.Unit, d.Apartments[a.ApartmentID].Name, o, a.Code)
+		}
+		unitSeen[k] = a.Code
 	}
 	users := map[string]string{}
 	for _, u := range d.AdminUsers {

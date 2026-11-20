@@ -120,6 +120,33 @@ type AccountRouterState struct {
 	LastError         string    `json:"last_error"`
 }
 
+// provisionBlock says, in words, why an account must not be provisioned on its
+// router: it has no apartment, its apartment is gone, or its router does not
+// serve its apartment. "" means nothing stands in the way. Call it inside View.
+func provisionBlock(d *store.Data, a store.Account) string {
+	if a.ApartmentID == "" {
+		return "no apartment: choose the building this customer lives in, then it is provisioned"
+	}
+	apt, ok := d.Apartments[a.ApartmentID]
+	if !ok {
+		return "its apartment no longer exists: choose the building this customer lives in"
+	}
+	if !d.ApartmentServedBy(a.ApartmentID, a.SiteID) {
+		return fmt.Sprintf("not provisioned: router %s does not serve %s. Link the router to the apartment, or move the customer to a router of %s", d.Sites[a.SiteID].Name, apt.Name, apt.Name)
+	}
+	return ""
+}
+
+// AccountProblem is provisionBlock for the pages and the API ("" = none).
+func (s *Service) AccountProblem(accountID string) (why string) {
+	s.st.View(func(d *store.Data) {
+		if a, ok := d.Accounts[accountID]; ok {
+			why = provisionBlock(d, a)
+		}
+	})
+	return
+}
+
 // ---- status -------------------------------------------------------------
 
 // provState is what the last reconcile pass of a building found.
@@ -287,6 +314,7 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	}
 	var wants []wantAcct
 	var skipped []string
+	blocked := map[string]string{}       // codes whose router does not serve their apartment, with the words for it
 	flagged := map[string]bool{}         // codes we must not touch
 	flaggedEntitled := map[string]bool{} // of those, the flats that have paid time (their walled rows must go)
 	s.st.View(func(d *store.Data) {
@@ -295,6 +323,15 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 				continue
 			}
 			switch {
+			case provisionBlock(d, a) != "":
+				// The one rule of apartments: an account is only ever written on its own
+				// router, and that router must serve the account's apartment. Nothing is
+				// written for it, and its existing rows are left as they are.
+				why := provisionBlock(d, a)
+				blocked[a.Code] = why
+				flagged[a.Code] = true
+				flaggedEntitled[a.Code] = AccountState(a, now) == StateActive
+				skipped = append(skipped, fmt.Sprintf("%s (%s): %s", a.Flat, a.Code, why))
 			case a.MACConflict:
 				flagged[a.Code] = true
 				flaggedEntitled[a.Code] = AccountState(a, now) == StateActive
@@ -353,7 +390,7 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	if ftn != nil {
 		ifc = ftn["interface"]
 	}
-	pd := planOps(site, wants, flagged, leases, queues, suspended, snap, now, planExtra{unreg: unreg, arp: arp, ifc: ifc, flaggedEntitled: flaggedEntitled})
+	pd := planOps(site, wants, flagged, leases, queues, suspended, snap, now, planExtra{unreg: unreg, arp: arp, ifc: ifc, flaggedEntitled: flaggedEntitled, blocked: blockedSet(blocked)})
 	ps.mu.Lock()
 	ps.foreign = map[string]bool{}
 	for _, ip := range pd.foreignIPs {
@@ -365,6 +402,9 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 		}
 	}
 	ps.mu.Unlock()
+	for code, why := range blocked {
+		snap[code] = acctSnap{leaseStatus: "none", clash: true, err: why}
+	}
 	run.Conflicts = append(pd.conflicts, skipped...)
 	run.Ops = len(pd.ops)
 
@@ -453,6 +493,10 @@ type planExtra struct {
 	unreg, arp      []routeros.Row
 	ifc             string          // the customer interface (ftn-dhcp's)
 	flaggedEntitled map[string]bool // flagged flats that have paid time
+	// blocked: accounts that must not be provisioned on this router (provisionBlock). They stay
+	// flagged, and the lease, queue and ARP row we wrote for them earlier are removed, so a
+	// blocked account never keeps its last router state.
+	blocked map[string]bool
 }
 
 // opSet collects what a pass wants to do.
@@ -597,7 +641,7 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 	}
 	// leases of flats that no longer exist here
 	for code, rows := range ourLeases {
-		if byCode[code] != nil || flagged[code] {
+		if byCode[code] != nil || (flagged[code] && !x.blocked[code]) {
 			continue
 		}
 		for _, r := range rows {
@@ -643,7 +687,7 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 		snap[a.Code] = sn
 	}
 	for code, rows := range ourQueues {
-		if byCode[code] != nil || flagged[code] {
+		if byCode[code] != nil || (flagged[code] && !x.blocked[code]) {
 			continue
 		}
 		for _, r := range rows {
@@ -731,7 +775,7 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 			}
 		}
 		for code, rows := range ourARP {
-			if byCode[code] != nil || flagged[code] {
+			if byCode[code] != nil || (flagged[code] && !x.blocked[code]) {
 				continue
 			}
 			for _, r := range rows {
@@ -768,4 +812,12 @@ func sameProp(key, cur, want string) bool {
 // RouterRows reads rows of a building's router (read only; the setup tests and the bench helper use it).
 func (s *Service) RouterRows(ctx context.Context, siteID, path string, query map[string]string) ([]routeros.Row, error) {
 	return s.router(siteID).Rows(ctx, path, query)
+}
+
+func blockedSet(m map[string]string) map[string]bool {
+	out := make(map[string]bool, len(m))
+	for code := range m {
+		out[code] = true
+	}
+	return out
 }

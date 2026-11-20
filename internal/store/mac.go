@@ -76,3 +76,13 @@ var (
 	// ErrBadAccessMode: a building's access mode is not ipoe.
 	ErrBadAccessMode = errors.New("the building access mode must be ipoe")
 )
+
+// Apartment rules (format 8).
+var (
+	// ErrDuplicateUnit: two open accounts of one apartment would have the same unit.
+	ErrDuplicateUnit = errors.New("another open account in this apartment already has that unit")
+	// ErrDuplicateApartment: two apartments would have the same name (any letter case).
+	ErrDuplicateApartment = errors.New("an apartment with that name already exists")
+	// ErrBadApartmentLink: an apartment router link points at an apartment or router that does not exist.
+	ErrBadApartmentLink = errors.New("an apartment link points at an apartment or router that does not exist")
+)

@@ -2,6 +2,8 @@
 
 **Version 4** (2026-11-18, see addendum L): adds the `/routers` aliases, `router_id`/`router_name` and the setup, live and overview calls. Versions 1 to 3 are unchanged.
 
+**Apartments** (see `docs/api/v6-apartments.md`): an apartment is a building that one or more routers serve (many-to-many), not a router. Accounts carry `apartment{id,name}` and `unit` (`flat` mirrors `unit`); `POST /accounts` requires `apartment_id`; a MAC of an open account seen in another apartment answers 409 `mac_other_building`. Caretaker and landlord contacts are fields of the apartment; the old per-router contacts endpoints answer 410 gone.
+
 Contract between the server (`internal/web/api*.go`, W1) and the Android app (W4). Source: `docs/rebuild-plan.md` section B, copied verbatim below, plus the section H addendum. Any later change needs a version-bump note in the Changes section at the end.
 
 ## API contract: `https://isp.ftw.co.ke/api/v1`

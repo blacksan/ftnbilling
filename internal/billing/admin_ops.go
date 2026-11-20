@@ -175,7 +175,7 @@ func nameOr(s, def string) string {
 	return s
 }
 
-// MoveAccount moves a flat to another building: its router user is removed
+// MoveAccount moves a flat to another router of its apartment: its router user is removed
 // from the old building's router and created on the new one's. The account
 // keeps its code, plan and expiry. It is refused when the new building already
 // has that MAC or flat label. Open portal orders are failed. Past payments stay
@@ -194,8 +194,8 @@ func (s *Service) MoveAccount(ctx context.Context, id, toSiteID string) error {
 		if !ok || to.Removed {
 			return ErrNoSite
 		}
-		if flatTaken(d, toSiteID, a.Flat, id) {
-			return fmt.Errorf("%s already has an account for %q. Rename the flat first", to.Name, a.Flat)
+		if a.ApartmentID != "" && !d.ApartmentServedBy(a.ApartmentID, toSiteID) {
+			return fmt.Errorf("%w (%s is not linked to %s). To move the customer to another apartment use Move customer here or the apartment form", ErrRouterNotLinked, to.Name, d.Apartments[a.ApartmentID].Name)
 		}
 		from = a.SiteID
 		// Clean the old router, then the new one gets the user via its own task.

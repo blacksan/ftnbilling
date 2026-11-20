@@ -27,13 +27,14 @@ class AccountsRepository(private val api: ApiClient) {
         api.get<ItemList<ServicePackage>>("packages", query = mapOf("router" to siteId)).items
 
     /**
-     * Creates a customer account and, when [activate] is set, applies [packageId] straight away
+     * Creates a customer account in an apartment (API v6: `apartment_id` and `unit` are required) and, when [activate] is set, applies [packageId] straight away
      * (API v4 `POST /accounts`). The server tries the router once before answering, so the
      * returned account's `router` says whether it is already provisioned or queued.
      */
     suspend fun create(
-        routerId: String,
-        flat: String,
+        apartmentId: String,
+        routerId: String?,
+        unit: String,
         tenant: String?,
         phone: String?,
         mac: String,
@@ -43,8 +44,10 @@ class AccountsRepository(private val api: ApiClient) {
     ): Account = api.post(
         "accounts",
         body = buildJsonObject {
-            put("router_id", routerId)
-            put("flat", flat.trim())
+            put("apartment_id", apartmentId)
+            // Empty router: the server picks the apartment's only router.
+            if (!routerId.isNullOrBlank()) put("router_id", routerId)
+            put("unit", unit.trim())
             putIfNotBlank("tenant", tenant?.trim())
             putIfNotBlank("phone", phone?.trim())
             put("mac", mac)

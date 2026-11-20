@@ -13,7 +13,7 @@ import (
 // Deleted: routers and everything tied to them (join tokens, tunnel keys and
 // addresses, join reports and the other "site.<id>.*" settings), packages,
 // customers, flats (open and closed), tenancies, equipment and its history,
-// router contacts, orders, vouchers, payments (M-Pesa included), devices and
+// apartments (with their router links and contacts), orders, vouchers, payments (M-Pesa included), devices and
 // leases, tasks, the event/audit log, CRM notes, admin browser sessions and
 // phone sessions (everybody signs in again).
 //
@@ -31,7 +31,7 @@ const (
 	WipeTenancies       = "tenancies"
 	WipeEquipment       = "equipment"
 	WipeEquipmentEvents = "equipment history"
-	WipeContacts        = "router contacts"
+	WipeApartments      = "apartments and their router links"
 	WipeOrders          = "orders"
 	WipeVouchers        = "vouchers"
 	WipePayments        = "payments"
@@ -82,7 +82,7 @@ func (d *Data) WipeReport() WipeReport {
 		Delete: []WipeItem{
 			{WipeRouters, len(d.Sites)}, {WipePackages, len(d.Packages)}, {WipeCustomers, len(d.Customers)},
 			{WipeAccounts, len(d.Accounts) + len(d.ClosedAccounts)}, {WipeTenancies, len(d.Tenancies)},
-			{WipeEquipment, len(d.Equipment)}, {WipeEquipmentEvents, len(d.EquipmentEvents)}, {WipeContacts, len(d.Contacts)},
+			{WipeEquipment, len(d.Equipment)}, {WipeEquipmentEvents, len(d.EquipmentEvents)}, {WipeApartments, len(d.Apartments) + len(d.ApartmentSites)},
 			{WipeOrders, len(d.Orders)}, {WipeVouchers, len(d.Vouchers)}, {WipePayments, len(d.Payments)},
 			{WipeDevices, len(d.Devices)}, {WipeTasks, len(d.Tasks)}, {WipeEvents, len(d.Events)}, {WipeNotes, len(d.Notes)},
 			{WipeRouterSettings, rs}, {WipeSessions, len(d.AdminSessions)}, {WipePhones, len(d.APIDevices)},

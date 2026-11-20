@@ -31,25 +31,75 @@ var (
 // ErrDuplicateMAC (and store.ErrDuplicateMAC) with errors.Is; use errors.As to
 // get the owner, e.g. for the API's mac_in_use details. A MAC is unique across
 // all buildings among open accounts.
+//
+// OtherBuilding is true when the owner lives in a different apartment than the
+// account the MAC was meant for: a MAC tied to a customer in one building must
+// never be provisioned in another, so the API answers mac_other_building (it
+// still matches ErrDuplicateMAC).
 type DuplicateMACError struct {
-	AccountID string
-	Code      string
-	Flat      string
-	SiteID    string
-	SiteName  string
+	AccountID     string
+	Code          string
+	Flat          string
+	SiteID        string
+	SiteName      string
+	CustomerName  string
+	ApartmentID   string
+	ApartmentName string
+	Unit          string
+	OtherBuilding bool
 }
 
 func (e *DuplicateMACError) Error() string {
-	return fmt.Sprintf("%s (%s in %s, code %s)", ErrDuplicateMAC.Error(), e.Flat, e.SiteName, e.Code)
+	where := e.SiteName
+	if e.ApartmentName != "" {
+		where = e.ApartmentName
+	}
+	if e.OtherBuilding {
+		return fmt.Sprintf("that MAC address already belongs to %s in another building (%s, unit %s, code %s): move the customer here first, or use another device", e.who(), where, e.Flat, e.Code)
+	}
+	return fmt.Sprintf("%s (%s in %s, code %s)", ErrDuplicateMAC.Error(), e.Flat, where, e.Code)
+}
+
+// CustomerOrCustomer is the owner's name, or "a customer" when there is none.
+func (e *DuplicateMACError) CustomerOrCustomer() string { return e.who() }
+
+func (e *DuplicateMACError) who() string {
+	if e.CustomerName != "" {
+		return e.CustomerName
+	}
+	return "a customer"
 }
 
 // Unwrap makes errors.Is(err, ErrDuplicateMAC) true.
 func (e *DuplicateMACError) Unwrap() error { return ErrDuplicateMAC }
 
 // duplicateMAC builds the error for the account that owns the MAC. Call it
-// inside View/Update with d.
-func duplicateMAC(d *store.Data, owner store.Account) error {
-	return &DuplicateMACError{AccountID: owner.ID, Code: owner.Code, Flat: owner.Flat, SiteID: owner.SiteID, SiteName: d.Sites[owner.SiteID].Name}
+// inside View/Update with d. forApartment is the apartment of the account the
+// MAC was meant for ("" = unknown): another apartment means another building.
+func duplicateMAC(d *store.Data, owner store.Account, forApartment string) error {
+	e := &DuplicateMACError{AccountID: owner.ID, Code: owner.Code, Flat: owner.Unit, SiteID: owner.SiteID, SiteName: d.Sites[owner.SiteID].Name,
+		CustomerName: accountCustomerName(d, owner), ApartmentID: owner.ApartmentID, ApartmentName: d.Apartments[owner.ApartmentID].Name, Unit: owner.Unit}
+	if e.Flat == "" {
+		e.Flat = owner.Flat
+	}
+	e.OtherBuilding = forApartment != "" && owner.ApartmentID != "" && owner.ApartmentID != forApartment
+	return e
+}
+
+// accountCustomerName is the tenant's name for display.
+func accountCustomerName(d *store.Data, a store.Account) string {
+	if c, ok := d.Customers[a.CustomerID]; ok && c.Name != "" {
+		return c.Name
+	}
+	return a.Tenant
+}
+
+// ErrMACOtherBuilding matches (errors.Is) a DuplicateMACError whose owner is in another apartment.
+var ErrMACOtherBuilding = errors.New("that MAC address belongs to a customer in another building")
+
+// Is lets errors.Is(err, ErrMACOtherBuilding) tell the cross-building case.
+func (e *DuplicateMACError) Is(target error) bool {
+	return target == ErrMACOtherBuilding && e.OtherBuilding
 }
 
 // Account states shown to people.
@@ -139,7 +189,14 @@ func AccountState(a store.Account, now time.Time) string {
 
 // AccountInput is what the admin types when creating or editing a flat.
 type AccountInput struct {
-	SiteID                          string // required: the building
+	// ApartmentID is the building the customer lives in (the API and the web
+	// form always send it). SiteID is the router; empty = the apartment's only
+	// router. A call with only SiteID (older callers) uses the router's only
+	// apartment, or makes one named after the router.
+	ApartmentID string
+	SiteID      string
+	// Unit is the flat or door inside the apartment; Flat is its older name.
+	Unit                            string
 	Flat, MAC, Tenant, Phone, Notes string
 	// WhatsApp is the tenant's WhatsApp number; WASamePhone copies Phone instead.
 	WhatsApp    string
@@ -166,16 +223,6 @@ func (s *Service) uniqueCode(d *store.Data) string {
 func closedCodeTaken(d *store.Data, code string) bool {
 	for _, a := range d.ClosedAccounts {
 		if a.Code == code {
-			return true
-		}
-	}
-	return false
-}
-
-// flatTaken: flat labels only need to be unique inside one building.
-func flatTaken(d *store.Data, siteID, flat, exceptID string) bool {
-	for _, a := range d.Accounts {
-		if a.SiteID == siteID && a.ID != exceptID && strings.EqualFold(a.Flat, flat) {
 			return true
 		}
 	}
@@ -221,11 +268,15 @@ func (s *Service) SetWhatsApp(id, raw string, samePhone, optOut bool) error {
 	})
 }
 
-// CreateAccount makes a new flat account (admin only). The MAC must be unique.
+// CreateAccount makes a new account (admin only). The MAC must be unique, the
+// unit must be free in the apartment, and the router must serve the apartment.
 func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
-	flat := cleanText(in.Flat, 40)
-	if flat == "" {
-		return store.Account{}, errors.New("flat label is required, e.g. Flat 3B")
+	unit := cleanText(in.Unit, 40)
+	if unit == "" {
+		unit = cleanText(in.Flat, 40)
+	}
+	if unit == "" {
+		return store.Account{}, errors.New("the unit (flat or door number) is required, e.g. B4")
 	}
 	mac, err := NormalizeMAC(in.MAC)
 	if err != nil {
@@ -241,26 +292,27 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 	}
 	var a store.Account
 	err = s.st.Update(func(d *store.Data) error {
-		if st, ok := d.Sites[in.SiteID]; !ok || st.Removed {
-			return ErrNoSite
+		aptID, siteID, err := s.resolveLocked(d, in.ApartmentID, in.SiteID)
+		if err != nil {
+			return err
 		}
 		if other, ok := d.AccountByMAC(mac); ok {
-			return duplicateMAC(d, other)
+			return duplicateMAC(d, other, aptID)
 		}
-		if flatTaken(d, in.SiteID, flat, "") {
-			return fmt.Errorf("an account for %q already exists in this building", flat)
+		if err := unitTakenLocked(d, aptID, unit, ""); err != nil {
+			return err
 		}
 		a = store.Account{
-			ID: RandomID(), SiteID: in.SiteID, Code: s.uniqueCode(d), Flat: flat, MAC: mac,
+			ID: RandomID(), SiteID: siteID, ApartmentID: aptID, Code: s.uniqueCode(d), Flat: unit, Unit: unit, MAC: mac,
 			Tenant: cleanText(in.Tenant, 60), Phone: phone, Notes: cleanText(in.Notes, 300), WhatsApp: wa,
 			CreatedAt: s.now(),
 		}
 		// A flat gets its fixed address now, and the router a task.
-		pl, err := s.PlanFor(d.Sites[in.SiteID])
+		pl, err := s.PlanFor(d.Sites[siteID])
 		if err != nil {
 			return err
 		}
-		if a.IP, err = FreeIPLocked(d, in.SiteID, pl, s.foreignIPs(in.SiteID)); err != nil {
+		if a.IP, err = FreeIPLocked(d, siteID, pl, s.foreignIPs(siteID)); err != nil {
 			return err
 		}
 		d.Accounts[a.ID] = a
@@ -269,17 +321,18 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 		return nil
 	})
 	if err == nil {
-		s.log.Info("account created", "site", a.SiteID, "code", a.Code, "flat", a.Flat, "mac", a.MAC)
+		s.log.Info("account created", "site", a.SiteID, "apartment", a.ApartmentID, "code", a.Code, "unit", a.Unit, "mac", a.MAC)
 	}
 	return a, err
 }
 
-// UpdateAccount edits the label, tenant, phone and notes. Code and MAC are not
-// touched (use ChangeMAC for an ONT swap).
+// UpdateAccount edits the unit, tenant, phone and notes. Code and MAC are not
+// touched (use ChangeMAC for an ONT swap); the apartment and router change
+// with MoveToApartment.
 func (s *Service) UpdateAccount(id, flat, tenant, phone, notes string) error {
-	flat = cleanText(flat, 40)
-	if flat == "" {
-		return errors.New("flat label is required")
+	unit := cleanText(flat, 40)
+	if unit == "" {
+		return errors.New("the unit (flat or door number) is required")
 	}
 	ph, err := normPhone(phone)
 	if err != nil {
@@ -290,10 +343,12 @@ func (s *Service) UpdateAccount(id, flat, tenant, phone, notes string) error {
 		if !ok {
 			return ErrNotFound
 		}
-		if flatTaken(d, a.SiteID, flat, id) {
-			return fmt.Errorf("an account for %q already exists in this building", flat)
+		if a.ApartmentID != "" {
+			if err := unitTakenLocked(d, a.ApartmentID, unit, id); err != nil {
+				return err
+			}
 		}
-		a.Flat, a.Tenant, a.Phone, a.Notes = flat, cleanText(tenant, 60), ph, cleanText(notes, 300)
+		a.Flat, a.Unit, a.Tenant, a.Phone, a.Notes = unit, unit, cleanText(tenant, 60), ph, cleanText(notes, 300)
 		d.Accounts[id] = a
 		return nil
 	})
@@ -312,7 +367,7 @@ func (s *Service) ChangeMAC(ctx context.Context, id, rawMAC string) error {
 			return ErrNotFound
 		}
 		if other, ok := d.AccountByMAC(mac); ok && other.ID != id {
-			return duplicateMAC(d, other)
+			return duplicateMAC(d, other, a.ApartmentID)
 		}
 		if strings.EqualFold(a.MAC, mac) && !a.MACConflict {
 			return store.ErrNoChange
@@ -378,14 +433,15 @@ func (s *Service) AccountByMAC(mac string) (a store.Account, ok bool) {
 
 // ---- unregistered devices ----------------------------------------------
 
-// NoteDevice records a MAC that has no account. It is a no-op for known MACs.
+// NoteDevice records a MAC that has no account on this router. It is a no-op
+// for the ONTs of this router's own customers.
 func (s *Service) NoteDevice(siteID, mac, ip, source string) {
 	if mac == "" || siteID == "" {
 		return
 	}
 	_ = s.st.Update(func(d *store.Data) error {
-		if len(d.OpenAccountsByMAC(mac)) > 0 {
-			return store.ErrNoChange // already a customer (here or in another building)
+		if own := d.OpenAccountsByMAC(mac); len(own) > 0 && own[0].SiteID == siteID {
+			return store.ErrNoChange // already a customer here; on another router it is listed as "belongs to"
 		}
 		if st, ok := d.Sites[siteID]; !ok || st.Removed {
 			return store.ErrNoChange

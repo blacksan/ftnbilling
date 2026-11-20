@@ -407,7 +407,31 @@ type macOwnerDetails struct {
 // the (normalised) MAC of the request, for mac_in_use.
 func (s *Server) billingErr(w http.ResponseWriter, err error, mac string) {
 	var dup *billing.DuplicateMACError
+	var blocked *billing.RouterBlockedError
+	var fe *billing.FieldError
 	switch {
+	case errors.As(err, &dup) && dup.OtherBuilding:
+		apiMACOtherBuilding(w, dup, mac)
+	case errors.As(err, &fe):
+		validationErr(w, map[string]string{fe.Field: fe.Msg})
+	case errors.Is(err, store.ErrDuplicateUnit):
+		apiErr(w, http.StatusConflict, codeUnitInUse, err.Error(), nil)
+	case errors.Is(err, billing.ErrApartmentExists), errors.Is(err, store.ErrDuplicateApartment):
+		apiErr(w, http.StatusConflict, codeApartmentNameUsed, "An apartment with that name already exists.", nil)
+	case errors.As(err, &blocked):
+		apiErr(w, http.StatusConflict, codeRouterServes, err.Error(), map[string]any{"router": blocked.Router, "apartment": blocked.Apartment, "units": blocked.Units})
+	case errors.Is(err, billing.ErrDeviceChanged):
+		apiErr(w, http.StatusConflict, "bad_state", err.Error(), nil)
+	case errors.Is(err, billing.ErrNoApartment):
+		validationErr(w, map[string]string{"apartment_id": "choose an apartment"})
+	case errors.Is(err, billing.ErrChooseRouter):
+		validationErr(w, map[string]string{"site_id": "choose a router: this apartment is served by more than one"})
+	case errors.Is(err, billing.ErrApartmentNoRoute):
+		validationErr(w, map[string]string{"apartment_id": "this apartment has no router yet: link a router to it first"})
+	case errors.Is(err, billing.ErrRouterNotLinked):
+		validationErr(w, map[string]string{"site_id": "that router does not serve this apartment"})
+	case strings.Contains(err.Error(), "still has") && strings.Contains(err.Error(), "account(s)"):
+		apiErr(w, http.StatusConflict, codeApartmentInUse, err.Error(), nil)
 	case errors.As(err, &dup):
 		apiErr(w, http.StatusConflict, codeMACInUse, "That MAC address is already used by flat "+dup.Flat+" ("+dup.Code+") in "+dup.SiteName+".",
 			map[string]any{"mac": mac, "account": macOwnerDetails{dup.AccountID, dup.Code, dup.Flat, dup.SiteID, dup.SiteName}})
@@ -437,8 +461,8 @@ func (s *Server) billingErr(w http.ResponseWriter, err error, mac string) {
 		apiErr(w, http.StatusConflict, codeFlatInUse, err.Error(), nil)
 	case strings.Contains(err.Error(), "choose a package"):
 		validationErr(w, map[string]string{"package_id": "choose a package"})
-	case strings.Contains(err.Error(), "flat label is required"):
-		validationErr(w, map[string]string{"flat": "a flat label is required"})
+	case strings.Contains(err.Error(), "flat label is required"), strings.Contains(err.Error(), "the unit (flat or door number) is required"):
+		validationErr(w, map[string]string{"unit": "a unit is required, e.g. B4"})
 	default:
 		s.log.Warn("api: unexpected error", "err", err)
 		apiErr(w, http.StatusBadRequest, codeBadRequest, err.Error(), nil)
@@ -511,6 +535,21 @@ func (s *Server) apiRoutes(mux *http.ServeMux) {
 	h("POST /api/v1/unregistered/attach", operator, s.apiUnregAttach)
 	h("POST /api/v1/unregistered/create", operator, s.apiUnregCreate)
 	h("POST /api/v1/unregistered/dismiss", operator, s.apiUnregDismiss)
+	h("POST /api/v1/unregistered/move", operator, s.apiUnregMove)
+
+	h("GET /api/v1/apartments", viewer, s.apiApartments)
+	h("GET /api/v1/apartments/{id}", viewer, s.apiApartment)
+	h("POST /api/v1/apartments", operator, s.apiApartmentCreate)
+	h("PATCH /api/v1/apartments/{id}", operator, s.apiApartmentPatch)
+	h("DELETE /api/v1/apartments/{id}", owner, s.apiApartmentDelete)
+	h("POST /api/v1/apartments/{id}/routers", operator, s.apiApartmentLink)
+	h("DELETE /api/v1/apartments/{id}/routers/{site_id}", operator, s.apiApartmentUnlink)
+	h("POST /api/v1/accounts/{id}/move", operator, s.apiAccountMove)
+	// The router contacts were replaced by the apartment's caretaker and landlord.
+	h("GET /api/v1/sites/{id}/contacts", viewer, apiGone)
+	h("POST /api/v1/sites/{id}/contacts", operator, apiGone)
+	h("PATCH /api/v1/sites/{id}/contacts/{cid}", operator, apiGone)
+	h("DELETE /api/v1/sites/{id}/contacts/{cid}", operator, apiGone)
 
 	// One hook per later stream; each adds its routes in its own file.
 	s.setupRoutes(h)

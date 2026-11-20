@@ -52,7 +52,7 @@ func TestAPIRouterAliases(t *testing.T) {
 	}
 
 	// router_id in a body means site_id.
-	x := r.call(r.oper.Access, "POST", "/accounts", map[string]any{"router_id": r.A.ID, "flat": "RA-2", "mac": "aa-bb-cc-00-90-03"}, nil)
+	x := r.call(r.oper.Access, "POST", "/accounts", map[string]any{"apartment_id": aptOf(t, r.st, r.A.ID), "router_id": r.A.ID, "flat": "RA-2", "mac": "aa-bb-cc-00-90-03"}, nil)
 	if x.Status != 201 {
 		t.Fatalf("create with router_id: %d %s", x.Status, x.Raw)
 	}

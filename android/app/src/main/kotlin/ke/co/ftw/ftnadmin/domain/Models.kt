@@ -61,6 +61,11 @@ data class Account(
     @SerialName("router_id") val routerId: String = "",
     @SerialName("router_name") val routerName: String = "",
     val flat: String = "",
+    /** The apartment (building) and the unit in it; null for an account that has no apartment yet. */
+    val apartment: AptRef? = null,
+    val unit: String = "",
+    /** Why the server is not provisioning the account, in words; empty when fine. */
+    val problem: String = "",
     val floor: String = "",
     val mac: String = "",
     @SerialName("mac_conflict") val macConflict: Boolean = false,
@@ -83,7 +88,8 @@ data class Account(
     /** v4 servers send router_id; older ones only site_id. */
     val routerKey: String get() = routerId.ifBlank { siteId }
     val routerLabel: String get() = routerName.ifBlank { siteName }
-    val title: String get() = listOf(flat, tenant).filter { it.isNotBlank() }.joinToString(" - ").ifBlank { code }
+    val unitLabel: String get() = unit.ifBlank { flat }
+    val title: String get() = listOf(unitLabel, tenant).filter { it.isNotBlank() }.joinToString(" - ").ifBlank { code }
 }
 
 @Serializable
@@ -349,6 +355,8 @@ data class NewDevice(
     @SerialName("suggested_account") val suggestedAccount: SuggestedAccount? = null,
     /** Name of the router entry holding this MAC when the server has no account for it. */
     @SerialName("router_user") val routerUser: String = "",
+    /** Set when the MAC belongs to a customer of another apartment: not provisioned here. */
+    @SerialName("belongs_to") val belongsTo: BelongsTo? = null,
 ) {
     val routerKey: String get() = routerId.ifBlank { siteId }
     val routerLabel: String get() = routerName.ifBlank { siteName }

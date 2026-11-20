@@ -29,14 +29,23 @@ class NewDevicesRepository(private val api: ApiClient) {
         },
     )
 
-    suspend fun create(siteId: String, mac: String, flat: String, tenant: String?, phone: String?, packageId: String?): Account =
+    suspend fun create(
+        siteId: String,
+        apartmentId: String,
+        mac: String,
+        unit: String,
+        tenant: String?,
+        phone: String?,
+        packageId: String?,
+    ): Account =
         api.post(
             "unregistered", "create",
             body = buildJsonObject {
                 put("site_id", siteId)
-            put("router_id", siteId)
+                put("router_id", siteId)
+                put("apartment_id", apartmentId)
                 put("mac", mac)
-                put("flat", flat)
+                put("unit", unit)
                 putIfNotBlank("tenant", tenant)
                 putIfNotBlank("phone", phone)
                 putIfNotBlank("package_id", packageId)
@@ -49,6 +58,20 @@ class NewDevicesRepository(private val api: ApiClient) {
             put("site_id", siteId)
             put("router_id", siteId)
             put("mac", mac)
+        },
+    )
+
+    /**
+     * "Move customer here": the MAC belongs to a customer of another apartment. The customer follows the device to the
+     * router that sees it (and to [apartmentId] when that router serves several; empty keeps the only choice).
+     */
+    suspend fun moveCustomerHere(siteId: String, mac: String, apartmentId: String?): Account = api.post(
+        "unregistered", "move",
+        body = buildJsonObject {
+            put("site_id", siteId)
+            put("router_id", siteId)
+            put("mac", mac)
+            putIfNotBlank("apartment_id", apartmentId)
         },
     )
 }

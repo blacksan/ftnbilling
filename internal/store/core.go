@@ -122,6 +122,9 @@ func (s *Store) Update(fn func(d *Data) error) error {
 		}
 		return nil
 	}
+	if !panicked && ferr == nil {
+		normalizeUnits(&s.data)
+	}
 	cs := diffData(&s.data, &s.shadow, s.now())
 	if panicked {
 		rollbackData(&s.data, &s.shadow, cs)
@@ -134,7 +137,7 @@ func (s *Store) Update(fn func(d *Data) error) error {
 	if cs.Empty() {
 		return nil
 	}
-	if err := firstErr(checkAccountInvariants(&s.data, cs), checkOtherInvariants(&s.data, cs)); err != nil {
+	if err := firstErr(checkAccountInvariants(&s.data, cs), checkOtherInvariants(&s.data, cs), checkApartmentInvariants(&s.data, cs)); err != nil {
 		rollbackData(&s.data, &s.shadow, cs)
 		return err
 	}
@@ -148,7 +151,7 @@ func (s *Store) Update(fn func(d *Data) error) error {
 			// checks did not catch (it is the final word). Not an outage:
 			// never counts towards degrading, however often it happens.
 			return fmt.Errorf("%w: %w", ErrPersist, err)
-		case errors.Is(err, ErrDuplicateMAC), errors.Is(err, ErrDuplicateIP):
+		case errors.Is(err, ErrDuplicateMAC), errors.Is(err, ErrDuplicateIP), errors.Is(err, ErrDuplicateUnit), errors.Is(err, ErrDuplicateApartment):
 			return err
 		case errors.Is(err, ErrAmbiguous):
 			s.reloadLocked()

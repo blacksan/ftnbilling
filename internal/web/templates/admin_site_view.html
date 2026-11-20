@@ -110,10 +110,7 @@
 {{range .Router}}<tr><td>Router</td><td><a href="/admin/equipment/view?id={{.ID}}">{{if .Serial}}{{.Serial}}{{else}}{{.Model}}{{end}}</a> <span class="muted">{{.Model}} {{.MAC}}</span></td></tr>{{end}}
 {{range .OLT}}<tr><td>OLT</td><td><a href="/admin/equipment/view?id={{.ID}}">{{if .Serial}}{{.Serial}}{{else}}{{.Model}}{{end}}</a> <span class="muted">{{.Model}} {{.MAC}}</span></td></tr>{{end}}
 {{if not (or .Router .OLT)}}<tr><td class="muted">None recorded. <a href="/admin/equipment">Add the router and OLT</a>.</td></tr>{{end}}</table></section>
-<section class="panel"><h2>Contacts</h2><table>{{range .Contacts}}<tr><td><b>{{.Role}}</b></td><td>{{.Name}}</td><td>{{.Phone}}{{if .Email}} <span class="muted">{{.Email}}</span>{{end}}</td>
-<td><form method="post" action="/admin/routers/contacts/delete" class="i"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$s.ID}}"><input type="hidden" name="cid" value="{{.ID}}"><button class="ghost sm">Remove</button></form></td></tr>{{else}}<tr><td class="muted">No contacts yet.</td></tr>{{end}}</table>
-<form method="post" action="/admin/routers/contacts/save" class="row" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$s.ID}}">
-<label class="field">Role<select name="role">{{range $d.Data.Roles}}<option>{{.}}</option>{{end}}</select></label><label class="field">Name<input name="name" required></label><label class="field">Phone<input name="phone"></label><button>Add contact</button></form></section>{{end}}
+<section class="panel"><h2>Apartments served</h2><table>{{range .Apartments}}<tr><td><b><a href="/admin/apartments/view?id={{.ID}}">{{.Name}}</a></b></td><td class="muted">{{.Address}}</td></tr>{{else}}<tr><td class="muted">No apartments linked yet. <a href="/admin/apartments">Link this router to an apartment</a>.</td></tr>{{end}}</table></section>{{end}}
 </div>
 
 {{else}}

@@ -67,7 +67,7 @@ fun AddCustomerScreen(routerId: String?, mac: String?, onBack: () -> Unit, onOpe
         key = "add-customer-${routerId.orEmpty()}-${mac.orEmpty()}",
         factory = vmFactory {
             AddCustomerViewModel(
-                container.accounts, container.routerLive, container.sites,
+                container.accounts, container.routerLive, container.sites, container.apartments,
                 initialRouterId = routerId ?: container.routerContext.selection.value,
                 initialMac = mac,
             )
@@ -127,11 +127,6 @@ private fun StepCard(number: Int, title: String, content: @Composable () -> Unit
 @Composable
 private fun Form(ui: AddCustomerUiState, vm: AddCustomerViewModel) {
     StepCard(1, "Customer") {
-        OutlinedTextField(
-            ui.flat, vm::onFlat, label = { Text("Flat or label") }, singleLine = true,
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
-            modifier = Modifier.fillMaxWidth(),
-        )
         OutlinedTextField(ui.tenant, vm::onTenant, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(
             ui.phone, vm::onPhone, label = { Text("Phone") }, singleLine = true,
@@ -139,9 +134,33 @@ private fun Form(ui: AddCustomerUiState, vm: AddCustomerViewModel) {
             modifier = Modifier.fillMaxWidth(),
         )
     }
-    StepCard(2, "Package") {
-        when (val p = ui.packages) {
+    StepCard(2, "Apartment and unit") {
+        when (val a = ui.apartments) {
             Loadable.Loading -> LoadingSpinner()
+            is Loadable.Failed -> Text(a.message, color = MaterialTheme.colorScheme.error)
+            is Loadable.Ready -> if (a.value.isEmpty()) {
+                Text("No apartments yet. Create one on the Apartments page first.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                ChipRow(horizontalPadding = 0.dp) {
+                    a.value.forEach { apt ->
+                        FilterChip(selected = apt.id == ui.apartmentId, onClick = { vm.onApartment(apt.id) }, label = { ChipLabel(apt.name) })
+                    }
+                }
+            }
+        }
+        OutlinedTextField(
+            ui.unit, vm::onUnit, label = { Text("Unit (flat), for example B4") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+    StepCard(3, "Package") {
+        when (val p = ui.packages) {
+            Loadable.Loading -> if (ui.apartmentId == null) {
+                Text("Choose the apartment first.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                LoadingSpinner()
+            }
             is Loadable.Failed -> Text(p.message, color = MaterialTheme.colorScheme.error)
             is Loadable.Ready -> if (p.value.isEmpty()) {
                 Text("No packages for this router.", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -150,18 +169,26 @@ private fun Form(ui: AddCustomerUiState, vm: AddCustomerViewModel) {
             }
         }
     }
-    StepCard(3, "Router") {
-        if (ui.routers.isEmpty()) {
-            LoadingSpinner()
-        } else {
-            ChipRow(horizontalPadding = 0.dp) {
-                ui.routers.forEach { r ->
-                    FilterChip(
-                        selected = r.key == ui.routerId,
-                        onClick = { vm.setRouter(r.key) },
-                        leadingIcon = { StatusDot(r.online, size = 10.dp) },
-                        label = { ChipLabel(r.label) },
-                    )
+    if (ui.apartment != null) {
+        val rs = ui.apartmentRouters
+        StepCard(4, "Router") {
+            when {
+                rs.isEmpty() -> Text(
+                    "This apartment has no router yet. Link one on its page first.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                // One router: chosen automatically.
+                rs.size == 1 -> Text("${rs.first().label} (the only router of this apartment)", style = MaterialTheme.typography.bodyLarge)
+                else -> ChipRow(horizontalPadding = 0.dp) {
+                    rs.forEach { r ->
+                        FilterChip(
+                            selected = r.key == ui.routerId,
+                            onClick = { vm.setRouter(r.key) },
+                            leadingIcon = { StatusDot(r.online, size = 10.dp) },
+                            label = { ChipLabel(r.label) },
+                        )
+                    }
                 }
             }
             if (ui.routers.firstOrNull { it.key == ui.routerId }?.online == false) {
@@ -173,11 +200,11 @@ private fun Form(ui: AddCustomerUiState, vm: AddCustomerViewModel) {
             }
         }
     }
-    StepCard(4, "Device MAC") {
+    StepCard(5, "Device MAC") {
         val clipboard = LocalClipboardManager.current
         OutlinedTextField(
             ui.macInput, vm::onMac, label = { Text("MAC address") }, singleLine = true,
-            isError = ui.macError != null || ui.macOwner != null,
+            isError = ui.macError != null || ui.macOwner != null || ui.macOther != null,
             supportingText = {
                 Text(
                     ui.macError ?: if (ui.macValid) "Valid MAC" else "Paste it, type it, or pick a device below.",
@@ -190,6 +217,13 @@ private fun Form(ui: AddCustomerUiState, vm: AddCustomerViewModel) {
         )
         ui.macOwner?.let { o ->
             Text(macConflictText(o), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+        }
+        ui.macOther?.let { o ->
+            Text(
+                "${o.text}. A MAC of one apartment is never set up in another. Move that customer from the New devices page, or use another device.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Devices on this router now", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -315,7 +349,8 @@ private fun ResultCard(a: AddedCustomer, onOpen: () -> Unit, onAnother: () -> Un
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = scheme.surfaceContainerHigh)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Customer created", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold)
-            LabeledValue("Flat", a.account.flat)
+            LabeledValue("Apartment", a.account.apartment?.name.orEmpty())
+            LabeledValue("Unit", a.account.unitLabel)
             if (a.account.tenant.isNotBlank()) LabeledValue("Name", a.account.tenant)
             LabeledValue("Code", a.account.code)
             LabeledValue("Router", a.account.routerLabel)

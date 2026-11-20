@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -25,11 +26,19 @@ type apiRouterState struct {
 	LastError         string `json:"last_error"`
 }
 
+type apiAptRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type apiAccount struct {
 	ID          string         `json:"id"`
 	Code        string         `json:"code"`
 	SiteID      string         `json:"site_id"`
 	SiteName    string         `json:"site_name"`
+	Apartment   *apiAptRef     `json:"apartment"` // null for an account made before apartments and never assigned
+	Unit        string         `json:"unit"`
+	Problem     string         `json:"problem"` // why it is not provisioned, in words ("" = none)
 	Flat        string         `json:"flat"`
 	Floor       string         `json:"floor"`
 	MAC         string         `json:"mac"`
@@ -63,8 +72,12 @@ func (s *Server) accountsJSON(accts []store.Account) []apiAccount {
 	now := s.svc.Now()
 	siteNames := map[string]string{}
 	pkgs := map[string]*apiPkg{}
+	aptRefs := map[string]*apiAptRef{}
 	s.st.View(func(d *store.Data) {
 		for _, a := range accts {
+			if apt, ok := d.Apartments[a.ApartmentID]; ok {
+				aptRefs[a.ApartmentID] = &apiAptRef{apt.ID, apt.Name}
+			}
 			if _, ok := siteNames[a.SiteID]; !ok {
 				siteNames[a.SiteID] = d.Sites[a.SiteID].Name
 			}
@@ -80,6 +93,7 @@ func (s *Server) accountsJSON(accts []store.Account) []apiAccount {
 		rs := s.svc.AccountRouterState(a.ID)
 		out = append(out, apiAccount{
 			ID: a.ID, Code: a.Code, SiteID: a.SiteID, SiteName: siteNames[a.SiteID], Flat: a.Flat, Floor: a.Floor,
+			Apartment: aptRefs[a.ApartmentID], Unit: a.Unit, Problem: s.svc.AccountProblem(a.ID),
 			MAC: a.MAC, MACConflict: a.MACConflict, IP: a.IP, Tenant: a.Tenant, Phone: a.Phone, WhatsApp: a.WhatsApp, Notes: a.Notes,
 			State: billing.AccountState(a, now), Suspended: a.Suspended, Package: pkgs[a.SiteID+"|"+a.PackageID], ExpiresAt: tp(a.ExpiresAt),
 			Router: apiRouterState{InSync: rs.InSync, SuspendedOnRouter: rs.SuspendedOnRouter, LeaseStatus: leaseStatus(rs.LeaseStatus),
@@ -108,6 +122,12 @@ func hexOnlyLower(s string) string {
 	return b.String()
 }
 
+func (s *Server) apartmentExists(id string) bool {
+	ok := false
+	s.st.View(func(d *store.Data) { _, ok = d.Apartments[id] })
+	return ok
+}
+
 func (s *Server) siteExists(id string) bool {
 	ok := false
 	s.st.View(func(d *store.Data) { st, f := d.Sites[id]; ok = f && !st.Removed })
@@ -122,6 +142,7 @@ func (s *Server) apiAccounts(w http.ResponseWriter, r *http.Request, c *apiCtx) 
 	}
 	q := r.URL.Query()
 	site, state, text := q.Get("site"), q.Get("state"), strings.ToLower(strings.TrimSpace(q.Get("q")))
+	apartment := q.Get("apartment")
 	switch state {
 	case "", "active", "expired", "suspended", "new", "mac_conflict":
 	default:
@@ -136,6 +157,9 @@ func (s *Server) apiAccounts(w http.ResponseWriter, r *http.Request, c *apiCtx) 
 			if site != "" && a.SiteID != site {
 				continue
 			}
+			if apartment != "" && a.ApartmentID != apartment {
+				continue
+			}
 			switch state {
 			case "":
 			case "mac_conflict":
@@ -148,7 +172,7 @@ func (s *Server) apiAccounts(w http.ResponseWriter, r *http.Request, c *apiCtx) 
 				}
 			}
 			if text != "" {
-				hit := strings.Contains(strings.ToLower(a.Flat), text) || strings.Contains(strings.ToLower(a.Code), text) ||
+				hit := strings.Contains(strings.ToLower(a.Unit), text) || strings.Contains(strings.ToLower(d.Apartments[a.ApartmentID].Name), text) || strings.Contains(strings.ToLower(a.Code), text) ||
 					strings.Contains(strings.ToLower(a.Tenant), text) || strings.Contains(strings.ToLower(a.Phone), text)
 				if !hit && len(hexq) >= 4 && strings.Contains(hexOnlyLower(a.MAC), hexq) {
 					hit = true
@@ -237,12 +261,14 @@ func (s *Server) respondAccount(w http.ResponseWriter, status int, id string) {
 
 func (s *Server) apiAccountCreate(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 	var req struct {
-		SiteID string `json:"site_id"`
-		Flat   string `json:"flat"`
-		MAC    string `json:"mac"`
-		Tenant string `json:"tenant"`
-		Phone  string `json:"phone"`
-		Notes  string `json:"notes"`
+		ApartmentID string `json:"apartment_id"`
+		SiteID      string `json:"site_id"` // the router; optional when the apartment has one
+		Unit        string `json:"unit"`
+		Flat        string `json:"flat"` // older name of unit
+		MAC         string `json:"mac"`
+		Tenant      string `json:"tenant"`
+		Phone       string `json:"phone"`
+		Notes       string `json:"notes"`
 		// Extended body (v4): one form for the whole customer.
 		PackageID string `json:"package_id"`
 		Activate  bool   `json:"activate"`
@@ -255,13 +281,19 @@ func (s *Server) apiAccountCreate(w http.ResponseWriter, r *http.Request, c *api
 	if req.Activate && req.PackageID == "" {
 		fields["package_id"] = "choose a package to activate"
 	}
-	if strings.TrimSpace(req.SiteID) == "" {
-		fields["site_id"] = "choose a router"
-	} else if !s.siteExists(req.SiteID) {
+	if strings.TrimSpace(req.ApartmentID) == "" {
+		fields["apartment_id"] = "choose an apartment"
+	} else if !s.apartmentExists(req.ApartmentID) {
+		fields["apartment_id"] = "no such apartment"
+	}
+	if req.SiteID != "" && !s.siteExists(req.SiteID) {
 		fields["site_id"] = "no such router"
 	}
-	if strings.TrimSpace(req.Flat) == "" {
-		fields["flat"] = "a flat label is required"
+	if strings.TrimSpace(req.Unit) == "" {
+		req.Unit = req.Flat
+	}
+	if strings.TrimSpace(req.Unit) == "" {
+		fields["unit"] = "a unit is required, e.g. B4"
 	}
 	mac, merr := billing.NormalizeMAC(req.MAC)
 	if merr != nil {
@@ -275,13 +307,13 @@ func (s *Server) apiAccountCreate(w http.ResponseWriter, r *http.Request, c *api
 	if note == "" {
 		note = req.Notes
 	}
-	a, _, err := s.svc.CreateCustomer(r.Context(), billing.AddCustomerInput{SiteID: req.SiteID, Flat: req.Flat, MAC: mac, Tenant: req.Tenant, Phone: req.Phone,
+	a, _, err := s.svc.CreateCustomer(r.Context(), billing.AddCustomerInput{ApartmentID: req.ApartmentID, SiteID: req.SiteID, Unit: req.Unit, MAC: mac, Tenant: req.Tenant, Phone: req.Phone,
 		PackageID: req.PackageID, Activate: req.Activate, Note: note})
 	if err != nil {
 		s.billingErr(w, err, mac)
 		return
 	}
-	c.audit(s, "account "+a.Code+" ("+a.Flat+") created")
+	c.audit(s, "account "+a.Code+" ("+a.Unit+") created")
 	s.respondAccount(w, http.StatusCreated, a.ID)
 }
 
@@ -291,17 +323,46 @@ func (s *Server) apiAccountPatch(w http.ResponseWriter, r *http.Request, c *apiC
 		return
 	}
 	var req struct {
-		Flat   *string `json:"flat"`
-		Tenant *string `json:"tenant"`
-		Phone  *string `json:"phone"`
-		Notes  *string `json:"notes"`
+		Flat        *string `json:"flat"`
+		Unit        *string `json:"unit"`
+		ApartmentID *string `json:"apartment_id"` // a different apartment (or site_id) moves the customer
+		SiteID      *string `json:"site_id"`
+		Tenant      *string `json:"tenant"`
+		Phone       *string `json:"phone"`
+		Notes       *string `json:"notes"`
 	}
 	if !decode(w, r, &req, false) {
 		return
 	}
-	flat, tenant, phone, notes := a.Flat, a.Tenant, a.Phone, a.Notes
-	if req.Flat != nil {
-		flat = *req.Flat
+	if req.Unit == nil {
+		req.Unit = req.Flat
+	}
+	// Moving first: the unit may change with it, and it is the call that can be refused.
+	moveApt, moveSite := "", ""
+	if req.ApartmentID != nil {
+		moveApt = *req.ApartmentID
+	}
+	if req.SiteID != nil {
+		moveSite = *req.SiteID
+	}
+	if (moveApt != "" && moveApt != a.ApartmentID) || (moveSite != "" && moveSite != a.SiteID) {
+		in := billing.MoveInput{AccountID: a.ID, ApartmentID: moveApt, SiteID: moveSite}
+		if req.Unit != nil {
+			in.Unit = *req.Unit
+		}
+		if _, err := s.svc.MoveToApartment(r.Context(), in); err != nil && !errors.Is(err, store.ErrNoChange) {
+			s.billingErr(w, err, "")
+			return
+		}
+		a, _ = s.svc.GetAccount(a.ID)
+		c.audit(s, "account "+a.Code+" moved to apartment "+a.ApartmentID)
+	}
+	flat, tenant, phone, notes := a.Unit, a.Tenant, a.Phone, a.Notes
+	if flat == "" {
+		flat = a.Flat
+	}
+	if req.Unit != nil {
+		flat = *req.Unit
 	}
 	if req.Tenant != nil {
 		tenant = *req.Tenant
@@ -313,7 +374,7 @@ func (s *Server) apiAccountPatch(w http.ResponseWriter, r *http.Request, c *apiC
 		notes = *req.Notes
 	}
 	if strings.TrimSpace(flat) == "" {
-		validationErr(w, map[string]string{"flat": "a flat label is required"})
+		validationErr(w, map[string]string{"unit": "a unit is required, e.g. B4"})
 		return
 	}
 	if err := s.svc.UpdateAccount(a.ID, flat, tenant, phone, notes); err != nil {

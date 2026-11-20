@@ -31,8 +31,10 @@ var ErrOldFormat = errors.New("ispbill.json is in an old or unknown data format"
 // an ONT MAC unique across all buildings; 7 = the bootstrap script: Site.WANMode
 // and the WAN, PPPoE and admin LAN fields, every router is IPoE, and the
 // settings of the old provisioning job are gone; 8 = customer ports: Site.BenchPort
-// moves into Site.CustomerPorts, and Site.DisabledPorts is new.
-const FormatVersion = 8
+// moves into Site.CustomerPorts, and Site.DisabledPorts is new; 9 = apartments (buildings)
+// with their router links and caretaker/landlord contacts, Account.ApartmentID
+// and Account.Unit, and the old per-router contacts are gone.
+const FormatVersion = 9
 
 const (
 	OrderPending = "pending"
@@ -158,10 +160,18 @@ func (p Package) RateLimit() string { return fmt.Sprintf("%dM/%dM", p.SpeedMbps,
 // the M-Pesa Paybill account number.
 type Account struct {
 	ID     string `json:"id"`
-	SiteID string `json:"site_id"`
+	SiteID string `json:"site_id"` // the router that serves the flat
 	Code   string `json:"code"`
 	Flat   string `json:"flat"`
-	MAC    string `json:"mac"`
+	// ApartmentID is the building the customer lives in (format 8). SiteID must
+	// be one of that apartment's routers; the reconciler writes nothing for an
+	// account whose router does not serve its apartment. Unit is the flat or
+	// door inside the apartment ("B4"), unique per apartment among open
+	// accounts. Unit is the label; Flat is kept equal to it (Account.norm), so
+	// every older reader of Flat sees the same text.
+	ApartmentID string `json:"apartment_id,omitempty"`
+	Unit        string `json:"unit,omitempty"`
+	MAC         string `json:"mac"`
 	// MACConflict marks an open account whose MAC was found on another open
 	// account (or malformed) by a migration. It is never provisioned and is
 	// excluded from the MAC uniqueness rule until somebody fixes the MAC.
@@ -329,8 +339,45 @@ type Tenancy struct {
 	MoveOut    time.Time `json:"move_out,omitempty"`
 }
 
-// Contact is a person tied to a building: landlord, caretaker, agent...
-type Contact struct {
+// ApartmentContact is a person who looks after or owns an apartment: the
+// caretaker, or the landlord or agent. Phones are stored as +254XXXXXXXXX.
+type ApartmentContact struct {
+	Name   string `json:"name,omitempty"`
+	Phone  string `json:"phone,omitempty"`
+	Phone2 string `json:"phone2,omitempty"`
+	Email  string `json:"email,omitempty"`
+	Notes  string `json:"notes,omitempty"`
+}
+
+// Empty reports whether nothing is filled in.
+func (c ApartmentContact) Empty() bool { return c == ApartmentContact{} }
+
+// Apartment is a building customers live in (for example "MG One Central").
+// Routers serve apartments many to many: ApartmentSite rows link them. Accounts
+// belong to one apartment and have a unit inside it.
+type Apartment struct {
+	ID        string           `json:"id"`   // "a" + 6 hex, immutable
+	Name      string           `json:"name"` // unique, ignoring case
+	Address   string           `json:"address,omitempty"`
+	Notes     string           `json:"notes,omitempty"`
+	Caretaker ApartmentContact `json:"caretaker"`
+	Landlord  ApartmentContact `json:"landlord"` // landlord or agent
+	CreatedAt time.Time        `json:"created_at"`
+}
+
+// ApartmentSite says that a router (site) serves an apartment.
+type ApartmentSite struct {
+	ApartmentID string    `json:"apartment_id"`
+	SiteID      string    `json:"site_id"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// ApartmentSiteKey is the key of Data.ApartmentSites.
+func ApartmentSiteKey(apartmentID, siteID string) string { return apartmentID + "|" + siteID }
+
+// legacyContact is a format 7 router contact, read only to migrate it onto the
+// apartment of its router (see migrateV7toV8).
+type legacyContact struct {
 	ID        string    `json:"id"`
 	SiteID    string    `json:"site_id"`
 	Role      string    `json:"role"`
@@ -340,15 +387,6 @@ type Contact struct {
 	Notes     string    `json:"notes,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
-
-// Contact roles.
-const (
-	RoleLandlord  = "landlord"
-	RoleCaretaker = "caretaker"
-	RoleAgent     = "agent"
-	RoleSecurity  = "security"
-	RoleOther     = "other"
-)
 
 // Equipment kinds and statuses.
 const (
@@ -454,7 +492,6 @@ type Data struct {
 	ClosedAccounts  map[string]Account        `json:"closed_accounts"`
 	Customers       map[string]Customer       `json:"customers"`
 	Tenancies       map[string]Tenancy        `json:"tenancies"`
-	Contacts        map[string]Contact        `json:"contacts"`
 	Equipment       map[string]Equipment      `json:"equipment"`
 	EquipmentEvents map[string]EquipmentEvent `json:"equipment_events"`
 	Notes           map[string]Note           `json:"notes"`
@@ -462,6 +499,13 @@ type Data struct {
 
 	// Format 5: admin settings (key -> row), including the admin password hash.
 	Settings map[string]Setting `json:"settings"`
+
+	// Format 8: apartments and the routers that serve them (key apartmentID|siteID).
+	Apartments     map[string]Apartment     `json:"apartments"`
+	ApartmentSites map[string]ApartmentSite `json:"apartment_sites"`
+	// LegacyContacts holds format 7 router contacts while an old file is read;
+	// migrateV7toV8 empties it, so it is never written back.
+	LegacyContacts map[string]legacyContact `json:"contacts,omitempty"`
 
 	// Format 6: sign-in. Users, browser sessions and API devices (phones).
 	AdminUsers    map[string]AdminUser    `json:"admin_users"`
@@ -504,8 +548,11 @@ func (d *Data) init() {
 	if d.Tenancies == nil {
 		d.Tenancies = map[string]Tenancy{}
 	}
-	if d.Contacts == nil {
-		d.Contacts = map[string]Contact{}
+	if d.Apartments == nil {
+		d.Apartments = map[string]Apartment{}
+	}
+	if d.ApartmentSites == nil {
+		d.ApartmentSites = map[string]ApartmentSite{}
 	}
 	if d.Equipment == nil {
 		d.Equipment = map[string]Equipment{}

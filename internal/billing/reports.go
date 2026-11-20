@@ -94,7 +94,7 @@ type MonthRevenue struct {
 // BuildingReport is the numbers on a building's profile page.
 type BuildingReport struct {
 	Site                     store.Site
-	Contacts                 []store.Contact
+	Apartments               []store.Apartment // the apartments this router serves
 	Router, OLT              []store.Equipment
 	ByStatus                 map[string]int
 	ThisMonth, LastMonth     int
@@ -124,10 +124,8 @@ func (s *Service) Building(siteID string) (BuildingReport, bool) {
 		if !ok {
 			return
 		}
-		for _, c := range d.Contacts {
-			if c.SiteID == siteID {
-				r.Contacts = append(r.Contacts, c)
-			}
+		for _, id := range d.SiteApartmentIDs(siteID) {
+			r.Apartments = append(r.Apartments, d.Apartments[id])
 		}
 		for _, e := range d.Equipment {
 			if e.SiteID != siteID {
@@ -172,7 +170,6 @@ func (s *Service) Building(siteID string) (BuildingReport, bool) {
 			}
 		}
 	})
-	sort.Slice(r.Contacts, func(i, j int) bool { return r.Contacts[i].CreatedAt.Before(r.Contacts[j].CreatedAt) })
 	r.Months = months
 	r.ThisMonth, r.LastMonth = months[0].KES, months[1].KES
 	return r, ok

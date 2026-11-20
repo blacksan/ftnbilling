@@ -81,6 +81,16 @@ adb install ftn-admin-X.Y.Z.apk      # or open the APK on the phone
 2. Settings: app lock (biometric or screen lock), hiding content from screenshots, theme, signed-in
    devices (revoke), updates, and Sign out (revokes this phone on the server and deletes the session).
 
+## Apartments
+
+An apartment is a building that one or more routers serve (many-to-many); a router is not an apartment.
+More > Apartments (and the Apartments chip on Customers) lists them, with flats active/total and online now.
+The detail screen shows the routers, the flats and the caretaker and landlord contacts with Call (tel:) and
+WhatsApp links; the form creates or edits an apartment and links or unlinks routers. Adding a customer picks
+the apartment and unit first (the router is automatic when the apartment has one). A customer can be moved to
+another apartment from their page, and New devices shows "Belongs to ..." for a MAC of another apartment with
+a confirmed "Move customer here". The old router contacts screen is gone: contacts live on the apartment.
+
 ## Security notes
 
 - Tokens and the install id are AES-256-GCM encrypted with an Android Keystore key (StrongBox when

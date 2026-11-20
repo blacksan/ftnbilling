@@ -75,6 +75,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	s.securityRoutes(get, post)
 	s.settingsRoutes(get, post)
 	s.crmRoutes(get, post)
+	s.apartmentRoutes(get, post)
 	s.metricsRoutes(get, post)
 	s.opsRoutes(get, post)
 }
@@ -138,6 +139,7 @@ func (s *Server) page(r *http.Request, active string) adminPage {
 	if p.CanWrite {
 		p.Data["RouterDefaults"] = sites.ApplyDefaults(s.cfg, store.Site{Mode: store.SiteModeWG})
 		p.Data["JoinTTL"] = int(s.cfg.JoinTokenTTL.Minutes())
+		p.Data["AptOpts"] = s.apartmentOptions()
 	}
 	s.st.View(func(d *store.Data) {
 		for _, pk := range d.EffectivePackages(sc.ID) {
@@ -335,13 +337,17 @@ func (s *Server) adminAccounts(w http.ResponseWriter, r *http.Request) {
 
 // customerForm is everything the Add customer form can say.
 type customerForm struct {
-	SiteID, Flat, Tenant, Phone, WhatsApp, MAC, PackageID, Notes string
-	WASame, Activate                                             bool
+	SiteID, ApartmentID, Flat, Tenant, Phone, WhatsApp, MAC, PackageID, Notes string
+	WASame, Activate                                                          bool
 }
 
 func customerFormOf(r *http.Request, site string) customerForm {
 	f := func(k string) string { return strings.TrimSpace(r.PostFormValue(k)) }
-	return customerForm{SiteID: site, Flat: f("flat"), Tenant: f("tenant"), Phone: f("phone"), WhatsApp: f("whatsapp"), MAC: f("mac"),
+	unit := f("unit")
+	if unit == "" {
+		unit = f("flat") // the older field name
+	}
+	return customerForm{SiteID: site, ApartmentID: f("apartment_id"), Flat: unit, Tenant: f("tenant"), Phone: f("phone"), WhatsApp: f("whatsapp"), MAC: f("mac"),
 		PackageID: f("package"), Notes: f("notes"), WASame: r.PostFormValue("wa_same") == "1", Activate: r.PostFormValue("activate") == "1"}
 }
 
@@ -351,8 +357,8 @@ func customerFormOf(r *http.Request, site string) customerForm {
 // put the flat on the router. The router state it returns is what the dialog
 // shows ("Provisioned", "Queued", or the error).
 func (s *Server) createCustomer(ctx context.Context, in customerForm) (store.Account, billing.AccountRouterState, error) {
-	if in.SiteID == "" {
-		return store.Account{}, billing.AccountRouterState{}, errors.New("choose a router")
+	if in.ApartmentID == "" {
+		return store.Account{}, billing.AccountRouterState{}, errors.New("choose an apartment")
 	}
 	if in.Activate && in.PackageID == "" {
 		return store.Account{}, billing.AccountRouterState{}, errors.New("choose a plan to activate")
@@ -367,7 +373,7 @@ func (s *Server) createCustomer(ctx context.Context, in customerForm) (store.Acc
 	if in.Activate {
 		note = "activated on create"
 	}
-	a, rs, err := s.svc.CreateCustomer(ctx, billing.AddCustomerInput{SiteID: in.SiteID, Flat: in.Flat, Tenant: in.Tenant, Phone: in.Phone, MAC: mac,
+	a, rs, err := s.svc.CreateCustomer(ctx, billing.AddCustomerInput{ApartmentID: in.ApartmentID, SiteID: in.SiteID, Unit: in.Flat, Flat: in.Flat, Tenant: in.Tenant, Phone: in.Phone, MAC: mac,
 		PackageID: in.PackageID, Activate: in.Activate, Note: note})
 	if a.ID != "" {
 		if in.Activate && in.Notes != "" {
@@ -411,7 +417,8 @@ func (s *Server) routerStateJSON(ctx context.Context, a store.Account, rs billin
 }
 
 func (s *Server) adminAccountCreate(w http.ResponseWriter, r *http.Request) {
-	in := customerFormOf(r, s.siteFor(r))
+	// The router is the form's own choice; empty means the apartment's only router.
+	in := customerFormOf(r, strings.TrimSpace(r.PostFormValue("site")))
 	a, rs, err := s.createCustomer(r.Context(), in)
 	if wantsJSON(r) {
 		if err != nil && a.ID == "" {
@@ -428,7 +435,7 @@ func (s *Server) adminAccountCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil && a.ID == "" {
-		s.back(w, r, "/admin/accounts?mac="+url.QueryEscape(in.MAC)+"&flat="+url.QueryEscape(in.Flat), "Error: "+err.Error())
+		s.back(w, r, "/admin/accounts?mac="+url.QueryEscape(in.MAC)+"&flat="+url.QueryEscape(in.Flat)+"&apartment="+url.QueryEscape(in.ApartmentID), "Error: "+err.Error())
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
@@ -513,6 +520,8 @@ func (s *Server) adminAccount(w http.ResponseWriter, r *http.Request) {
 	p.Data["A"], p.Data["Pkg"], p.Data["State"] = a, pkg, billing.AccountState(a, s.svc.Now())
 	p.Data["Payments"], p.Data["PkgMap"], p.Data["Pkgs"] = pays, pkgMap, pkgs
 	p.Data["AcctSite"] = p.Data["SiteNames"].(map[string]string)[a.SiteID]
+	p.Data["Problem"] = s.svc.AccountProblem(a.ID)
+	s.st.View(func(d *store.Data) { p.Data["AptName"] = d.Apartments[a.ApartmentID].Name })
 	var others []store.Site
 	for _, st := range p.Sites {
 		if st.ID != a.SiteID {
@@ -978,4 +987,26 @@ func (s *Server) adminPrintVouchers(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminDeletePackage(w http.ResponseWriter, r *http.Request) {
 	s.back(w, r, "/admin/packages", msgOr(s.svc.DeletePackage(r.Context(), r.PostFormValue("id")), "Package deleted"))
+}
+
+// aptOpt is one apartment in the Add customer form: its routers, so the form
+// can pick the router by itself when there is only one.
+type aptOpt struct {
+	ID, Name string
+	Routers  []string
+	Only     string // the one router, when there is exactly one
+}
+
+func (s *Server) apartmentOptions() []aptOpt {
+	var out []aptOpt
+	s.st.View(func(d *store.Data) {
+		for _, a := range d.ApartmentList() {
+			o := aptOpt{ID: a.ID, Name: a.Name, Routers: d.ApartmentSiteIDs(a.ID)}
+			if len(o.Routers) == 1 {
+				o.Only = o.Routers[0]
+			}
+			out = append(out, o)
+		}
+	})
+	return out
 }
