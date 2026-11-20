@@ -178,7 +178,7 @@ func (c *REST) PingHost(ctx context.Context, target string, count int) (PingResu
 	var rows []map[string]string
 	body := map[string]string{"address": target, "count": strconv.Itoa(count)}
 	to := time.Duration(count+8) * time.Second
-	if err := c.doT(ctx, to, http.MethodPost, "/ping", nil, body, &rows); err != nil {
+	if err := c.doTool(ctx, to, http.MethodPost, "/ping", nil, body, &rows); err != nil {
 		return PingResult{}, err
 	}
 	return parsePing(target, count, rows), nil
@@ -196,7 +196,7 @@ func (c *REST) PingFrom(ctx context.Context, target, src string, count int) (Pin
 	var rows []map[string]string
 	body := map[string]string{"address": target, "count": strconv.Itoa(count), "src-address": src}
 	to := time.Duration(count+8) * time.Second
-	if err := c.doT(ctx, to, http.MethodPost, "/ping", nil, body, &rows); err != nil {
+	if err := c.doTool(ctx, to, http.MethodPost, "/ping", nil, body, &rows); err != nil {
 		return PingResult{}, err
 	}
 	return parsePing(target, count, rows), nil

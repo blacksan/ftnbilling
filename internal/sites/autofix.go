@@ -221,7 +221,12 @@ func (m *Manager) AutoMaintain(ctx context.Context, siteID string) []AutoFixOutc
 		e.mu.Lock()
 		st.lastTry = now
 		if msg == "" {
-			st.fixedAt, st.lastErr, st.fails, st.next = now, "", 0, time.Time{}
+			// "Fixed by the server" only when the server wrote something: the cached list may be a minute old
+			// and somebody else may have fixed the router since.
+			if len(res.Applied) > 0 {
+				st.fixedAt = now
+			}
+			st.lastErr, st.fails, st.next = "", 0, time.Time{}
 		} else {
 			st.lastErr = msg
 			st.fails++

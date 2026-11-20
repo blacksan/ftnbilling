@@ -377,7 +377,7 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	}
 
 	// Device list and swap detection never depend on the writes below.
-	s.collectDevices(site, pl, wants, leases, arp, ps)
+	s.collectDevicesX(site, pl, true, arpErr == nil, wants, leases, arp, ps)
 
 	var ftn routeros.Row
 	for _, r := range servers {

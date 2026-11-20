@@ -123,6 +123,13 @@ type routerReq struct {
 	OLTCapMbps     *float64  `json:"olt_cap_mbps"`
 	FUPTB          *float64  `json:"fup_tb"`
 	SupportPhone   *string   `json:"support_phone"`
+	// The ports, OLT uplink and VLAN the client was SHOWN when it loaded the router (all optional). With them, a
+	// field the client changes is refused with 409 when the stored value moved on meanwhile (for example on the Ports
+	// tab), and a field it did not change keeps whatever is stored now. Without them the request is applied as sent.
+	BaseLANPorts      *string   `json:"base_lan_ports"`
+	BaseCustomerPorts *portList `json:"base_customer_ports"`
+	BaseOLTInterface  *string   `json:"base_olt_interface"`
+	BaseVLANID        *int      `json:"base_vlan_id"`
 	// Confirm accepts the warning for a change of the OLT port or the VLAN on a router that is set up
 	// ("Customers on the OLT lose service until the OLT uses the new setting").
 	Confirm *bool `json:"confirm"`
@@ -286,6 +293,18 @@ func (s *Server) apiRouterPatch(w http.ResponseWriter, r *http.Request, c *apiCt
 	}
 	in := sites.SiteInputOf(st)
 	base := in // only the fields that were sent change; the rest keep what is stored now, even if the Ports tab moved it meanwhile
+	if req.BaseLANPorts != nil {
+		base.LANPorts = *req.BaseLANPorts
+	}
+	if req.BaseCustomerPorts != nil {
+		base.CustomerPorts = strings.Join(*req.BaseCustomerPorts, ",")
+	}
+	if req.BaseOLTInterface != nil {
+		base.OLTInterface = *req.BaseOLTInterface
+	}
+	if req.BaseVLANID != nil {
+		base.VLANID = *req.BaseVLANID
+	}
 	in = applyRouterReq(in, req)
 	in.Base = &base
 	if err := s.mgr.UpdateSiteCtx(r.Context(), st.ID, in); err != nil {

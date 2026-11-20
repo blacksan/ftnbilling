@@ -220,9 +220,25 @@ func (s *Service) hasDueTasks(siteID string) (due bool) {
 	return
 }
 
-// RunSweeper retries router tasks every few seconds and sweeps every interval.
+// RunSweeper retries router tasks every few seconds and sweeps every interval. The sweep runs in its own
+// goroutine (one at a time; a tick that finds one still running is skipped): it waits for every building's
+// hook, up to 90 s each, and one slow router must not starve the task retries of the others.
 func (s *Service) RunSweeper(ctx context.Context, every time.Duration) {
-	s.Sweep(ctx)
+	var sweeping atomic.Bool
+	var wg sync.WaitGroup
+	runSweep := func() {
+		if !sweeping.CompareAndSwap(false, true) {
+			return
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer sweeping.Store(false)
+			s.Sweep(ctx)
+		}()
+	}
+	defer wg.Wait()
+	runSweep()
 	tasks := time.NewTicker(10 * time.Second)
 	sweep := time.NewTicker(every)
 	defer tasks.Stop()
@@ -234,7 +250,7 @@ func (s *Service) RunSweeper(ctx context.Context, every time.Duration) {
 		case <-tasks.C:
 			s.RunTasks(ctx)
 		case <-sweep.C:
-			s.Sweep(ctx)
+			runSweep()
 		}
 	}
 }
