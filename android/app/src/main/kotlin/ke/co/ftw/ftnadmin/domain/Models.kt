@@ -211,6 +211,10 @@ data class Site(
     @SerialName("vlan_id") val vlanId: Int = 0,
     @SerialName("customer_subnet") val customerSubnet: String = "",
     @SerialName("bench_port") val benchPort: String = "",
+    /** Every customer port the server sets up (`bench_port` is only the first one, kept for older clients). */
+    @SerialName("customer_ports") val customerPorts: List<String> = emptyList(),
+    /** Ports the server keeps switched off (customer and unused ports only). */
+    @SerialName("disabled_ports") val disabledPorts: List<String> = emptyList(),
     /** What the server did with the extra customer port; null from an older server. */
     @SerialName("customer_port") val customerPort: CustomerPortStatus? = null,
     /** Whether the server's automatic fixes of this router are paused; null from an older server. */

@@ -19,9 +19,9 @@ import org.junit.Test
 
 class RouterPortFieldsTest {
     @Test fun formCopyIsTheAgreedWording() {
-        assertEquals("Customer port (extra)", RouterFormCopy.CUSTOMER_PORT_LABEL)
+        assertEquals("Customer ports (extra)", RouterFormCopy.CUSTOMER_PORT_LABEL)
         assertEquals(
-            "A port where you can plug a customer device directly (for example ether5). The server sets it up.",
+            "Ports where you can plug a customer device directly (for example ether4,ether5). The server sets them up.",
             RouterFormCopy.CUSTOMER_PORT_HINT,
         )
         assertEquals("OLT uplink port", RouterFormCopy.OLT_LABEL)
@@ -41,6 +41,17 @@ class RouterPortFieldsTest {
         assertEquals("ether5: ether5 is the WAN port", customerPortLine(bad))
         assertNull(customerPortLine(null))
         assertNull(customerPortLine(CustomerPortStatus()))
+    }
+
+    @Test fun portsResponseReadsTheApplyStatusAndTheOltCannotBeSwitchedOff() {
+        val json = Json { ignoreUnknownKeys = true }
+        val r = json.decodeFromString<ke.co.ftw.ftnadmin.data.routers.PortsResponse>(
+            """{"items":[{"name":"sfp-sfpplus1","role":"olt","can_change":true,"can_disable":false},{"name":"ether4","role":"unused","can_change":true,"can_disable":true}],""" +
+                """"customer_port":{"port":"ether5","state":"ok","text":"ether5: customer port ✓"}}""",
+        )
+        assertEquals("ether5: customer port ✓", customerPortLine(r.customerPort))
+        assertFalse(r.items[0].canDisable)
+        assertTrue(r.items[1].canDisable)
     }
 
     @Test fun portPickerOffersOnlyRealPorts() {

@@ -269,6 +269,11 @@ const (
 // false when the value is a stale one served after a failed read; err is set
 // only when there is nothing (fresh or stale) to give.
 func (m *Manager) liveGet(ctx context.Context, siteID, view string, fetch func(context.Context) (any, error)) (val any, reachable bool, err error) {
+	return m.liveGetTTL(ctx, siteID, view, liveTTL, fetch)
+}
+
+// liveGetTTL is liveGet with its own freshness window.
+func (m *Manager) liveGetTTL(ctx context.Context, siteID, view string, ttl time.Duration, fetch func(context.Context) (any, error)) (val any, reachable bool, err error) {
 	key := siteID + "|" + view
 	for {
 		now := m.now()
@@ -281,7 +286,7 @@ func (m *Manager) liveGet(ctx context.Context, siteID, view string, fetch func(c
 			e = &liveEntry{}
 			m.live.ent[key] = e
 		}
-		if e.val != nil && e.flight == nil && now.Sub(e.at) < liveTTL && !now.Before(e.at) {
+		if e.val != nil && e.flight == nil && now.Sub(e.at) < ttl && !now.Before(e.at) {
 			v := e.val
 			m.live.mu.Unlock()
 			return v, true, nil
@@ -617,7 +622,7 @@ func ifaceRole(site store.Site, it Interface, customer string) string {
 		return RoleWAN
 	case it.Name == site.OLTInterface:
 		return RoleOLT
-	case site.BenchPort != "" && it.Name == site.BenchPort:
+	case containsStr(SplitPorts(site.CustomerPorts), it.Name):
 		return RoleBench
 	case it.Name == customer:
 		return RoleCustomer
@@ -1037,3 +1042,12 @@ func naturalLess(a, b string) bool {
 }
 
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+func containsStr(l []string, s string) bool {
+	for _, x := range l {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}

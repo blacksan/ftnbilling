@@ -20,6 +20,8 @@ import (
 //	/ip/traffic-flow/target      the row aimed at the server's tunnel address (targets take no comment)
 //	/interface/bridge/port       the building's customer ports in br-customers (horizon=1, comment "ftn: customer port"),
 //	                             the server's own old membership of a dropped port, the OLT port's rows (fixOLT)
+//	/interface/bridge/port       also br-lan membership rows the server made (comment "ftn: LAN port")
+//	/interface                   disabled=yes|no on non-WAN physical ports (ether, sfp, combo, wlan), nothing else
 //	/interface/vlan              the customer VLAN interface ("ftn: customer VLAN"): added, or moved to the OLT port
 //	/ip/firewall/filter, /nat    the customer DNS accepts, and the walled-garden rules
 //	/ip/dhcp-server              enabling ftn-dhcp
@@ -83,6 +85,11 @@ type fixWriter struct {
 	ifaces    map[string]bool // the OLT port of this building (fixOLT) and the customer bridge
 	custPorts map[string]bool // ports (and the customer VLAN interface) the server may put in br-customers
 	stale     map[string]bool // ports whose "ftn: customer port" membership of br-customers the server may remove
+	lanPorts  map[string]bool // ports the server may put in br-lan (comment "ftn: LAN port")
+	staleLAN  map[string]bool // ports whose server-made br-lan membership may be removed
+	lanSafe   bool            // a wanted admin LAN port is a member of br-lan: old members may leave
+	offPorts  map[string]bool // physical ports the server may switch off or on (/interface disabled)
+	wan       string          // the WAN interface: never written
 	oldVLANs  map[string]bool // the server's own old customer VLAN interfaces it may remove once the new one is in place
 	vlanName  string          // the customer VLAN interface the server may add or move
 	oltPort   string          // the interface that VLAN sits on
@@ -129,8 +136,13 @@ func (w *fixWriter) allowedRow(path string, row routeros.Row) error {
 			return forbid("a bridge port row without an interface")
 		case w.ifaces[iface]:
 		case (w.custPorts[iface] || w.stale[iface]) && row["bridge"] == CustomerBridge:
+		case (w.lanPorts[iface] || w.staleLAN[iface]) && row["bridge"] == LANBridge:
 		default:
 			return forbid("bridge port " + iface + " (bridge " + row["bridge"] + ") is not a customer port of this building")
+		}
+	case "/interface":
+		if !physicalType(row["type"]) || row["name"] == "" || row["name"] == w.wan || !w.offPorts[row["name"]] {
+			return forbid("an interface that is not a non-WAN physical port the server may switch")
 		}
 	case "/interface/vlan":
 		if row["comment"] != CustVLANComment || !((w.vlanName != "" && row["name"] == w.vlanName) || w.oldVLANs[row["name"]]) {
@@ -161,6 +173,12 @@ func (w *fixWriter) allowedRow(path string, row routeros.Row) error {
 func (w *fixWriter) addRow(ctx context.Context, path string, body map[string]string) error {
 	switch path {
 	case "/interface/bridge/port":
+		if body["bridge"] == LANBridge {
+			if !w.lanPorts[body["interface"]] || body["interface"] == "" || len(body) != 3 || body["comment"] != LANPortComment {
+				return forbid("a bridge port row that is not " + LANPortComment + " in " + LANBridge + " for an admin LAN port of this building")
+			}
+			break
+		}
 		if !w.custPorts[body["interface"]] || body["interface"] == "" {
 			return forbid("bridge port " + body["interface"] + " is not a customer port of this building")
 		}
@@ -240,7 +258,22 @@ func (w *fixWriter) setRow(ctx context.Context, path string, row routeros.Row, d
 		return err
 	}
 	switch path {
+	case "/interface":
+		if len(diff) != 1 || (diff["disabled"] != "yes" && diff["disabled"] != "no") {
+			return forbid("a port may only be switched on or off")
+		}
 	case "/interface/bridge/port":
+		if row["bridge"] == LANBridge {
+			if !w.lanPorts[row["interface"]] {
+				return forbid("only an admin LAN port of this building may be changed in " + LANBridge)
+			}
+			for k, v := range diff {
+				if !(k == "comment" && v == LANPortComment) && !(k == "disabled" && v == "no") {
+					return forbid("an admin LAN port may only get the server's comment or be enabled")
+				}
+			}
+			break
+		}
 		if row["bridge"] != CustomerBridge || !w.custPorts[row["interface"]] {
 			return forbid("only a customer port in " + CustomerBridge + " may be changed")
 		}
@@ -281,6 +314,12 @@ func (w *fixWriter) removeRow(ctx context.Context, path string, row routeros.Row
 	case "/interface/bridge/port", "/ip/traffic-flow/target", "/ip/firewall/filter", "/ip/firewall/nat", "/file":
 		if err := w.allowedRow(path, row); err != nil {
 			return err
+		}
+		if path == "/interface/bridge/port" && row["bridge"] == LANBridge {
+			if !w.lanSafe || !w.staleLAN[row["interface"]] || row["comment"] != LANPortComment {
+				return forbid("only the server's own " + LANPortComment + " row of a dropped port may be removed, and never the last admin LAN port")
+			}
+			break
 		}
 		if path == "/interface/bridge/port" && !w.ifaces[row["interface"]] && (!w.stale[row["interface"]] || !serverMade(row["comment"])) {
 			return forbid("only the server's own " + CustPortComment + " membership of a dropped port may be removed")

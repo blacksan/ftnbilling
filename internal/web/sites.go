@@ -21,6 +21,8 @@ func (s *Server) siteRoutes(get, post func(string, http.HandlerFunc)) {
 	get("/admin/sites/status.json", s.adminSiteStatus)
 	get("/admin/sites/checks.json", s.adminSiteChecks)
 	get("/admin/sites/customer-port.json", s.adminSiteCustomerPort)
+	get("/admin/sites/ports.json", s.adminPorts)
+	post("/admin/sites/ports/update", s.adminPortChange)
 	post("/admin/sites/fix", s.adminSiteFix)
 	post("/admin/sites/create", s.adminSiteCreate)
 	post("/admin/sites/update", s.adminSiteUpdate)
@@ -133,14 +135,21 @@ func siteInput(r *http.Request) sites.SiteInput {
 	f := func(k string) string { return strings.TrimSpace(r.PostFormValue(k)) }
 	fl := func(k string) float64 { v, _ := strconv.ParseFloat(f(k), 64); return v }
 	vlan, _ := strconv.Atoi(f("vlan"))
+	_ = r.ParseForm()
+	var base *sites.SiteInput
+	if _, ok := r.PostForm["orig_lanports"]; ok { // what the page was built with: unchanged ports keep the stored value
+		ov, _ := strconv.Atoi(f("orig_vlan"))
+		base = &sites.SiteInput{LANPorts: f("orig_lanports"), CustomerPorts: f("orig_customerports"), OLTInterface: f("orig_olt"), VLANID: ov}
+	}
 	return sites.SiteInput{
+		Base: base,
 		Name: f("name"), Notes: f("notes"), SupportPhone: f("support"),
 		WANInterface: f("wan"), OLTInterface: f("olt"),
-		CustomerNet: f("subnet"), VLANID: vlan, WANCapMbps: fl("wancap"), OLTCapMbps: fl("oltcap"), FUPTB: fl("fup"), BenchPort: f("bench"),
+		CustomerNet: f("subnet"), VLANID: vlan, WANCapMbps: fl("wancap"), OLTCapMbps: fl("oltcap"), FUPTB: fl("fup"), CustomerPorts: f("customerports"),
 		WANMode: f("wanmode"), WANAddress: f("wanaddr"), WANGateway: f("wangw"), WANDNS: f("wandns"),
 		PPPoEUser: f("pppoeuser"), PPPoEPass: r.PostFormValue("pppoepass"), PPPoEPassClear: r.PostFormValue("pppoeclear") == "1",
 		LANPorts: f("lanports"), LANSubnet: f("lansubnet"),
-		Confirm: f("confirm") == "1",
+		Confirm: f("confirm") == "1", ConfirmName: f("confirmname"),
 	}
 }
 

@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -100,28 +101,53 @@ func (s *Server) apiSetup(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 // ---- add and edit a router -------------------------------------------------------------------
 
 type routerReq struct {
-	Name           *string  `json:"name"`
-	WANInterface   *string  `json:"wan_interface"`
-	WANMode        *string  `json:"wan_mode"`
-	WANAddress     *string  `json:"wan_address"`
-	WANGateway     *string  `json:"wan_gateway"`
-	WANDNS         *string  `json:"wan_dns"`
-	PPPoEUser      *string  `json:"pppoe_user"`
-	PPPoEPass      *string  `json:"pppoe_pass"`
-	PPPoEPassClear *bool    `json:"pppoe_pass_clear"`
-	LANPorts       *string  `json:"lan_ports"`
-	LANSubnet      *string  `json:"lan_subnet"`
-	OLTInterface   *string  `json:"olt_interface"`
-	VLANID         *int     `json:"vlan_id"`
-	CustomerSubnet *string  `json:"customer_subnet"`
-	BenchPort      *string  `json:"bench_port"`
-	WANCapMbps     *float64 `json:"wan_cap_mbps"`
-	OLTCapMbps     *float64 `json:"olt_cap_mbps"`
-	FUPTB          *float64 `json:"fup_tb"`
-	SupportPhone   *string  `json:"support_phone"`
+	Name           *string   `json:"name"`
+	WANInterface   *string   `json:"wan_interface"`
+	WANMode        *string   `json:"wan_mode"`
+	WANAddress     *string   `json:"wan_address"`
+	WANGateway     *string   `json:"wan_gateway"`
+	WANDNS         *string   `json:"wan_dns"`
+	PPPoEUser      *string   `json:"pppoe_user"`
+	PPPoEPass      *string   `json:"pppoe_pass"`
+	PPPoEPassClear *bool     `json:"pppoe_pass_clear"`
+	LANPorts       *string   `json:"lan_ports"`
+	LANSubnet      *string   `json:"lan_subnet"`
+	OLTInterface   *string   `json:"olt_interface"`
+	VLANID         *int      `json:"vlan_id"`
+	CustomerSubnet *string   `json:"customer_subnet"`
+	CustomerPorts  *portList `json:"customer_ports"`
+	BenchPort      *string   `json:"bench_port"` // deprecated alias: the first customer port
+	WANCapMbps     *float64  `json:"wan_cap_mbps"`
+	OLTCapMbps     *float64  `json:"olt_cap_mbps"`
+	FUPTB          *float64  `json:"fup_tb"`
+	SupportPhone   *string   `json:"support_phone"`
 	// Confirm accepts the warning for a change of the OLT port or the VLAN on a router that is set up
 	// ("Customers on the OLT lose service until the OLT uses the new setting").
 	Confirm *bool `json:"confirm"`
+	// ConfirmName is the typed router name that a change of lan_ports on a set-up router needs.
+	ConfirmName string `json:"confirm_name"`
+}
+
+// portList is a JSON array of port names, or a comma list in one string.
+type portList []string
+
+func (p *portList) UnmarshalJSON(b []byte) error {
+	var arr []string
+	if err := json.Unmarshal(b, &arr); err != nil {
+		var one string
+		if err2 := json.Unmarshal(b, &one); err2 != nil {
+			return errors.New("customer_ports must be a list of port names")
+		}
+		arr = strings.Split(one, ",")
+	}
+	out := []string{}
+	for _, a := range arr {
+		if a = strings.TrimSpace(a); a != "" {
+			out = append(out, a)
+		}
+	}
+	*p = out
+	return nil
 }
 
 func applyRouterReq(in sites.SiteInput, q routerReq) sites.SiteInput {
@@ -142,12 +168,25 @@ func applyRouterReq(in sites.SiteInput, q routerReq) sites.SiteInput {
 	str(&in.LANSubnet, q.LANSubnet)
 	str(&in.OLTInterface, q.OLTInterface)
 	str(&in.CustomerNet, q.CustomerSubnet)
-	str(&in.BenchPort, q.BenchPort)
+	switch {
+	case q.CustomerPorts != nil:
+		in.CustomerPorts = strings.Join(*q.CustomerPorts, ",")
+	case q.BenchPort != nil: // the alias replaces (or clears) the first customer port
+		rest := sites.SplitPorts(in.CustomerPorts)
+		if len(rest) > 0 {
+			rest = rest[1:]
+		}
+		if b := strings.TrimSpace(*q.BenchPort); b != "" {
+			rest = append([]string{b}, rest...)
+		}
+		in.CustomerPorts = strings.Join(rest, ",")
+	}
 	str(&in.SupportPhone, q.SupportPhone)
 	if q.PPPoEPassClear != nil {
 		in.PPPoEPassClear = *q.PPPoEPassClear
 	}
 	in.Confirm = q.Confirm != nil && *q.Confirm
+	in.ConfirmName = q.ConfirmName
 	if q.VLANID != nil {
 		in.VLANID = *q.VLANID
 	}
@@ -177,10 +216,13 @@ func (s *Server) joinBody(st store.Site) (map[string]any, error) {
 }
 
 // routerFieldErr turns a validation error of the router fields into a 422 on the field it is about.
-func routerFieldErr(w http.ResponseWriter, err error) {
+func routerFieldErr(w http.ResponseWriter, err error, alias ...bool) {
 	var fe *sites.FieldError
 	if errors.As(err, &fe) {
 		fields := map[string]string{fe.Field: fe.Msg}
+		if len(alias) > 0 && alias[0] && fe.Field == "customer_ports" {
+			fields["bench_port"] = fe.Msg // the deprecated alias the caller used
+		}
 		for _, f := range fe.Also {
 			fields[f] = fe.Msg
 		}
@@ -191,7 +233,7 @@ func routerFieldErr(w http.ResponseWriter, err error) {
 	msg := err.Error()
 	for _, f := range []struct{ key, word string }{
 		{"pppoe_pass", "PPPoE needs a password"}, {"pppoe_pass", "PPPoE password"}, {"pppoe_user", "PPPoE"}, {"wan_address", "WAN address"}, {"wan_gateway", "WAN gateway"},
-		{"wan_dns", "WAN DNS"}, {"wan_mode", "WAN type"}, {"wan_interface", "WAN interface"}, {"olt_interface", "OLT interface"}, {"olt_interface", "OLT uplink port"}, {"bench_port", "customer port"}, {"bench_port", "bench port"},
+		{"wan_dns", "WAN DNS"}, {"wan_mode", "WAN type"}, {"wan_interface", "WAN interface"}, {"olt_interface", "OLT interface"}, {"olt_interface", "OLT uplink port"}, {"customer_ports", "customer port"}, {"customer_ports", "bench port"},
 		{"lan_ports", "admin LAN port"}, {"lan_subnet", "admin LAN subnet"}, {"customer_subnet", "customer subnet"}, {"vlan_id", "VLAN"},
 		{"lan_subnet", "LAN and customer subnets"}, {"lan_ports", "is used twice"},
 	} {
@@ -217,7 +259,7 @@ func (s *Server) apiRouterCreate(w http.ResponseWriter, r *http.Request, c *apiC
 		if s.storeErr(w, err) {
 			return
 		}
-		routerFieldErr(w, err)
+		routerFieldErr(w, err, req.BenchPort != nil && req.CustomerPorts == nil)
 		return
 	}
 	join, err := s.joinBody(st)
@@ -241,11 +283,22 @@ func (s *Server) apiRouterPatch(w http.ResponseWriter, r *http.Request, c *apiCt
 		return
 	}
 	in := sites.SiteInputOf(st)
-	if err := s.mgr.UpdateSite(st.ID, applyRouterReq(in, req)); err != nil {
+	base := in // only the fields that were sent change; the rest keep what is stored now, even if the Ports tab moved it meanwhile
+	in = applyRouterReq(in, req)
+	in.Base = &base
+	if err := s.mgr.UpdateSite(st.ID, in); err != nil {
+		var pe *sites.PortRefusal
 		if errors.Is(err, sites.ErrOLTConfirmRequired) {
 			apiErr(w, http.StatusConflict, codeConfirm, err.Error(), nil)
+		} else if errors.Is(err, sites.ErrStaleLayout) {
+			apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
+		} else if errors.Is(err, sites.ErrLANConfirmRequired) {
+			apiErr(w, http.StatusUnprocessableEntity, codeValidation, err.Error(),
+				map[string]any{"fields": map[string]any{"confirm_name": err.Error()}, "warning": sites.WarnLAN})
+		} else if errors.As(err, &pe) {
+			s.portFail(w, err)
 		} else if !s.storeErr(w, err) {
-			routerFieldErr(w, err)
+			routerFieldErr(w, err, req.BenchPort != nil && req.CustomerPorts == nil)
 		}
 		return
 	}

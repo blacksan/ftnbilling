@@ -75,6 +75,16 @@
 {{else}}{{template "empty" (dict "Title" "No interfaces to show." "Text" "The router could not be read. Ports show here once it answers.")}}{{end}}
 </div>
 
+{{else if eq $tab "ports"}}
+<section class="panel" data-ports="{{$s.ID}}" data-name="{{$s.Name}}" data-role="{{.Role}}">
+<div class="panel-h"><h2>Ports</h2><span class="muted" data-ports-at aria-live="polite"></span></div>
+<p class="muted">Every physical port of the router. The server sets roles on the router by itself and keeps them there; nothing is typed on the router. The Internet uplink (WAN) is locked.</p>
+<p class="flash bad" role="status" data-ports-warn hidden>The router could not be read just now. These are the last readings the server kept.</p>
+<p class="cport" role="status" data-ports-apply hidden></p>
+<div class="tw"><table class="rs"><thead><tr><th>Port</th><th>Role</th><th>Link</th><th>State</th><th class="n">Receive</th><th class="n">Send</th><th>MAC</th><th>Actions</th></tr></thead><tbody data-ports-body><tr><td colspan="8" class="muted">Reading the router.</td></tr></tbody></table></div>
+<p class="muted">Updated every 5 seconds while this page is open.{{if ne .Role "owner"}} Changing the admin LAN or the OLT uplink needs an owner.{{end}}</p>
+</section>
+
 {{else if eq $tab "plans"}}
 <section class="panel"><h2>Plans at this router</h2><p class="muted" style="margin:6px 0 12px">Hide a plan here, or give it a different price. Prices must stay unique inside the router.</p>
 <form method="post" action="/admin/routers/packages"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
@@ -85,11 +95,11 @@
 {{else if eq $tab "profile"}}
 <div class="grid c2">
 <section class="panel"><h2>Details</h2>
-<form method="post" action="/admin/routers/update" class="stack-col" style="margin-top:12px"{{if $s.WGPublicKey}} data-plumb{{if .Data.Pause.Paused}} data-paused{{end}} data-olt-default="sfp-sfpplus1" data-olt="{{.Data.Eff.OLTInterface}}" data-vlan="{{.Data.Eff.VLANID}}"{{end}}><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="confirm" value="">
+<form method="post" action="/admin/routers/update" class="stack-col" style="margin-top:12px"{{if $s.WGPublicKey}} data-plumb{{if .Data.Pause.Paused}} data-paused{{end}} data-olt-default="sfp-sfpplus1" data-olt="{{.Data.Eff.OLTInterface}}" data-vlan="{{.Data.Eff.VLANID}}" data-lanports="{{.Data.Eff.LANPorts}}" data-name="{{$s.Name}}"{{end}}><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="confirm" value=""><input type="hidden" name="confirmname" value=""><input type="hidden" name="orig_lanports" value="{{.Data.Eff.LANPorts}}"><input type="hidden" name="orig_customerports" value="{{.Data.Eff.CustomerPorts}}"><input type="hidden" name="orig_olt" value="{{.Data.Eff.OLTInterface}}"><input type="hidden" name="orig_vlan" value="{{.Data.Eff.VLANID}}">
 {{template "sitefields" $s}}
 {{with .Data.CustPort}}{{if .Text}}<p class="cport {{.State}}" data-cport="{{.State}}" role="status">{{.Text}}</p>{{end}}{{if .OLTMessage}}<p class="cport error" role="status">OLT uplink: {{.OLTMessage}}</p>{{end}}{{end}}
 {{if .Data.Ports}}<datalist id="router-ports">{{range .Data.Ports}}<option value="{{.}}">{{end}}</datalist>{{end}}
-<details><summary>Router layout</summary><div class="stack-col" style="margin-top:10px">{{template "sitelayout" .Data.Eff}}<p class="muted">The OLT uplink port and the customer port are set up on the router by the server as soon as you save. Other layout changes apply to the next line and to metrics: paste a new line on the router to build it with the new layout.</p></div></details>
+<details><summary>Router layout</summary><div class="stack-col" style="margin-top:10px">{{template "sitelayout" .Data.Eff}}<p class="muted">Admin LAN, OLT uplink and customer ports are set up on the router by the server as soon as you save (and healed by the sweep); use the Ports tab to enable, disable or move a port. The internet uplink is never changed by the server. Other layout changes apply to the next line and to metrics.</p></div></details>
 <div><button>Save</button></div></form></section>
 {{with .Data.Rep}}<section class="panel"><h2>Location</h2>
 <form method="post" action="/admin/routers/profile" class="stack-col" style="margin-top:12px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">

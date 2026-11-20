@@ -226,7 +226,10 @@ func TestWireRebootThroughTheWebUsesTheSameGuards(t *testing.T) {
 	if reboots() != 0 {
 		t.Fatal("a refused request rebooted the router")
 	}
-	if code, j := reboot("alpha"); code != 202 || j["ok"] != true || reboots() != 1 {
+	if code, j := reboot("alpha"); code != 422 || j["ok"] != false || reboots() != 0 {
+		t.Fatalf("a different case must be refused: %d %v", code, j)
+	}
+	if code, j := reboot(" Alpha "); code != 202 || j["ok"] != true || reboots() != 1 {
 		t.Fatalf("reboot: %d %v (%d)", code, j, reboots())
 	}
 	// the limiter is shared with the API: the API is now refused, and so is the web

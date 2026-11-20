@@ -88,7 +88,8 @@ type bootstrapData struct {
 	LANBridge, CustBridge            string
 	OLTInterface, CustIface          string
 	VLANID                           int
-	VLANName, BenchPort              string
+	VLANName                         string
+	CustomerPorts                    []string
 	Plan                             SubnetPlan
 	DHCPServer, UnregList, UnregPool string
 	DNSServers                       string
@@ -263,7 +264,7 @@ func RenderBootstrap(in BootstrapInput) ([]byte, error) {
 		WANIface: s.WANInterface, WANMode: s.WANMode, WANAddress: s.WANAddress, WANGateway: s.WANGateway,
 		PPPoEUser: s.PPPoEUser, PPPoEPass: in.PPPoEPass, PPPoEIface: "pppoe-wan",
 		LANPorts: SplitPorts(s.LANPorts), LAN: lan, LANBridge: LANBridge, CustBridge: CustomerBridge,
-		OLTInterface: s.OLTInterface, CustIface: s.OLTInterface, VLANID: s.VLANID, BenchPort: s.BenchPort,
+		OLTInterface: s.OLTInterface, CustIface: s.OLTInterface, VLANID: s.VLANID, CustomerPorts: SplitPorts(s.CustomerPorts),
 		Plan: plan, DHCPServer: billing.DHCPServerName, UnregList: listUnreg, UnregPool: listUnreg,
 		NetflowPort: in.NetflowPort, NoCheck: in.NoCheck, Token: in.Token,
 		Files: []string{SetupFile, ResetFile},
@@ -285,9 +286,7 @@ func RenderBootstrap(in BootstrapInput) ([]byte, error) {
 	}
 	need := []string{s.WANInterface, s.OLTInterface}
 	need = append(need, d.LANPorts...)
-	if s.BenchPort != "" {
-		need = append(need, s.BenchPort)
-	}
+	need = append(need, d.CustomerPorts...)
 	seen := map[string]bool{}
 	var q []string
 	for _, n := range need {

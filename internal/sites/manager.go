@@ -64,10 +64,11 @@ type Manager struct {
 	chk          checksState   // cache of the setup checks (checks.go)
 	autoFixDelay time.Duration // wait after the first answer before the post-join fixes (runtime.go)
 
-	cport cpState   // customer-port and automatic-fix state per building (custport.go, autofix.go)
-	prov  provMgr   // billing hooks and the reboot slot (provision.go)
-	live  liveState // live router views (live.go)
-	box   *secretbox.Box
+	cport     cpState    // customer-port and automatic-fix state per building (custport.go, autofix.go)
+	prov      provMgr    // billing hooks and the reboot slot (provision.go)
+	live      liveState  // live router views (live.go)
+	portRates portsRates // byte counters of the Ports view (ports.go)
+	box       *secretbox.Box
 }
 
 // SetForeignIPs lets the billing service tell the sites package which addresses
@@ -311,7 +312,7 @@ type SiteInput struct {
 	CustomerNet                   string
 	VLANID                        int
 	WANCapMbps, OLTCapMbps, FUPTB float64
-	BenchPort                     string
+	CustomerPorts                 string // comma list of extra customer ports
 	// WAN, admin LAN. PPPoEPass is the clear text to seal; "" keeps the stored
 	// password unless PPPoEPassClear is set.
 	WANMode, WANAddress, WANGateway, WANDNS string
@@ -321,18 +322,31 @@ type SiteInput struct {
 	// Confirm says the operator accepted the warning for a change of the OLT port or VLAN on a router
 	// that is set up (customers lose service until the OLT uses the new setting). Not stored.
 	Confirm bool
+	// ConfirmName is the typed router name that a change of the admin LAN ports of a set-up router needs. Not stored.
+	ConfirmName string
+	// Base is the layout the editor started from (the effective LAN ports, customer ports, OLT port and VLAN
+	// it was shown). A field the editor left as it was keeps the stored value, so a form that has been open
+	// while the Ports tab changed a port cannot put the old value back. A field the editor changed while the
+	// stored value had moved on is refused (ErrStaleLayout). Nil: every field of the input counts.
+	Base *SiteInput
 }
+
+// ErrStaleLayout: the ports changed since the editor loaded them; reload and try again.
+var ErrStaleLayout = errors.New("The ports of this router changed since this page was loaded (for example on the Ports tab). Reload the page and make the change again.")
 
 // SiteInputOf is the input that leaves a router as it is (a PATCH starts from it).
 func SiteInputOf(st store.Site) SiteInput {
 	return SiteInput{Name: st.Name, Notes: st.Notes, SupportPhone: st.SupportPhone, WANInterface: st.WANInterface, OLTInterface: st.OLTInterface,
-		CustomerNet: st.CustomerSubnet, VLANID: st.VLANID, WANCapMbps: st.WANCapMbps, OLTCapMbps: st.OLTCapMbps, FUPTB: st.FUPTB, BenchPort: st.BenchPort,
+		CustomerNet: st.CustomerSubnet, VLANID: st.VLANID, WANCapMbps: st.WANCapMbps, OLTCapMbps: st.OLTCapMbps, FUPTB: st.FUPTB, CustomerPorts: st.CustomerPorts,
 		WANMode: st.WANMode, WANAddress: st.WANAddress, WANGateway: st.WANGateway, WANDNS: st.WANDNS, PPPoEUser: st.PPPoEUser,
 		LANPorts: st.LANPorts, LANSubnet: st.LANSubnet}
 }
 
 // ErrOLTConfirmRequired: the OLT port or the VLAN of a set-up router cannot change without confirm.
 var ErrOLTConfirmRequired = errors.New("Customers on the OLT lose service until the OLT uses the new setting. Confirm to change the OLT port or the VLAN.")
+
+// ErrLANConfirmRequired: changing the admin LAN ports of a set-up router needs the typed router name.
+var ErrLANConfirmRequired = errors.New("Type the router name to confirm. " + WarnLAN)
 
 // ErrNoDataKey: a PPPoE password cannot be stored without DATA_KEY.
 var ErrNoDataKey = errors.New("the PPPoE password cannot be saved: DATA_KEY is not set on the server")
@@ -365,7 +379,7 @@ func (m *Manager) applyInput(s store.Site, in SiteInput) (store.Site, error) {
 	s.WANInterface, s.OLTInterface = strings.TrimSpace(in.WANInterface), strings.TrimSpace(in.OLTInterface)
 	s.CustomerSubnet, s.VLANID = strings.TrimSpace(in.CustomerNet), in.VLANID
 	s.WANCapMbps, s.OLTCapMbps, s.FUPTB = in.WANCapMbps, in.OLTCapMbps, in.FUPTB
-	s.BenchPort = strings.TrimSpace(in.BenchPort)
+	s.CustomerPorts, s.BenchPort = strings.Join(SplitPorts(in.CustomerPorts), ","), ""
 	s.WANMode = strings.ToLower(strings.TrimSpace(in.WANMode))
 	s.LANPorts, s.LANSubnet = strings.Join(SplitPorts(in.LANPorts), ","), strings.TrimSpace(in.LANSubnet)
 	if s.WANMode == WANStatic {
@@ -444,9 +458,65 @@ func (m *Manager) CreateSite(in SiteInput) (store.Site, error) {
 	return out, nil
 }
 
-// UpdateSite saves the editable fields and restarts the building's runtime.
+// layoutPorts is the port part of an input in the form the server compares: defaults filled in, no spaces.
+type layoutPorts struct {
+	lan, cust, olt string
+	vlan           int
+}
+
+func (m *Manager) layoutOf(in SiteInput) layoutPorts {
+	e := m.Effective(store.Site{LANPorts: in.LANPorts, OLTInterface: in.OLTInterface})
+	return layoutPorts{lan: strings.Join(SplitPorts(e.LANPorts), ","), cust: strings.Join(SplitPorts(in.CustomerPorts), ","), olt: e.OLTInterface, vlan: in.VLANID}
+}
+
+// rebaseInput applies "only what the editor changed": a port field equal to the editor's Base takes the stored
+// value; one that differs from Base while the store has moved on is stale.
+func (m *Manager) rebaseInput(cur store.Site, in SiteInput) (SiteInput, error) {
+	if in.Base == nil {
+		return in, nil
+	}
+	base, have, want := m.layoutOf(*in.Base), m.layoutOf(SiteInputOf(cur)), m.layoutOf(in)
+	if want.lan == base.lan {
+		in.LANPorts = cur.LANPorts
+	} else if have.lan != base.lan {
+		return in, ErrStaleLayout
+	}
+	if want.cust == base.cust {
+		in.CustomerPorts = cur.CustomerPorts
+	} else if have.cust != base.cust {
+		return in, ErrStaleLayout
+	}
+	if want.olt == base.olt {
+		in.OLTInterface = cur.OLTInterface
+	} else if have.olt != base.olt {
+		return in, ErrStaleLayout
+	}
+	if want.vlan == base.vlan {
+		in.VLANID = cur.VLANID
+	} else if have.vlan != base.vlan {
+		return in, ErrStaleLayout
+	}
+	return in, nil
+}
+
+// UpdateSite saves the editable fields and restarts the building's runtime. It takes the same per-router
+// lock as the port pass and ChangePort, so a form save and a Ports-tab change never interleave.
 func (m *Manager) UpdateSite(id string, in SiteInput) error {
 	var portsChanged bool
+	e := m.cport.entry(id)
+	e.run.Lock()
+	defer e.run.Unlock()
+	var cur0 store.Site
+	var found bool
+	m.st.View(func(d *store.Data) { cur0, found = d.Sites[id] })
+	if !found || cur0.Removed {
+		return billing.ErrNoSite
+	}
+	asked := in // what the editor sent; rebased again inside the transaction against the stored site
+	in, err0 := m.rebaseInput(cur0, asked)
+	if err0 != nil {
+		return err0
+	}
 	if err := m.checkPortsExist(id, in); err != nil {
 		return err
 	}
@@ -455,6 +525,10 @@ func (m *Manager) UpdateSite(id string, in SiteInput) error {
 		cur, ok := d.Sites[id]
 		if !ok || cur.Removed {
 			return billing.ErrNoSite
+		}
+		in, err := m.rebaseInput(cur, asked)
+		if err != nil {
+			return err
 		}
 		s, err := m.applyInput(cur, in)
 		if err != nil {
@@ -478,10 +552,18 @@ func (m *Manager) UpdateSite(id string, in SiteInput) error {
 			return fmt.Errorf("there is already a router called %q", s.Name)
 		}
 		was, now := m.Effective(cur), m.Effective(s)
-		portsChanged = now.BenchPort != was.BenchPort || now.OLTInterface != was.OLTInterface || now.VLANID != was.VLANID
+		portsChanged = now.CustomerPorts != was.CustomerPorts || now.LANPorts != was.LANPorts || now.OLTInterface != was.OLTInterface || now.VLANID != was.VLANID
 		if (now.OLTInterface != was.OLTInterface || now.VLANID != was.VLANID) && siteIsSetUp(cur) && !in.Confirm {
 			return ErrOLTConfirmRequired
 		}
+		// a port that became an admin LAN port or the OLT uplink is not kept off any more
+		var keepOff []string
+		for _, p := range SplitPorts(s.DisabledPorts) {
+			if p != now.OLTInterface && !containsStr(SplitPorts(now.LANPorts), p) {
+				keepOff = append(keepOff, p)
+			}
+		}
+		s.DisabledPorts = strings.Join(keepOff, ",")
 		d.Sites[id] = s
 		return nil
 	})
@@ -509,9 +591,13 @@ func (m *Manager) checkPortsExist(id string, in SiteInput) error {
 		return nil
 	}
 	was := m.Effective(cur)
-	bench := strings.TrimSpace(in.BenchPort)
+	if err := m.checkLANChange(cur, was, in); err != nil {
+		return err
+	}
+	newCust := addedPorts(SplitPorts(was.CustomerPorts), SplitPorts(in.CustomerPorts))
+	newLAN := addedPorts(SplitPorts(was.LANPorts), SplitPorts(in.LANPorts))
 	olt := m.Effective(store.Site{OLTInterface: strings.TrimSpace(in.OLTInterface)}).OLTInterface
-	if (bench == "" || bench == was.BenchPort) && olt == was.OLTInterface {
+	if len(newCust) == 0 && len(newLAN) == 0 && olt == was.OLTInterface {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), routeros.DefaultTimeout)
@@ -528,10 +614,28 @@ func (m *Manager) checkPortsExist(id string, in SiteInput) error {
 	if olt != was.OLTInterface && !has[olt] && olt != was.WANInterface {
 		return fieldErr("olt_interface", "The router has no port called %s. Its ports: %s.", olt, strings.Join(choices, ", "))
 	}
-	if bench != "" && bench != was.BenchPort && !has[bench] && bench != was.WANInterface {
-		return fieldErr("bench_port", "The router has no port called %s. Its ports: %s.", bench, strings.Join(choices, ", "))
+	for _, c := range newCust {
+		if !has[c] && c != was.WANInterface {
+			return fieldErr("customer_ports", "The router has no port called %s. Its ports: %s.", c, strings.Join(choices, ", "))
+		}
+	}
+	for _, c := range newLAN {
+		if !has[c] && c != was.WANInterface {
+			return fieldErr("lan_ports", "The router has no port called %s. Its ports: %s.", c, strings.Join(choices, ", "))
+		}
 	}
 	return nil
+}
+
+// addedPorts is what is in now and not in was.
+func addedPorts(was, now []string) []string {
+	var out []string
+	for _, n := range now {
+		if !containsStr(was, n) {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // SetDisabled pauses or resumes a building. The WireGuard peer is kept.
@@ -636,3 +740,37 @@ func (m *Manager) Status(ctx context.Context, siteID string) (SiteStatus, bool) 
 }
 
 func nowFn() time.Time { return time.Now() }
+
+// checkLANChange guards the admin LAN ports of a set-up router: a change needs the typed router name, and when a
+// port leaves the list at least one port that stays must be switched on and have a link (it is read from the
+// router; a router that cannot be read refuses, because the old port's membership would go without proof).
+func (m *Manager) checkLANChange(cur store.Site, was store.Site, in SiteInput) error {
+	nowLAN := SplitPorts(m.Effective(store.Site{LANPorts: in.LANPorts}).LANPorts)
+	oldLAN := SplitPorts(was.LANPorts)
+	if sameList(oldLAN, nowLAN) {
+		return nil
+	}
+	if strings.TrimSpace(in.ConfirmName) != cur.Name {
+		return ErrLANConfirmRequired
+	}
+	if len(addedPorts(nowLAN, oldLAN)) == 0 {
+		return nil // only ports added: nothing leaves
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), routeros.DefaultTimeout)
+	defer cancel()
+	rt := m.Router(cur.ID)
+	ifaces, err := m.ifaceRows(ctx, rt)
+	if err != nil {
+		return fieldErr("lan_ports", "The router did not answer, so the server cannot check that an admin LAN port stays connected. Try again when it is reachable.")
+	}
+	keep := 0
+	for _, p := range nowLAN {
+		if portUsable(ifaces[p]) {
+			keep++
+		}
+	}
+	if keep == 0 {
+		return &PortRefusal{Kind: PortErrLastLAN, Msg: fmt.Sprintf("None of the admin LAN ports (%s) is switched on and connected, so the router would be cut off. Connect and enable one first.", strings.Join(nowLAN, ", "))}
+	}
+	return nil
+}

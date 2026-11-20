@@ -29,6 +29,9 @@ data class EditRouterUiState(
     val original: RouterForm? = null,
     /** The confirm dialog for an OLT port or VLAN change is open. */
     val confirmOlt: Boolean = false,
+    /** The typed-name dialog for a change of the admin LAN ports is open. */
+    val confirmLan: Boolean = false,
+    val typedName: String = "",
     /** The router's automatic fixes are paused (the confirm dialog says a change is still applied). */
     val autoFixesPaused: Boolean = false,
 ) {
@@ -81,6 +84,10 @@ class EditRouterViewModel(
         val s = _state.value
         val form = s.form ?: return
         if (!s.canSave) return
+        if (s.original?.let { form.changesLan(it) } == true) {
+            _state.update { it.copy(confirmLan = true, typedName = "") }
+            return
+        }
         if (s.original?.let { form.changesOlt(it) } == true) {
             _state.update { it.copy(confirmOlt = true) }
             return
@@ -94,12 +101,31 @@ class EditRouterViewModel(
         send(form, confirm = true)
     }
 
-    fun cancelConfirm() = _state.update { it.copy(confirmOlt = false) }
+    fun cancelConfirm() = _state.update { it.copy(confirmOlt = false, confirmLan = false, typedName = "") }
 
-    private fun send(form: RouterForm, confirm: Boolean) {
+    fun setTypedName(v: String) = _state.update { it.copy(typedName = v) }
+
+    /** True when the typed text is the router's name (the same rule as the server's). */
+    fun canConfirmLan(): Boolean {
+        val s = _state.value
+        val want = s.original?.name?.trim().orEmpty()
+        return want.isNotEmpty() && s.typedName.trim() == want
+    }
+
+    /** Sends an admin LAN change with the typed router name (also confirms an OLT change made at the same time). */
+    fun confirmLanSave() {
+        val s = _state.value
+        val form = s.form ?: return
+        if (!canConfirmLan()) return
+        val olt = s.original?.let { form.changesOlt(it) } == true
+        _state.update { it.copy(confirmLan = false) }
+        send(form, confirm = olt, confirmName = s.typedName.trim())
+    }
+
+    private fun send(form: RouterForm, confirm: Boolean, confirmName: String = "") {
         _state.update { it.copy(busy = true, error = null, fieldErrors = emptyMap()) }
         viewModelScope.launch {
-            val r = apiResult { repo.updateRouter(routerId, form.toInput(confirm)) }
+            val r = apiResult { repo.updateRouter(routerId, form.toInput(confirm, confirmName)) }
             r.fold(
                 { _ ->
                     _state.update { it.copy(busy = false, saved = true) }

@@ -187,8 +187,8 @@ func TestAPIRebootGuards(t *testing.T) {
 			t.Fatalf("%d %s", x.Status, x.Raw)
 		}
 	}
-	// the typed name must match
-	for _, body := range []any{map[string]any{"confirm_name": "Beta"}, map[string]any{"confirm_name": ""}, map[string]any{}} {
+	// the typed name must match exactly (after trimming): a different case is refused
+	for _, body := range []any{map[string]any{"confirm_name": "Beta"}, map[string]any{"confirm_name": "alpha"}, map[string]any{"confirm_name": "ALPHA "}, map[string]any{"confirm_name": ""}, map[string]any{}} {
 		if x := r.call(r.owner.Access, "POST", path, body, nil); x.Status != 400 || x.errCode(t) != "validation_failed" {
 			t.Fatalf("%d %s", x.Status, x.Raw)
 		}
@@ -201,12 +201,12 @@ func TestAPIRebootGuards(t *testing.T) {
 	}
 	// the router itself says no: 409 router_refused, slot not used
 	mk.SetPathFail("/system/reboot", &routeros.APIError{Status: 403, Message: "Forbidden", Detail: "not enough permissions (9)", Method: "POST", Path: "/system/reboot"})
-	if x := r.call(r.owner.Access, "POST", path, map[string]any{"confirm_name": "alpha"}, nil); x.Status != 409 || x.errCode(t) != "router_refused" {
+	if x := r.call(r.owner.Access, "POST", path, map[string]any{"confirm_name": "Alpha"}, nil); x.Status != 409 || x.errCode(t) != "router_refused" {
 		t.Fatalf("%d %s", x.Status, x.Raw)
 	}
 	mk.SetPathFail("/system/reboot", nil)
-	// name match ignores case; success is 202 {queued:true}
-	x := r.call(r.owner.Access, "POST", path, map[string]any{"confirm_name": "  aLpHa "}, nil)
+	// name match is exact after trimming; success is 202 {queued:true}
+	x := r.call(r.owner.Access, "POST", path, map[string]any{"confirm_name": "  Alpha "}, nil)
 	if x.Status != 202 || x.JSON(t)["queued"] != true || reboots() != 1 {
 		t.Fatalf("%d %s reboots=%d", x.Status, x.Raw, reboots())
 	}

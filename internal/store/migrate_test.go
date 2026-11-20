@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -138,7 +139,7 @@ func TestV3RoundTrip(t *testing.T) {
 }
 
 func TestUnknownFormatRefused(t *testing.T) {
-	for _, f := range []string{"1", "8", "0"} {
+	for _, f := range []string{"1", "9", "0"} {
 		dir := t.TempDir()
 		p := filepath.Join(dir, "ispbill.json")
 		raw := []byte(`{"format":` + f + `}`)
@@ -295,11 +296,40 @@ func TestMigrateV6ToV7MakesRoutersIPoEAndPurgesJobSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.View(func(d *Data) {
-		if d.Format != 7 || d.Sites["s1"].AccessMode != AccessIPoE || d.Sites["s2"].AccessMode != AccessIPoE {
+		if d.Format != FormatVersion || d.Sites["s1"].AccessMode != AccessIPoE || d.Sites["s2"].AccessMode != AccessIPoE {
 			t.Fatalf("format %d, modes %q %q", d.Format, d.Sites["s1"].AccessMode, d.Sites["s2"].AccessMode)
 		}
 		if len(d.Settings) != 2 || d.Settings["site.s1.join_report"].Value != "keep" || d.Settings["other"].Value != "keep" {
 			t.Fatalf("settings %v", d.Settings)
 		}
 	})
+}
+
+func TestMigrateV7ToV8MovesBenchPortIntoCustomerPorts(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{"format":7,"sites":{
+	"s1":{"id":"s1","name":"A","mode":"wg","bench_port":"ether5"},
+	"s2":{"id":"s2","name":"B","mode":"wg","bench_port":"ether5","customer_ports":"ether4,ether5"},
+	"s3":{"id":"s3","name":"C","mode":"wg"}}}`
+	p := filepath.Join(dir, "ispbill.json")
+	os.WriteFile(p, []byte(raw), 0o600)
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"s1": "ether5", "s2": "ether4,ether5", "s3": ""}
+	s.View(func(d *Data) {
+		for id, w := range want {
+			if got := d.Sites[id]; got.CustomerPorts != w || got.BenchPort != "" {
+				t.Fatalf("%s: customer_ports %q bench %q, want %q and none", id, got.CustomerPorts, got.BenchPort, w)
+			}
+		}
+	})
+	if b, err := os.ReadFile(p + ".v7.bak"); err != nil || string(b) != raw {
+		t.Fatalf("v7 backup: %v", err)
+	}
+	b, _ := os.ReadFile(p)
+	if strings.Contains(string(b), "bench_port") || !strings.Contains(string(b), `"format": 8`) {
+		t.Fatalf("saved file still has bench_port or the old format: %s", b)
+	}
 }

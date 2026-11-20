@@ -274,7 +274,7 @@ func TestAPIPortFieldsAreValidatedAndReportedPerField(t *testing.T) {
 	}
 	var st store.Site
 	r.st.View(func(d *store.Data) { st = d.Sites[id] })
-	if st.BenchPort != "ether5" || st.OLTInterface != "ether3" {
+	if st.CustomerPorts != "ether5" || st.OLTInterface != "ether3" {
 		t.Fatalf("a refused save changed the router: %+v", st)
 	}
 }

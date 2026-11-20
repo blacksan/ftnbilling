@@ -1429,27 +1429,33 @@ func custPortApplied(sn *snapshot, port string) bool {
 // the port on the customer bridge by itself (custport.go), so there is no button;
 // the item says OK, or in words why the port is not applied.
 func evalBench(e *evalCtx, it *CheckItem) {
-	port := e.site.BenchPort
-	if port == "" {
+	ports := SplitPorts(e.site.CustomerPorts)
+	if len(ports) == 0 {
 		it.Status = StatusInfo
 		it.Detail = "No extra customer port is set for this router."
 		return
 	}
-	if custPortApplied(e.sn, port) {
-		okItem(it, fmt.Sprintf("%s is a customer port on %s: a device plugged in gets a customer address and waits to be registered.", port, CustomerBridge))
+	var notOK []string
+	for _, port := range ports {
+		if custPortApplied(e.sn, port) {
+			continue
+		}
+		it.Status = StatusWarn
+		if pr := portProblems(e.sn, e.site, port, "bench"); len(pr) > 0 {
+			it.Evidence = append(it.Evidence, pr...)
+			notOK = append(notOK, fmt.Sprintf("%s: %s", port, strings.Join(pr, "; ")))
+		} else {
+			notOK = append(notOK, port+": the server is setting it up")
+		}
+	}
+	if len(notOK) == 0 {
+		okItem(it, fmt.Sprintf("%s: customer port(s) on %s: a device plugged in gets a customer address and waits to be registered.", strings.Join(ports, ", "), CustomerBridge))
 		return
 	}
-	it.Status = StatusWarn
-	if pr := portProblems(e.sn, e.site, port, "bench"); len(pr) > 0 {
-		it.Evidence = append(it.Evidence, pr...)
-		it.Detail = fmt.Sprintf("The server cannot set %s up as a customer port: %s. Change the customer port in the router's fields.", port, strings.Join(pr, "; "))
-		return
-	}
+	it.Detail = "The server could not set up every customer port yet: " + strings.Join(notOK, " | ") + ". It tries again by itself; change the customer ports in the router's fields or the Ports tab."
 	if st := e.m.CustomerPortStatus(e.site.ID); st.State == PortError && st.Message != "" {
-		it.Detail = fmt.Sprintf("The server could not set %s up as a customer port: %s. It tries again by itself.", port, st.Message)
-		return
+		it.Detail += " Last error: " + st.Message + "."
 	}
-	it.Detail = fmt.Sprintf("The server is setting %s up as a customer port.", port)
 }
 
 // ---- traffic flow -------------------------------------------------------------------------
@@ -1541,8 +1547,10 @@ func evalWWW(e *evalCtx, it *CheckItem) {
 	switch {
 	case rowDisabled(www):
 		it.Detail = "The router's web page (WebFig) is switched off. WinBox still works."
+	case wwwAddrOK(www["address"], e.site, ServerTunnelIP(e.m.pfx)):
+		okItem(it, "The router's web page (WebFig) answers the admin LAN ("+lanNetOf(e.site)+") and the billing server only.")
 	case www["address"] != "":
-		it.Detail = "The router's web page (WebFig) only answers the billing server (" + www["address"] + "). WinBox still works from the LAN. If you want WebFig from the LAN too, add the LAN address to /ip/service www by hand."
+		it.Detail = "The router's web page (WebFig) only answers " + www["address"] + ". WinBox still works from the LAN. A new line (rebuild) opens WebFig to the admin LAN and the server's tunnel address."
 	default:
 		it.Detail = "The router's web page (WebFig) is open to every address the firewall allows."
 	}
@@ -1717,4 +1725,31 @@ func (m *Manager) runChecks(ctx context.Context, site store.Site) Checks {
 	out.Slow = e.slow
 	out.Summary = summarize(items)
 	return out
+}
+
+// wwwAddrOK: the www service address list is the admin LAN network plus the
+// server's tunnel /32, as the bootstrap script sets it.
+func wwwAddrOK(addr string, site store.Site, serverIP string) bool {
+	lan, err := PlanLAN(site.LANSubnet)
+	if err != nil {
+		return false
+	}
+	var hasLAN, hasSrv bool
+	for _, a := range strings.Split(addr, ",") {
+		a = strings.TrimSpace(a)
+		switch {
+		case a == lan.Network:
+			hasLAN = true
+		case a == serverIP+"/32":
+			hasSrv = true
+		}
+	}
+	return hasLAN && hasSrv
+}
+
+func lanNetOf(site store.Site) string {
+	if lan, err := PlanLAN(site.LANSubnet); err == nil {
+		return lan.Network
+	}
+	return site.LANSubnet
 }

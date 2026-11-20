@@ -273,7 +273,8 @@ func (s *Server) minRole(method, path string) string {
 	case strings.HasPrefix(path, "/admin/settings"), strings.HasPrefix(path, "/admin/tools"):
 		return store.RoleOwner
 	case !read && (strings.HasPrefix(path, "/admin/sites/") && path != "/admin/sites/profile" && !strings.HasPrefix(path, "/admin/sites/contacts") &&
-		path != "/admin/sites/outage-notice" && path != "/admin/sites/packages" && path != "/admin/sites/sync"):
+		path != "/admin/sites/outage-notice" && path != "/admin/sites/packages" && path != "/admin/sites/sync" &&
+		path != "/admin/sites/ports/update"): // operators change customer/unused ports; ChangePort keeps LAN and OLT for owners
 		return store.RoleOwner
 	case !read && (strings.HasPrefix(path, "/admin/customers/natid") || path == "/admin/customers/anonymize" || path == "/admin/accounts/delete" || path == "/admin/accounts/move"):
 		return store.RoleOwner
