@@ -173,6 +173,15 @@ private fun PortCard(p: PortRow, busy: Boolean, onToggle: () -> Unit, onRole: (S
             if (detail.isNotEmpty()) {
                 Text(detail.joinToString("  ·  "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            if (p.note.isNotBlank()) {
+                Text(p.note, style = MaterialTheme.typography.bodySmall)
+            }
+            if (p.warning.isNotBlank()) {
+                Text(p.warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+            }
+            if (p.disabled && !p.locked && p.role != PortRole.LAN) {
+                Text("Switched off. Nothing works on this port until you enable it.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             p.apply?.takeIf { it.state != "ok" }?.let {
                 Text("${it.state}: ${it.message}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
@@ -189,7 +198,7 @@ private fun PortCard(p: PortRow, busy: Boolean, onToggle: () -> Unit, onRole: (S
                     if (p.canDisable) {
                         OutlinedButton(onClick = onToggle, enabled = !busy) { Text(if (p.disabled) "Enable" else "Disable") }
                     } else {
-                        Text("Move the OLT role to switch it off.", style = MaterialTheme.typography.bodySmall)
+                        Text("OLT port: can't be switched off here. Give the OLT role to another port first.", style = MaterialTheme.typography.bodySmall)
                     }
                     Column {
                         OutlinedButton(onClick = { menu = true }, enabled = !busy) { Text("Role") }

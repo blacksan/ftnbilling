@@ -508,6 +508,9 @@
         if (p.locked) rl.appendChild(el("span", "sr-only", " (locked)"));
         if (p.flats != null) rl.appendChild(el("span", "muted", " " + p.flats + " house" + (p.flats === 1 ? "" : "s")));
         if (p.apply && p.apply.state !== "ok") { var ap = el("div", "cport " + p.apply.state, p.apply.state === "applying" ? "applying…" : (p.apply.message || "not applied")); rl.appendChild(ap); }
+        if (p.note) rl.appendChild(el("div", "muted", p.note));
+        if (p.warning) { var wn = el("div", "warn", p.warning); wn.style.marginTop = "4px"; rl.appendChild(wn); }
+        if (p.disabled && !p.locked && p.role !== "lan") rl.appendChild(el("div", "muted", "Switched off until you enable it."));
         td("Role", rl);
         td("Link", p.link || "");
         td("State", pill(p));
@@ -516,9 +519,9 @@
         if (p.locked) { act.appendChild(el("span", "muted", "locked: set in the router's network settings")); }
         else if (!p.can_change) { act.appendChild(el("span", "muted", p.needs_owner ? "owner only" : "")); }
         else {
-          /* the OLT uplink is not switched off here: move the OLT role or unplug it */
+          /* the OLT uplink is not switched off here (it can be enabled): give the OLT role to another port first */
           if (p.can_disable !== false) { var b = el("button", "ghost sm", p.disabled ? "Enable" : "Disable"); b.type = "button"; b.onclick = function () { toggle(p); }; act.appendChild(b); }
-          else { act.appendChild(el("span", "muted", "move the OLT role to switch it off")); }
+          else { act.appendChild(el("span", "muted", "OLT port: can\u2019t be switched off here. Give the OLT role to another port first.")); }
           if (p.role_options && p.role_options.length) {
             var sel = el("select"); sel.setAttribute("aria-label", "Change the role of " + p.name);
             var o0 = el("option", "", "Change role…"); o0.value = ""; sel.appendChild(o0);
