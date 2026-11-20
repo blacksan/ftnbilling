@@ -821,3 +821,26 @@ func blockedSet(m map[string]string) map[string]bool {
 	}
 	return out
 }
+
+// OrderOnline reports whether a paid order's flat is really switched back on at its router: nothing stands in the way
+// of provisioning it (apartment, router, MAC, address, duplicate-MAC flag), the last pass left it in sync with no
+// queued task and no suspended entry, its lease is bound on that router, and the building was compared with the
+// router after the payment. The pay page's "You're back online" waits for this; anything else keeps it on "waiting".
+func (s *Service) OrderOnline(o store.Order) bool {
+	if o.Status != store.OrderPaid {
+		return false
+	}
+	var blocked bool
+	s.st.View(func(d *store.Data) {
+		a, ok := d.Accounts[o.AccountID]
+		blocked = !ok || provisionBlock(d, a) != "" || a.MACConflict || a.MAC == "" || a.IP == "" || a.Suspended || a.SiteID != o.SiteID
+	})
+	if blocked {
+		return false
+	}
+	st := s.AccountRouterState(o.AccountID)
+	if st.PendingTask || st.SuspendedOnRouter || !st.InSync || st.LeaseStatus != "bound" {
+		return false
+	}
+	return !s.ProvisionStatus(o.SiteID).LastRunAt.Before(o.PaidAt)
+}
