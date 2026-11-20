@@ -331,6 +331,15 @@ func TestManagerLifecycle(t *testing.T) {
 	}
 	// Edit restarts it.
 	c1 := f.m.Collector(a.ID)
+	// the WAN port of a router that has joined is locked, unless a new script is being made for it
+	if siteIsSetUp(f.site(a.ID)) {
+		if err := f.m.UpdateSite(a.ID, SiteInput{Name: "Block A2", WANInterface: "ether3"}); err == nil || !strings.Contains(err.Error(), "cannot be changed here") {
+			t.Fatalf("a joined router's WAN port was changed: %v", err)
+		}
+		if _, _, err := f.m.MintJoin(a.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := f.m.UpdateSite(a.ID, SiteInput{Name: "Block A2", WANInterface: "ether3"}); err != nil {
 		t.Fatal(err)
 	}

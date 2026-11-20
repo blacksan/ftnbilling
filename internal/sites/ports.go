@@ -133,6 +133,18 @@ type PortsView struct {
 }
 
 // portsManaged: the router is on the default-off policy (see PortsPolicyOff).
+// PortsOffNotice is the warning shown with the setup line: a router built by the script has only the uplink and
+// the admin port switched on. eff is the router's effective record (the configured port names).
+func PortsOffNotice(eff store.Site) string {
+	return "After setup, only " + eff.WANInterface + " (internet) and " + strings.Join(SplitPorts(eff.LANPorts), " and ") +
+		" (admin) are on. Turn on the OLT and customer ports in the Ports tab, or customers stay offline."
+}
+
+// PasteAdminHint tells the operator which port to be plugged into when pasting the line.
+func PasteAdminHint(eff store.Site) string {
+	return "Be plugged into the admin port (" + strings.Join(SplitPorts(eff.LANPorts), " or ") + ") when you paste the line: every other port is switched off while the router builds itself."
+}
+
 func portsManaged(s store.Site) bool { return s.PortsPolicy == PortsPolicyOff }
 
 // roleOf is the role the server stores for a port name.

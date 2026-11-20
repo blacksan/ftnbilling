@@ -278,6 +278,7 @@ func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site,
 		}
 	}
 	p.Data["Cmd"], p.Data["CmdNoCheck"], p.Data["CmdExpires"] = cmd, cmdNoCheck, exp
+	p.Data["PortsNotice"], p.Data["PasteHint"] = sites.PortsOffNotice(eff), sites.PasteAdminHint(eff)
 	p.Data["MgmtWinbox"] = s.mgr.MgmtWinbox(st.ID)
 	if p.Role == store.RoleOwner {
 		p.Data["WF"] = s.webfigViewFor(st)

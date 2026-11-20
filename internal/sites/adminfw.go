@@ -2,7 +2,9 @@ package sites
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"sort"
 	"strings"
@@ -70,6 +72,10 @@ func AdminAllowEntries(hosts []string) []AdminAllowEntry {
 		seen[h] = true
 		out = append(out, AdminAllowEntry{Address: h, Comment: adminAllowPrefix + h})
 	}
+	// IP entries first: RouterOS may already have resolved a name to the same IP, and then refuses the static row
+	sort.SliceStable(out, func(i, j int) bool {
+		return net.ParseIP(out[i].Address) != nil && net.ParseIP(out[j].Address) == nil
+	})
 	return out
 }
 
@@ -270,8 +276,8 @@ func evalAdminNet(e *evalCtx, it *CheckItem) {
 	it.Fix = CheckFix{Kind: FixAuto, Label: "Repair the admin port rules", Role: store.RoleOperator}
 }
 
-// fixAdminNet puts the allow list and the three rules right. The list goes first (so the accept is never
-// ahead of its names). Rules whose properties changed are set in place; when a rule is missing, doubled or
+// fixAdminNet puts the three rules and the allow list right. The rules go first and a list error does not stop
+// them. Rules whose properties changed are set in place; when a rule is missing, doubled or
 // not at the top, a complete new copy goes in above the first static forward rule and only then do the old
 // rows come out, so the admin port is never open in between.
 func fixAdminNet(ctx context.Context, fe *fixEnv) error {
@@ -299,7 +305,30 @@ func fixAdminNet(ctx context.Context, fe *fixEnv) error {
 	if diffAdmin(sn, rules, entries).ok() {
 		return nil
 	}
-	// 1. the list
+	// 1. the rules first: the drops do not depend on the list, and an accept with an empty list accepts
+	// nothing, so a failing list write must never keep the rules from landing.
+	if err := fixAdminRules(ctx, fe, sn, rules); err != nil {
+		return err
+	}
+	// 2. the list. A failure here is noted and retried by the next sweep; it does not fail the fix.
+	if err := fixAdminList(ctx, fe, sn, entries); err != nil {
+		if errors.Is(err, ErrAutoFixesPaused) {
+			return err
+		}
+		fe.w.note("could not update the admin allow list (%v); the next sweep tries again", err)
+	}
+	return nil
+}
+
+// alreadyHaveEntry: RouterOS refuses an address list row that exists already (a static IP next to the same
+// address resolved from a name). The row is there, which is what was wanted.
+func alreadyHaveEntry(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "already have such entry")
+}
+
+// fixAdminList puts the allow list right: IP entries before names (RouterOS may already have resolved a name
+// to the same IP); "already have such entry" counts as done.
+func fixAdminList(ctx context.Context, fe *fixEnv, sn *snapshot, entries []AdminAllowEntry) error {
 	have := map[string]routeros.Row{}
 	for _, r := range adminAllowRows(sn.tbl("/ip/firewall/address-list")) {
 		if strings.HasPrefix(r["comment"], adminAllowPrefix) {
@@ -313,7 +342,11 @@ func fixAdminNet(ctx context.Context, fe *fixEnv) error {
 		switch {
 		case !ok:
 			if err := fe.w.addRow(ctx, "/ip/firewall/address-list", map[string]string{"list": AdminAllowList, "address": en.Address, "comment": en.Comment}); err != nil {
-				return err
+				if !alreadyHaveEntry(err) {
+					return err
+				}
+				fe.w.note("%s is already in the admin allow list", en.Address)
+				continue
 			}
 			fe.w.note("added %s to the admin allow list", en.Address)
 		case !strings.EqualFold(r["address"], en.Address) || rowDisabled(r):
@@ -331,7 +364,11 @@ func fixAdminNet(ctx context.Context, fe *fixEnv) error {
 			fe.w.note("removed %s from the admin allow list", r["address"])
 		}
 	}
-	// 2. the rules
+	return nil
+}
+
+// fixAdminRules puts the three rules right (set in place, or a complete new copy above the old rows).
+func fixAdminRules(ctx context.Context, fe *fixEnv, sn *snapshot, rules []ipoeRule) error {
 	rows := sn.tbl("/ip/firewall/filter")
 	d := diffAdmin(sn, rules, nil)
 	var old []routeros.Row

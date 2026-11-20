@@ -317,7 +317,7 @@ func TestCustomerPortNonV5RouterIsUntouched(t *testing.T) {
 	s := f.joined("Block A")
 	f.st.Update(func(d *store.Data) error {
 		x := d.Sites[s.ID]
-		x.CustomerPorts = "ether5"
+		x.CustomerPorts, x.EnabledPorts = "ether5", "ether3,ether5"
 		d.Sites[s.ID] = x
 		return nil
 	})
@@ -761,7 +761,13 @@ func TestPortChoicesAcceptBondsAndListPhysicalFirst(t *testing.T) {
 	if _, ok := idx["bond1"]; !ok || idx["bond1"] < idx["ether3"] {
 		t.Fatalf("bond1 missing or before the physical ports: %v", got)
 	}
-	// and the save accepts it
+	// and the save accepts it once the owner has enabled the port
+	f.st.Update(func(d *store.Data) error {
+		x := d.Sites[s.ID]
+		x.EnabledPorts += ",bond1"
+		d.Sites[s.ID] = x
+		return nil
+	})
 	if err := f.saveInput(s.ID, func(in *SiteInput) { in.OLTInterface, in.Confirm = "bond1", true }); err != nil {
 		t.Fatalf("bonding uplink refused: %v", err)
 	}

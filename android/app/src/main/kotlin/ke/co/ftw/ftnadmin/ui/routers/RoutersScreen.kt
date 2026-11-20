@@ -211,7 +211,7 @@ fun RouterDetailScreen(
                     item { SiteSummary(s.value) }
                     webfigLaunchUrl(s.value.webfigUrl, user.isOwner)?.let { url -> item { OpenWebFigCard(url) } }
                     item { SetupStepsCard(setupUi, onRetry = setupVm::retry, onChecks = { onChecks(id) }) }
-                    item { BootstrapLineCard(setupUi, user.isOwner, onGet = setupVm::getLine, onHide = setupVm::hideLine) }
+                    item { BootstrapLineCard(setupUi, user.isOwner, onGet = setupVm::getLine, onHide = setupVm::hideLine, wanInterface = s.value.wanInterface, lanPorts = s.value.lanPorts) }
                     item { Button(onClick = { onNewDevices(id) }, modifier = Modifier.fillMaxWidth()) { Text("New devices on this router") } }
                     item { Button(onClick = { onChecks(id) }, modifier = Modifier.fillMaxWidth()) { Text("Setup and checks") } }
                     item { Button(onClick = { onPorts(id, s.value.label) }, modifier = Modifier.fillMaxWidth()) { Text("Ports") } }

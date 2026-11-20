@@ -90,6 +90,7 @@ type fixWriter struct {
 	lanPorts  map[string]bool // ports the server may put in br-lan (comment "ftn: LAN port")
 	staleLAN  map[string]bool // ports whose server-made br-lan membership may be removed
 	lanSafe   bool            // a wanted admin LAN port is a member of br-lan: old members may leave
+	uplink    map[string]bool // interfaces that carry the uplink (read from the router): never switched
 	offPorts  map[string]bool // physical ports the server may switch off or on (/interface disabled)
 	wan       string          // the WAN interface: never written
 	oldVLANs  map[string]bool // the server's own old customer VLAN interfaces it may remove once the new one is in place
@@ -155,7 +156,7 @@ func (w *fixWriter) allowedRow(path string, row routeros.Row) error {
 			return forbid("bridge port " + iface + " (bridge " + row["bridge"] + ") is not a customer port of this router")
 		}
 	case "/interface":
-		if !physicalType(row["type"]) || row["name"] == "" || row["name"] == w.wan || !w.offPorts[row["name"]] {
+		if !physicalType(row["type"]) || row["name"] == "" || row["name"] == w.wan || w.uplink[row["name"]] || !w.offPorts[row["name"]] {
 			return forbid("an interface that is not a non-WAN physical port the server may switch")
 		}
 	case "/interface/vlan":

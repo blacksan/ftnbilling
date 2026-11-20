@@ -140,7 +140,7 @@ To restore from a local dump on the same server instead: `sudo systemctl stop ft
 
 1. Open the admin and go to **Routers, Add router**. Give the name; the router layout defaults suit a standard install (WAN `ether1`, OLT port `sfp-sfpplus1`). Change the WAN mode (dhcp, static or pppoe), the admin LAN ports, the VLAN, the customer subnet or the bench port there if this router differs. A PPPoE password is write-only: the page shows that one is set, never the password.
 2. The dialog then shows the **one line** to paste. It is shown once, works once, and expires after 30 minutes. (On the router page, Setup, **Make the line** makes a new one.)
-3. Paste it in the router's terminal (WinBox, New Terminal). The router fetches its setup script, **erases itself and builds itself again** (WAN, admin LAN, customer network, DHCP, firewall, WireGuard tunnel, the API login), and reports back. The server generates the router's WireGuard private key when the router fetches the script, serves it once inside that script and does not store it (it keeps only the public key); the script deletes itself from the router. Nothing else is typed on the router, and the server never changes its users, services, tunnel, routes or WAN afterwards.
+3. Plug into the admin port (`ether2`) first: every other port is switched off while the router builds itself, so a WinBox session over any other port is lost. Then paste it in the router's terminal (WinBox, New Terminal). The router fetches its setup script, **erases itself and builds itself again** (WAN, admin LAN, customer network, DHCP, firewall, WireGuard tunnel, the API login), and reports back. The server generates the router's WireGuard private key when the router fetches the script, serves it once inside that script and does not store it (it keeps only the public key); the script deletes itself from the router. Nothing else is typed on the router, and the server never changes its users, services, tunnel, routes or WAN afterwards.
 
 **Ports are off until you enable them.** When the setup script finishes, only the uplink (`ether1`) and the admin port (`ether2`) are up. Every other ethernet and SFP port, the OLT port and the customer ports included, is switched off, so a cable plugged into a spare port gets nothing. Enable each port you use from the **Ports** tab (web or Android): the server switches it on at the router and remembers that you enabled it. The sweep never switches on a port you did not enable, and it switches off any port that is on at the router but that you did not enable (an unused port someone switched on by hand stays off). The OLT port cannot be switched off from the tab ("give the OLT role to another port first") but it does start off, so enable it before the customers can connect. The uplink and the admin port are never switched off by the server.
 
@@ -207,6 +207,18 @@ How it is kept narrow: the profile routes only the routers' tunnel range (`WG_SU
 **Do not run Docker on this server.** Docker publishes container ports by its own iptables rules, which bypass ufw's forward rules and would open a path the rules above are meant to close. If you change `MGMT_PORT`, the installer removes the old port's ufw rule; with `NO_FIREWALL=1` remote WinBox is skipped and the forwarding it switched on earlier is switched off again.
 
 **Routers built before this feature** have no such rule, and the server never changes a router's services or firewall after the bootstrap. Reset each one (Setup, **Reset router**) and paste the new line once; the rebuilt router has it. Until then WinBox works as before on its LAN. Changing `MGMT_SUBNET` later likewise needs every device re-added and every router rebuilt.
+
+### First fresh-router test (bench checklist)
+
+Not yet run on a real RouterOS 7.25.1 router. On the bench RB5009, once, before a release:
+
+- [ ] Paste the line with the laptop on `ether2`. The terminal does not stop half way and the router reports back.
+- [ ] `/interface print`: every ethernet and SFP port except `ether1` and `ether2` is disabled (`:foreach ... disabled=yes` ran), including `sfp-sfpplus1`.
+- [ ] `/ip firewall address-list print where list=ftn-admin-allow`: with the WAN down at script time the FQDN adds may fail (the script prints a note); after the first sweep all three entries are there. Check what RouterOS does when a static IP is added while an FQDN entry already resolved to the same IP ("already have such entry" is treated as done).
+- [ ] `:typeof [:find $keepUp $n]` gives `"nil"` for a port that is not in the keep-up list (7.25.1 behaviour of the keep-up test).
+- [ ] The admin laptop reaches WinBox, WebFig and the billing site, and gets no other internet; a customer port that was enabled in the Ports tab still works.
+- [ ] After the sweep, `ether3` and the OLT port stay off until enabled in the Ports tab; enabling the OLT port brings the customers back.
+- [ ] A router built with PPPoE on `ether1`: edit nothing, run two sweeps, `ether1` stays up.
 
 ## 3. Check
 

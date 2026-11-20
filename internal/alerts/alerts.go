@@ -449,6 +449,22 @@ func (e *Engine) readOffline(site store.Site) reading {
 	return reading{}
 }
 
+// OLTOffMsg replaces the "OLT port down" alert while the OLT port is switched off by the ports-off policy.
+const OLTOffMsg = "OLT port off — enable it in the Ports tab"
+
+// oltOffByPolicy: the router is on the ports-off policy and the owner has not enabled the OLT port.
+func oltOffByPolicy(site store.Site, olt string) bool {
+	if site.PortsPolicy != "off" || olt == "" {
+		return false
+	}
+	for _, p := range strings.Split(site.EnabledPorts, ",") {
+		if strings.TrimSpace(p) == olt {
+			return false
+		}
+	}
+	return true
+}
+
 func recent(t, now time.Time) bool { return !t.IsZero() && now.Sub(t) <= stale }
 
 func (e *Engine) readMetric(rule string, site store.Site, set Settings, now time.Time) reading {
@@ -468,6 +484,10 @@ func (e *Engine) readMetric(rule string, site store.Site, set Settings, now time
 		return reading{known: true, active: util >= r.Threshold,
 			detail: fmt.Sprintf("WAN at %.0f%% of %.0f Mbps (rx %.0f, tx %.0f Mbps)", util, cfg.WANCapMbps, rx, tx)}
 	case RuleOLTDown:
+		if oltOffByPolicy(site, cfg.OLT) {
+			// switched off on purpose until the owner enables it: not an outage
+			return reading{known: true, detail: OLTOffMsg}
+		}
 		p, has := live.Ports[cfg.OLT]
 		if !has || !recent(p.At, now) {
 			return reading{}

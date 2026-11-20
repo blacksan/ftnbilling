@@ -560,6 +560,26 @@ func (m *Manager) UpdateSiteCtx(ctx context.Context, id string, in SiteInput) er
 			return fmt.Errorf("there is already a router called %q", s.Name)
 		}
 		was, now := m.Effective(cur), m.Effective(s)
+		if now.WANInterface != was.WANInterface && siteIsSetUp(cur) && TokenStateOf(cur.Join, m.now()) != TokenPending {
+			return fieldErr("wan_interface", "%s", WANPortLockedMsg)
+		}
+		// the OLT port and the customer ports of a router on the ports-off policy must already be switched on by the owner
+		if portsManaged(cur) && siteIsSetUp(cur) {
+			var moved []string
+			if now.OLTInterface != was.OLTInterface {
+				moved = append(moved, now.OLTInterface)
+			}
+			moved = append(moved, addedPorts(SplitPorts(was.CustomerPorts), SplitPorts(now.CustomerPorts))...)
+			for _, p := range moved {
+				if p != "" && !containsStr(SplitPorts(cur.EnabledPorts), p) {
+					field := "customer_ports"
+					if p == now.OLTInterface && now.OLTInterface != was.OLTInterface {
+						field = "olt_interface"
+					}
+					return fieldErr(field, "%s", PortNotEnabledMsg(p))
+				}
+			}
+		}
 		portsChanged = now.CustomerPorts != was.CustomerPorts || now.LANPorts != was.LANPorts || now.OLTInterface != was.OLTInterface || now.VLANID != was.VLANID
 		if (now.OLTInterface != was.OLTInterface || now.VLANID != was.VLANID) && siteIsSetUp(cur) && !in.Confirm {
 			return ErrOLTConfirmRequired
@@ -582,6 +602,14 @@ func (m *Manager) UpdateSiteCtx(ctx context.Context, id string, in SiteInput) er
 		}
 	}
 	return err
+}
+
+// WANPortLockedMsg: the WAN port of a router that has joined cannot be edited in the router form.
+const WANPortLockedMsg = "The internet port (WAN) of a router that has joined cannot be changed here: the router would lose its uplink. Make a new setup line (rebuild) for this router, then change it."
+
+// PortNotEnabledMsg: a role cannot move to a port the owner has not switched on (same rule as ChangePort).
+func PortNotEnabledMsg(port string) string {
+	return "Enable " + port + " in the Ports tab first, then move the role to it."
 }
 
 // siteIsSetUp: the router has joined (its key is known and it has answered), whether or not billing has

@@ -15,7 +15,7 @@ Unknown fields are ignored. Validation errors are 400 `validation_failed` with a
 | Field | Type | Default | Rule |
 |---|---|---|---|
 | `name` | string | - | 1 to 60 characters |
-| `wan_interface` | string | `ether1` | RouterOS interface name (letters, digits, `.`, `-`, `_`) |
+| `wan_interface` | string | `ether1` | RouterOS interface name (letters, digits, `.`, `-`, `_`). Refused (400, field `wan_interface`) on a router that has joined, unless a new setup line is pending (the router is being rebuilt) |
 | `wan_mode` | string | `dhcp` | `dhcp`, `static`, `pppoe` |
 | `wan_address` | string | "" | static only: IPv4 with prefix, `203.0.113.10/29` |
 | `wan_gateway` | string | "" | static only: IPv4 |
@@ -243,7 +243,9 @@ enable and disable are written at once (one read, one write).
 Disabling a customer port needs no typed name; `disable_warning` carries the number of flats seen on it, when known. An operator may enable, disable and change the role of customer and unused ports.
 Every change is in the router's activity with the actor (`port ether5: role Unused -> Customer port`, `port ether5 disabled`). A customer or unused port the server switched off is remembered (`disabled_ports` on the router) and kept off by the
 sweep (`switched off ether5`, actor `system`); enabling it forgets it. An Admin LAN port that is switched off is a one-off: it is not remembered, so enabling it again at the router is not undone;
-the sweep never switches a LAN port or the OLT uplink off. The sweep and the apply honour "Pause automatic fixes"; an explicit change from the page runs anyway.
+the sweep never switches a LAN port off, and switches the OLT uplink off only on a router with `ports_policy` `off` (below) when the owner has not enabled it. The sweep and the apply honour "Pause automatic fixes"; an explicit change from the page runs anyway.
+
+The sweep never switches off any interface that carries the uplink, read from the router on every sweep: the stored WAN port, every WAN list member, the parent of any PPPoE client, any DHCP client interface, any interface with an address that is not the server's own bridges or customer VLANs, the interface of the default route, and the parent of a VLAN or the members of a bridge among those. If that read is incomplete, no port is changed. Changing the OLT port or a customer port in the router form to a port the owner has not enabled is refused with "Enable <port> in the Ports tab first, then move the role to it."
 
 Ports are off by default. A router built by the current script has every port except the uplink and the Admin LAN port switched off, the OLT and customer ports included, and `ports_policy` `off`. A port is on only when the owner enabled it (`PATCH` with `disabled: false`; the server switches it on and records it in `enabled_ports`); the sweep switches off any other port that is on, never switches one on, and never touches the uplink or the Admin LAN port. Each port row carries `owner_enabled`, a `note` (the Admin LAN port: "Admin — router management and the billing site only") and a `warning` ("Up with no role — disable it if you don't use it" for a port that is up with no role). A router from before the policy (`ports_policy` empty) gets it at its first sweep: every port that is on and has a role or a link is recorded as enabled, so nothing in service goes down.
 

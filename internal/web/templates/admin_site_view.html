@@ -48,6 +48,7 @@
 <div data-setup-view aria-live="polite">{{template "setup_steps" .}}</div></section>{{end}}
 <section class="panel"><div class="panel-h"><h2>Set up the router</h2></div>
 {{if .Data.Cmd}}<p>Paste this one line in the router's terminal (WinBox, New Terminal). It works once, for {{.Data.TTL}} minutes. The router then builds itself; nothing else is typed on it.</p>
+<p class="bad" data-ports-notice><strong>{{.Data.PortsNotice}}</strong></p><p>{{.Data.PasteHint}}</p>
 <div class="cmdbox"><textarea id="joincmd" readonly rows="3" aria-label="Bootstrap line">{{.Data.Cmd}}</textarea><button type="button" class="btn" data-copy-from="#joincmd">Copy line</button></div>
 <details><summary>If the line fails with a certificate error</summary><p class="muted">The router's clock is probably wrong or it has no certificate store. Correct the clock first. If that is not possible, this line is the same without the certificate check.</p>
 <div class="cmdbox"><textarea id="joincmd2" readonly rows="3" aria-label="Bootstrap line without certificate check">{{.Data.CmdNoCheck}}</textarea><button type="button" class="btn ghost" data-copy-from="#joincmd2">Copy line</button></div></details>
@@ -55,6 +56,7 @@
 <form method="post" action="/admin/routers/join/revoke"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button class="ghost sm">Cancel this line</button></form>
 {{else}}{{if and .Data.Insecure (not .Data.AllowInsecure)}}<p class="bad">PUBLIC_BASE_URL must start with https:// before a line can be made.</p>{{end}}
 <p class="muted">The router must run RouterOS 7 with the right clock. The line erases the router and builds it again, so use it on a new router, or on one you mean to rebuild. If the router asks for its reset button to be pressed (fetch is off in device mode), press it and paste the same line again.</p>
+<p class="bad" data-ports-notice><strong>{{.Data.PortsNotice}}</strong></p><p class="muted">{{.Data.PasteHint}}</p>
 {{if .CanWrite}}<form method="post" action="/admin/routers/join"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button>{{if .Data.Status.Joined}}Make a new line (rebuilds the router){{else}}Make the line{{end}}</button></form>{{end}}{{end}}</section>
 <section class="panel"><div class="panel-h"><h2>Automatic fixes</h2><span class="pill {{if .Data.Pause.Paused}}paused{{else}}online{{end}}" data-autofix-state>{{if .Data.Pause.Paused}}paused{{if .Data.Pause.Until}} until {{eat .Data.Pause.Until}}{{end}}{{else}}on{{end}}</span></div>
 <p class="muted">The server fixes safe problems by itself, and keeps customer DNS, the customer DHCP server and traffic reporting on. Pause this while you change one of them on purpose: nothing is then applied by itself (a customer port you save is still applied).</p>

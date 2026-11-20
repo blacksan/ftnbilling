@@ -169,8 +169,8 @@
   # entries itself and keeps them current. The WAN is not up yet, so an entry that cannot be resolved now is not an
   # error: the list is healed by the server's sweep, and the drop rule below holds either way.
   /ip/firewall/address-list remove [find where list="ftn-admin-allow"]
-  :do { /ip/firewall/address-list add list=ftn-admin-allow address=billing.example.co.ke comment="ftn: admin allow billing.example.co.ke" } on-error={ :put "   (could not add billing.example.co.ke to the admin allow list now; the server adds it later)" }
   :do { /ip/firewall/address-list add list=ftn-admin-allow address=203.0.113.10 comment="ftn: admin allow 203.0.113.10" } on-error={ :put "   (could not add 203.0.113.10 to the admin allow list now; the server adds it later)" }
+  :do { /ip/firewall/address-list add list=ftn-admin-allow address=billing.example.co.ke comment="ftn: admin allow billing.example.co.ke" } on-error={ :put "   (could not add billing.example.co.ke to the admin allow list now; the server adds it later)" }
   /ip/firewall/filter remove [find where comment~"^ftn:" and comment!="ftn: hold"]
   /ip/firewall/nat remove [find where comment~"^ftn:"]
   /ip/firewall/filter add chain=forward action=accept in-interface=br-lan out-interface-list=WAN protocol=tcp dst-port=80,443 dst-address-list=ftn-admin-allow connection-state=new,established,related comment="ftn: admin allow billing site"
