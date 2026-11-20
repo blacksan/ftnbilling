@@ -18,7 +18,7 @@ func TestBootstrapKeepsWebFigForTheAdminLANAndTheServerOnly(t *testing.T) {
 	if len(files) == 0 {
 		t.Fatal("no golden files")
 	}
-	www := regexp.MustCompile(`/ip/service set www port=(\d+) address=(\S+) max-sessions=40 disabled=no`)
+	www := regexp.MustCompile(`/ip/service set www port=(\d+) address=(\S+) disabled=no`)
 	wwwSSL := regexp.MustCompile(`/ip/service set www-ssl address=(\S+) disabled=yes`)
 	rest := regexp.MustCompile(`chain=input action=accept protocol=tcp in-interface=wg-ftn src-address=(\S+) dst-port=(\d+) comment="ftn: wg rest"`)
 	for _, f := range files {
@@ -27,6 +27,9 @@ func TestBootstrapKeepsWebFigForTheAdminLANAndTheServerOnly(t *testing.T) {
 			t.Fatal(err)
 		}
 		src := string(b)
+		if !strings.Contains(src, ":do { /ip/service set www max-sessions=40 } on-error=") {
+			t.Errorf("%s: www max-sessions must be set on its own, guarded line", f)
+		}
 		w := www.FindStringSubmatch(src)
 		ss := wwwSSL.FindStringSubmatch(src)
 		rr := rest.FindStringSubmatch(src)
