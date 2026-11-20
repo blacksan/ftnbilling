@@ -213,6 +213,10 @@
   :do {
     /ipv6/firewall/filter remove [find where comment~"^ftn:"]
     /ipv6/firewall/filter add chain=forward action=drop in-interface=br-customers comment="ftn: ipv6 drop"
+    # Belt and braces (IPv6 is switched off above): if the uplink ever hands out IPv6, nothing but the admin LAN reaches the router over it.
+    /ipv6/firewall/filter add chain=input action=accept connection-state=established,related comment="ftn: ipv6 input est/rel"
+    /ipv6/firewall/filter add chain=input action=accept protocol=icmpv6 comment="ftn: ipv6 input icmpv6"
+    /ipv6/firewall/filter add chain=input action=drop in-interface-list=!LAN comment="ftn: ipv6 input drop non-LAN"
   } on-error={ :put "   (no IPv6 firewall on this router)" }
 } on-error={ :set report ($report . "7 DNS and IPv6: failed (no error text before RouterOS 7.13)\n"); :set fails ($fails + 1); :put "ftn: section 7 DNS and IPv6 failed, continuing" }
 

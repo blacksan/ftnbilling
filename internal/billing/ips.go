@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/netip"
 	"sort"
 	"strings"
 	"time"
@@ -231,17 +230,46 @@ func firstNonEmpty(v ...string) string {
 	return ""
 }
 
-// ipLess orders dotted-quad strings numerically.
-func ipLess(a, b string) bool {
-	x, e1 := netip.ParseAddr(a)
-	y, e2 := netip.ParseAddr(b)
-	if e1 != nil || e2 != nil {
-		return a < b
-	}
-	return x.Less(y)
-}
-
 var _ = routeros.RowID
+
+// readdressClashes gives every open flat of the building whose address is held by one of the router's own
+// static leases a fresh address from the static range, and queues its router work.
+func (s *Service) readdressClashes(siteID string, pl netplan.Plan, foreignList, codes []string) {
+	if len(foreignList) == 0 || len(codes) == 0 {
+		return
+	}
+	only := make(map[string]bool, len(codes))
+	for _, c := range codes {
+		only[c] = true
+	}
+	foreign := make(map[string]bool, len(foreignList))
+	for _, ip := range foreignList {
+		foreign[ip] = true
+	}
+	_ = s.st.Update(func(d *store.Data) error {
+		changed := false
+		for _, a := range d.AccountList() {
+			if a.SiteID != siteID || a.IP == "" || !foreign[a.IP] || !only[a.Code] {
+				continue
+			}
+			fresh, err := FreeIPLocked(d, siteID, pl, foreign)
+			if err != nil {
+				continue
+			}
+			old := a.IP
+			a.IP = fresh
+			d.Accounts[a.ID] = a
+			s.enqueueLocked(d, a, "address changed")
+			d.AddEvent(store.Event{Time: s.now(), SiteID: siteID, Kind: "info", AccountID: a.ID,
+				Msg: fmt.Sprintf("%s (%s): address %s is held by a static lease of the router, moved to %s", a.Flat, a.Code, old, fresh)})
+			changed = true
+		}
+		if !changed {
+			return store.ErrNoChange
+		}
+		return nil
+	})
+}
 
 // foreignIPs are the addresses of the router's own static leases seen by the
 // last pass: they are not handed to a flat.

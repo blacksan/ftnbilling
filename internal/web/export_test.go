@@ -41,3 +41,11 @@ func (s *Server) AuthInjectAccountFailures(name string, n int) {
 		s.auth.login.all = append(s.auth.login.all, time.Now())
 	}
 }
+
+// ResetPayLimiters forgets recent /pay attempts (the limiters are package-wide
+// and every test arrives from 127.0.0.1).
+func ResetPayLimiters() {
+	payIPRL, payFindRL = newLimiter(60, 10*time.Minute), newLimiter(120, time.Minute)
+	payIPRLOpen, payFindRLOpen = newLimiter(8, 10*time.Minute), newLimiter(15, time.Minute)
+	payAcctRL = newLimiter(4, 10*time.Minute)
+}

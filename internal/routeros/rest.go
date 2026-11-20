@@ -43,7 +43,7 @@ func (e *APIError) Error() string {
 // REST implements Client over RouterOS v7 /rest with basic auth.
 //
 // Budget for a slow tunnel: one transport and one set of slots per router base
-// URL (shared by every REST value built for it): 2 reads and 1 write in
+// URL (shared by every REST value built for it): 2 reads, 1 write and 1 ping or traceroute in
 // flight, at most 3 connections, keep-alive. The per-call deadline starts only
 // once a slot is held, so queueing does not eat the router's time.
 type REST struct {
@@ -66,6 +66,7 @@ type endpoint struct {
 	hc     *http.Client
 	reads  chan struct{}
 	writes chan struct{}
+	tools  chan struct{} // ping and traceroute: they change nothing, so they never take the write slot
 }
 
 var (
@@ -82,8 +83,8 @@ func endpointFor(base string) *endpoint {
 	tr := &http.Transport{
 		Proxy:                 nil,
 		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		MaxConnsPerHost:       readSlots + writeSlots,
-		MaxIdleConnsPerHost:   readSlots + writeSlots,
+		MaxConnsPerHost:       readSlots + writeSlots + 1, // + the ping/traceroute slot
+		MaxIdleConnsPerHost:   readSlots + writeSlots + 1,
 		IdleConnTimeout:       90 * time.Second,
 		ResponseHeaderTimeout: 0, // the per-call deadline bounds it
 	}
@@ -91,6 +92,7 @@ func endpointFor(base string) *endpoint {
 		hc:     &http.Client{Transport: tr},
 		reads:  make(chan struct{}, readSlots),
 		writes: make(chan struct{}, writeSlots),
+		tools:  make(chan struct{}, 1),
 	}
 	endpoints[base] = e
 	return e
@@ -154,8 +156,19 @@ func transient(err error) bool {
 // starts the deadline. Reads are retried once after 300 ms on timeout or
 // reset; writes only when the request was never sent.
 func (c *REST) doT(ctx context.Context, timeout time.Duration, method, path string, q url.Values, body, out any) error {
+	return c.doSlot(ctx, nil, timeout, method, path, q, body, out)
+}
+
+// doTool is doT for ping and traceroute: a POST that only measures. It has its own slot, so a running ping
+// (5 s or more) does not hold the router's single write slot, and writes do not wait behind it.
+func (c *REST) doTool(ctx context.Context, timeout time.Duration, method, path string, q url.Values, body, out any) error {
+	return c.doSlot(ctx, c.ep.tools, timeout, method, path, q, body, out)
+}
+
+// doSlot: slots nil = the read slots for GET and the write slots for everything else.
+func (c *REST) doSlot(ctx context.Context, slots chan struct{}, timeout time.Duration, method, path string, q url.Values, body, out any) error {
 	read := method == http.MethodGet
-	err := c.once(ctx, read, timeout, method, path, q, body, out)
+	err := c.once(ctx, slots, read, timeout, method, path, q, body, out)
 	if err == nil || ctx.Err() != nil {
 		return err
 	}
@@ -165,15 +178,17 @@ func (c *REST) doT(ctx context.Context, timeout time.Duration, method, path stri
 		case <-ctx.Done():
 			return err
 		}
-		return c.once(ctx, read, timeout, method, path, q, body, out)
+		return c.once(ctx, slots, read, timeout, method, path, q, body, out)
 	}
 	return err
 }
 
-func (c *REST) once(ctx context.Context, read bool, timeout time.Duration, method, path string, q url.Values, body, out any) error {
-	slots := c.ep.writes
-	if read {
-		slots = c.ep.reads
+func (c *REST) once(ctx context.Context, slots chan struct{}, read bool, timeout time.Duration, method, path string, q url.Values, body, out any) error {
+	if slots == nil {
+		slots = c.ep.writes
+		if read {
+			slots = c.ep.reads
+		}
 	}
 	select {
 	case slots <- struct{}{}:

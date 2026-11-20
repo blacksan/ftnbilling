@@ -157,6 +157,12 @@ func printCounts(out io.Writer, c pgstore.Counts) {
 	}
 }
 
+// churnTables are tables whose rows the app legitimately deletes after a dump is taken (expired admin
+// sessions, a spent setup code in settings, pruned revoked phones, dismissed devices, finished tasks).
+// A restored copy holding more rows than live is normal for them; for every other table (payments,
+// accounts, orders, events ...) it still means the restore is not a faithful older copy.
+var churnTables = map[string]bool{"admin_sessions": true, "api_devices": true, "settings": true, "devices": true, "tasks": true}
+
 // compareDB prints how a restored copy (counts) differs from the live
 // database. The restored copy may legitimately be missing rows added since
 // the dump; it must never hold more than the live database.
@@ -177,6 +183,8 @@ func compareDB(ctx context.Context, out io.Writer, restored pgstore.Counts, live
 		r, l := restored.Rows[t], live.Rows[t]
 		note := ""
 		switch {
+		case r > l && churnTables[t]:
+			note = fmt.Sprintf("  (%d removed since the dump: normal for this table)", r-l)
 		case r > l:
 			bad = append(bad, fmt.Sprintf("%s: restored copy has %d rows but the live database has %d", t, r, l))
 			note = "  MORE THAN LIVE"

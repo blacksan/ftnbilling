@@ -118,7 +118,6 @@ type codec[V any] struct {
 	args  func(V) []any
 	dst   func(*V) []any
 	upsql string
-	table string
 	// guard, when set, is a condition (on the existing row and EXCLUDED) that
 	// must hold for an update to apply; a write that fails it changes nothing
 	// and Commit reports store.ErrStaleWrite.

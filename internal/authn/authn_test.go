@@ -421,6 +421,9 @@ func TestRefreshRotationReuseAndGrace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The phone uses its newest pair (this is what tells the server the last answer arrived) ...
+	c.add(time.Second)
+	s.TouchDevice(dev.ID, "1.1.1.1")
 	c.add(2 * time.Minute)
 	if _, _, _, err := s.Refresh(t2.Refresh, "6.6.6.6"); !errors.Is(err, authn.ErrTokenRevoked) {
 		t.Fatalf("reuse after grace: %v", err)

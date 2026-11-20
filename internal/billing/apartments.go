@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
-	"sort"
 	"strings"
 	"time"
 
@@ -583,7 +582,7 @@ func (s *Service) MoveToApartment(ctx context.Context, in MoveInput) (store.Acco
 				return err
 			}
 			for k, o := range d.Orders {
-				if o.AccountID == a.ID && o.Status == store.OrderPending {
+				if o.AccountID == a.ID && (o.Status == store.OrderPending || o.Status == store.OrderExpired) {
 					o.Status, o.Reason = store.OrderFailed, "account moved to another building"
 					d.Orders[k] = o
 				}
@@ -601,22 +600,7 @@ func (s *Service) MoveToApartment(ctx context.Context, in MoveInput) (store.Acco
 		return nil
 	})
 	if err == nil {
-		if from != "" {
-			s.RunSiteTasks(ctx, from)
-		}
-		if to != "" && to != from {
-			s.RunSiteTasks(ctx, to)
-		}
+		s.runSitesShort(ctx, to, from) // both at once: the new router never waits for the old one
 	}
 	return out, err
-}
-
-// SortedUnits lists the units of the accounts, for messages.
-func SortedUnits(as []store.Account) []string {
-	out := make([]string, 0, len(as))
-	for _, a := range as {
-		out = append(out, a.Unit)
-	}
-	sort.Slice(out, func(i, j int) bool { return store.NaturalLess(out[i], out[j]) })
-	return out
 }

@@ -62,12 +62,12 @@ class ApartmentsTest {
         server.start()
         val sessions = SessionManager(MemoryTokenStore(Session("a", "", "r", "", "d", UserInfo("1", "b", "owner"))))
         sessions.restore()
-        api = ApiClient.create(server.url("/").toString(), sessions)
+        api = ApiClient.create(server.url("/").toString(), sessions, io = main.dispatcher)
     }
 
     @After fun tearDown() {
-        Thread.sleep(300)
-        main.dispatcher.scheduler.advanceUntilIdle()
+        // Cancel the view models first, so no call is resumed on a Main that is about to be reset.
+        main.cancelViewModels()
         server.shutdown()
     }
 
@@ -125,7 +125,7 @@ class ApartmentsTest {
 
     @Test fun listLoadsAndSearchAsksTheServer() = runTest(main.dispatcher) {
         routes["GET /api/v1/apartments"] = ok("""{"items":[$apt],"next_cursor":null}""")
-        val vm = ApartmentsViewModel(ApartmentsRepository(api), debounceMs = 0)
+        val vm = main.track(ApartmentsViewModel(ApartmentsRepository(api), debounceMs = 0))
         await(vm.state) { it.items is Loadable.Ready }
         assertEquals("ap1", (vm.state.value.items as Loadable.Ready).value.single().id)
         vm.onQuery("otieno")
@@ -138,7 +138,7 @@ class ApartmentsTest {
         routes["GET /api/v1/apartments/ap1"] = ok(apt)
         routes["GET /api/v1/routers"] = ok("""{"items":[{"id":"r1","name":"Kilimani"},{"id":"r2","name":"Lavington"}]}""")
         routes["POST /api/v1/apartments/ap1/routers"] = ok(apt.replace("\"routers\":[", "\"routers\":[{\"site_id\":\"r2\",\"router_id\":\"r2\",\"router_name\":\"Lavington\"},"))
-        val vm = ApartmentDetailViewModel("ap1", ApartmentsRepository(api), SitesRepository(api))
+        val vm = main.track(ApartmentDetailViewModel("ap1", ApartmentsRepository(api), SitesRepository(api)))
         await(vm.state) { it.apartment is Loadable.Ready && it.allRouters.isNotEmpty() }
         assertEquals("only the router that does not serve it yet is offered", listOf("r2"), vm.state.value.linkable.map { it.key })
         vm.link("r2")
@@ -151,7 +151,7 @@ class ApartmentsTest {
         routes["GET /api/v1/apartments/ap1"] = ok(apt)
         routes["GET /api/v1/routers"] = ok("""{"items":[]}""")
         routes["DELETE /api/v1/apartments/ap1/routers/r1"] = err(409, "router_serves_accounts", msg = "Kilimani still serves 2 flats of MG One Central.")
-        val vm = ApartmentDetailViewModel("ap1", ApartmentsRepository(api), SitesRepository(api))
+        val vm = main.track(ApartmentDetailViewModel("ap1", ApartmentsRepository(api), SitesRepository(api)))
         await(vm.state) { it.apartment is Loadable.Ready }
         vm.askUnlink("r1")
         vm.unlink()
@@ -164,7 +164,7 @@ class ApartmentsTest {
     @Test fun formCreatesWithRoutersAndContactsAndShowsPhoneErrors() = runTest(main.dispatcher) {
         routes["GET /api/v1/routers"] = ok("""{"items":[{"id":"r1","name":"Kilimani"}]}""")
         routes["POST /api/v1/apartments"] = err(400, "validation_failed", """{"fields":{"caretaker.phone":"Caretaker phone: not a Kenyan number"}}""")
-        val vm = ApartmentFormViewModel(null, ApartmentsRepository(api), SitesRepository(api))
+        val vm = main.track(ApartmentFormViewModel(null, ApartmentsRepository(api), SitesRepository(api)))
         await(vm.state) { it.allRouters.isNotEmpty() }
         assertEquals("a single router is preselected", setOf("r1"), vm.state.value.routerIds)
         vm.onName("MG One Central")
@@ -188,7 +188,7 @@ class ApartmentsTest {
         routes["GET /api/v1/packages"] = ok("""{"items":[]}""")
         routes["GET /api/v1/apartments"] = ok("""{"items":[$apt]}""")
         routes["POST /api/v1/accounts/a1/move"] = err(409, "unit_in_use", msg = "Unit C2 is used.")
-        val vm = CustomerDetailViewModel("a1", AccountsRepository(api), ApartmentsRepository(api))
+        val vm = main.track(CustomerDetailViewModel("a1", AccountsRepository(api), ApartmentsRepository(api)))
         await(vm.state) { it.account is Loadable.Ready }
         vm.openMove()
         await(vm.state) { it.apartments is Loadable.Ready }
@@ -213,10 +213,10 @@ class ApartmentsTest {
         routes["GET /api/v1/routers/r2/clients"] = ok("""{"items":[],"counts":{}}""")
     }
 
-    private fun addVm(router: String? = null) = AddCustomerViewModel(
+    private fun addVm(router: String? = null) = main.track(AddCustomerViewModel(
         AccountsRepository(api), RouterLiveRepository(api), SitesRepository(api), ApartmentsRepository(api),
         initialRouterId = router, initialMac = null, pollMs = 10, maxPolls = 3,
-    )
+    ))
 
     @Test fun addCustomerNeedsAnApartmentAndTakesTheOnlyRouterByItself() = runTest(main.dispatcher) {
         addRoutes("""{"items":[$apt,{"id":"ap2","name":"Hilltop","routers":[{"site_id":"r1","router_id":"r1"},{"site_id":"r2","router_id":"r2"}]}]}""")
@@ -269,7 +269,7 @@ class ApartmentsTest {
         "belongs_to":{"account_id":"a1","code":"FTN-1","customer":"Wanjiru","apartment":{"id":"ap7","name":"Hilltop"},"unit":"A-1","site_id":"r1","site_name":"Kilimani",
         "same_apartment":false,"move_to_choices":[{"id":"ap2","name":"Lavington Court"}]}}"""
 
-    private fun devicesVm() = NewDevicesViewModel(null, NewDevicesRepository(api), SitesRepository(api), AccountsRepository(api), ApartmentsRepository(api))
+    private fun devicesVm() = main.track(NewDevicesViewModel(null, NewDevicesRepository(api), SitesRepository(api), AccountsRepository(api), ApartmentsRepository(api)))
 
     @Test fun newDeviceOfAnotherApartmentShowsBelongsToAndMovesTheCustomerAfterConfirm() = runTest(main.dispatcher) {
         routes["GET /api/v1/unregistered"] = ok("""{"items":[$otherDevice]}""")

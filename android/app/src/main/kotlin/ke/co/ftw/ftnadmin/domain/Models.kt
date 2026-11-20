@@ -213,6 +213,11 @@ data class Site(
     @SerialName("tunnel_address") val tunnelAddress: String = "",
     /** True only when the router reported being built with remote WinBox for the current management subnet. */
     @SerialName("mgmt_winbox") val mgmtWinbox: Boolean = false,
+    /**
+     * The admin's own page for opening this router's WebFig through the server (owners only; the page asks for
+     * the password and authenticator code again). Empty when remote WebFig is off on the server or the router has no tunnel.
+     */
+    @SerialName("webfig_url") val webfigUrl: String = "",
     @SerialName("olt_interface") val oltInterface: String = "",
     @SerialName("vlan_id") val vlanId: Int = 0,
     @SerialName("customer_subnet") val customerSubnet: String = "",
@@ -353,8 +358,6 @@ data class NewDevice(
     @SerialName("last_seen") val lastSeen: String? = null,
     val hits: Int = 0,
     @SerialName("suggested_account") val suggestedAccount: SuggestedAccount? = null,
-    /** Name of the router entry holding this MAC when the server has no account for it. */
-    @SerialName("router_user") val routerUser: String = "",
     /** Set when the MAC belongs to a customer of another apartment: not provisioned here. */
     @SerialName("belongs_to") val belongsTo: BelongsTo? = null,
 ) {

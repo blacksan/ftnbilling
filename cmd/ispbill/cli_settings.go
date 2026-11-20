@@ -111,6 +111,13 @@ func runSettingsCommand(cmd string, args []string, getenv func(string) string, o
 				fmt.Fprintf(out, "  %-28s %s%s\n", f.Key, f.Source, mark)
 			}
 		}
+		if eff := m.Effective(); eff.MpesaEnabled() {
+			if on, why := eff.MpesaConfirm(); on {
+				fmt.Fprintln(out, "\nreceipt confirmation: on (each M-Pesa receipt is checked with Daraja before it is credited)")
+			} else {
+				fmt.Fprintln(out, "\nreceipt confirmation: OFF: "+why)
+			}
+		}
 		if p := m.Problems(); len(p) > 0 {
 			fmt.Fprintln(out, "\nstored values that are ignored:")
 			for _, x := range p {

@@ -465,9 +465,6 @@ func cloneData(d *Data) Data {
 	}
 }
 
-// Diff is exported for tests and tools: what would change from before to after.
-func Diff(after, before *Data) *ChangeSet { return diffData(after, before, time.Now()) }
-
 // NormTime is nt for other packages: UTC, microseconds, zero stays zero.
 func NormTime(t time.Time) time.Time { return nt(t) }
 

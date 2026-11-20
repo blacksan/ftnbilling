@@ -42,19 +42,26 @@
 #   NO_FIREWALL=1 do not touch ufw.
 #   DRY_RUN=1     print what would be done; change nothing (works without root).
 #   ADMIN_PASS    a random one is generated on first install.
-#   CADDY_MPESA_IPS  optional: space- or comma-separated IPs/CIDRs. When set, Caddy
-#                 answers /pay/cb/* (the M-Pesa callbacks) only to those source
-#                 addresses and refuses everyone else with 403. Take the list from
-#                 Safaricom (Daraja support / your Paybill onboarding): the
-#                 published ranges have changed over time and are NOT hard-coded
-#                 here, because a wrong list would silently drop real payments.
-#                 Unset = no IP filter (the callback token still protects them).
+#   CADDY_MPESA_IPS  space- or comma-separated IPs/CIDRs that Caddy lets reach
+#                 /pay/cb/* (the M-Pesa callbacks); everyone else gets 403.
+#                 Default: NOT SET = no filter (the doctor warns). A wrong list
+#                 would answer 403 to real payments, so set it only to ranges you
+#                 have verified with Safaricom. A suggested list is in a comment
+#                 near mpesa_cb_block below (unverified). CADDY_MPESA_IPS=any is the
+#                 same as unset, written down on purpose.
 #   SUPPORT_PHONE, BRAND_NAME, PUBLIC_IP (skip auto-detection of this VPS's IPv4).
 #   WG_PORT (51820), WG_SUBNET (10.99.0.0/22),
 #   MGMT_PORT (51821, udp: the remote-WinBox WireGuard interface wg-mgmt),
 #   MGMT_SUBNET (10.98.0.0/24: a private IPv4 prefix, /16 to /29, apart from
 #                WG_SUBNET; the server is .1, each device gets the next free address.
 #                Routers built after this setting is made accept WinBox from it).
+#   WEBFIG_DOMAIN e.g. tech.ftw.co.ke: opens a router's WebFig through this server, from
+#                the router page in the admin (owners only, after a fresh password and
+#                code). Needs its own DNS A record to this VPS (like DOMAIN) and DOMAIN
+#                set. Adds a second Caddy site with its own certificate and makes the
+#                app listen on 127.0.0.1:8082 for it. Unset = off (and an earlier
+#                setting is kept when a later run leaves it out); WEBFIG_DOMAIN=off
+#                switches it off again. ufw is unchanged (443 is already open).
 #   REPO (blacksan/ftnbilling), BRANCH (main), SWAP_MB (1024).
 set -Eeuo pipefail
 
@@ -75,7 +82,16 @@ BIN=/usr/local/bin/$APP
 SBIN=/usr/local/sbin
 BACKUPS=/var/backups/$APP
 WG_IF=wg0
+# A re-run is an upgrade: WG_PORT and WG_SUBNET not given again come from the settings file
+# (or the live wg0.conf), so wg-sync, ufw and the WinBox rules keep matching the tunnel.
+_envk() { if [ -f "$ENVF" ]; then grep -m1 "^$1=" "$ENVF" | cut -d= -f2- | tr -d "\"'" || true; fi; }
+if [ -z "${WG_PORT:-}" ]; then
+  WG_PORT=$(_envk WG_PORT)
+  [ -n "$WG_PORT" ] || { WG_PORT=$(_envk WG_ENDPOINT); WG_PORT=${WG_PORT##*:}; case $WG_PORT in ""|*[!0-9]*) WG_PORT="" ;; esac; }
+  [ -n "$WG_PORT" ] || WG_PORT=$(awk '/^\[Peer\]/{exit} /^ListenPort *=/{print $3; exit}' "/etc/wireguard/wg0.conf" 2>/dev/null || true)
+fi
 WG_PORT="${WG_PORT:-51820}"
+WG_SUBNET="${WG_SUBNET:-$(_envk WG_SUBNET)}"
 WG_SUBNET="${WG_SUBNET:-10.99.0.0/22}"
 WG_NET=${WG_SUBNET%/*}
 WG_SERVER_IP=${WG_NET%.*}.1
@@ -124,12 +140,48 @@ writef() {
 # Wait (up to 15 min) for the dpkg lock instead of failing: a new VPS often runs
 # unattended-upgrades in the background for the first few minutes. APT_CONFIG
 # applies to every apt-get call in this script, including the bare ones.
+# DPkg::Lock::Timeout only covers the dpkg lock; "apt-get update" and "install" also take
+# /var/lib/apt/lists/lock and /var/cache/apt/archives/lock and do NOT wait for them, so
+# apt_get waits for those itself before each call and retries when apt still loses the race.
 if [ "$DRY" != 1 ]; then
   APT_CONFIG=$(mktemp /tmp/ftn-apt.XXXXXX)
-  printf 'DPkg::Lock::Timeout "900";\n' >"$APT_CONFIG"
+  printf 'DPkg::Lock::Timeout "900";\nAcquire::Retries "3";\n' >"$APT_CONFIG"
   export APT_CONFIG
 fi
-apt_get() { run env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 apt-get "$@" </dev/null; }
+# apt_locks_busy: true while any process holds one of apt's lock files (POSIX or flock, from /proc/locks).
+apt_locks_busy() {
+  local f ino
+  for f in /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock; do
+    [ -e "$f" ] || continue
+    ino=$(stat -c %i "$f" 2>/dev/null) || continue
+    if awk -v i="$ino" '{ n = split($6, a, ":"); if (n == 3 && a[3] == i) found = 1 } END { exit !found }' /proc/locks 2>/dev/null; then return 0; fi
+  done
+  return 1
+}
+apt_wait_locks() {
+  local waited=0
+  while apt_locks_busy; do
+    [ "$waited" -lt 900 ] || { warn "apt is still locked by another process after 15 minutes"; return 0; }
+    [ "$waited" -ne 0 ] || note "another apt/dpkg process is running; waiting for it to finish"
+    sleep 5; waited=$((waited + 5))
+  done
+}
+apt_get() {
+  if [ "$DRY" = 1 ]; then printf '    [dry-run] apt-get %s\n' "$*"; return 0; fi
+  local err rc waited=0
+  err=$(mktemp /tmp/ftn-apt-err.XXXXXX)
+  while :; do
+    apt_wait_locks
+    if env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 apt-get "$@" </dev/null 2>"$err"; then rc=0; else rc=$?; fi
+    cat "$err" >&2
+    if [ "$rc" -ne 0 ] && [ "$waited" -lt 900 ] && grep -q "Could not get lock\|Unable to acquire the dpkg\|Could not open lock file" "$err"; then
+      sleep 5; waited=$((waited + 5)); continue
+    fi
+    break
+  done
+  rm -f "$err"
+  return "$rc"
+}
 apt_install() { if [ "$DRY" = 1 ]; then printf '    [dry-run] apt-get install %s\n' "$*"; else apt_get install -y -qq --no-install-recommends "$@" >/dev/null; fi; }
 have() { command -v "$1" >/dev/null 2>&1; }
 envget() { [ -f "$ENVF" ] && grep -m1 "^$1=" "$ENVF" | cut -d= -f2- || true; }
@@ -193,6 +245,34 @@ mgmt_settings() {
   MGMT_SUBNET=$MGMT_NET/${MGMT_SUBNET#*/}
   MGMT_SERVER_IP=$(int2ip_masked "$MGMT_NET" 32 1)
 }
+# webfig_settings: WEBFIG_DOMAIN from the environment, else from the settings file of an
+# earlier install, else off. "off" switches it off. WEBFIG_PORT is the app's loopback port.
+WEBFIG_PORT=8082
+webfig_settings() {
+  local given="${WEBFIG_DOMAIN:-}" main="${DOMAIN:-}" base
+  WEBFIG_DOMAIN="${given:-$(envget WEBFIG_DOMAIN)}"
+  WEBFIG_DOMAIN=$(printf '%s' "$WEBFIG_DOMAIN" | tr '[:upper:]' '[:lower:]')
+  WEBFIG_OFF=0
+  if [ "$WEBFIG_DOMAIN" = off ]; then WEBFIG_DOMAIN=""; WEBFIG_OFF=1; fi
+  [ -n "$WEBFIG_DOMAIN" ] || return 0
+  [[ $WEBFIG_DOMAIN =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "WEBFIG_DOMAIN must be a host name like tech.example.co.ke, got: $WEBFIG_DOMAIN"
+  if [[ $WEBFIG_DOMAIN =~ ^[0-9.]+$ ]]; then die "WEBFIG_DOMAIN must be a host name, not an IP address: $WEBFIG_DOMAIN"; fi
+  if [ -z "$main" ]; then
+    base=$(envget PUBLIC_BASE_URL)
+    case "$base" in https://*) main=${base#https://}; main=${main%%[/:]*} ;; esac
+  fi
+  [ -n "$main" ] || die "WEBFIG_DOMAIN needs DOMAIN (HTTPS) for the admin itself: run again with DOMAIN=your.domain WEBFIG_DOMAIN=$WEBFIG_DOMAIN"
+  [ "$WEBFIG_DOMAIN" != "$main" ] || die "WEBFIG_DOMAIN must differ from DOMAIN ($main): WebFig needs its own host name, so it never shares cookies with the admin"
+}
+# render_webfig_block: the Caddy site for WEBFIG_DOMAIN (its own certificate); empty when off.
+render_webfig_block() {
+  [ -n "${WEBFIG_DOMAIN:-}" ] || return 0
+  printf '\n# Remote WebFig: a router'"'"'s own web page, reached through this server only. The app checks\n'
+  printf '# the one-time ticket an owner gets after a fresh password and code, and proxies to that one\n'
+  printf '# router over the tunnel. Same rule as above: Caddy is the only proxy in front of it. No gzip\n'
+  printf '# here: compressing can hold back WebFig'"'"'s long requests.\n'
+  printf '%s {\n\treverse_proxy 127.0.0.1:%s {\n\t\tflush_interval -1\n\t}\n}\n' "$WEBFIG_DOMAIN" "${WEBFIG_PORT:-8082}"
+}
 # int2ip_masked ADDR BITS [N]: the network address of ADDR/BITS, plus N.
 int2ip_masked() {
   local n mask
@@ -203,13 +283,27 @@ int2ip_masked() {
 }
 
 # ---------------------------------------------------------------------------
+# recover_domain: a re-run without DOMAIN= keeps the HTTPS site of the first install. An explicit
+# empty DOMAIN= (set but empty) is the one way to ask for plain http again.
+recover_domain() {
+  if [ -n "${DOMAIN+x}" ]; then return 0; fi
+  local base host
+  base=$(envget PUBLIC_BASE_URL)
+  case "$base" in
+    https://*) host=${base#https://}; host=${host%%[:/]*}; [ -z "$host" ] || { DOMAIN=$host; note "keeping the HTTPS site $host from the earlier install (pass DOMAIN= to change it)"; } ;;
+  esac
+  return 0
+}
+
 preflight() {
   step "checking this server"
   if [ "$DRY" = 1 ]; then note "DRY_RUN=1: nothing below is executed, only printed"; fi
   if [ "$DRY" != 1 ] && [ "$(id -u)" != 0 ]; then die "run as root (pipe into: sudo ... bash)"; fi
   # An existing settings file means this run upgrades a server that is already installed.
   if [ -f "$ENVF" ]; then UPGRADE=1; note "existing install found: this run is an in-place upgrade"; fi
+  recover_domain
   mgmt_settings
+  webfig_settings
   local ID ID_LIKE VERSION_ID PRETTY_NAME
   eval "$( (. /etc/os-release 2>/dev/null; printf 'ID=%q ID_LIKE=%q VERSION_ID=%q PRETTY_NAME=%q' "${ID:-}" "${ID_LIKE:-}" "${VERSION_ID:-}" "${PRETTY_NAME:-}") || true)"
   case "${ID:-}${ID_LIKE:-}" in
@@ -333,12 +427,19 @@ get_bundle_from_release() {
   case "$code" in
     200) ;;
     401 | 403) rm -rf "$tmp"; die "GitHub refused the token (HTTP $code). Check GH_TOKEN (needs Contents: read on $REPO)." ;;
-    *) note "no release found (HTTP ${code:-none}; for a private repo a missing or wrong GH_TOKEN also looks like this)"; rm -rf "$tmp"; return 1 ;;
+    *)
+      rm -rf "$tmp"
+      [ "$WANT_VERSION" = latest ] || die "release $tag was not found (HTTP ${code:-none}). VERSION is a pin, so the installer will not build another version instead. Check the tag, and GH_TOKEN for a private repo."
+      note "no release found (HTTP ${code:-none}; for a private repo a missing or wrong GH_TOKEN also looks like this)"; return 1 ;;
   esac
   name=$(jq -r --arg re "^ftnbilling-.*-linux-${GOARCH}\\.tar\\.gz\$" '.assets[]? | select(.name|test($re)) | .name' "$tmp/meta.json" | head -1)
   id=$(jq -r --arg n "$name" '.assets[]? | select(.name==$n) | .id' "$tmp/meta.json" | head -1)
   sid=$(jq -r '.assets[]? | select(.name=="SHA256SUMS") | .id' "$tmp/meta.json" | head -1)
-  if [ -z "$name" ] || [ -z "$id" ]; then note "the release has no linux-$GOARCH bundle"; rm -rf "$tmp"; return 1; fi
+  if [ -z "$name" ] || [ -z "$id" ]; then
+    rm -rf "$tmp"
+    [ "$WANT_VERSION" = latest ] || die "release $tag has no linux-$GOARCH bundle. VERSION is a pin, so the installer will not build another version instead."
+    note "the release has no linux-$GOARCH bundle"; return 1
+  fi
   [ -n "$sid" ] || { rm -rf "$tmp"; die "the release has no SHA256SUMS: refusing to install an unverified download"; }
   PROG_VERSION=$(jq -r '.tag_name' "$tmp/meta.json")
   note "release $PROG_VERSION: downloading $name"
@@ -531,7 +632,7 @@ WGEOF
   fi
   writef 644 root:root /etc/systemd/system/wg-quick@$WG_IF.service.d/$APP.conf <<WGEOF
 [Service]
-ExecStartPost=$SBIN/$APP-wg-sync
+ExecStartPost=-$SBIN/$APP-wg-sync
 WGEOF
   run systemctl daemon-reload
   try systemctl enable wg-quick@$WG_IF
@@ -776,6 +877,13 @@ EOF
     [ -z "${ADMIN_PASS:-}" ] || setkv ADMIN_PASS "$ADMIN_PASS"
     BASE=$(envget PUBLIC_BASE_URL)
   fi
+  # Remote WebFig: written only when set (or switched off); a server without it is left as it was.
+  if [ -n "$WEBFIG_DOMAIN" ]; then
+    setkv WEBFIG_DOMAIN "$WEBFIG_DOMAIN"
+    setkv WEBFIG_LISTEN "127.0.0.1:$WEBFIG_PORT"
+  elif [ "$WEBFIG_OFF" = 1 ] && grep -qs '^WEBFIG_DOMAIN=' "$ENVF"; then
+    setkv WEBFIG_DOMAIN ""
+  fi
   # DATA_KEY encrypts the secrets saved in Settings and national IDs. Every
   # install gets one. Losing it makes both unreadable: it is in the Drive
   # backup, and must be restored together with the database.
@@ -877,6 +985,16 @@ SQL
     runuser -u postgres -- psql -q -v ON_ERROR_STOP=1 <<SQL
 ALTER ROLE ftnbilling PASSWORD '$pw';
 SQL
+  elif [ -n "$dburl" ] && [ -n "$pw" ] && [ "$DRY" != 1 ]; then
+    # The password in DATABASE_URL is the truth: after a disaster-recovery restore of the old env file onto a
+    # new server the role still has the new server's random password, and the app could not connect.
+    case $pw in
+      *"'"* | *'\\'*) warn "the password in DATABASE_URL has a quote or backslash; not syncing it to the database role" ;;
+      *) runuser -u postgres -- psql -q -v ON_ERROR_STOP=1 <<SQL
+ALTER ROLE ftnbilling PASSWORD '$pw';
+SQL
+        ;;
+    esac
   fi
   if [ "$DRY" = 1 ]; then printf '    [dry-run] ALTER ROLE statement_timeout=30s; createdb -O ftnbilling -E UTF8 -T template0 ftnbilling; REVOKE CONNECT ON DATABASE ftnbilling FROM PUBLIC\n'
   else
@@ -918,6 +1036,34 @@ SQL
   fi
 }
 
+# Daraja's callbacks are unsigned, so limiting /pay/cb/* to Safaricom's source
+# addresses is a second lock next to the secret in the URL. The installer does
+# NOT do it unless told to: a list that is wrong or out of date answers 403 to
+# real payments, which are then never credited. Set
+# CADDY_MPESA_IPS="<ip/cidr> ..." once you have Safaricom's current ranges.
+#
+# SUGGESTED, UNVERIFIED (written from memory; verify with Safaricom before use;
+# they have changed addresses before):
+#   CADDY_MPESA_IPS="196.201.214.200 196.201.214.206 196.201.213.114 196.201.214.207 196.201.214.208 196.201.213.44 196.201.212.127 196.201.212.138 196.201.212.129 196.201.212.136 196.201.212.74 196.201.212.69"
+
+# Prints the Caddyfile lines that limit /pay/cb/* by source address (CF_CB).
+mpesa_cb_block() {
+  local want="${CADDY_MPESA_IPS:-}" ips
+  case "$want" in
+    ""|any|ANY|Any)
+      note "M-Pesa callbacks (/pay/cb/*) are not limited by source address: set CADDY_MPESA_IPS to Safaricom's published ranges (verify them with Safaricom first)" >&2
+      printf '\t# /pay/cb/* is NOT limited by source address (CADDY_MPESA_IPS not set).\n'
+      return 0 ;;
+    *)
+      ips=$(printf '%s' "$want" | tr ',' ' ' | xargs)
+      # Only addresses reach the Caddyfile: refuse anything else instead of writing it in.
+      case "$ips" in
+        ""|*[!0-9a-fA-F:./\ ]*) die "CADDY_MPESA_IPS must be IPs or CIDRs separated by spaces or commas (or the word any), got: $want" ;;
+      esac ;;
+  esac
+  printf '\t# M-Pesa callbacks only from these addresses (CADDY_MPESA_IPS).\n\t@mpesa_cb_other {\n\t\tpath /pay/cb/*\n\t\tnot remote_ip %s\n\t}\n\trespond @mpesa_cb_other "Forbidden" 403\n' "$ips"
+}
+
 # The public Caddyfile, from CF_SITE (the domain, or :80), CF_CB (the optional
 # M-Pesa callback filter) and CF_CATCHALL (the plain-HTTP redirect, domain installs only).
 render_caddyfile() {
@@ -939,8 +1085,51 @@ $CF_SITE {
 $CF_CB
 	reverse_proxy 127.0.0.1:8080
 }
-$CF_CATCHALL
+$CF_CATCHALL$(render_webfig_block)
 EOF
+}
+
+# Sets CF_SITE, CF_CB and CF_CATCHALL (the pieces render_caddyfile needs) from DOMAIN and CADDY_MPESA_IPS.
+caddy_vars() {
+  local site="${DOMAIN:-:80}" cbblock
+  cbblock=$(mpesa_cb_block)
+  local catchall=""
+  if [ -n "${DOMAIN:-}" ]; then
+    # Customers suspended on their router have their plain-HTTP
+    # requests redirected to this server's public IP, whatever site they asked
+    # for. Send them to the payment page. (Caddy already redirects http to https
+    # for $DOMAIN itself; this only catches every other host name.)
+    # The domain itself keeps its http->https redirect (308 keeps the method); this block spells it out and puts it
+    # first, in a route (which keeps the written order), so the catch-all can never swallow it. The @own matcher is
+    # defined at site level. ACME HTTP challenges are answered by Caddy before any route. 302, never 204 or "Success":
+    # the device must see a portal.
+    catchall=$(printf '\n# Any other plain-HTTP host (customers suspended on the router, a captive-portal probe): to the payment page.\nhttp:// {\n\t@own host %s\n\troute {\n\t\tredir @own https://%s{uri} 308\n\t\tredir https://%s/pay 302\n\t}\n}\n' "$DOMAIN" "$DOMAIN" "$DOMAIN")
+  fi
+  CF_SITE=$site; CF_CB=$cbblock; CF_CATCHALL=$catchall
+}
+
+# Renders the Caddyfile to a temporary file, has caddy check that file, and only then puts it in place (the old one is
+# kept as Caddyfile.bak). A file caddy refuses never replaces the working one: the old file stays untouched and the
+# installer stops with caddy's own message.
+install_caddyfile() {
+  local dest=${CADDYFILE:-/etc/caddy/Caddyfile} tmp out
+  if [ "$DRY" = 1 ]; then
+    render_caddyfile >/dev/null
+    printf '    [dry-run] write %s (rendered to a temporary file and checked with caddy validate --adapter caddyfile first; the old file is kept as %s.bak)\n' "$dest" "$dest"
+    return 0
+  fi
+  mkdir -p "$(dirname "$dest")"
+  tmp=$(mktemp "$dest.new.XXXXXX")
+  render_caddyfile >"$tmp"
+  if ! out=$(caddy validate --adapter caddyfile --config "$tmp" 2>&1); then
+    rm -f "$tmp"
+    die "the new Caddyfile is not valid; $dest was left untouched. caddy said: $out"
+  fi
+  chmod 644 "$tmp"
+  if [ "$(id -u)" = 0 ]; then chown root:root "$tmp"; fi
+  if [ -f "$dest" ] && cmp -s "$tmp" "$dest"; then rm -f "$tmp"; return 0; fi
+  if [ -f "$dest" ]; then cp -p "$dest" "$dest.bak"; fi
+  mv -f "$tmp" "$dest"
 }
 
 # ---------------------------------------------------------------------------
@@ -976,28 +1165,8 @@ CapabilityBoundingSet=CAP_NET_RAW
 [Install]
 WantedBy=multi-user.target
 EOF
-  local site="${DOMAIN:-:80}" cbips="" cbblock=$'\t# /pay/cb/* is not limited by source address (set CADDY_MPESA_IPS to limit it).'
-  if [ -n "${CADDY_MPESA_IPS:-}" ]; then
-    cbips=$(printf '%s' "$CADDY_MPESA_IPS" | tr ',' ' ' | xargs)
-    # Only addresses reach the Caddyfile: refuse anything else instead of writing it in.
-    case "$cbips" in
-      ""|*[!0-9a-fA-F:./\ ]*) die "CADDY_MPESA_IPS must be IPs or CIDRs separated by spaces or commas, got: $CADDY_MPESA_IPS" ;;
-    esac
-    cbblock=$(printf '\t# M-Pesa callbacks only from the addresses in CADDY_MPESA_IPS (confirm them with Safaricom).\n\t@mpesa_cb_other {\n\t\tpath /pay/cb/*\n\t\tnot remote_ip %s\n\t}\n\trespond @mpesa_cb_other "Forbidden" 403\n' "$cbips")
-  fi
-  local catchall=""
-  if [ -n "${DOMAIN:-}" ]; then
-    # Customers suspended on their router have their plain-HTTP
-    # requests redirected to this server's public IP, whatever site they asked
-    # for. Send them to the payment page. (Caddy already redirects http to https
-    # for $DOMAIN itself; this only catches every other host name.)
-    catchall=$(printf '\n# Any other plain-HTTP host (customers suspended on the router): to the payment page.\nhttp:// {\n\tredir https://%s/pay 302\n}\n' "$DOMAIN")
-  fi
-  CF_SITE=$site; CF_CB=$cbblock; CF_CATCHALL=$catchall
-  render_caddyfile | writef 644 root:root /etc/caddy/Caddyfile
-  if [ "$DRY" != 1 ]; then
-    caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1 || die "the new Caddyfile is not valid (check: caddy validate --config /etc/caddy/Caddyfile)"
-  fi
+  caddy_vars
+  install_caddyfile
   runq systemctl enable caddy
   if [ "$DRY" = 1 ]; then printf '    [dry-run] systemctl reload caddy\n'; else systemctl reload caddy 2>/dev/null || systemctl restart caddy; fi
 }
@@ -1173,8 +1342,16 @@ pre_upgrade_database() {
 # must not make the installer fail.
 make_setup_code() {
   SETUP_OUT=""
-  local out rc=0
+  OWNER_ENROLLED=0
+  local out rc=0 st
+  # An owner who already has the authenticator app needs no setup code: skip the call (it would stop and
+  # restart the service for nothing) and never print a FIRST SIGN-IN block for them.
+  if [ -n "$(envget DATABASE_URL)" ]; then
+    st=$(app_cli admin-status -json 2>/dev/null || true)
+    case "$st" in *'"totp_enrolled":true'*) OWNER_ENROLLED=1; return 0 ;; esac
+  fi
   out=$("$SBIN/$APP-admin-reset" --setup-code 2>&1) || rc=$?
+  case "$out" in *"already has an authenticator"*) OWNER_ENROLLED=1; return 0 ;; esac
   if [ "$rc" = 0 ]; then SETUP_OUT=$out
   else
     SETUP_OUT=""
@@ -1227,8 +1404,13 @@ doctor_and_banner() {
     printf '\n    [dry-run] finished: nothing was changed.\n'
     return 0
   fi
-  local pwtext="your existing admin password"
-  if [ "$UPGRADE" != 1 ]; then pwtext="the password $(envget ADMIN_PASS)"; fi
+  # The generated password is printed until a banner has been shown once: a first install that failed
+  # after the settings step wrote ADMIN_PASS but never displayed it, and its re-run is an "upgrade".
+  local pwtext="your admin password" shown
+  shown="$(dirname "$ENVF")/.install-banner-shown"
+  # An owner who has already set up the authenticator has signed in with the password: it may have been changed
+  # since, and it is not printed again (servers installed before the marker file existed).
+  if [ "${OWNER_ENROLLED:-0}" != 1 ] && { [ "$UPGRADE" != 1 ] || [ ! -e "$shown" ]; }; then pwtext="the password $(envget ADMIN_PASS) (from $ENVF)"; fi
   if [ -n "$(envget DATABASE_URL)" ]; then backend="PostgreSQL (local socket)"; fi
   cat <<EOF
 
@@ -1280,6 +1462,7 @@ EOF
   echo " Health check any time:  sudo $APP-doctor"
   if [ "$DOC_RC" != 0 ]; then echo " The doctor above found problems (FAIL lines): fix them before relying on this server."; fi
   echo "────────────────────────────────────────────────────────────────────"
+  date -u +%FT%TZ >"$shown" 2>/dev/null || true
 }
 
 main() {

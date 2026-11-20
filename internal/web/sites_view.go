@@ -279,6 +279,9 @@ func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site,
 	}
 	p.Data["Cmd"], p.Data["CmdNoCheck"], p.Data["CmdExpires"] = cmd, cmdNoCheck, exp
 	p.Data["MgmtWinbox"] = s.mgr.MgmtWinbox(st.ID)
+	if p.Role == store.RoleOwner {
+		p.Data["WF"] = s.webfigViewFor(st)
+	}
 	if jr, ok := s.mgr.JoinReport(st.ID); ok {
 		p.Data["JoinReport"] = jr
 	}

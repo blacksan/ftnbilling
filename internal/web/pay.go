@@ -6,14 +6,17 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"ispbill/internal/billing"
+	"ispbill/internal/payments"
 	"ispbill/internal/store"
 )
 
@@ -65,55 +68,103 @@ var (
 
 // payToken is a short-lived signed reference to an account, so the page after a
 // flat-label lookup does not have to carry (or show) the account code.
-func payToken(accountID string, now time.Time) string {
+func payToken(accountID string, now time.Time, byCode bool) string {
 	paySecretOnce.Do(func() { paySecret = make([]byte, 32); rand.Read(paySecret) })
-	body := base64.RawURLEncoding.EncodeToString([]byte(accountID + "|" + now.Add(10*time.Minute).UTC().Format(time.RFC3339)))
+	body := base64.RawURLEncoding.EncodeToString([]byte(accountID + "|" + now.Add(10*time.Minute).UTC().Format(time.RFC3339) + "|" + map[bool]string{true: "c", false: "f"}[byCode]))
 	m := hmac.New(sha256.New, paySecret)
 	m.Write([]byte(body))
 	return body + "." + base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 
-func payTokenAccount(tok string, now time.Time) (string, bool) {
+func payTokenAccount(tok string, now time.Time) (id string, byCode, ok bool) {
 	paySecretOnce.Do(func() { paySecret = make([]byte, 32); rand.Read(paySecret) })
 	body, sig, ok := strings.Cut(tok, ".")
 	if !ok {
-		return "", false
+		return "", false, false
 	}
 	m := hmac.New(sha256.New, paySecret)
 	m.Write([]byte(body))
 	want := base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 	if subtle.ConstantTimeCompare([]byte(sig), []byte(want)) != 1 {
-		return "", false
+		return "", false, false
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(body)
 	if err != nil {
-		return "", false
+		return "", false, false
 	}
-	id, exp, ok := strings.Cut(string(raw), "|")
-	t, err := time.Parse(time.RFC3339, exp)
-	if !ok || err != nil || now.After(t) {
-		return "", false
+	f := strings.Split(string(raw), "|")
+	if len(f) != 3 {
+		return "", false, false
 	}
-	return id, true
+	t, err := time.Parse(time.RFC3339, f[1])
+	if err != nil || now.After(t) {
+		return "", false, false
+	}
+	return f[0], f[2] == "c", true
 }
 
-const payCSRFCookie = "ftn_pay_csrf"
+// The double-submit cookie. Over https it is __Host-ftn_pay_csrf (Path=/, no
+// Domain): a script on a sibling host name of the same site, such as the WebFig
+// host, cannot overwrite it. Plain http (a customer on the router's walled
+// network) cannot carry a __Host- cookie and keeps the plain name. The old name
+// is still read for a while, so forms already on screen keep working; it is
+// never written again over https.
+const (
+	payCSRFCookie     = "ftn_pay_csrf"
+	payCSRFCookieHost = "__Host-ftn_pay_csrf"
+)
+
+func payHTTPS(r *http.Request) bool {
+	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+}
+
+func payCookieName(r *http.Request) string {
+	if payHTTPS(r) {
+		return payCSRFCookieHost
+	}
+	return payCSRFCookie
+}
 
 // payCSRF returns this visitor's token for the page's forms, setting the cookie
 // on first use. The public forms are protected by the usual double submit.
 func (s *Server) payCSRF(w http.ResponseWriter, r *http.Request) string {
-	if c, err := r.Cookie(payCSRFCookie); err == nil && len(c.Value) >= 16 {
+	name := payCookieName(r)
+	if c, err := r.Cookie(name); err == nil && len(c.Value) >= 16 {
 		return c.Value
 	}
 	b := make([]byte, 18)
 	rand.Read(b)
 	v := base64.RawURLEncoding.EncodeToString(b)
-	http.SetCookie(w, &http.Cookie{Name: payCSRFCookie, Value: v, Path: "/pay", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"})
+	path := "/pay"
+	if name == payCSRFCookieHost {
+		path = "/" // the __Host- prefix demands it
+	}
+	http.SetCookie(w, &http.Cookie{Name: name, Value: v, Path: path, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: payHTTPS(r)})
 	return v
 }
 
+// payOriginOK refuses a POST that says it comes from another origin: another
+// site or, with the WebFig host on the same site, a sibling host name.
+func payOriginOK(r *http.Request) bool {
+	if v := r.Header.Get("Sec-Fetch-Site"); v != "" && v != "same-origin" && v != "none" {
+		return false
+	}
+	o := r.Header.Get("Origin")
+	if o == "" {
+		return true
+	}
+	u, err := url.Parse(o)
+	return err == nil && u.Host != "" && strings.EqualFold(u.Host, r.Host)
+}
+
 func payCSRFOK(r *http.Request) bool {
-	c, err := r.Cookie(payCSRFCookie)
+	if !payOriginOK(r) {
+		return false
+	}
+	c, err := r.Cookie(payCookieName(r))
+	if err != nil && payHTTPS(r) {
+		c, err = r.Cookie(payCSRFCookie) // transition: a form served before the rename
+	}
 	f := r.FormValue("_pcsrf")
 	return err == nil && len(c.Value) >= 16 && subtle.ConstantTimeCompare([]byte(c.Value), []byte(f)) == 1
 }
@@ -143,6 +194,8 @@ type payPage struct {
 	Blocked                        map[string]bool
 	BlockedUntil                   string
 	Selected, Phone                string
+	PhoneMask                      string // the number on file, masked; "" = none offered
+	UseFile                        bool
 	Mpesa, Test                    bool
 	// Choices: set when a typed flat number is used in more than one apartment of the router.
 	// The visitor picks theirs (ApartmentID) and continues.
@@ -300,7 +353,7 @@ func (s *Server) payChoose(w http.ResponseWriter, r *http.Request, p payPage, a 
 		return
 	}
 	p.Site, p.Found, p.Flat, p.Error, p.ByCode = a.SiteID, true, a.Flat, errMsg, byCode
-	p.Tok = payToken(a.ID, s.svc.Now())
+	p.Tok = payToken(a.ID, s.svc.Now(), byCode)
 	p.CSRF = s.payCSRF(w, r)
 	if byCode {
 		p.Code, p.ExpiresAt, p.State = a.Code, a.ExpiresAt, billing.AccountState(a, s.svc.Now())
@@ -344,6 +397,12 @@ func (s *Server) payChoose(w http.ResponseWriter, r *http.Request, p payPage, a 
 		}
 	}
 	p.Phone = r.FormValue("phone")
+	if byCode && a.Phone != "" {
+		// The number on file is offered, masked, only to a visitor who typed the account code (a flat label is easy to
+		// guess). The page never carries the full number: /pay/start fills it in from the account.
+		p.PhoneMask = maskPhone(a.Phone)
+		p.UseFile = r.FormValue("phone_src") != "other"
+	}
 	s.render(w, "pay", p)
 }
 
@@ -351,8 +410,9 @@ func (s *Server) payChoose(w http.ResponseWriter, r *http.Request, p payPage, a 
 // of the package step, or the account code. Only open accounts can pay: a
 // closed or deleted one is refused.
 func (s *Server) payFormAccount(r *http.Request) (a store.Account, byCode, ok bool) {
-	if id, tok := payTokenAccount(r.FormValue("tok"), s.svc.Now()); tok {
+	if id, bc, tok := payTokenAccount(r.FormValue("tok"), s.svc.Now()); tok {
 		a, ok = s.svc.GetAccount(id)
+		byCode = bc
 	} else if c := strings.ToUpper(strings.TrimSpace(r.FormValue("code"))); c != "" && len(c) <= 40 {
 		a, ok = s.svc.AccountByCode(c)
 		byCode = true
@@ -401,7 +461,11 @@ func (s *Server) payStart(w http.ResponseWriter, r *http.Request) {
 		again(http.StatusBadRequest, "That payment method is not available.")
 		return
 	}
-	phone, err := billing.NormalizePhone(strings.TrimSpace(r.FormValue("phone")))
+	rawPhone := strings.TrimSpace(r.FormValue("phone"))
+	if byCode && a.Phone != "" && r.FormValue("phone_src") != "other" {
+		rawPhone = a.Phone // "use the number on file": the page never held it
+	}
+	phone, err := billing.NormalizePhone(rawPhone)
 	if err != nil {
 		again(http.StatusBadRequest, err.Error())
 		return
@@ -416,8 +480,16 @@ func (s *Server) payStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := prov.Start(r.Context(), o); err != nil {
+		if errors.Is(err, payments.ErrPushUncertain) {
+			// Daraja may have accepted the push: the prompt can be on the phone. Keep
+			// the order pending; the callback (matched by phone and amount if the
+			// checkout id was lost) or the 15-minute expiry settles it.
+			s.log.Warn("payment start unclear; order left pending", "order", o.ID, "err", err)
+			http.Redirect(w, r, "/portal/wait?order="+o.ID, http.StatusSeeOther)
+			return
+		}
 		s.log.Warn("payment start failed", "order", o.ID, "method", method, "err", err)
-		_ = s.svc.FailOrder(r.Context(), o.ID, "the payment prompt could not be sent")
+		_ = s.svc.FailOrder(r.Context(), o.ID, billing.ReasonPromptNotSent)
 		again(http.StatusBadGateway, "We could not send the payment prompt. Please try again in a minute, or call "+p.Support+".")
 		return
 	}
@@ -467,4 +539,20 @@ func (s *Server) payVoucher(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/portal/success?order="+o.ID, http.StatusSeeOther)
+}
+
+// maskPhone shows a stored 2547XXXXXXXX number as 07•• ••• 123 (only the last three digits).
+func maskPhone(p string) string {
+	l := localPhone(p)
+	if len(l) != 10 {
+		return "•••• ••• " + l[max(0, len(l)-3):]
+	}
+	return "07•• ••• " + l[7:]
+}
+
+func localPhone(p string) string {
+	if len(p) == 12 && strings.HasPrefix(p, "254") {
+		return "0" + p[3:]
+	}
+	return p
 }

@@ -41,6 +41,9 @@ func (m *Manager) ResetRouter(siteID, confirmName, actor string) error {
 		d.Sites[siteID] = s
 		pre := "site." + siteID + "."
 		for k := range d.Settings {
+			if k == pauseKey(siteID) {
+				continue // the owner's pause is a decision about this router, not about the build that is erased
+			}
 			if strings.HasPrefix(k, pre) {
 				delete(d.Settings, k)
 			}
@@ -62,6 +65,7 @@ func (m *Manager) ResetRouter(siteID, confirmName, actor string) error {
 		return err
 	}
 	m.refused.clear(siteID)
+	m.renderFail.clear(siteID)
 	m.chk.drop(siteID)
 	m.forgetLive(siteID)
 	m.Reload(siteID) // not joined any more: the runtime stops

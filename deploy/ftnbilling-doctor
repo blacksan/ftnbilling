@@ -112,6 +112,9 @@ else
 fi
 if unit_enabled unattended-upgrades; then pass "unattended-upgrades" "enabled"; else warn "unattended-upgrades" "not enabled (security updates will not install by themselves)"; fi
 if unit_active "$APP-wg-sync.path"; then pass "unit: $APP-wg-sync.path" "watching"; else fail "unit: $APP-wg-sync.path" "not active (routers' peers will not be applied)"; fi
+if [ -r /run/ftnbilling/wg-sync.status ] && grep -q '^skipped=[1-9]' /run/ftnbilling/wg-sync.status; then
+  warn "wg-sync: skipped peers" "$(grep -m1 '^problem=' /run/ftnbilling/wg-sync.status | cut -d= -f2-) (see /run/ftnbilling/wg-sync.status)"
+fi
 for t in $APP-wg-status.timer $APP-dump.timer; do
   if unit_active "$t"; then pass "timer: $t" "active"; else fail "timer: $t" "not active"; fi
 done
@@ -219,6 +222,11 @@ if [ -n "$DBURL" ] && [ -x "$BIN" ] && [ -r "$ENVF" ]; then
       ne=$(printf '%s\n' "$sc" | awk -v s="[$sec]" '$0==s{f=1;next} /^\[/{f=0} f && $2=="env"' | wc -l)
       pass "settings: $sec" "$nd saved in the admin, $ne from the settings file"
     done
+    if printf '%s\n' "$sc" | grep -q '^receipt confirmation: on'; then
+      pass "M-Pesa receipt check" "each receipt is confirmed with Daraja before it is credited"
+    elif printf '%s\n' "$sc" | grep -q '^receipt confirmation: OFF'; then
+      warn "M-Pesa receipt check" "OFF: $(printf '%s\n' "$sc" | sed -n 's/^receipt confirmation: OFF: //p' | head -1)"
+    fi
     if [ "$rc" != 0 ]; then fail "saved settings readable" "$(printf '%s\n' "$sc" | sed -n '/ignored/,$p' | tail -n +2 | head -3 | tr -s ' \n' ' ')"; fi
     if [ -z "$(envval DATA_KEY)" ] && printf '%s\n' "$sc" | grep -q 'database (secret, set)'; then
       warn "DATA_KEY missing" "saved secrets exist but DATA_KEY is empty: they cannot be read"
@@ -280,6 +288,48 @@ fi
 if have caddy && [ -r /etc/caddy/Caddyfile ]; then
   if caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then pass "Caddyfile valid" ""; else fail "Caddyfile valid" "caddy validate failed"; fi
 fi
+# The M-Pesa callbacks are unsigned: Caddy can limit /pay/cb/* to Safaricom's addresses (CADDY_MPESA_IPS).
+if [ -r /etc/caddy/Caddyfile ]; then
+  if grep -q 'not remote_ip' /etc/caddy/Caddyfile 2>/dev/null; then
+    pass "M-Pesa callback source filter" "/pay/cb/* is limited to the addresses in the Caddyfile"
+  else
+    warn "M-Pesa callback source filter" "M-Pesa callbacks are not IP-filtered; set CADDY_MPESA_IPS to Safaricom's published ranges (verify them with Safaricom first, then re-run the installer)"
+  fi
+fi
+
+# ------------------------------------------------------------------ remote WebFig
+WFDOM=$(envval WEBFIG_DOMAIN)
+if [ -n "$WFDOM" ]; then
+  section "Remote WebFig"
+  WFLISTEN=$(envval WEBFIG_LISTEN); WFLISTEN=${WFLISTEN:-127.0.0.1:8082}
+  WFPORT=${WFLISTEN##*:}
+  if listening tcp "$WFPORT"; then pass "WebFig listener" "$WFLISTEN"; else fail "WebFig listener" "nothing listens on $WFLISTEN (journalctl -u $APP -n 30; restart $APP)"; fi
+  case "$WFLISTEN" in 127.*|"[::1]"*|localhost:*) ;; *) fail "WebFig listener address" "$WFLISTEN is not loopback: only Caddy may reach it" ;; esac
+  if [ -r /etc/caddy/Caddyfile ] && grep -q "^$WFDOM {" /etc/caddy/Caddyfile; then pass "WebFig Caddy site" "$WFDOM"; else fail "WebFig Caddy site" "no site block for $WFDOM in /etc/caddy/Caddyfile (re-run the installer with WEBFIG_DOMAIN=$WFDOM)"; fi
+  wfip=$(getent ahostsv4 "$WFDOM" 2>/dev/null | awk 'NR==1{print $1}')
+  pubip=$(envval PUBLIC_IP)
+  if [ -z "$wfip" ]; then fail "WebFig DNS" "$WFDOM does not resolve: add an A record for it to ${pubip:-this server}"
+  elif [ -n "$pubip" ] && [ "$wfip" != "$pubip" ]; then warn "WebFig DNS" "$WFDOM points to $wfip, this server is $pubip"
+  else pass "WebFig DNS" "$WFDOM -> $wfip"; fi
+  # A ticket is bound to the client address; a phone that reaches the two names over different
+  # address families or routes would see "your network changed". Both names must resolve alike.
+  ahost=$(envval PUBLIC_BASE_URL); ahost=${ahost#https://}; ahost=${ahost%%[/:]*}
+  if [ -n "$ahost" ]; then
+    aset=$(getent ahosts "$ahost" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')
+    wset=$(getent ahosts "$WFDOM" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')
+    if [ -n "$aset" ] && [ "$aset" = "$wset" ]; then pass "WebFig and admin names alike" "$ahost and $WFDOM both resolve to ${aset% }"
+    else warn "WebFig and admin names alike" "$ahost resolves to [${aset% }] but $WFDOM to [${wset% }]: add the same A (and AAAA) records to both, or WebFig may say your network changed"; fi
+  fi
+  if have curl; then
+    wurl=${FTN_WEBFIG_URL:-https://$WFDOM/_ftn/open}
+    code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$wurl" 2>/dev/null || true)
+    case "$code" in
+      403) pass "WebFig over https" "$wurl answers (no ticket: 403, as expected)" ;;
+      ""|000) fail "WebFig over https" "no answer from $wurl (DNS, certificate or Caddy?)" ;;
+      *) fail "WebFig over https" "$wurl answers HTTP $code, expected 403" ;;
+    esac
+  fi
+fi
 
 # ------------------------------------------------------------------ wireguard
 section "WireGuard"
@@ -320,6 +370,9 @@ if have ufw; then
       printf '%s' "$st" | grep -Eq "^$r +ALLOW" && pass "ufw allow $r" "" || fail "ufw allow $r" "rule missing"
     done
     if printf '%s' "$st" | grep -Eq '^8080(/tcp)? +ALLOW +Anywhere'; then fail "ufw :8080 public" "port 8080 is open to everyone"; else pass "ufw :8080 public" "not open to the internet"; fi
+    if [ -n "$(envval WEBFIG_DOMAIN)" ]; then
+      if printf '%s' "$st" | grep -Eq '^8082(/tcp)? +ALLOW +Anywhere'; then fail "ufw :8082 public" "port 8082 (WebFig) is open to everyone"; else pass "ufw :8082 public" "not open to the internet"; fi
+    fi
     if [ -f "$MGMT_CONF" ]; then
       printf '%s' "$st" | grep -Eq "^$MGMT_PORT/udp +ALLOW" && pass "ufw allow $MGMT_PORT/udp" "remote WinBox" || fail "ufw allow $MGMT_PORT/udp" "rule missing: devices cannot connect (re-run the installer)"
     fi

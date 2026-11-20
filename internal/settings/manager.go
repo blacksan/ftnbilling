@@ -520,8 +520,8 @@ func (m *Manager) SetMarker(key, value string) error {
 // HasAdminPassword reports whether a password hash is stored.
 func (m *Manager) HasAdminPassword() bool { return m.snap.Load().hasPwd }
 
-// NoteAuditTo sends audit messages to fn instead of writing event rows. The
-// command line tools use it while the service runs on the same Postgres
+// NoteAuditTo sends audit messages to fn instead of writing event rows. It is
+// meant for command line tools (none uses it yet) that run while the service runs on the same Postgres
 // database: event numbers (Event.Seq) come from the service's own counter, so
 // a second writer adding events would collide with it. The message goes to
 // stderr (the journal when run by the wrapper) instead.

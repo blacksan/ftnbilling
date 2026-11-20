@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +28,12 @@ type Config struct {
 	PublicBaseURL     string
 	SupportPhone      string
 
+	// WebFigDomain (WEBFIG_DOMAIN) turns on remote WebFig access: the host name
+	// served by a second listener (WebFigListen, loopback only) that the
+	// reverse proxy sends to the app. Empty = the feature is off.
+	WebFigDomain string
+	WebFigListen string
+
 	// PublicIP is the VPS address the routers reach (the walled flats' payment
 	// page and the WireGuard endpoint).
 	PublicIP string
@@ -43,9 +50,20 @@ type Config struct {
 	MpesaUnknownRef string
 	MpesaPasskey    string
 	// MpesaCallbackToken is required once M-Pesa is configured (see Validate).
-	// Daraja callback URLs carry ?t=<token> and callbacks without it are
+	// Daraja callback URLs carry the token (/pay/cb/t/<token>/...) and callbacks without it are
 	// refused (Daraja callbacks are unsigned, so this stops forged "payments").
 	MpesaCallbackToken string
+	// MpesaInitiator and MpesaSecurityCredential are the Daraja API operator
+	// (initiator) name and its password encrypted with Safaricom's certificate
+	// (base64). With them the server asks Daraja's Transaction Status API
+	// whether a receipt is real before it credits it (MpesaConfirmReceipts).
+	MpesaInitiator          string
+	MpesaSecurityCredential string
+	// MpesaConfirmReceipts: "off" (default: credit as soon as a callback
+	// arrives), or "auto" / "on" (on when the initiator settings are present).
+	// It is off until an owner has tested the initiator credentials: a wrong
+	// credential would hold every real payment for 15 minutes.
+	MpesaConfirmReceipts string
 	// MpesaCallbackTokenPrev is the token this one replaced. It keeps working
 	// until MpesaCallbackTokenPrevUntil, so payments Safaricom still sends to
 	// the registered URLs are not lost. Set by the settings manager only.
@@ -135,6 +153,10 @@ func Load(getenv func(string) string) (Config, error) {
 		MpesaC2BShortcode:  get("MPESA_C2B_SHORTCODE", ""),
 		MpesaUnknownRef:    strings.ToLower(get("MPESA_UNKNOWN_REF", "reject")),
 		MpesaCallbackToken: get("MPESA_CALLBACK_TOKEN", ""),
+
+		MpesaInitiator:          get("MPESA_INITIATOR_NAME", ""),
+		MpesaSecurityCredential: get("MPESA_SECURITY_CREDENTIAL", ""),
+		MpesaConfirmReceipts:    strings.ToLower(get("MPESA_CONFIRM_RECEIPTS", "off")),
 	}
 	var errs []error
 	num := func(k string, def float64) float64 {
@@ -168,6 +190,18 @@ func Load(getenv func(string) string) (Config, error) {
 	c.FUPTB = num("FUP_TB", 15)
 	c.OLTCapacityMbps = num("OLT_CAPACITY_MBPS", 10000)
 	c.NetflowAddr = get("NETFLOW_ADDR", ":2055")
+	c.WebFigDomain = strings.ToLower(get("WEBFIG_DOMAIN", ""))
+	c.WebFigListen = get("WEBFIG_LISTEN", "127.0.0.1:8082")
+	if c.WebFigDomain != "" {
+		if err := checkWebFigDomain(c.WebFigDomain, c.PublicBaseURL); err != nil {
+			errs = append(errs, err)
+		}
+		if h, _, err := net.SplitHostPort(c.WebFigListen); err != nil {
+			errs = append(errs, errors.New("WEBFIG_LISTEN must be host:port, e.g. 127.0.0.1:8082"))
+		} else if ip, err := netip.ParseAddr(h); err != nil || !ip.IsLoopback() {
+			errs = append(errs, errors.New("WEBFIG_LISTEN must be a loopback address (127.0.0.1:8082): only the reverse proxy may reach it"))
+		}
+	}
 	c.WGPublicKey = get("WG_PUBLIC_KEY", "")
 	c.WGEndpoint = get("WG_ENDPOINT", "")
 	if c.WGEndpoint == "" && c.PublicIP != "" {
@@ -288,13 +322,18 @@ func (c Config) Validate() error {
 	if c.MpesaUnknownRef != "reject" && c.MpesaUnknownRef != "accept" {
 		errs = append(errs, fmt.Errorf("MPESA_UNKNOWN_REF must be reject or accept, got %q", c.MpesaUnknownRef))
 	}
+	switch c.MpesaConfirmReceipts {
+	case "auto", "on", "off":
+	default:
+		errs = append(errs, fmt.Errorf("MPESA_CONFIRM_RECEIPTS must be auto, on or off, got %q", c.MpesaConfirmReceipts))
+	}
 	if c.MpesaEnv != "sandbox" && c.MpesaEnv != "production" {
 		errs = append(errs, fmt.Errorf("MPESA_ENV must be sandbox or production, got %q", c.MpesaEnv))
 	}
 	if c.MpesaKey != "" && c.MpesaSecret != "" && c.MpesaShortcode != "" && c.MpesaCallbackToken == "" {
 		errs = append(errs, errors.New("MPESA_CALLBACK_TOKEN must be set when M-Pesa is configured: Daraja callbacks are unsigned, "+
 			"so without a secret in the callback URL anyone could post a fake payment. "+
-			"Generate one (for example: openssl rand -hex 24), put it in the env file, and register the three callback URLs with ?t=<token> appended"))
+			"Generate one (for example: openssl rand -hex 24), put it in the env file, and register the three callback URLs as <PUBLIC_BASE_URL>/pay/cb/t/<token>/stk, /c2b/validate and /c2b/confirm"))
 	}
 	return errors.Join(errs...)
 }
@@ -314,6 +353,25 @@ func (c Config) CheckAdminPass() error {
 func (c Config) MpesaEnabled() bool {
 	return c.MpesaKey != "" && c.MpesaSecret != "" && c.MpesaShortcode != "" &&
 		c.MpesaPasskey != "" && c.PublicBaseURL != ""
+}
+
+// MpesaConfirm tells whether M-Pesa receipts are confirmed with Daraja's
+// Transaction Status API before they are credited, and why not when they are
+// not. It is off by default. MPESA_CONFIRM_RECEIPTS=auto (or on) turns it on
+// exactly when the initiator name and security credential are set; without
+// them it cannot work, so it is reported as off.
+func (c Config) MpesaConfirm() (on bool, why string) {
+	mode := c.MpesaConfirmReceipts
+	if mode == "" {
+		mode = "off"
+	}
+	switch {
+	case mode == "off":
+		return false, "MPESA_CONFIRM_RECEIPTS=off (the default): payments are credited as soon as a callback arrives, so a leaked callback token can credit a fake payment. To turn it on: set MPESA_INITIATOR_NAME and MPESA_SECURITY_CREDENTIAL, press \"Test receipt confirmation\" in Settings > M-Pesa with a real receipt until Daraja confirms it, then set MPESA_CONFIRM_RECEIPTS=auto"
+	case c.MpesaInitiator == "" || c.MpesaSecurityCredential == "":
+		return false, "the Daraja initiator name (MPESA_INITIATOR_NAME) and security credential (MPESA_SECURITY_CREDENTIAL) are not set, so receipts cannot be confirmed with Daraja; callbacks are credited unchecked"
+	}
+	return true, ""
 }
 
 // MpesaBaseURL returns the Daraja API root for the selected environment.
@@ -360,4 +418,31 @@ func parseBool(s string) bool {
 		return true
 	}
 	return false
+}
+
+// checkWebFigDomain: a plain DNS name (not an address), different from the
+// admin's own host, so the two never share cookies.
+func checkWebFigDomain(d, base string) error {
+	if len(d) > 253 || !strings.Contains(d, ".") {
+		return errors.New("WEBFIG_DOMAIN must be a full host name such as tech.example.co.ke")
+	}
+	if _, err := netip.ParseAddr(d); err == nil {
+		return errors.New("WEBFIG_DOMAIN must be a host name, not an IP address")
+	}
+	for _, lab := range strings.Split(d, ".") {
+		if lab == "" || len(lab) > 63 || lab[0] == '-' || lab[len(lab)-1] == '-' {
+			return errors.New("WEBFIG_DOMAIN is not a valid host name")
+		}
+		for _, c := range lab {
+			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+				return errors.New("WEBFIG_DOMAIN is not a valid host name (letters, digits, dots and hyphens only)")
+			}
+		}
+	}
+	if base != "" {
+		if u, err := url.Parse(base); err == nil && strings.EqualFold(u.Hostname(), d) {
+			return errors.New("WEBFIG_DOMAIN must differ from the admin's host name (PUBLIC_BASE_URL): WebFig needs its own origin")
+		}
+	}
+	return nil
 }

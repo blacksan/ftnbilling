@@ -221,3 +221,24 @@ func (s *Service) Prune() {
 		return nil
 	})
 }
+
+// SessionLive reports whether the admin session with this id (the hash the
+// store keeps, not the cookie value) is still signed in all the way: it exists,
+// finished the second factor, has not reached its absolute end and belongs to
+// an enabled user. Idle time is not checked: it is for the admin pages' own
+// use, and WebFig has its own.
+func (s *Service) SessionLive(id string) (live bool) {
+	if id == "" {
+		return false
+	}
+	now := s.now()
+	s.st.View(func(d *store.Data) {
+		x, ok := d.AdminSessions[id]
+		if !ok || !x.MFA || !now.Before(x.ExpiresAt) {
+			return
+		}
+		u, ok := d.AdminUsers[x.UserID]
+		live = ok && !u.Disabled
+	})
+	return
+}

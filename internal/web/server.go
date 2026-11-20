@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -68,8 +67,11 @@ type Server struct {
 	authn     *authn.Service
 	alertSink func(string) // tests: take security alerts instead of the outbox
 	idem      *idemStore
+	searchRL  *limiter    // search, by signed-in user (web and API)
 	refreshRL *limiter    // /api/v1/auth/refresh by client address
 	reboots   rebootGuard // one router reboot per 10 minutes per router (api_live.go)
+
+	wf webfigState
 
 	onlineMu sync.Mutex
 	online   map[string]onlineEntry
@@ -87,6 +89,7 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 	if p, err := netip.ParsePrefix(cfg.WGSubnet); err == nil {
 		s.wgNet = p.Masked()
 	}
+	s.initWebFig()
 	a, err := authn.New(st, cfg.DataKey, cfg.BrandName)
 	if err != nil {
 		log.Error("sign-in: DATA_KEY unusable, two-factor sign-in cannot be set up", "err", err)
@@ -96,33 +99,26 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 	a.SetAlert(s.securityAlert)
 	s.idem = newIdemStore()
 	s.refreshRL = newLimiter(30, time.Minute)
+	s.searchRL = newLimiter(searchPerMinute, time.Minute)
 	funcs := template.FuncMap{
-		"kes": func(n int) string { return "KES " + itoa(n) },
-		// brandParts splits "Fast Tech Net" into {"Fast Tech", "Net"} so the
-		// last word can be drawn in the accent colour.
-		"brandParts": func(b string) []string {
-			b = strings.TrimSpace(b)
-			if i := strings.LastIndex(b, " "); i > 0 {
-				return []string{b[:i], b[i+1:]}
-			}
-			return []string{b, ""}
-		},
-		"dur":    billing.DescribeMinutes,
-		"eat":    func(t time.Time) string { return t.In(billing.EAT).Format("Mon 2 Jan 2006, 15:04") + " EAT" },
-		"eats":   func(t time.Time) string { return t.In(billing.EAT).Format("2 Jan 2006, 15:04") },
-		"left":   func(t time.Time) string { return billing.Remaining(t, svc.Now()) },
-		"pkgOf":  func(m map[string]store.Package, id string) store.Package { return m[id] },
-		"acctOf": func(m map[string]store.Account, id string) store.Account { return m[id] },
-		"state":  func(a store.Account) string { return billing.AccountState(a, svc.Now()) },
-		"f1":     func(v float64) string { return fmt.Sprintf("%.1f", v) },
-		"f0":     func(v float64) string { return fmt.Sprintf("%.0f", v) },
-		"f2":     func(v float64) string { return fmt.Sprintf("%.2f", v) },
-		"eatNow": func() string { return svc.Now().In(billing.EAT).Format("2006-01-02T15:04") },
-		"inc":    func(i int) int { return i + 1 },
-		"day":    day,
-		"stat":   func(v string) string { return strings.ReplaceAll(v, "_", " ") },
-		"deref":  func(b *bool) bool { return b != nil && *b },
-		"last4":  lastFour,
+		"kes":      func(n int) string { return "KES " + itoa(n) },
+		"dur":      billing.DescribeMinutes,
+		"eat":      func(t time.Time) string { return t.In(billing.EAT).Format("Mon 2 Jan 2006, 15:04") + " EAT" },
+		"eats":     func(t time.Time) string { return t.In(billing.EAT).Format("2 Jan 2006, 15:04") },
+		"left":     func(t time.Time) string { return billing.Remaining(t, svc.Now()) },
+		"pkgOf":    func(m map[string]store.Package, id string) store.Package { return m[id] },
+		"acctOf":   func(m map[string]store.Account, id string) store.Account { return m[id] },
+		"state":    func(a store.Account) string { return billing.AccountState(a, svc.Now()) },
+		"f1":       func(v float64) string { return fmt.Sprintf("%.1f", v) },
+		"f0":       func(v float64) string { return fmt.Sprintf("%.0f", v) },
+		"f2":       func(v float64) string { return fmt.Sprintf("%.2f", v) },
+		"eatNow":   func() string { return svc.Now().In(billing.EAT).Format("2006-01-02T15:04") },
+		"inc":      func(i int) int { return i + 1 },
+		"day":      day,
+		"stat":     func(v string) string { return strings.ReplaceAll(v, "_", " ") },
+		"deref":    func(b *bool) bool { return b != nil && *b },
+		"last4":    lastFour,
+		"maskCode": maskCode,
 		"pct": func(a, b float64) float64 {
 			if b <= 0 {
 				return 0
@@ -457,13 +453,6 @@ func packageGroups(all []store.Package) []packageGroup {
 	return out
 }
 
-func isHTTPURL(s string) bool {
-	u, err := url.Parse(s)
-	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && len(s) <= 1024
-}
-
-var _ = strings.TrimSpace
-
 func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
 
 // fromTunnel reports whether the request came from inside the WireGuard
@@ -477,6 +466,6 @@ func (s *Server) fromTunnel(r *http.Request) bool {
 	return err == nil && s.wgNet.Contains(a.Unmap())
 }
 
-// Auth is the sign-in service (users, sessions, devices); main seeds the owner
-// through it and the tests sign in with it.
+// Auth is the sign-in service (users, sessions, devices); only the tests use
+// it (main seeds the owner through its own authn service).
 func (s *Server) Auth() *authn.Service { return s.authn }

@@ -22,6 +22,13 @@ type Tokens struct {
 	DeviceID       string
 }
 
+func trimOlder(older []string) []string {
+	if n := len(older); n > refreshHistory {
+		return append([]string(nil), older[n-refreshHistory:]...)
+	}
+	return older
+}
+
 // refreshHistory is how many older refresh hashes a device remembers.
 const refreshHistory = 5
 
@@ -86,8 +93,10 @@ func (s *Service) LoginDevice(userID string, info DeviceInfo, ip string) (Tokens
 
 // Refresh exchanges a refresh token for a new pair. Every use rotates the
 // refresh token. Presenting the previous one again is reuse: within the grace
-// period (a lost response) it is answered with a fresh pair; later it means a
-// copy of the token exists, and the device is revoked.
+// period (a lost response) it is answered with a fresh pair. Later it is still
+// answered, once, while the phone has not used the newest pair (RefreshLostGrace:
+// the answer never arrived); once the newest pair was used, or the window is
+// over, it means a copy of the token exists, and the device is revoked.
 func (s *Service) Refresh(refreshToken, ip string) (Tokens, store.APIDevice, store.AdminUser, error) {
 	id, ok := splitToken(refreshPrefix, refreshToken)
 	if !ok {
@@ -110,17 +119,27 @@ func (s *Service) Refresh(refreshToken, ip string) (Tokens, store.APIDevice, sto
 			result = ErrTokenRevoked
 			return store.ErrNoChange
 		}
+		sinceRotation := now.Sub(x.RefreshRotatedAt)
+		// confirmed: the phone used the access token of the newest pair (TouchDevice moves LastSeenAt past the
+		// rotation), so it did receive the last answer and the previous refresh token is dead for good.
+		confirmed := x.LastSeenAt.After(x.RefreshRotatedAt)
+		keepSeen := false
 		switch {
 		case hashEq(h, x.RefreshHash):
 			if x.RefreshPrevHash != "" {
 				x.RefreshOlder = append(x.RefreshOlder, x.RefreshPrevHash)
-				if n := len(x.RefreshOlder); n > refreshHistory {
-					x.RefreshOlder = append([]string(nil), x.RefreshOlder[n-refreshHistory:]...)
-				}
+				x.RefreshOlder = trimOlder(x.RefreshOlder)
 			}
 			x.RefreshPrevHash, x.RefreshRotatedAt = x.RefreshHash, now
-		case hashEq(h, x.RefreshPrevHash) && now.Sub(x.RefreshRotatedAt) <= RefreshGrace:
-			// A retry after a lost response: new pair, same previous token.
+		case hashEq(h, x.RefreshPrevHash) && sinceRotation <= RefreshGrace:
+			// A retry after a lost response: a new pair, the same previous token.
+			keepSeen = true
+		case hashEq(h, x.RefreshPrevHash) && !confirmed && sinceRotation <= RefreshLostGrace:
+			// The answer to the last refresh never reached the phone (it left coverage): nothing was ever
+			// done with the newer pair, so the previous token is still the phone's own. Treat it as the
+			// current token, once: after this the unreceived pair is the "previous" one.
+			x.RefreshOlder = trimOlder(append(x.RefreshOlder, h))
+			x.RefreshPrevHash, x.RefreshRotatedAt = x.RefreshHash, now
 		case hashEq(h, x.RefreshPrevHash):
 			s.revokeDeviceLocked(d, id, x, now, "refresh token used twice")
 			s.Audit(d, u.Username, ip, "app device "+id+" revoked: an old refresh token was used again", "", "")
@@ -138,7 +157,10 @@ func (s *Service) Refresh(refreshToken, ip string) (Tokens, store.APIDevice, sto
 			result = ErrTokenRevoked
 			return store.ErrNoChange
 		}
-		x.LastIP, x.LastSeenAt = ip, now
+		x.LastIP = ip
+		if !keepSeen {
+			x.LastSeenAt = now
+		}
 		tok = s.issueLocked(&x, now)
 		d.APIDevices[id] = x
 		dev, user = x, cloneUser(u)
@@ -150,6 +172,11 @@ func (s *Service) Refresh(refreshToken, ip string) (Tokens, store.APIDevice, sto
 	if result != nil {
 		return Tokens{}, store.APIDevice{}, store.AdminUser{}, result
 	}
+	// The first use of the new pair must always be recorded (it confirms the phone got this answer), so the
+	// 60 s activity throttle starts afresh.
+	s.mu.Lock()
+	delete(s.touch, id)
+	s.mu.Unlock()
 	return tok, dev, user, nil
 }
 

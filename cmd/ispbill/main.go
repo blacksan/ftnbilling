@@ -97,6 +97,8 @@ func run(log *slog.Logger) error {
 	mp := payments.NewMpesa(mpesaConf(setm.Effective()), svc, st, log)
 	// Callbacks the database could not take are kept on disk and replayed.
 	mp.SetSpool(payments.NewSpool(filepath.Join(cfg.DataDir, "spool")))
+	mp.SetLegacyQueryUntil(payments.LegacyQueryDeadline(cfg.DataDir, time.Now(), log.Warn))
+	defer mp.Close()
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -115,6 +117,9 @@ func run(log *slog.Logger) error {
 			}
 			if n, err := mp.Replay(ctx); n > 0 || err != nil {
 				log.Info("replayed spooled payment callbacks", "applied", n, "err", err)
+			}
+			if n, err := svc.ExpireOrders(); n > 0 || err != nil { // waiting checkouts end as "expired", not "failed"
+				log.Info("expired unpaid portal orders", "count", n, "err", err)
 			}
 		}
 	}()
@@ -145,6 +150,7 @@ func run(log *slog.Logger) error {
 	}
 	webSrv := web.New(cfg, st, svc, providers, mp, mgr, log)
 	webSrv.SetSettings(setm)
+	mp.SetAlert(webSrv.PaymentAlert)
 	webSrv.SetOps(ops)
 	wg.Add(1)
 	go func() {
@@ -169,8 +175,26 @@ func run(log *slog.Logger) error {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	errc := make(chan error, 1)
+	errc := make(chan error, 2)
 	go func() { errc <- srv.ListenAndServe() }()
+
+	var lockErr error
+	// Remote WebFig (WEBFIG_DOMAIN): its own loopback listener behind the reverse proxy.
+	var wfSrv *http.Server
+	if h := webSrv.WebFigHandler(); h != nil {
+		wfSrv = &http.Server{
+			Addr:              cfg.WebFigListen,
+			Handler:           h,
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       2 * time.Minute,
+			// No read or write timeout: WebFig uploads and long requests run as long
+			// as the session; the proxy ends them at the session's deadline.
+		}
+		log.Info("remote WebFig on", "domain", cfg.WebFigDomain, "listen", cfg.WebFigListen)
+		go func() { errc <- wfSrv.ListenAndServe() }()
+		wg.Add(1)
+		go func() { defer wg.Done(); webSrv.RunWebFig(ctx) }()
+	}
 
 	select {
 	case err := <-errc:
@@ -179,17 +203,27 @@ func run(log *slog.Logger) error {
 		mgr.Wait()
 		svc.Wait()
 		return err
+	case <-st.LockLost(): // nil channel (JSON store) blocks for ever
+		lockErr = st.Healthy()
+		stop() // end every loop (sweeper, spool, ops, manager) so run() returns and the service manager restarts the app
+		log.Error("the database writer lock was lost; exiting so that the service manager restarts the app", "err", lockErr)
 	case <-ctx.Done():
 	}
 	log.Info("shutting down")
 	shCtx, shCancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer shCancel()
+	if wfSrv != nil {
+		_ = wfSrv.Shutdown(shCtx)
+	}
 	err = srv.Shutdown(shCtx)
 	wg.Wait()
 	mgr.Wait()
 	svc.Wait()
 	if errors.Is(err, http.ErrServerClosed) {
 		err = nil
+	}
+	if lockErr != nil {
+		return lockErr
 	}
 	return err
 }

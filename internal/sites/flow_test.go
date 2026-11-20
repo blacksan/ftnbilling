@@ -555,3 +555,19 @@ func TestFixWriterTrafficFlowTargetIsTheServersOnly(t *testing.T) {
 		t.Fatalf("a comment must be refused, got %v", err)
 	}
 }
+
+// L-1: the walled garden cannot limit DNS on RouterOS, so the checklist says so
+// (a warning, never a blocker) while the router answers DNS, and is quiet otherwise.
+func TestChecklistWarnsThatWalledFlatsCanStillResolveAnyName(t *testing.T) {
+	f, s, m := checkRig(t)
+	m.SeedOne("/ip/dns", R{"allow-remote-requests": "true"})
+	it := checkItem(t, f, s.ID, CheckWalledDNS)
+	if it.Status != StatusWarn || it.Blocks || it.Fix.Kind != FixNone || !strings.Contains(it.Detail, "tunnel") {
+		t.Fatalf("%+v", it)
+	}
+	m.SeedOne("/ip/dns", R{"allow-remote-requests": "false"})
+	f.m.SweepSite(context.Background(), s.ID)
+	if it := checkItem(t, f, s.ID, CheckWalledDNS); it.Status != StatusOK {
+		t.Fatalf("DNS off for customers: %+v", it)
+	}
+}

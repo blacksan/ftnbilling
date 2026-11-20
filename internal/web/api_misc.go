@@ -36,7 +36,12 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 		validationErr(w, map[string]string{"q": "type something to search for"})
 		return
 	}
-	res := s.svc.Search(q, func(string) bool { return true })
+	if !s.searchRL.allow("u:" + c.user.ID) {
+		rateLimited(w, time.Minute, false)
+		return
+	}
+	res := s.svc.Search(q, func(string) bool { return true }, c.user.Role == store.RoleOwner)
+	s.auditNationalIDHits(c.user, c.ip, res)
 	custs := []apiCustomer{}
 	for _, cu := range res.Customers {
 		custs = append(custs, apiCustomer{cu.ID, cu.Name, cu.Phone, cu.Email})
@@ -274,6 +279,7 @@ func (s *Server) apiUnregCreate(w http.ResponseWriter, r *http.Request, c *apiCt
 		Tenant      string `json:"tenant"`
 		Phone       string `json:"phone"`
 		PackageID   string `json:"package_id"`
+		Activate    bool   `json:"activate"` // grant the package's first period free; default false, like POST /accounts
 	}
 	if !decode(w, r, &req, false) {
 		return
@@ -308,16 +314,13 @@ func (s *Server) apiUnregCreate(w http.ResponseWriter, r *http.Request, c *apiCt
 		validationErr(w, fields)
 		return
 	}
-	a, err := s.svc.CreateAccount(billing.AccountInput{ApartmentID: req.ApartmentID, SiteID: req.SiteID, Unit: req.Unit, Flat: req.Unit, MAC: mac, Tenant: req.Tenant, Phone: req.Phone})
+	// The same door as POST /accounts: a package is set as the plan and the tenant pays for it; free time only
+	// when "activate" says so. A package that cannot be set refuses the request before anything is made.
+	a, _, err := s.svc.CreateCustomer(r.Context(), billing.AddCustomerInput{ApartmentID: req.ApartmentID, SiteID: req.SiteID, Unit: req.Unit, Flat: req.Unit,
+		MAC: mac, Tenant: req.Tenant, Phone: req.Phone, PackageID: req.PackageID, Activate: req.Activate})
 	if err != nil {
 		s.billingErr(w, err, mac)
 		return
-	}
-	if req.PackageID != "" {
-		// Starts the package from now, like "Change package, start fresh".
-		if err := s.svc.ChangePackage(r.Context(), a.ID, req.PackageID, false); err != nil {
-			s.log.Warn("api: package on a new account failed", "account", a.Code, "err", err)
-		}
 	}
 	c.audit(s, "account "+a.Code+" ("+a.Flat+") created from device "+mac)
 	s.respondAccount(w, http.StatusCreated, a.ID)

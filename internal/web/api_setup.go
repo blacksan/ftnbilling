@@ -72,6 +72,8 @@ func (s *Server) routerFail(w http.ResponseWriter, err error) bool {
 		apiErr(w, http.StatusConflict, codeRouterRefused, "The router refused the change.", map[string]any{"router_error": rr.Msg})
 	case errors.Is(err, sites.ErrRouterUnreachable):
 		apiErr(w, http.StatusServiceUnavailable, codeRouterUnreachable, "The router does not answer. Check the tunnel and try again.", nil)
+	case errors.Is(err, sites.ErrRouterBusy):
+		apiErr(w, http.StatusConflict, codeBadState, sites.ErrRouterBusy.Error(), nil)
 	default:
 		return false
 	}
@@ -121,6 +123,13 @@ type routerReq struct {
 	OLTCapMbps     *float64  `json:"olt_cap_mbps"`
 	FUPTB          *float64  `json:"fup_tb"`
 	SupportPhone   *string   `json:"support_phone"`
+	// The ports, OLT uplink and VLAN the client was SHOWN when it loaded the router (all optional). With them, a
+	// field the client changes is refused with 409 when the stored value moved on meanwhile (for example on the Ports
+	// tab), and a field it did not change keeps whatever is stored now. Without them the request is applied as sent.
+	BaseLANPorts      *string   `json:"base_lan_ports"`
+	BaseCustomerPorts *portList `json:"base_customer_ports"`
+	BaseOLTInterface  *string   `json:"base_olt_interface"`
+	BaseVLANID        *int      `json:"base_vlan_id"`
 	// Confirm accepts the warning for a change of the OLT port or the VLAN on a router that is set up
 	// ("Customers on the OLT lose service until the OLT uses the new setting").
 	Confirm *bool `json:"confirm"`
@@ -270,7 +279,7 @@ func (s *Server) apiRouterCreate(w http.ResponseWriter, r *http.Request, c *apiC
 	c.audit(s, "router "+st.Name+" added")
 	w.Header().Set("Cache-Control", "no-store")
 	h := s.siteHealths(r.Context(), []store.Site{st})[st.ID]
-	writeJSON(w, http.StatusCreated, map[string]any{"router": s.siteJSON(st, h, nil), "join": join})
+	writeJSON(w, http.StatusCreated, map[string]any{"router": s.siteJSONFor(c, st, h, nil), "join": join})
 }
 
 func (s *Server) apiRouterPatch(w http.ResponseWriter, r *http.Request, c *apiCtx) {
@@ -283,12 +292,26 @@ func (s *Server) apiRouterPatch(w http.ResponseWriter, r *http.Request, c *apiCt
 		return
 	}
 	in := sites.SiteInputOf(st)
-	base := in // only the fields that were sent change; the rest keep what is stored now, even if the Ports tab moved it meanwhile
+	base := in // a base_X counts only when X itself was sent; only the fields that were sent change; the rest keep what is stored now, even if the Ports tab moved it meanwhile
+	if req.BaseLANPorts != nil && req.LANPorts != nil {
+		base.LANPorts = *req.BaseLANPorts
+	}
+	if req.BaseCustomerPorts != nil && (req.CustomerPorts != nil || req.BenchPort != nil) {
+		base.CustomerPorts = strings.Join(*req.BaseCustomerPorts, ",")
+	}
+	if req.BaseOLTInterface != nil && req.OLTInterface != nil {
+		base.OLTInterface = *req.BaseOLTInterface
+	}
+	if req.BaseVLANID != nil && req.VLANID != nil {
+		base.VLANID = *req.BaseVLANID
+	}
 	in = applyRouterReq(in, req)
 	in.Base = &base
-	if err := s.mgr.UpdateSite(st.ID, in); err != nil {
+	if err := s.mgr.UpdateSiteCtx(r.Context(), st.ID, in); err != nil {
 		var pe *sites.PortRefusal
-		if errors.Is(err, sites.ErrOLTConfirmRequired) {
+		if errors.Is(err, sites.ErrRouterBusy) {
+			apiErr(w, http.StatusConflict, codeBadState, sites.ErrRouterBusy.Error(), nil)
+		} else if errors.Is(err, sites.ErrOLTConfirmRequired) {
 			apiErr(w, http.StatusConflict, codeConfirm, err.Error(), nil)
 		} else if errors.Is(err, sites.ErrStaleLayout) {
 			apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
@@ -305,7 +328,7 @@ func (s *Server) apiRouterPatch(w http.ResponseWriter, r *http.Request, c *apiCt
 	c.audit(s, "router "+st.Name+" edited")
 	st, _ = s.site404(w, st.ID)
 	h := s.siteHealths(r.Context(), []store.Site{st})[st.ID]
-	writeJSON(w, http.StatusOK, s.siteJSON(st, h, s.siteCounts()[st.ID]))
+	writeJSON(w, http.StatusOK, s.siteJSONFor(c, st, h, s.siteCounts()[st.ID]))
 }
 
 // apiRouterReset is POST /routers/{id}/actions/reset: forget the router on the
@@ -342,7 +365,7 @@ func (s *Server) apiRouterReset(w http.ResponseWriter, r *http.Request, c *apiCt
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	h := s.siteHealths(r.Context(), []store.Site{st})[st.ID]
-	writeJSON(w, http.StatusOK, map[string]any{"router": s.siteJSON(st, h, s.siteCounts()[st.ID]), "join": join})
+	writeJSON(w, http.StatusOK, map[string]any{"router": s.siteJSONFor(c, st, h, s.siteCounts()[st.ID]), "join": join})
 }
 
 // apiRouterScript is POST /routers/{id}/script: the same script as the paste line fetches, as a file download
@@ -584,6 +607,7 @@ func (s *Server) apiPauseAutoFixes(w http.ResponseWriter, r *http.Request, c *ap
 		switch {
 		case errors.Is(err, sites.ErrPauseInPast):
 			validationErr(w, map[string]string{"until": err.Error()})
+			return
 		case errors.Is(err, store.ErrNoChange):
 		default:
 			if !s.storeErr(w, err) {

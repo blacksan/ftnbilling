@@ -448,8 +448,6 @@ func legacyPhone(raw string) string {
 	return strings.TrimSpace(raw)
 }
 
-var spaceRun = regexp.MustCompile(`\s+`)
-
 func tidy(s string) string { return NormalizeUnit(s) }
 
 // migrateV8toV9 upgrades format 8 data in memory (migration 0008 in Postgres):

@@ -30,6 +30,9 @@ const TunnelFresh = 3 * time.Minute
 // about two minutes, so ten is generous.
 const StallAfter = 10 * time.Minute
 
+// FailedReportWait: a failed join report only means "stalled" this long after it was posted, if the tunnel is still down.
+const FailedReportWait = 2 * time.Minute
+
 // SetupJoin is the join part of Setup.
 type SetupJoin struct {
 	State     string      `json:"state"` // none | waiting | used | expired
@@ -165,7 +168,14 @@ func (m *Manager) SetupView(_ context.Context, siteID string) (Setup, bool) {
 		green = cs.Summary.Fail == 0 && len(out.Blockers) == 0
 	}
 
-	stalled := !tunnel && !joined && !site.Join.UsedAt.IsZero() && out.Join.Report == nil && now.Sub(site.Join.UsedAt) > StallAfter
+	// A router that never came back is stalled: the fetch is older than StallAfter (with or without a report, a
+	// report that says "ok" and then no tunnel still means it did not join), or the script itself reported
+	// that it failed, which no waiting will fix.
+	failedReport := out.Join.Report != nil && !out.Join.Report.OK
+	// A "fail" report is not the end while the tunnel may still be coming up (the report is posted over the WAN
+	// before the first handshake): it counts as stalled only when the tunnel is still down FailedReportWait later.
+	failedStalled := failedReport && now.Sub(out.Join.Report.At) > FailedReportWait
+	stalled := !tunnel && !joined && !site.Join.UsedAt.IsZero() && (failedStalled || now.Sub(site.Join.UsedAt) > StallAfter)
 	switch {
 	case !fetched:
 		out.State = StateNotStarted
@@ -180,7 +190,6 @@ func (m *Manager) SetupView(_ context.Context, siteID string) (Setup, bool) {
 	}
 
 	// Steps.
-	failedReport := out.Join.Report != nil && !out.Join.Report.OK
 	step := func(n int, key, title string) *SetupStep {
 		out.Steps = append(out.Steps, SetupStep{N: n, Key: key, Title: title, Status: "pending"})
 		return &out.Steps[len(out.Steps)-1]
@@ -203,6 +212,8 @@ func (m *Manager) SetupView(_ context.Context, siteID string) (Setup, bool) {
 	}
 	if tunnel {
 		s2.Status, s2.At = "ok", handshakeAt
+	} else if stalled && failedStalled {
+		s2.Status, s2.Detail = "failed", "The script stopped before the tunnel was built."
 	} else if stalled {
 		s2.Status, s2.Detail = "failed", "The router fetched the script but never came back."
 	} else if fetched {
@@ -225,6 +236,12 @@ func (m *Manager) SetupView(_ context.Context, siteID string) (Setup, bool) {
 	}
 
 	out.NextAction = nextAction(out, site, cs, haveChecks)
+	renderFail, hasRenderFail := m.renderFail.get(siteID)
+	if hasRenderFail && !fetched && out.Join.State == "waiting" {
+		// The router already tried the line and the server could not make the script: pasting again is useless until this is fixed.
+		out.LastError = renderFail.Msg
+		out.NextAction = SetupNext{Kind: "none", Text: "The router fetched the line but the server could not make its script: " + renderFail.Msg + ". Fix that on the server (see the installer settings), then paste the same line again."}
+	}
 	if failedReport {
 		out.LastError = firstLine(out.Join.Report.Lines)
 	} else if stalled {
@@ -273,6 +290,9 @@ func nextAction(s Setup, site store.Site, cs Checks, haveChecks bool) SetupNext 
 		}
 		return SetupNext{Kind: "paste_line", Text: "Make a new line, then paste it on the router."}
 	case StateStalled:
+		if s.Join.Report != nil && !s.Join.Report.OK {
+			return SetupNext{Kind: "paste_line", Text: "The script stopped on the router: " + firstLine(s.Join.Report.Lines) + ". Reset the router with the Reset button here, fix what the line above says if it is something on the router, then make a new line and paste it again."}
+		}
 		return SetupNext{Kind: "paste_line", Text: "The router fetched the script but never came back (it may have stopped before or during the reset). Reset the router with the Reset button here, then make a new line and paste it on the router."}
 	case StateWaitingRouter:
 		return SetupNext{Kind: "wait", Text: "The router is building itself. This takes about two minutes."}

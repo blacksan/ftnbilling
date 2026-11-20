@@ -88,8 +88,9 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 
 // Run is the conformance suite: every backend must pass it unchanged.
 func Run(t *testing.T) {
-	store.Strict = true
-	t.Cleanup(func() { store.Strict = false })
+	// Strict stays on for the rest of the test binary: NewIn sets it once (strictOnce),
+	// so resetting it here would silently turn it off for every later test.
+	strictOnce.Do(func() { store.Strict = true })
 
 	t.Run("PersistenceAcrossReopen", func(t *testing.T) {
 		h := New(t)

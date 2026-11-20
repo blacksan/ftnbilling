@@ -132,9 +132,6 @@ object SetupState {
     const val ONLINE = "online"
     const val READY = "ready"
 
-    /** The app polls (every 5 s) until every step is green. */
-    fun isReady(state: String) = state == READY
-
     fun label(state: String) = when (state) {
         "", NOT_STARTED -> "Not started"
         WAITING_ROUTER -> "Waiting for the router"
@@ -142,14 +139,6 @@ object SetupState {
         READY -> "Ready"
         else -> state.replace('_', ' ').replaceFirstChar { it.uppercase() }
     }
-}
-
-/** The four derived steps of `GET /routers/{id}/setup`, in order. */
-object SetupStepKey {
-    const val SCRIPT_FETCHED = "script_fetched"
-    const val TUNNEL_UP = "tunnel_up"
-    const val SERVER_LOGIN = "server_login"
-    const val CHECKS_GREEN = "checks_green"
 }
 
 @Serializable

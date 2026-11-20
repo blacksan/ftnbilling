@@ -1,6 +1,8 @@
 package web_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -327,5 +329,45 @@ func TestAPIOLTChangeNeedsConfirmOnASetUpRouterAndPauseIsOwnerOnly(t *testing.T)
 	}
 	if x := r.call(r.owner.Access, "POST", "/routers/"+id+"/actions/pause-auto-fixes", map[string]any{"paused": false}, nil); x.Status != 200 || x.JSON(t)["paused"] == true {
 		t.Fatalf("%d %s", x.Status, x.Raw)
+	}
+}
+
+// A refused pause (the date is in the past) answers once with the 400, and is
+// not recorded as a pause: no second 200 body, no audit row.
+func TestAPIPauseAutoFixesInThePastIsRefusedCleanly(t *testing.T) {
+	r := newAPIRig(t)
+	id := r.A.ID
+	count := func() int {
+		n := 0
+		r.st.View(func(d *store.Data) {
+			for _, e := range d.Events {
+				if e.Kind == "audit" && strings.Contains(e.Msg, "automatic fixes") {
+					n++
+				}
+			}
+		})
+		return n
+	}
+	before := count()
+	x := r.call(r.owner.Access, "POST", "/routers/"+id+"/actions/pause-auto-fixes", map[string]any{"paused": true, "until": "2020-01-01T00:00:00Z"}, nil)
+	if x.Status != 400 && x.Status != 422 {
+		t.Fatalf("past: %d %s", x.Status, x.Raw)
+	}
+	dec := json.NewDecoder(bytes.NewReader(x.Raw))
+	var first map[string]any
+	if err := dec.Decode(&first); err != nil {
+		t.Fatalf("body: %v %q", err, x.Raw)
+	}
+	if _, isErr := first["error"]; !isErr {
+		t.Errorf("the body is not the error: %s", x.Raw)
+	}
+	if dec.More() {
+		t.Errorf("a second document follows the error: %s", x.Raw)
+	}
+	if bytes.Contains(x.Raw, []byte(`"paused"`)) {
+		t.Errorf("a 200 body was appended: %s", x.Raw)
+	}
+	if got := count(); got != before {
+		t.Errorf("audit rows: %d before, %d after a refused pause", before, got)
 	}
 }

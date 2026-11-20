@@ -10,8 +10,9 @@
 #   PublicKey = <44 characters of base64>
 #   AllowedIPs = <one address inside the tunnel subnet>/32
 #
-# Anything else (PostUp, Endpoint, another interface, a symlink, a huge file)
-# makes the script refuse the whole file and change nothing.
+# A peer block with anything else in it (PostUp, Endpoint, an address outside
+# the tunnel subnet) is skipped and reported (stderr and the status file); the
+# valid peers are still applied. A symlink or a huge file is refused whole.
 set -euo pipefail
 
 CONF=${FTN_WG_SYNC_CONF:-/etc/ftnbilling/wg-sync.env}
@@ -52,38 +53,90 @@ SIZE=$(stat -c %s "$FILE")
 
 OUT=$(mktemp)
 trap 'rm -f "$OUT"' EXIT
+STATUS=${FTN_WG_SYNC_STATUS:-/run/ftnbilling/wg-sync.status}
+good=0
+skipped=0
+reasons=()
+
+# One [Peer] block at a time: a block that fails validation is skipped and reported, the others
+# are still applied. (A single bad line must not take every router's tunnel down.)
+blk_start=0
+blk_bad=""
+blk_key=""
+blk_has_allowed=0
+blk_lines=()
+flush_block() {
+  [ "$blk_start" -gt 0 ] || return 0
+  if [ -z "$blk_bad" ] && [ -z "$blk_key" ]; then blk_bad="no PublicKey"; fi
+  if [ -z "$blk_bad" ] && [ "$blk_has_allowed" = 0 ]; then blk_bad="no AllowedIPs"; fi
+  if [ -n "$blk_bad" ]; then
+    skipped=$((skipped + 1))
+    reasons+=("peer at line $blk_start skipped: $blk_bad")
+    echo "ftnbilling-wg-sync: peer at line $blk_start skipped: $blk_bad" >&2
+  else
+    printf '%s\n' "[Peer]" "${blk_lines[@]}" "" >>"$OUT"
+    good=$((good + 1))
+  fi
+  blk_start=0; blk_bad=""; blk_key=""; blk_has_allowed=0; blk_lines=()
+}
+bad() { [ -n "$blk_bad" ] || blk_bad="line $n: $*"; }
+
 n=0
-haskey=0
 while IFS= read -r line || [ -n "$line" ]; do
   n=$((n + 1))
+  line=${line%$'\r'}
   case $line in
-    "") echo >>"$OUT" ;;
+    "") ;;
     "[Peer]")
-      echo "$line" >>"$OUT"
-      haskey=0
+      flush_block
+      blk_start=$n
       ;;
-    "PublicKey = "*)
-      key=${line#PublicKey = }
-      [[ $key =~ ^[A-Za-z0-9+/]{43}=$ ]] || die "line $n: not a valid public key"
-      echo "$line" >>"$OUT"
-      haskey=1
+    *)
+      if [ "$blk_start" -eq 0 ]; then
+        skipped=$((skipped + 1)); reasons+=("line $n ignored: outside a [Peer] block")
+        echo "ftnbilling-wg-sync: line $n ignored: outside a [Peer] block" >&2
+        continue
+      fi
+      case $line in
+        "PublicKey = "*)
+          key=${line#PublicKey = }
+          if [ -n "$blk_key" ]; then bad "a second PublicKey"
+          elif [[ $key =~ ^[A-Za-z0-9+/]{43}=$ ]]; then blk_key=$key; blk_lines+=("$line")
+          else bad "not a valid public key"; fi
+          ;;
+        "AllowedIPs = "*)
+          v=${line#AllowedIPs = }
+          if [ -z "$blk_key" ]; then bad "AllowedIPs before PublicKey"
+          elif [ "$blk_has_allowed" = 1 ]; then bad "a second AllowedIPs"
+          elif [[ ! $v =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/32$ ]]; then bad "AllowedIPs must be one /32 address"
+          else
+            for o in "${BASH_REMATCH[@]:1:4}"; do
+              [ "$((10#$o))" -le 255 ] || bad "bad address"
+            done
+            if [ -z "$blk_bad" ]; then
+              ip=${v%/32}
+              i=$(ip2int "$ip")
+              if [ $((i & MASK)) -ne "$NETINT" ]; then bad "$ip is outside $WG_SUBNET"
+              elif [ "$i" -eq "$SERVER" ] || [ "$i" -eq "$NETINT" ]; then bad "$ip is reserved"
+              else blk_has_allowed=1; blk_lines+=("$line"); fi
+            fi
+          fi
+          ;;
+        *) bad "not allowed" ;;
+      esac
       ;;
-    "AllowedIPs = "*)
-      v=${line#AllowedIPs = }
-      [ "$haskey" = 1 ] || die "line $n: AllowedIPs before PublicKey"
-      [[ $v =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/32$ ]] || die "line $n: AllowedIPs must be one /32 address"
-      for o in "${BASH_REMATCH[@]:1:4}"; do
-        [ "$((10#$o))" -le 255 ] || die "line $n: bad address"
-      done
-      ip=${v%/32}
-      i=$(ip2int "$ip")
-      [ $((i & MASK)) -eq "$NETINT" ] || die "line $n: $ip is outside $WG_SUBNET"
-      [ "$i" -ne "$SERVER" ] && [ "$i" -ne "$NETINT" ] || die "line $n: $ip is reserved"
-      echo "$line" >>"$OUT"
-      ;;
-    *) die "line $n: not allowed" ;;
   esac
 done <"$FILE"
+flush_block
+
+write_status() {
+  local tmp
+  mkdir -p "$(dirname "$STATUS")" 2>/dev/null || return 0
+  tmp="$STATUS.tmp.$$"
+  { printf 'time=%s\napplied=%s\nskipped=%s\n' "$(date -u +%FT%TZ)" "$good" "$skipped"
+    for r in "${reasons[@]}"; do printf 'problem=%s\n' "$r"; done; } >"$tmp" 2>/dev/null && mv -f "$tmp" "$STATUS" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+}
 
 "$WG" syncconf "$IFACE" <("$WGQ" strip "$IFACE"; cat "$OUT")
-echo "applied $(grep -c '^\[Peer\]' "$OUT" || true) peers to $IFACE"
+write_status
+echo "applied $good peers to $IFACE$([ "$skipped" = 0 ] || echo " ($skipped skipped, see above)")"

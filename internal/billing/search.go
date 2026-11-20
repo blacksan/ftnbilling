@@ -20,6 +20,8 @@ type SearchResult struct {
 	Buildings []store.Site
 	// Apartments found by name, address, or caretaker/landlord name or phone.
 	Apartments []store.Apartment
+	// NationalIDHits are the customers matched by an exact national ID (owners only).
+	NationalIDHits []string
 }
 
 // Total is the number of hits over all groups.
@@ -109,8 +111,11 @@ func phoneMatch(stored, full, digits string) bool {
 // admin's current scope. Phone numbers match in any common form, MACs without
 // separators, codes/receipts/serials exactly then by prefix, names and flats
 // by case-folded substring. A national ID matches exactly through its blind
-// index.
-func (s *Service) Search(q string, in func(siteID string) bool) SearchResult {
+// index, but only when byNationalID is true: that exact match is an oracle (a
+// caller can test guesses against every stored ID at once), so the web layer
+// allows it for owners only, who may reveal IDs anyway. The customers it found
+// are listed in NationalIDHits so the caller can audit the lookup.
+func (s *Service) Search(q string, in func(siteID string) bool, byNationalID bool) SearchResult {
 	q = strings.TrimSpace(q)
 	res := SearchResult{Query: q}
 	if q == "" {
@@ -124,8 +129,11 @@ func (s *Service) Search(q string, in func(siteID string) bool) SearchResult {
 		macQ = hexq
 	}
 	nidHits := map[string]bool{}
-	for _, c := range s.FindByNationalID(q) {
-		nidHits[c.ID] = true
+	if byNationalID {
+		for _, c := range s.FindByNationalID(q) {
+			nidHits[c.ID] = true
+			res.NationalIDHits = append(res.NationalIDHits, c.ID)
+		}
 	}
 	exact := map[string]bool{} // exact hits sort first
 	s.st.View(func(d *store.Data) {

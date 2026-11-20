@@ -52,10 +52,11 @@ func (a alertInputs) Live(id string) (metrics.Live, metrics.Config, bool) {
 
 // mpesaConf maps the effective configuration to the Daraja client's.
 func mpesaConf(c config.Config) payments.MpesaConfig {
+	confirm, _ := c.MpesaConfirm()
 	return payments.MpesaConfig{
 		BaseURL: c.MpesaBaseURL(), Key: c.MpesaKey, Secret: c.MpesaSecret, Shortcode: c.MpesaShortcode, C2BShortcode: c.MpesaC2BShortcode,
 		Passkey: c.MpesaPasskey, PublicBaseURL: c.PublicBaseURL, CallbackToken: c.MpesaCallbackToken, PrevToken: c.MpesaCallbackTokenPrev, PrevUntil: c.MpesaCallbackTokenPrevUntil, UnknownRef: c.MpesaUnknownRef,
-		Enabled: c.MpesaEnabled(),
+		Enabled: c.MpesaEnabled(), Initiator: c.MpesaInitiator, SecurityCredential: c.MpesaSecurityCredential, ConfirmReceipts: confirm,
 	}
 }
 
@@ -108,7 +109,6 @@ func startOps(ctx context.Context, wg *sync.WaitGroup, setm *settings.Manager, m
 			return alerts.Targets{Email: emailTargets(c), WhatsApp: waTargets(c)}
 		},
 	})
-	mgr.SetAnnouncer(engine.Announce)
 	tenant := notify.NewTenant(notify.TenantOptions{
 		Store: st, Box: box, Log: log, Lang: cfg.WALang, Policy: svc.Policy, PayHint: payHintOf(cfg), MinConfirmKES: cfg.WAMinConfirmKES,
 		Mode:      func() string { return engine.Settings().OutageNotice },

@@ -1,0 +1,12 @@
+{{define "admin_webfig_step"}}{{template "authhead" .}}
+<h1>Open WebFig</h1><p class="muted">Router <b>{{.RouterName}}</b>. WebFig opens through this server, never straight on the router.</p>
+{{if .Error}}<div class="err" role="alert">{{.Error}}</div>{{end}}
+{{if .Fresh}}<p>You confirmed your password and code a few minutes ago.</p>
+<form method="post" action="/admin/routers/webfig"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{.RouterID}}"><button type="submit">Open WebFig</button></form>
+{{else}}<p class="muted">Signed in as <b>{{.Username}}</b>. Confirm it is you: WebFig can change anything on the router.</p>
+<form method="post" action="/admin/routers/webfig" autocomplete="off"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{.RouterID}}">
+<label>Password<input type="password" name="password" autocomplete="current-password" required maxlength="300"></label>
+<label>6-digit code<input name="code" inputmode="numeric" pattern="[0-9 ]*" autocomplete="one-time-code" required maxlength="12"></label>
+<button type="submit">Confirm and open WebFig</button></form>{{end}}
+<p><a href="/admin/routers/view?id={{.RouterID}}">Back to the router</a></p>
+{{template "authfoot" .}}{{end}}

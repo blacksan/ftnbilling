@@ -56,13 +56,12 @@ class ViewModelsTest {
         server.start()
         val sessions = SessionManager(MemoryTokenStore(Session("a", "", "r", "", "d", UserInfo("1", "b", "owner"))))
         sessions.restore()
-        api = ApiClient.create(server.url("/").toString(), sessions)
+        api = ApiClient.create(server.url("/").toString(), sessions, io = main.dispatcher)
     }
 
     @After fun tearDown() {
-        // Let responses still in flight land while the test Main dispatcher exists, so nothing leaks into the next test.
-        Thread.sleep(300)
-        main.dispatcher.scheduler.advanceUntilIdle()
+        // Cancel the view models first, so no call is resumed on a Main that is about to be reset.
+        main.cancelViewModels()
         server.shutdown()
     }
 
@@ -92,7 +91,7 @@ class ViewModelsTest {
             409, "mac_in_use",
             """{"mac":"AA:BB:CC:DD:EE:02","account":{"id":"a2","code":"FTN-2","flat":"C7","site_id":"s2","site_name":"Lavington Court"}}""",
         )
-        val vm = CustomerDetailViewModel("a1", AccountsRepository(api))
+        val vm = main.track(CustomerDetailViewModel("a1", AccountsRepository(api)))
         await(vm.state) { it.account is Loadable.Ready }
 
         vm.open(DetailDialog.EditMac)
@@ -113,7 +112,7 @@ class ViewModelsTest {
     @Test fun badMacIsRejectedLocallyWithoutACall() = runTest(main.dispatcher) {
         routes["GET /api/v1/accounts/a1"] = ok(account)
         routes["GET /api/v1/packages"] = ok("""{"items":[]}""")
-        val vm = CustomerDetailViewModel("a1", AccountsRepository(api))
+        val vm = main.track(CustomerDetailViewModel("a1", AccountsRepository(api)))
         await(vm.state) { it.account is Loadable.Ready }
         vm.open(DetailDialog.EditMac)
         vm.onMacInput("AA:BB:CC")
@@ -127,7 +126,7 @@ class ViewModelsTest {
         routes["GET /api/v1/accounts/a1"] = ok(account.dropLast(1) + ""","events":[{"time":"2026-01-01T00:00:00Z","msg":"hello"}]}""")
         routes["GET /api/v1/packages"] = ok("""{"items":[]}""")
         routes["PUT /api/v1/accounts/a1/mac"] = ok(account.replace("EE:01", "EE:09"))
-        val vm = CustomerDetailViewModel("a1", AccountsRepository(api))
+        val vm = main.track(CustomerDetailViewModel("a1", AccountsRepository(api)))
         await(vm.state) { it.account is Loadable.Ready }
         vm.open(DetailDialog.EditMac)
         vm.onMacInput("AA:BB:CC:DD:EE:09")
@@ -142,7 +141,7 @@ class ViewModelsTest {
         routes["GET /api/v1/accounts/a1"] = ok(account)
         routes["GET /api/v1/packages"] = ok("""{"items":[]}""")
         routes["POST /api/v1/accounts/a1/extend"] = err(409, "lower_plan_active", msg = "A faster plan is running.")
-        val vm = CustomerDetailViewModel("a1", AccountsRepository(api))
+        val vm = main.track(CustomerDetailViewModel("a1", AccountsRepository(api)))
         await(vm.state) { it.account is Loadable.Ready }
         vm.open(DetailDialog.Extend)
         vm.extendTracked("p1", null)
@@ -160,7 +159,7 @@ class ViewModelsTest {
             """{"items":[${dev("00:00:00:00:00:01", false, "2026-01-03T00:00:00Z")},${dev("00:00:00:00:00:02", true, "2026-01-01T00:00:00Z")},${dev("00:00:00:00:00:03", true, "2026-01-02T00:00:00Z")}]}""",
         )
         routes["GET /api/v1/packages"] = ok("""{"items":[]}""")
-        val vm = NewDevicesViewModel(null, NewDevicesRepository(api), SitesRepository(api), AccountsRepository(api))
+        val vm = main.track(NewDevicesViewModel(null, NewDevicesRepository(api), SitesRepository(api), AccountsRepository(api)))
         await(vm.state) { it.devices is Loadable.Ready }
         val macs = (vm.state.value.devices as Loadable.Ready<List<NewDevice>>).value.map { it.mac.takeLast(2) }
         assertEquals(listOf("03", "02", "01"), macs)
@@ -175,7 +174,7 @@ class ViewModelsTest {
             409, "mac_in_use",
             """{"mac":"AA:BB:CC:DD:EE:05","account":{"id":"a9","code":"FTN-9","flat":"D2","site_id":"s3","site_name":"Westlands Plaza"}}""",
         )
-        val vm = NewDevicesViewModel(null, NewDevicesRepository(api), SitesRepository(api), AccountsRepository(api))
+        val vm = main.track(NewDevicesViewModel(null, NewDevicesRepository(api), SitesRepository(api), AccountsRepository(api)))
         await(vm.state) { it.devices is Loadable.Ready }
         val device = (vm.state.value.devices as Loadable.Ready<List<NewDevice>>).value.single()
         vm.open(device)
@@ -195,7 +194,7 @@ class ViewModelsTest {
         routes["GET /api/v1/routers"] = ok("""{"items":[{"id":"s1","name":"A"},{"id":"s2","name":"B"}]}""")
         routes["POST /api/v1/routers/s1/unregistered/refresh"] = MockResponse().setResponseCode(202)
         routes["POST /api/v1/routers/s2/unregistered/refresh"] = err(503, "db_unavailable")
-        val vm = NewDevicesViewModel(null, NewDevicesRepository(api), SitesRepository(api), AccountsRepository(api))
+        val vm = main.track(NewDevicesViewModel(null, NewDevicesRepository(api), SitesRepository(api), AccountsRepository(api)))
         await(vm.state) { it.devices is Loadable.Ready }
         synchronized(seen) { seen.clear() }
         vm.refresh()
@@ -212,7 +211,7 @@ class ViewModelsTest {
         routes["GET /api/v1/payments"] = ok("""{"items":[],"totals":{"count":0,"revenue_kes":0}}""")
         routes["GET /api/v1/packages"] = ok("""{"items":[]}""")
         routes["POST /api/v1/payments"] = err(409, "duplicate_payment", msg = "Code already recorded.")
-        val vm = PaymentsViewModel(PaymentsRepository(api), AccountsRepository(api))
+        val vm = main.track(PaymentsViewModel(PaymentsRepository(api), AccountsRepository(api)))
         await(vm.state) { !it.loading }
         vm.openRecord()
         vm.editForm { it.copy(account = ke.co.ftw.ftnadmin.domain.Account(id = "a1", flat = "A1"), amount = "1500", transCode = "ABC123") }

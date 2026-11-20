@@ -13,7 +13,7 @@ import (
 // form registered for C2B, in case RegisterURL refuses a query string). A
 // Settings save therefore takes effect without a restart.
 func (s *Server) callbackRoutes(mux *http.ServeMux) {
-	stk := s.cb(func(w http.ResponseWriter, b []byte, r *http.Request) {
+	stk := s.cbQuery(true, func(w http.ResponseWriter, b []byte, r *http.Request) {
 		if err := s.mpesa.HandleSTKCallback(r.Context(), b); err != nil {
 			s.log.Warn("stk callback", "err", err)
 		}
@@ -25,6 +25,14 @@ func (s *Server) callbackRoutes(mux *http.ServeMux) {
 	confirm := s.cb(func(w http.ResponseWriter, b []byte, r *http.Request) {
 		jsonOut(w, s.mpesa.HandleC2BConfirmation(r.Context(), b))
 	})
+	txres := s.cb(func(w http.ResponseWriter, b []byte, r *http.Request) {
+		jsonOut(w, s.mpesa.HandleTxStatusResult(r.Context(), b))
+	})
+	txtimeout := s.cb(func(w http.ResponseWriter, b []byte, r *http.Request) {
+		jsonOut(w, s.mpesa.HandleTxStatusTimeout(b))
+	})
+	mux.HandleFunc("POST /pay/cb/t/{token}/txstatus/result", txres)
+	mux.HandleFunc("POST /pay/cb/t/{token}/txstatus/timeout", txtimeout)
 	mux.HandleFunc("POST /pay/cb/stk", stk)
 	mux.HandleFunc("POST /pay/cb/c2b/validate", validate)
 	mux.HandleFunc("POST /pay/cb/c2b/confirm", confirm)
@@ -36,10 +44,25 @@ func (s *Server) callbackRoutes(mux *http.ServeMux) {
 // cb wraps a callback handler: live enabled check, shared-secret check, bounded
 // body read. Every refusal is the same 404.
 func (s *Server) cb(h func(http.ResponseWriter, []byte, *http.Request)) http.HandlerFunc {
+	return s.cbQuery(false, h)
+}
+
+// cbQuery is cb. With stk set, the old form of the STK callback URL, the token
+// in the query string (?t=), is only accepted until the end of the grace period
+// (Mpesa.LegacyQueryUntil, 30 days after this version first ran) so STK pushes
+// already sent with the old URL still land. Every use is logged.
+func (s *Server) cbQuery(stk bool, h func(http.ResponseWriter, []byte, *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok := r.PathValue("token")
 		if tok == "" {
 			tok = r.URL.Query().Get("t")
+			if tok != "" {
+				if stk && !s.mpesa.LegacyQueryOK() {
+					http.NotFound(w, r)
+					return
+				}
+				s.log.Warn("M-Pesa callback with the secret in the query string (old form): re-register the URL with the token in the path", "path", r.URL.Path)
+			}
 		}
 		if s.mpesa == nil || !s.mpesa.CheckCallbackToken(tok) {
 			http.NotFound(w, r)

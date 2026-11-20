@@ -56,6 +56,7 @@ const (
 	CheckIPv6         = "ipv6"
 	CheckPublicIP     = "server.public_ip"
 	CheckWalled       = "walled.rules"
+	CheckWalledDNS    = "walled.dns"
 	CheckDHCP         = "dhcp.ftn"
 	CheckWAN          = "wan.internet"
 	CheckBootFile     = "bootstrap.file"
@@ -162,6 +163,9 @@ type Checks struct {
 	AutoFixes *PauseState `json:"auto_fixes,omitempty"`
 	// Slow is true when some read of the router timed out: the server repeats the pass by itself.
 	Slow bool `json:"slow,omitempty"`
+	// MgmtWinbox: the router's firewall has the "ftn: mgmt winbox" accept for the server's current management
+	// subnet, read from the router itself (so a lost join report does not make a built router look unbuilt).
+	MgmtWinbox bool `json:"mgmt_winbox,omitempty"`
 }
 
 // Item returns the item with the id.
@@ -357,14 +361,6 @@ func yes(v string) bool {
 	return false
 }
 
-func no(v string) bool {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "false", "no", "off":
-		return true
-	}
-	return false
-}
-
 func rowDisabled(r routeros.Row) bool { return yes(r["disabled"]) }
 
 func splitList(s string) []string {
@@ -414,8 +410,6 @@ func parseVersion(v string) (major, minor int, ok bool) {
 	minor, _ = strconv.Atoi(m[2])
 	return major, minor, true
 }
-
-func printCmd(path string) string { return path + "/print" }
 
 // ---- evaluation ----------------------------------------------------------------
 
@@ -506,6 +500,7 @@ var needs = map[string][]string{
 	CheckWWW:         {"/ip/service"},
 	CheckIPv6:        {"/ipv6/settings"},
 	CheckWalled:      {"/ip/firewall/filter", "/ip/firewall/nat"},
+	CheckWalledDNS:   {"/ip/dns"},
 	CheckDHCP:        {"/ip/dhcp-server"},
 	CheckWAN:         {"/ip/route"},
 	CheckBootFile:    {"/file"},
@@ -530,6 +525,7 @@ var checkDefs = []checkDef{
 	{CheckCustomerIf, "network", "Customer network is on one interface", true, "", evalCustomerIf},
 	{CheckDHCP, "network", "Customer DHCP server is on", true, "", evalDHCP},
 	{CheckWalled, "network", "Unpaid and unregistered flats are walled", true, "", evalWalled},
+	{CheckWalledDNS, "network", "Walled flats can still resolve any name", false, "", evalWalledDNS},
 	{CheckWAN, "network", "Router has a way to the internet", false, "", evalWAN},
 	{CheckOLT, "network", "Fibre (OLT) port is not stuck in the bridge", true, "", evalOLT},
 	{CheckBench, "network", "Customer port (extra)", false, "", evalBench},
@@ -1245,10 +1241,6 @@ type portAssess struct {
 	conflict bool
 }
 
-func (a portAssess) autoSafe() bool {
-	return len(a.hard) == 0 && len(a.unknown) == 0 && len(a.learned) == 0
-}
-
 // wanIfaces is every interface name the router treats as the WAN.
 func wanIfaces(sn *snapshot, site store.Site) map[string]bool {
 	out := map[string]bool{}
@@ -1722,6 +1714,7 @@ func (m *Manager) runChecks(ctx context.Context, site store.Site) Checks {
 	out := Checks{SiteID: site.ID, GeneratedAt: now, Items: items, JoinReport: m.loadJoinReport(site.ID),
 		Router: RouterInfo{Reachable: e.sn.errs["/system/resource"] == nil, Version: res["version"], Board: res["board-name"]}}
 	out.Layout = layout
+	out.MgmtWinbox = hasMgmtWinboxRule(e.sn, m.mgmt.String())
 	out.Slow = e.slow
 	out.Summary = summarize(items)
 	return out
@@ -1752,4 +1745,17 @@ func lanNetOf(site store.Site) string {
 		return lan.Network
 	}
 	return site.LANSubnet
+}
+
+// hasMgmtWinboxRule: an enabled input rule with the remote-WinBox comment that accepts the management subnet.
+func hasMgmtWinboxRule(sn *snapshot, mgmt string) bool {
+	if sn.errs["/ip/firewall/filter"] != nil || mgmt == "" {
+		return false
+	}
+	for _, r := range sn.tbl("/ip/firewall/filter") {
+		if r["comment"] == MgmtWinboxComment && r["chain"] == "input" && r["src-address"] == mgmt && !yes(r["disabled"]) {
+			return true
+		}
+	}
+	return false
 }

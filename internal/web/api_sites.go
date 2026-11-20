@@ -153,7 +153,7 @@ func (s *Server) apiSites(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 	cnt := s.siteCounts()
 	items := make([]map[string]any, 0, len(list))
 	for _, st := range list {
-		items = append(items, s.siteJSON(st, hs[st.ID], cnt[st.ID]))
+		items = append(items, s.siteJSONFor(c, st, hs[st.ID], cnt[st.ID]))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
@@ -175,7 +175,7 @@ func (s *Server) apiSite(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
 	defer cancel()
 	h := s.siteHealths(ctx, []store.Site{st})[st.ID]
-	out := s.siteJSON(st, h, s.siteCounts()[st.ID])
+	out := s.siteJSONFor(c, st, h, s.siteCounts()[st.ID])
 	out["uptime_30d_pct"] = nil
 	if s.ops.Fleet != nil {
 		if _, pct := s.ops.Fleet.Availability(st.ID, 30, time.Now()); pct >= 0 {
@@ -455,4 +455,14 @@ func portsJSON(list string) []string {
 		return l
 	}
 	return []string{}
+}
+
+// siteJSONFor is siteJSON for one caller: owners also get webfig_url (the
+// admin's step-up page for the router), nobody else does.
+func (s *Server) siteJSONFor(c *apiCtx, st store.Site, h siteHealth, cnt *siteCounts) map[string]any {
+	m := s.siteJSON(st, h, cnt)
+	if c != nil && c.user.Role == store.RoleOwner {
+		m["webfig_url"] = s.webfigAdminURL(st)
+	}
+	return m
 }

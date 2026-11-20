@@ -143,7 +143,11 @@ func (m *Manager) ConsumeJoin(token, userAgent, from string, noCheck bool) (scri
 		m.noteRefusedUA(token, userAgent) // a valid token turned away for its User-Agent shows on the router page
 		return nil, "", ErrJoinInvalid
 	}
-	return m.consume(token, ROSVersionFromUA(userAgent), from, noCheck)
+	script, siteID, err = m.consume(token, ROSVersionFromUA(userAgent), from, noCheck)
+	if errors.Is(err, ErrCannotRender) {
+		m.noteRenderFail(token, err)
+	}
+	return script, siteID, err
 }
 
 func (m *Manager) consume(token, rosVersion, from string, noCheck bool) (script []byte, siteID string, err error) {
@@ -196,6 +200,7 @@ func (m *Manager) consume(token, rosVersion, from string, noCheck bool) (script 
 			return fmt.Errorf("%w: %v", ErrCannotRender, err)
 		}
 		m.refused.clear(site.ID)
+		m.renderFail.clear(site.ID)
 		site.Join.UsedAt, site.Join.UsedFrom = now, from
 		site.JoinedAt = time.Time{} // the next successful ping marks it joined again
 		d.Sites[site.ID] = site
@@ -303,8 +308,10 @@ type SiteStatus struct {
 	Joined       bool       `json:"joined"`
 	// RefusedUA / RefusedAt: a fetch with this building's valid join token was
 	// turned away because its User-Agent is not a RouterOS fetch's.
-	RefusedUA string    `json:"refused_ua,omitempty"`
-	RefusedAt time.Time `json:"refused_at,omitempty"`
+	// RenderError: the router fetched its script and the server could not make it (the token is still valid).
+	RenderError string    `json:"render_error,omitempty"`
+	RefusedUA   string    `json:"refused_ua,omitempty"`
+	RefusedAt   time.Time `json:"refused_at,omitempty"`
 }
 
 // TokenStateOf classifies a stored token.

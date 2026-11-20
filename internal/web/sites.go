@@ -34,6 +34,7 @@ func (s *Server) siteRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/sites/disable", s.adminSiteDisable)
 	post("/admin/sites/remove", s.adminSiteRemove)
 	post("/admin/sites/reboot", s.adminSiteReboot)
+	s.webfigRoutes(get, post)
 	s.deviceRoutes(get, post)
 }
 
@@ -182,7 +183,7 @@ func (s *Server) adminSiteUpdate(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	err := s.mgr.UpdateSite(st.ID, siteInput(r))
+	err := s.mgr.UpdateSiteCtx(r.Context(), st.ID, siteInput(r))
 	s.back(w, r, "/admin/routers/view?id="+st.ID, msgOr(err, "Saved"))
 }
 

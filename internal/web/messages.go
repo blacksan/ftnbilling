@@ -81,6 +81,13 @@ func (s *Server) adminMessageCancel(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if m, found := s.ops.Box.Get(r.PostFormValue("id")); found && m.Kind == notify.KindAdminAlert {
+		if u, _ := userOf(r); u.Role != store.RoleOwner {
+			// A rogue operator must not be able to silence the warning about their own attack.
+			s.back(w, r, "/admin/messages", "Error: only an owner can cancel a security or monitoring alert")
+			return
+		}
+	}
 	ok := s.ops.Box.Cancel(r.PostFormValue("id"))
 	msg := "Message cancelled"
 	if !ok {

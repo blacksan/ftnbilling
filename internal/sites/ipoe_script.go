@@ -14,7 +14,7 @@ const listUnreg = "ftn-unreg"
 
 // ipoeRule is one firewall or NAT rule of the walled garden as data: it is
 // rendered to a pasteable script line (ipoeRules, the frozen paste scripts) and
-// to a REST body (Body, the server-run provisioning job).
+// to a REST body (Body, used by the checks' fixes).
 type ipoeRule struct {
 	Table   string // "filter" or "nat"
 	Props   [][2]string
@@ -43,14 +43,6 @@ func (r ipoeRule) Args() string {
 	return b.String()
 }
 
-// Path is the REST path of the rule's table.
-func (r ipoeRule) Path() string {
-	if r.Table == "nat" {
-		return "/ip/firewall/nat"
-	}
-	return "/ip/firewall/filter"
-}
-
 // Body is the REST body of the rule for the customer interface iface ($ifc is replaced).
 func (r ipoeRule) Body(iface string) map[string]string {
 	out := map[string]string{"comment": r.Comment}
@@ -70,6 +62,15 @@ func (r ipoeRule) Body(iface string) map[string]string {
 // per-flat queues see it, and flat-to-flat traffic is dropped.
 // Input chain: the REST port is blocked from the flats and a walled flat may
 // only use the router's DNS, DHCP and ping.
+//
+// Known gap (security review L-1): the router resolves every name for a walled
+// flat, so a DNS tunnel (dnstt, iodine) gives slow free internet. RouterOS 7 has
+// no per-client DNS policy ( /ip/dns/static FWD entries add names, they do not
+// remove the others), and a layer-7 regexp on DNS payloads cannot be tested
+// without a router and is heavy on small CPUs, so the rules are left alone and
+// the checklist carries a warning (CheckWalledDNS). Do not "fix" this by
+// dropping DNS for walled flats: the payment page and the phones' captive-portal
+// probes need names.
 func ipoeRuleSet(plan netplan.Plan, publicIP string, restPort int) (filter, nat []ipoeRule) {
 	lists := []string{listUnreg, billing.SuspendedList}
 	f := func(args, comment string) ipoeRule { return newIpoeRule("filter", args, comment) }

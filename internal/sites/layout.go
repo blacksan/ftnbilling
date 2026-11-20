@@ -161,12 +161,6 @@ func addInt(b [4]byte, n int) netip.Addr {
 	return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
 }
 
-// Validate checks the editable layout fields of a site. They end up inside the
-// bootstrap script, so interface names, addresses and the subnets are held to a
-// strict shape. wgNet (may be the zero Prefix) is the WireGuard tunnel subnet
-// the LAN and customer subnets must not overlap.
-func Validate(s store.Site) error { return ValidateNet(s, netip.Prefix{}) }
-
 // DefaultTunnelRange is the tunnel subnet assumed when the caller has none.
 var DefaultTunnelRange = netip.MustParsePrefix("10.99.0.0/22")
 
@@ -243,6 +237,9 @@ func ValidateNetMgmt(s store.Site, wgNet, mgmt netip.Prefix) error {
 		}
 		if !a.Masked().Contains(g) {
 			return fmt.Errorf("WAN gateway %s is outside the WAN network %s", g, a.Masked())
+		}
+		if err := staticWANAddrs(a, g); err != nil {
+			return err
 		}
 		for _, d := range SplitPorts(s.WANDNS) {
 			if ip, err := netip.ParseAddr(d); err != nil || !ip.Is4() {
@@ -358,4 +355,31 @@ func nonZero(v, def float64) float64 {
 		return v
 	}
 	return def
+}
+
+// staticWANAddrs rejects a WAN address or gateway that cannot be a host: the network or broadcast address of the
+// WAN network (a /30 or shorter), or a gateway that is the router's own address.
+func staticWANAddrs(a netip.Prefix, g netip.Addr) error {
+	net, bits := a.Masked().Addr(), a.Bits()
+	n4 := net.As4()
+	var b4 [4]byte
+	for i := range b4 {
+		mask := byte(0)
+		if bits >= (i+1)*8 {
+			mask = 0xff
+		} else if bits > i*8 {
+			mask = byte(0xff << (8 - (bits - i*8)))
+		}
+		b4[i] = n4[i] | ^mask
+	}
+	broadcast := netip.AddrFrom4(b4)
+	switch {
+	case g == a.Addr():
+		return fmt.Errorf("WAN gateway %s is the router's own WAN address", g)
+	case a.Addr() == net || a.Addr() == broadcast:
+		return fmt.Errorf("WAN address %s is the network or broadcast address of %s, not a host", a.Addr(), a.Masked())
+	case g == net || g == broadcast:
+		return fmt.Errorf("WAN gateway %s is the network or broadcast address of %s, not a host", g, a.Masked())
+	}
+	return nil
 }

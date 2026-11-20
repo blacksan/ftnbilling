@@ -103,6 +103,9 @@ type PortInfo struct {
 	ConfirmDisable bool   `json:"confirm_disable,omitempty"`
 	// CanDisable is false for the OLT uplink: it is moved to another port or unplugged, never switched off here.
 	CanDisable bool `json:"can_disable"`
+	// Missing: the server stores a role for this port but the router has no physical port of that name any more.
+	// Its role can still be cleared (set to unused). Bond marks a non-physical interface that holds the OLT role.
+	Missing bool `json:"missing,omitempty"`
 }
 
 // PortsView is the answer of the Ports tab.
@@ -156,6 +159,7 @@ var portsFastProps = []string{"name", "type", "running", "disabled", "comment", 
 
 type portFast struct {
 	rows []routeros.Row
+	all  map[string]routeros.Row // every interface by name, physical or not (a bond can be the OLT uplink)
 	rx   map[string]*int64
 	tx   map[string]*int64
 	at   time.Time
@@ -179,7 +183,7 @@ func (m *Manager) readPortsFast(ctx context.Context, siteID string, rt routeros.
 		return nil, err
 	}
 	now := m.now()
-	pf := portFast{rx: map[string]*int64{}, tx: map[string]*int64{}, at: now}
+	pf := portFast{rx: map[string]*int64{}, tx: map[string]*int64{}, at: now, all: map[string]routeros.Row{}}
 	m.portRates.mu.Lock()
 	if m.portRates.prev == nil {
 		m.portRates.prev = map[string]map[string]ifSample{}
@@ -187,6 +191,9 @@ func (m *Manager) readPortsFast(ctx context.Context, siteID string, rt routeros.
 	prev := m.portRates.prev[siteID]
 	cur := map[string]ifSample{}
 	for _, r := range rows {
+		if r["name"] != "" {
+			pf.all[r["name"]] = r
+		}
 		if !physicalType(r["type"]) || r["name"] == "" {
 			continue
 		}
@@ -302,6 +309,39 @@ func (m *Manager) Ports(ctx context.Context, siteID, viewerRole string) (PortsVi
 			pi.Flats = &n
 		}
 		m.decoratePort(&pi, site, viewerRole)
+		out.Items = append(out.Items, pi)
+	}
+	// Ports that hold a stored role but have no physical row: an OLT uplink that is a bond, and any port that
+	// vanished from the router (the tab would otherwise hide which port holds the role and offer no way to clear it).
+	listed := map[string]bool{}
+	for _, it := range out.Items {
+		listed[it.Name] = true
+	}
+	stored := append(append(SplitPorts(site.LANPorts), SplitPorts(site.CustomerPorts)...), site.OLTInterface)
+	for _, name := range stored {
+		if name == "" || listed[name] {
+			continue
+		}
+		listed[name] = true
+		role := roleOf(site, name)
+		pi := PortInfo{Name: name, Role: role, RoleLabel: PortRoleLabels[role], Kind: PortKind(name, ""), RoleOptions: []string{}}
+		if r, ok := pf.all[name]; ok {
+			pi.Kind = r["type"]
+			pi.Running, pi.Disabled, pi.MAC, pi.Comment = isYes(r["running"]), isYes(r["disabled"]), r["mac-address"], r["comment"]
+			pi.Comment = strings.TrimSpace(pi.Comment)
+			pi.Link = ""
+			pi.NeedsOwner = role == PortRoleOLT || role == PortRoleLAN
+		} else {
+			pi.Missing = true
+			pi.Comment = "The router has no port with this name any more."
+			pi.NeedsOwner = role == PortRoleLAN
+			pi.CanChange = roleRank(viewerRole) >= 1 && (!pi.NeedsOwner || roleRank(viewerRole) >= 2)
+			if role == PortRoleCustomer || (role == PortRoleLAN && len(SplitPorts(site.LANPorts)) > 1) {
+				if pi.CanChange {
+					pi.RoleOptions = []string{PortRoleUnused}
+				}
+			}
+		}
 		out.Items = append(out.Items, pi)
 	}
 	sort.SliceStable(out.Items, func(i, j int) bool { return naturalLess(out.Items[i].Name, out.Items[j].Name) })
@@ -484,7 +524,9 @@ func (m *Manager) ChangePort(ctx context.Context, siteID, port string, ch PortCh
 		return res, portErr(PortErrForbidden, "your role may not change the router")
 	}
 	e := m.cport.entry(siteID)
-	e.run.Lock() // the same per-router lock as the sweep; nothing is read before it is held
+	if err := e.run.LockCtx(ctx); err != nil { // the same per-router lock as the sweep; nothing is read before it is held
+		return res, portErr(PortErrConflict, "%s", ErrRouterBusy.Error())
+	}
 	defer e.run.Unlock()
 	var site store.Site
 	var found bool
@@ -518,6 +560,25 @@ func (m *Manager) ChangePort(ctx context.Context, siteID, port string, ch PortCh
 	}
 	row, err := physicalRow(ifaces, port)
 	if err != nil {
+		// A port the server stores a role for that is gone from the router: its role can still be cleared.
+		var pe *PortRefusal
+		if errors.As(err, &pe) && pe.Kind == PortErrNoPort && target == PortRoleUnused && ch.Disabled == nil && (cur == PortRoleCustomer || cur == PortRoleLAN) {
+			if cur == PortRoleLAN {
+				if rank < 2 {
+					return res, portErr(PortErrForbidden, "only an owner may change the admin LAN or the OLT uplink")
+				}
+				if len(SplitPorts(eff.LANPorts)) <= 1 {
+					return res, portErr(PortErrLastLAN, "%s is the last Admin LAN port. Make another port an Admin LAN port first.", port)
+				}
+			}
+			if err := m.setPortRole(siteID, port, cur, target, who); err != nil {
+				return res, err
+			}
+			m.QueueCustomerPort(siteID)
+			m.chk.drop(siteID)
+			m.dropPortsView(siteID)
+			return res, nil
+		}
 		return res, err
 	}
 	kind := PortKind(port, row["type"])
@@ -569,23 +630,45 @@ func (m *Manager) ChangePort(ctx context.Context, siteID, port string, ch PortCh
 		return res, &PortRefusal{Kind: PortErrConfirm, Msg: "type the router name to confirm. " + confirmWhy, Warning: confirmWhy}
 	}
 
+	wantDisable := ch.Disabled != nil && (*ch.Disabled != isYes(row["disabled"]) || *ch.Disabled != containsStr(SplitPorts(site.DisabledPorts), port))
+	endRole := cur
+	if roleChange {
+		endRole = target
+	}
+	// only customer and unused ports are kept off by the sweep; a LAN port switched off is a one-off
+	keep := endRole == PortRoleCustomer || endRole == PortRoleUnused
+	if roleChange && wantDisable {
+		// Both in one request: the router write is the part that can fail for reasons nobody can check up front,
+		// so it goes first; the role is stored only when it worked, and the router is put back if the role is refused.
+		if err := m.setPortDisabled(ctx, rt, eff, row, port, *ch.Disabled, keep, who, &res.Applied); err != nil {
+			return res, err
+		}
+		if err := m.setPortRole(siteID, port, cur, target, who); err != nil {
+			prev := isYes(row["disabled"])
+			var undone []string
+			if uerr := m.setPortDisabled(ctx, rt, eff, row, port, prev, keep && prev, who, &undone); uerr != nil {
+				m.log.Warn("could not put the port back after a refused role change", "site", siteID, "port", port, "err", uerr)
+			}
+			res.Applied = nil
+			return res, err
+		}
+		m.QueueCustomerPort(siteID)
+		m.chk.drop(siteID)
+		m.dropPortsView(siteID)
+		return res, nil
+	}
 	if roleChange {
 		if err := m.setPortRole(siteID, port, cur, target, who); err != nil {
 			return res, err
 		}
 		m.QueueCustomerPort(siteID)
 	}
-	if ch.Disabled != nil && (*ch.Disabled != isYes(row["disabled"]) || *ch.Disabled != containsStr(SplitPorts(site.DisabledPorts), port)) {
-		// only customer and unused ports are kept off by the sweep; a LAN port switched off is a one-off
-		endRole := cur
-		if roleChange {
-			endRole = target
-		}
-		keep := endRole == PortRoleCustomer || endRole == PortRoleUnused
+	if wantDisable {
 		if err := m.setPortDisabled(ctx, rt, eff, row, port, *ch.Disabled, keep, who, &res.Applied); err != nil {
 			return res, err
 		}
 	}
+	m.dropPortsView(siteID)
 	m.chk.drop(siteID)
 	return res, nil
 }
@@ -682,4 +765,12 @@ func (m *Manager) setPortDisabled(ctx context.Context, rt routeros.Client, eff s
 		d.AddEvent(store.Event{Time: m.now(), SiteID: eff.ID, Kind: "audit", Actor: who.Name, Msg: "port " + port + " " + word})
 		return nil
 	})
+}
+
+// dropPortsView forgets the cached fast read of the router's ports, so the answer to a change and the next poll
+// show what the router has now (the cache would keep the old enabled/disabled state for up to portsFastTTL).
+func (m *Manager) dropPortsView(siteID string) {
+	m.live.mu.Lock()
+	delete(m.live.ent, siteID+"|"+viewPortsFast)
+	m.live.mu.Unlock()
 }

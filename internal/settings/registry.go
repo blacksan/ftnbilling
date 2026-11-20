@@ -275,6 +275,15 @@ func buildRegistry() []Def {
 	g, s = str(func(c *config.Config) *string { return &c.MpesaCallbackToken })
 	add(Def{Key: "mpesa.callback_token", Env: "MPESA_CALLBACK_TOKEN", Section: SecMpesa, Label: "Callback token", Secret: true, Kind: KText,
 		Help: "A secret inside the callback URLs. Generated for you; use Rotate to replace it.", Norm: token(16, 200, "the callback token")}, g, s)
+	g, s = str(func(c *config.Config) *string { return &c.MpesaInitiator })
+	add(Def{Key: "mpesa.initiator", Env: "MPESA_INITIATOR_NAME", Section: SecMpesa, Label: "Initiator name (receipt check)", Kind: KText,
+		Help: "The Daraja API operator. With the security credential below, every payment is confirmed with Daraja before it is credited.", Norm: token(2, 100, "the initiator name")}, g, s)
+	g, s = str(func(c *config.Config) *string { return &c.MpesaSecurityCredential })
+	add(Def{Key: "mpesa.security_credential", Env: "MPESA_SECURITY_CREDENTIAL", Section: SecMpesa, Label: "Security credential (receipt check)", Secret: true, Kind: KText,
+		Help: "The initiator's password encrypted with Safaricom's certificate, as base64 (openssl rsautl -encrypt -certin -inkey cert.cer -pkcs, then base64).", Norm: token(40, 1000, "the security credential")}, g, s)
+	g, s = str(func(c *config.Config) *string { return &c.MpesaConfirmReceipts })
+	add(Def{Key: "mpesa.confirm_receipts", Env: "MPESA_CONFIRM_RECEIPTS", Section: SecMpesa, Label: "Confirm receipts with Daraja", Kind: KSelect, Options: []string{"auto", "on", "off"},
+		Help: "Off (the default) credits a payment as soon as Daraja calls back. Auto or on holds each payment until Daraja confirms the receipt (needs the initiator name and credential); a receipt it does not confirm goes to Unmatched payments. Test the credentials with the Test receipt confirmation button first: a wrong credential holds every payment for 15 minutes.", Norm: oneOf("the choice", "auto", "on", "off")}, g, s)
 	g, s = str(func(c *config.Config) *string { return &c.MpesaUnknownRef })
 	add(Def{Key: "mpesa.unknown_ref", Env: "MPESA_UNKNOWN_REF", Section: SecMpesa, Label: "Payment with an unknown account number", Kind: KSelect, Options: []string{"reject", "accept"},
 		Help: "Reject bounces it at the Paybill prompt. Accept takes the money and puts it in Unmatched payments.", Norm: oneOf("the choice", "reject", "accept")}, g, s)

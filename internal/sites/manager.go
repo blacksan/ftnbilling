@@ -57,9 +57,8 @@ type Manager struct {
 
 	stray atomic.Uint64 // NetFlow datagrams from unknown sources
 
-	refused refusals // join fetches turned away for their User-Agent (joinreport.go)
-
-	foreignIPs atomic.Pointer[func(string) map[string]bool] // set by billing.NewService
+	renderFail renderFails // join fetches whose script could not be made (joinreport.go)
+	refused    refusals    // join fetches turned away for their User-Agent (joinreport.go)
 
 	chk          checksState   // cache of the setup checks (checks.go)
 	autoFixDelay time.Duration // wait after the first answer before the post-join fixes (runtime.go)
@@ -69,17 +68,6 @@ type Manager struct {
 	live      liveState  // live router views (live.go)
 	portRates portsRates // byte counters of the Ports view (ports.go)
 	box       *secretbox.Box
-}
-
-// SetForeignIPs lets the billing service tell the sites package which addresses
-// the router's own static leases hold, so no flat is given one of them.
-func (m *Manager) SetForeignIPs(f func(siteID string) map[string]bool) { m.foreignIPs.Store(&f) }
-
-func (m *Manager) foreignIPsOf(siteID string) map[string]bool {
-	if f := m.foreignIPs.Load(); f != nil {
-		return (*f)(siteID)
-	}
-	return nil
 }
 
 // New builds a Manager. Nothing runs until Start.
@@ -144,6 +132,12 @@ func (m *Manager) Start(ctx context.Context) {
 		m.startLocked(s)
 	}
 	m.reloadMu.Unlock()
+	// peers.conf is written after the store commit of a join, a reset or a removal; a restart in that gap would leave
+	// wg0 without a new router (or with a removed one's key). Rewriting it at start (and so touching the apply stamp
+	// the path unit watches) makes the file follow the store again.
+	if err := m.ApplyPeers(); err != nil {
+		m.log.Error("could not write the WireGuard peers at start", "err", err)
+	}
 	if addr := m.cfg.NetflowAddr; addr != "" && !strings.EqualFold(addr, "off") && !m.cfg.RouterMock {
 		m.wg.Add(1)
 		go func() {
@@ -502,9 +496,23 @@ func (m *Manager) rebaseInput(cur store.Site, in SiteInput) (SiteInput, error) {
 // UpdateSite saves the editable fields and restarts the building's runtime. It takes the same per-router
 // lock as the port pass and ChangePort, so a form save and a Ports-tab change never interleave.
 func (m *Manager) UpdateSite(id string, in SiteInput) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return m.UpdateSiteCtx(ctx, id, in)
+}
+
+// UpdateSiteCtx is UpdateSite whose wait for the router's lock ends with ctx (ErrRouterBusy).
+func (m *Manager) UpdateSiteCtx(ctx context.Context, id string, in SiteInput) error {
 	var portsChanged bool
 	e := m.cport.entry(id)
-	e.run.Lock()
+	// The wait for the router's lock is capped like every admin action (billing.AdminRunCap): a sweep or port pass
+	// on a slow router must not hold a form for minutes. Nothing is saved when it gives up.
+	lctx, lcancel := context.WithTimeout(ctx, billing.AdminRunCap)
+	lerr := e.run.LockCtx(lctx)
+	lcancel()
+	if lerr != nil {
+		return lerr
+	}
 	defer e.run.Unlock()
 	var cur0 store.Site
 	var found bool
@@ -718,6 +726,9 @@ func (m *Manager) Status(ctx context.Context, siteID string) (SiteStatus, bool) 
 	}
 	now := m.now()
 	st := SiteStatus{Token: TokenStateOf(s.Join, now), TokenExpires: s.Join.ExpiresAt, UsedFrom: s.Join.UsedFrom, Joined: !s.JoinedAt.IsZero()}
+	if rf, ok := m.renderFail.get(siteID); ok && st.Token == TokenPending {
+		st.RenderError = rf.Msg
+	}
 	if rf, ok := m.refused.get(siteID); ok && st.Token == TokenPending {
 		st.RefusedUA, st.RefusedAt = rf.UA, rf.At
 	}
@@ -738,8 +749,6 @@ func (m *Manager) Status(ctx context.Context, siteID string) (SiteStatus, bool) 
 	}
 	return st, true
 }
-
-func nowFn() time.Time { return time.Now() }
 
 // checkLANChange guards the admin LAN ports of a set-up router: a change needs the typed router name, and when a
 // port leaves the list at least one port that stays must be switched on and have a link (it is read from the

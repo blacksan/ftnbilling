@@ -169,6 +169,26 @@ func evalWalled(e *evalCtx, it *CheckItem) {
 	it.Fix = CheckFix{Kind: FixAuto, Label: "Repair the walled-garden rules", Role: store.RoleOperator}
 }
 
+// evalWalledDNS warns about the one thing the walled garden cannot close on
+// RouterOS: a walled flat (unpaid, suspended or unregistered) asks the router
+// for DNS, and the router answers for every name. A DNS tunnel (dnstt, iodine)
+// through those answers gives slow free internet. RouterOS has no per-client DNS
+// policy: /ip/dns/static FWD entries add names, they do not remove the others,
+// and a layer-7 regexp on DNS payloads is CPU-heavy and cannot be tested here,
+// so the server leaves DNS as it is and says so.
+func evalWalledDNS(e *evalCtx, it *CheckItem) {
+	v := e.sn.single("/ip/dns")["allow-remote-requests"]
+	if !yes(v) {
+		okItem(it, "The router does not answer DNS for customers at all (see the DNS check).")
+		return
+	}
+	it.Evidence = append(it.Evidence, "allow-remote-requests: "+v)
+	it.Status = StatusWarn
+	it.Detail = "A walled flat (unpaid, suspended or not registered) can still look up any name through the router, which is what makes the payment page work. " +
+		"Someone who knows how could tunnel traffic through those lookups (dnstt, iodine) for slow free internet. RouterOS cannot limit DNS to a few names per customer, " +
+		"so nothing is changed on the router. If a walled flat shows heavy DNS traffic, suspend it and ask the tenant to pay."
+}
+
 // ---- customer DHCP server ------------------------------------------------------------
 
 func evalDHCP(e *evalCtx, it *CheckItem) {

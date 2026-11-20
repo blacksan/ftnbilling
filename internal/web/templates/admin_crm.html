@@ -15,7 +15,7 @@
 <label>Show<select name="state"><option value="current"{{if eq .Data.State "current"}} selected{{end}}>Current tenants</option><option value="former"{{if eq .Data.State "former"}} selected{{end}}>No flat now (former or new)</option><option value="all"{{if eq .Data.State "all"}} selected{{end}}>Everyone</option></select></label><button>Filter</button></form>
 <div class="tw"><table><tr><th>Name</th><th>Phone</th><th>WhatsApp</th><th>Flats</th><th>National ID</th><th>Status</th></tr>
 {{range .Data.Rows}}<tr><td><a href="/admin/customers/view?id={{.C.ID}}"><b>{{.C.Name}}</b></a></td><td>{{.C.Phone}}</td><td>{{.C.WhatsApp}}{{if .C.WAOptOut}} <span class="muted">(opted out)</span>{{end}}</td>
-<td>{{range .Accounts}}<a href="/admin/accounts/view?code={{.Code}}">{{.Flat}}</a> {{end}}</td><td>{{if .C.NationalIDLast4}}<span class="muted">ending {{.C.NationalIDLast4}}</span>{{end}}</td>
+<td>{{range .Accounts}}<a href="/admin/accounts/view?code={{.Code}}">{{.Flat}}</a> {{end}}</td><td>{{if .C.NationalIDLast4}}<span class="muted">{{if $.Data.SeeID4}}ending {{.C.NationalIDLast4}}{{else}}on file{{end}}</span>{{end}}</td>
 <td>{{if .Former}}<span class="pill ignored">no flat now</span>{{else}}<span class="pill active">current</span>{{end}}</td></tr>
 {{else}}<tr><td colspan="6">No customers match.</td></tr>{{end}}</table></div>
 <div class="card"><b>Add a customer</b> <span class="muted">Link them to a flat afterwards, from their page or from the flat's page.</span>
@@ -36,7 +36,7 @@
 <label class="muted">Notes<br><textarea name="notes" rows="2" style="width:100%">{{$C.Notes}}</textarea></label><button>Save details</button></form></div>
 <div class="card"><b>National ID</b>
 {{if not .Data.NatID}}<p class="muted">Not enabled. Set DATA_KEY on the server (openssl rand -base64 32) to store IDs encrypted.</p>
-{{else}}<p class="muted" style="margin:4px 0">Stored encrypted. {{if $C.NationalIDLast4}}On file, ending <b>{{$C.NationalIDLast4}}</b>.{{else}}None on file.{{end}} Revealing it is written to the audit log.</p>
+{{else}}<p class="muted" style="margin:4px 0">Stored encrypted. {{if $C.NationalIDLast4}}On file{{if .Data.SeeID4}}, ending <b>{{$C.NationalIDLast4}}</b>{{end}}.{{else}}None on file.{{end}} Revealing it is written to the audit log.</p>
 {{if .Data.Revealed}}<div class="banner" style="border-color:var(--warn);background:var(--warnbg)">National ID: <b style="font-size:18px">{{.Data.Revealed}}</b> <span class="muted">shown once; this reveal was logged</span></div>{{end}}
 <form method="post" action="/admin/customers/natid" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$C.ID}}"><label>{{if $C.NationalIDLast4}}Replace (blank removes){{else}}ID number{{end}}<input name="national_id" autocomplete="off"></label><button>Save</button></form>
 {{if $C.NationalIDLast4}}<form method="post" action="/admin/customers/natid/reveal" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$C.ID}}"><button>Reveal the ID (logged)</button></form>{{end}}{{end}}</div></div>{{end}}

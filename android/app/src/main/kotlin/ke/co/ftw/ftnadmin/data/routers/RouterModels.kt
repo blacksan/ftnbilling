@@ -151,7 +151,6 @@ data class Client(
     @SerialName("usage_month_bytes") val usageMonthBytes: Long = 0,
     @SerialName("suspended_on_router") val suspendedOnRouter: Boolean = false,
     @SerialName("in_sync") val inSync: Boolean = true,
-    @SerialName("router_user") val routerUser: String = "",
 ) {
     val isFlat: Boolean get() = kind != ClientKind.UNREGISTERED
 

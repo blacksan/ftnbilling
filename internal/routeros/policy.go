@@ -115,9 +115,7 @@ var secretWords = []string{"key", "secret", "password", "passphrase", "pre-share
 var scriptKeys = regexp.MustCompile(`(?i)(script|^on-|source|command|contents|^run-)`)
 
 var (
-	wordRe  = regexp.MustCompile(`^[a-z0-9-]+$`)
 	headRe  = regexp.MustCompile(`^/?[a-z0-9-]+(/[a-z0-9-]+)*/?$`)
-	keyRe   = regexp.MustCompile(`^[A-Za-z0-9!][A-Za-z0-9_.!-]*$`)
 	bareRe  = regexp.MustCompile(`^[A-Za-z0-9*!][A-Za-z0-9_.:/*@+,%~<>=!&|-]*$`)
 	quoteRe = regexp.MustCompile(`^([A-Za-z0-9!][A-Za-z0-9_.!-]*)(=|~|!=|<=|>=|<|>)"([^"]*)"$`)
 )

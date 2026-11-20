@@ -94,7 +94,6 @@ internal fun ClientRow(
                     }
                     if (c.port.isNotBlank()) LabeledValue("Port", c.port)
                     if (c.hostName.isNotBlank()) LabeledValue("Host name", c.hostName)
-                    if (c.routerUser.isNotBlank()) LabeledValue("Router user", c.routerUser)
                     LabeledValue("Last seen", formatAge(c.lastSeen))
                     if (canWrite) {
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {

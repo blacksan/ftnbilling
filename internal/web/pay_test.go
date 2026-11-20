@@ -103,9 +103,85 @@ func TestPayRejectsSlowerPlanWhileActiveServerSide(t *testing.T) {
 	if r.StatusCode != 303 {
 		t.Errorf("upgrade status %d", r.StatusCode)
 	}
+	// The test payment completes after a short delay; let it land first, or it would
+	// overwrite the package the admin forces below.
+	a.tp.Wait()
 	// Admin form: the force box applies a slower package.
 	a.adminPost(t, "/admin/accounts/extend", url.Values{"id": {acct.ID}, "package": {a.pkgID("1 Hour")}, "force": {"1"}})
 	if cur := a.account(t, "Flat 3B"); cur.PackageID != a.pkgID("1 Hour") {
 		t.Errorf("forced package %s", cur.PackageID)
+	}
+}
+
+// The pay form's double-submit cookie is __Host- over https (a script on a
+// sibling host name cannot overwrite it); the old name is only read.
+func TestPayCSRFCookieIsHostPrefixedOverHTTPS(t *testing.T) {
+	a := newApp(t, false)
+	get := func(https bool) *http.Response {
+		req, _ := http.NewRequest("GET", a.ts.URL+"/pay", nil)
+		if https {
+			req.Header.Set("X-Forwarded-Proto", "https")
+		}
+		r, err := a.cl.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		return r
+	}
+	var names []string
+	for _, c := range get(true).Cookies() {
+		names = append(names, c.Name)
+		if c.Name == "__Host-ftn_pay_csrf" && (c.Path != "/" || c.Domain != "" || !c.Secure || !c.HttpOnly) {
+			t.Fatalf("cookie not host-only: %+v", c)
+		}
+	}
+	if strings.Join(names, ",") != "__Host-ftn_pay_csrf" {
+		t.Fatalf("over https wrote %v", names)
+	}
+	// plain http (a walled customer) cannot carry a __Host- cookie and keeps the plain name
+	names = nil
+	for _, c := range get(false).Cookies() {
+		names = append(names, c.Name)
+	}
+	if strings.Join(names, ",") != "ftn_pay_csrf" {
+		t.Fatalf("over http wrote %v", names)
+	}
+}
+
+func TestPayPostsCheckOriginAndAcceptTheOldCookieOnlyAsARead(t *testing.T) {
+	a := newApp(t, false)
+	post := func(cookie string, hdr map[string]string) int {
+		form := url.Values{"_pcsrf": {payCSRFValue}, "code": {"nope"}}
+		req, _ := http.NewRequest("POST", a.ts.URL+"/pay/find", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("X-Forwarded-Proto", "https")
+		req.AddCookie(&http.Cookie{Name: cookie, Value: payCSRFValue})
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		r, err := a.cl.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		return r.StatusCode
+	}
+	for _, name := range []string{"__Host-ftn_pay_csrf", "ftn_pay_csrf"} { // new name, and the old one read during the transition
+		if c := post(name, nil); c == 403 {
+			t.Errorf("cookie %s refused", name)
+		}
+	}
+	for name, hdr := range map[string]map[string]string{
+		"same-site fetch":  {"Sec-Fetch-Site": "same-site"},
+		"cross-site fetch": {"Sec-Fetch-Site": "cross-site"},
+		"other origin":     {"Origin": "https://tech.example.co.ke"},
+	} {
+		if c := post("__Host-ftn_pay_csrf", hdr); c != 403 {
+			t.Errorf("%s: got %d, want 403", name, c)
+		}
+	}
+	if c := post("__Host-ftn_pay_csrf", map[string]string{"Sec-Fetch-Site": "same-origin"}); c == 403 {
+		t.Error("a same-origin post was refused")
 	}
 }

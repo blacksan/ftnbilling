@@ -43,9 +43,6 @@ func RandomCode(n int) string {
 	return string(out)
 }
 
-// RandomSecret returns 2*n hex characters from crypto/rand (internal passwords).
-func RandomSecret(n int) string { return fmt.Sprintf("%x", randBytes(n)) }
-
 // RandomID returns a 12-char hex id (fits Daraja's 12-char AccountReference).
 func RandomID() string { return fmt.Sprintf("%x", randBytes(6)) }
 

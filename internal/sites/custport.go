@@ -92,7 +92,7 @@ func portText(ports []string, state, msg string) string {
 
 // cpEntry is the per-building state of the port work.
 type cpEntry struct {
-	run   sync.Mutex // one pass, automatic fix or manual port action at a time per building
+	run   runLock    // one pass, automatic fix or manual port action at a time per building
 	mu    sync.Mutex // guards the rest
 	st    CustomerPortStatus
 	fails int
