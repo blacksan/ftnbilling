@@ -578,7 +578,7 @@ func TestInstallCaddyfileValidatesWithRealCaddy(t *testing.T) {
 		t.Skip("set CADDY_BIN to a caddy binary to validate the rendered Caddyfile")
 	}
 	for name, env := range map[string]string{"domain": "DOMAIN=billing.example.co.ke", "domain+filter": "DOMAIN=billing.example.co.ke CADDY_MPESA_IPS='196.201.214.200 196.201.214.0/24'", "domain+webfig": "DOMAIN=billing.example.co.ke WEBFIG_DOMAIN=tech.example.co.ke", "no domain": "DOMAIN="} {
-		script := "set -e\ndie() { echo \"$*\" >&2; exit 1; }\nWEBFIG_PORT=8082; WEBFIG_DOMAIN=\n" + fnSrc(t, "render_webfig_block") + "\n" + fnSrc(t, "render_caddyfile") + "\n" + fnSrc(t, "caddy_vars") + "\n" + env + "\nexport DOMAIN WEBFIG_DOMAIN\ncaddy_vars; render_caddyfile\n"
+		script := "set -e\ndie() { echo \"$*\" >&2; exit 1; }\nnote() { :; }\nWEBFIG_PORT=8082; WEBFIG_DOMAIN=\n" + fnSrc(t, "render_webfig_block") + "\n" + fnSrc(t, "mpesa_cb_block") + "\n" + fnSrc(t, "render_caddyfile") + "\n" + fnSrc(t, "caddy_vars") + "\n" + env + "\nexport DOMAIN WEBFIG_DOMAIN\ncaddy_vars; render_caddyfile\n"
 		out, err := exec.Command("bash", "-c", script).CombinedOutput()
 		if err != nil {
 			t.Fatalf("%s: %v %s", name, err, out)
