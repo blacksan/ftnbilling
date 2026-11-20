@@ -1,6 +1,10 @@
 {{define "authhead"}}<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="robots" content="noindex,nofollow"><title>{{.Brand}} admin</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><script src="{{static "theme.js"}}"></script><link rel="stylesheet" href="{{static "tokens.css"}}"><link rel="stylesheet" href="{{static "app.css"}}"></head><body class="auth"><main><div class="card"><img class="logo" src="/brand/logo-white-text.svg" alt="{{.Brand}}">{{end}}
 {{define "authfoot"}}</div><p class="muted back"><a href="/pay">Back to the payment page</a></p></main></body></html>{{end}}
 
+{{define "admin_notice"}}{{template "authhead" .}}
+<h1>{{.Title}}</h1><p class="muted">{{.Msg}}</p>
+<p><a class="btn alt" href="{{.Back}}">{{.BackLabel}}</a></p></div></main></body></html>{{end}}
+
 {{define "admin_login"}}{{template "authhead" .}}
 <h1>Admin sign-in</h1><p class="muted">For {{.Brand}} staff.</p>
 {{if .Error}}<div class="err" role="alert">{{.Error}}</div>{{end}}

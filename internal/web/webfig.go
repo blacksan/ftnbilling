@@ -215,7 +215,7 @@ func (s *Server) markStep(sessID string) {
 // webfigSite finds the router of the request and checks WebFig applies to it.
 func (s *Server) webfigSite(w http.ResponseWriter, r *http.Request) (store.Site, bool) {
 	if !s.webfigOn() {
-		s.webfigMsg(w, http.StatusNotFound, "Remote WebFig is not switched on. Set WEBFIG_DOMAIN on the server (see deploy/README.md) and run the installer again.")
+		s.webfigMsg(w, r, http.StatusNotFound, "Remote WebFig is not switched on. Set WEBFIG_DOMAIN on the server (see deploy/README.md) and run the installer again.")
 		return store.Site{}, false
 	}
 	st, ok := s.siteID(r)
@@ -224,21 +224,14 @@ func (s *Server) webfigSite(w http.ResponseWriter, r *http.Request) (store.Site,
 		return st, false
 	}
 	if _, ok := s.webfigTarget(st.ID); !ok {
-		s.webfigMsg(w, http.StatusConflict, "This router has no tunnel yet. Set it up first, then WebFig can be opened.")
+		s.webfigMsg(w, r, http.StatusConflict, "This router has no tunnel yet. Set it up first, then WebFig can be opened.")
 		return st, false
 	}
 	return st, true
 }
 
-func (s *Server) webfigMsg(w http.ResponseWriter, code int, msg string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(code)
-	_, _ = w.Write([]byte(`<!doctype html><meta name="viewport" content="width=device-width"><body style="font:16px system-ui;background:#0d1117;color:#e6e9ef;display:grid;place-items:center;height:90vh"><div style="max-width:30em">` +
-		htmlEscape(msg) + ` <a style="color:#8b83ff" href="/admin/routers">Back</a></div>`))
-}
-
-func htmlEscape(v string) string {
-	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;").Replace(v)
+func (s *Server) webfigMsg(w http.ResponseWriter, r *http.Request, code int, msg string) {
+	s.notice(w, r, code, "WebFig", msg, "/admin/routers", "Back to routers")
 }
 
 func (s *Server) webfigForm(w http.ResponseWriter, r *http.Request, st store.Site, code int, errMsg string) {
@@ -285,7 +278,7 @@ func (s *Server) webfigPost(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, err := s.wf.mgr.Mint(u.ID, u.Username, st.ID, ip, sess.ID)
 	if err != nil {
-		s.webfigMsg(w, http.StatusConflict, "WebFig cannot be opened for this router right now.")
+		s.webfigMsg(w, r, http.StatusConflict, "WebFig cannot be opened for this router right now.")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")

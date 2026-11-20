@@ -22,6 +22,7 @@ small{font-size:var(--fs-12)}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 [hidden]{display:none!important}
 :focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:6px}
+button:focus-visible,.btn:focus-visible,summary:focus-visible,a.tab:focus-visible,.tab:focus-visible,a.stat:focus-visible,.tw:focus-visible,.chartbox:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 ::selection{background:var(--brand);color:var(--on-brand)}
 .skip{position:absolute;left:12px;top:-60px;background:var(--brand);color:var(--on-brand);padding:10px 14px;border-radius:var(--r1);font-weight:600;z-index:100}
 .skip:focus{top:10px}
@@ -116,7 +117,7 @@ a.stat:hover{border-color:var(--line-strong)}
 .stat.t-ok{--t:var(--ok)}.stat.t-warn{--t:var(--warn)}.stat.t-bad{--t:var(--bad)}.stat.t-info{--t:var(--info)}
 .stat.t-ok .ic{background:var(--ok-soft);color:var(--ok)}.stat.t-warn .ic{background:var(--warn-fill);color:var(--on-warn-fill)}.stat.t-bad .ic{background:var(--bad-soft);color:var(--bad)}
 .stat.t-bad .v{color:var(--bad)}
-/* teal, plum, brand and the old feature card are plain brand now */
+/* the old feature card is a plain brand outline now */
 .stat.feature{border-color:var(--brand)}.stat.feature .ic{background:var(--brand-soft);color:var(--brand-ink)}
 
 /* ---- tabs: underline, brand on the active one ---------------------------- */
@@ -191,7 +192,7 @@ td.empty-row{height:auto;padding:0}
 .pill.suspended,.pill.refunded,.pill.down,.pill.failed,.pill.faulty,.pill.firing,.pill.offline{--p:var(--bad);--ps:var(--bad-soft);--dot:var(--bad);border-color:transparent}
 .pill.new,.pill.info,.pill.joined{--dot:var(--info)}
 .pill.paused,.pill.unknown,.pill.ignored,.pill.returned,.pill.retired,.pill.skipped,.pill.cancelled{--p:var(--muted);--dot:var(--line-strong)}
-.pill.teal,.pill.plum,.pill.brand{--p:var(--brand-ink);--dot:var(--brand)}
+.pill.brand{--p:var(--brand-ink);--dot:var(--brand)}
 .src{display:inline-block;padding:1px 8px;border-radius:99px;background:var(--surface-2);color:var(--muted);font:500 var(--fs-12) var(--f-sans)}
 .src.database{background:var(--brand-soft);color:var(--brand-ink)}
 
@@ -276,6 +277,9 @@ dialog#cmdk{width:min(620px,calc(100vw - 24px));margin:10vh auto auto}
 .empty p{color:var(--muted);max-width:44ch;margin:0 0 var(--sp-3)}
 .empty .act{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
 .tw .empty{border:0;border-radius:0;margin:0}
+/* plain "nothing here" lines share one look: centred, muted, same padding */
+.tw td[colspan]:only-child:not(.empty-row){height:auto;padding:var(--sp-8) var(--sp-4);text-align:center;color:var(--muted);white-space:normal}
+p.nil{padding:var(--sp-5) var(--sp-4);margin:0;text-align:center;border:1px dashed var(--line);border-radius:var(--r1);background:var(--surface-2)}
 
 /* ---- overview ------------------------------------------------------------------------ */
 .setup{display:grid;gap:var(--sp-1);margin:0;padding:0;list-style:none}
@@ -303,8 +307,13 @@ dialog#cmdk{width:min(620px,calc(100vw - 24px));margin:10vh auto auto}
 svg.bars{width:100%;height:auto;display:block}
 svg.bars .col{fill:var(--chart-1)}svg.bars .col.soon{fill:var(--chart-2)}svg.bars text{fill:var(--muted);font:500 11px var(--f-sans)}svg.bars .gl{stroke:var(--chart-grid);stroke-width:1;stroke-dasharray:2 4}
 svg.spark{display:block;overflow:visible}svg.spark .l{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}svg.spark .a{fill:currentColor;opacity:.16}svg.spark .d{fill:currentColor;stroke:var(--surface);stroke-width:2}
-/* charts drawn by internal/metrics use fixed colours: map them onto the theme */
-svg [fill="#fcfcfb"]{fill:var(--surface)}svg [stroke="#e3e7ec"]{stroke:var(--line)}svg [fill="#1c2630"]{fill:var(--ink)}svg [fill="#5b6670"]{fill:var(--muted)}svg [fill="#f1f3f5"]{fill:var(--surface-3)}
+/* charts drawn by internal/metrics carry classes (ci ink, cm muted, cg grid, cbg panel, cna empty cell, hd/hw heat-cell text); the hex in the SVG is only the light fallback */
+svg.chart{font-family:var(--f-sans)}
+svg.chart .ci{fill:var(--ink)}svg.chart .cm{fill:var(--muted)}svg.chart .cg{stroke:var(--chart-grid)}
+svg.chart .cbg{fill:var(--surface);stroke:var(--line)}svg.chart .cna{fill:var(--surface-3)}
+svg.chart .hd{fill:#0F172A}svg.chart .hw{fill:#FFFFFF}
+/* a chart never renders narrower than it was drawn, so its axis text keeps its pixel size; on a phone it scrolls */
+.chartbox{overflow-x:auto;max-width:100%;scrollbar-width:thin}
 .card svg,.tw svg,.panel svg{max-width:100%;height:auto}
 .ustrip{display:flex;gap:2px;margin:8px 0 4px}.ustrip i{flex:1;min-width:3px;height:38px;border-radius:3px;background:var(--surface-3)}.ustrip i.a{background:var(--ok)}.ustrip i.b{background:var(--info)}.ustrip i.c{background:var(--warn)}.ustrip i.d{background:var(--bad)}
 
@@ -373,8 +382,8 @@ body.auth p.back{text-align:center;margin-top:var(--sp-4)}
 @media(max-width:900px){
   .tw{overflow-x:auto}
   .shell{grid-template-columns:minmax(0,1fr)}
-  .side{position:fixed;left:0;top:0;bottom:0;width:min(300px,86vw);transform:translateX(-102%);transition:transform .2s var(--ease);box-shadow:0 0 60px rgba(0,0,0,.5)}
-  body.nav-open .side{transform:none}
+  .side{position:fixed;left:0;top:0;bottom:0;width:min(300px,86vw);transform:translateX(-102%);transition:transform .2s var(--ease)}
+  body.nav-open .side{transform:none;box-shadow:0 0 60px rgba(0,0,0,.5)}
   .scrim{display:block;position:fixed;inset:0;background:rgba(0,12,32,.55);z-index:25;opacity:0;pointer-events:none;transition:opacity .2s}
   body.nav-open .scrim{opacity:1;pointer-events:auto}
   .menu-btn{display:inline-grid}
@@ -392,8 +401,16 @@ body.auth p.back{text-align:center;margin-top:var(--sp-4)}
   .stat{grid-template-areas:"k ic" "v v" "s s"}.stat svg.spark{display:none}
   .hero .act{width:100%}.hero .act>*{flex:1}
   .tw{overflow-x:auto}
-  .rsel{max-width:120px}
-  .crumbs a:not(:last-of-type),.crumbs i{display:none}
+  .top{gap:var(--sp-2)}
+  .top .sp{display:none}
+  .rsel{max-width:88px;min-width:0}
+  .top .ibtn{min-height:36px;width:36px}
+  .crumbs{flex:1 1 0;min-width:0}
+  .crumbs>span,.crumbs a,.crumbs i{display:none}
+  .crumbs b{min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .kbtn{padding:0;min-width:0;width:36px;justify-content:center}.kbtn kbd{display:none}
+  .panel>table,.card>table,.panel>form>table{display:block;overflow-x:auto;max-width:100%}
+  .panel>table th,.panel>table td{white-space:nowrap}
   .two{grid-template-columns:1fr}
   dialog.modal{width:100%;margin:auto 0 0;max-width:none}
   dialog.modal .mcard{border-radius:var(--r4) var(--r4) 0 0;max-height:92vh;padding-bottom:max(20px,env(safe-area-inset-bottom))}
@@ -441,3 +458,8 @@ body.vprint{background:#fff;color:#000;padding:16px;font:14px var(--f-sans)}
 .clients-search{align-items:center;margin:0 0 12px}.clients-search input[type=search]{flex:1;min-width:240px}
 
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* New devices: a MAC that belongs to a customer of another apartment */
+.belongs{margin:0 0 var(--sp-2);padding:var(--sp-2) var(--sp-3);border-radius:var(--r1);background:var(--warn-soft);color:var(--warn);border-left:3px solid var(--warn-fill);font-size:var(--fs-13);white-space:normal}
+.tw td.act-wrap{white-space:normal;max-width:380px;padding-top:var(--sp-2);padding-bottom:var(--sp-2)}.act-wrap .row{flex-wrap:wrap}
+.panel>h2+.tw,.panel>h2+table,.panel>h2+.chartbox{margin-top:var(--sp-3)}

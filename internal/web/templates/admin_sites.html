@@ -24,8 +24,8 @@
 <div class="stats">
 {{template "stat" (dict "K" "Routers" "V" .Data.All "S" "linked to the server" "Icon" "sites" "Feature" true)}}
 {{template "stat" (dict "K" "Routers online" "V" .Data.Online "S" "answering now" "Icon" "check" "Tone" "ok")}}
-{{template "stat" (dict "K" "Offline" "V" .Data.Offline "S" "not answering" "Icon" "warn" "Tone" (cond (gt .Data.Offline 0) "bad" "plum"))}}
-{{template "stat" (dict "K" "Flats online" "V" .Data.FlatsOn "S" "across all routers" "Icon" "live" "Tone" "teal" "Href" "/admin/live")}}
+{{template "stat" (dict "K" "Offline" "V" .Data.Offline "S" "not answering" "Icon" "warn" "Tone" (cond (gt .Data.Offline 0) "bad" ""))}}
+{{template "stat" (dict "K" "Flats online" "V" .Data.FlatsOn "S" "across all routers" "Icon" "live" "Href" "/admin/live")}}
 {{template "stat" (dict "K" "Need a look" "V" .Data.Attn "S" "down or out of sync" "Icon" "pulse" "Tone" (cond (gt .Data.Attn 0) "warn" "info"))}}
 </div>
 <nav class="tabs" aria-label="Filter routers">{{range $t := (seq "all|All" "online|Online" "offline|Offline" "setting|Setting up")}}{{$k := index (split $t "|") 0}}{{$l := index (split $t "|") 1}}<a class="tab" href="/admin/routers?tab={{$k}}"{{if eq $k $d.Data.Tab}} aria-current="page"{{end}}>{{$l}}<span class="n">{{index $c $k}}</span></a>{{end}}</nav>

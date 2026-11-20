@@ -38,3 +38,4 @@ details summary{padding:var(--sp-2) 0;color:var(--brand-ink);cursor:pointer;font
 .center{text-align:center}
 .ok{background:var(--ok-soft);color:var(--ok);padding:var(--sp-3);border-radius:var(--r1);font-weight:500}
 .card.ok{background:var(--ok-soft);color:var(--ok);border-color:transparent}.card.ok .muted{color:var(--ok)}.card.ok .code{background:var(--surface);color:var(--ink)}
+.m-tight{margin:0 0 var(--sp-1)}.m-sm{margin:var(--sp-2) 0}.m-flat{margin:var(--sp-3) 0 2px}.m-foot{margin-top:var(--sp-6)}

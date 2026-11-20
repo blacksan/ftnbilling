@@ -7,10 +7,10 @@
 <div id="rt-live" data-refresh="15">
 {{if not $X.Reachable}}<p class="flash bad" role="status">The router could not be read just now, so CPU, memory and uptime are blank. The flats and money below are the server's own numbers.</p>{{end}}
 <div class="stats">
-{{template "stat" (dict "K" "Flats online" "V" $X.FlatsOn "S" (printf "%s, pulling traffic now" $X.FlatsSub) "Icon" "live" "Tone" "teal" "Feature" true)}}
+{{template "stat" (dict "K" "Flats online" "V" $X.FlatsOn "S" (printf "%s, pulling traffic now" $X.FlatsSub) "Icon" "live" "Feature" true)}}
 {{template "stat" (dict "K" "WAN" "V" $X.WAN "S" $X.WANSub "Icon" "metrics" "Tone" "info")}}
 {{template "stat" (dict "K" "Tunnel" "V" $X.Tunnel "S" $X.TunnelSub "Icon" "pulse" "Tone" "ok")}}
-{{template "stat" (dict "K" "CPU" "V" $X.CPU "S" (printf "memory %s %s" $X.Mem $X.MemSub) "Icon" "sites" "Tone" "plum")}}
+{{template "stat" (dict "K" "CPU" "V" $X.CPU "S" (printf "memory %s %s" $X.Mem $X.MemSub) "Icon" "sites")}}
 {{template "stat" (dict "K" "Uptime" "V" $X.Uptime "S" "since last boot" "Icon" "clock" "Tone" "warn")}}
 </div>
 <div class="grid c2">
@@ -36,10 +36,10 @@
 {{if .Sessions}}<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr><th>Who</th><th>From</th><th>Opened</th><th>Ends by</th><th></th></tr></thead><tbody>
 {{range .Sessions}}<tr><td data-label="Who">{{.User}}</td><td class="mono" data-label="From">{{.IP}}</td><td data-label="Opened">{{eat .Started}}</td><td data-label="Ends by">{{eat .Expires}}</td>
 <td><form method="post" action="/admin/routers/webfig/end"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="sid" value="{{.ID}}"><button class="ghost sm">End</button></form></td></tr>{{end}}</tbody></table></div>
-{{else}}<p class="muted">No WebFig session is open on this router.</p>{{end}}
+{{else}}<p class="muted nil">No WebFig session is open on this router.</p>{{end}}
 {{if .Activity}}<h3>Recent activity</h3><ul class="checks">{{range .Activity}}<li><span class="muted">{{eat .Time}}</span> {{.Msg}} <span class="muted">{{.Actor}}{{if .IP}} from {{.IP}}{{end}}</span></li>{{end}}</ul>{{end}}
 <p class="muted">A session belongs to one browser and one router. It ends after 30 minutes without use, or 2 hours after it opened.</p></section>{{end}}{{end}}
-{{with .Data.Rep}}<section class="panel"><h2>Revenue by month</h2>{{if .Months}}<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr><th>Month</th><th class="n">Payments</th><th class="n">KES</th></tr></thead><tbody>{{range .Months}}<tr><td data-label="Month">{{.Month}}</td><td class="n" data-label="Payments">{{.Payments}}</td><td class="n" data-label="KES">{{.KES}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No payments through this router yet.</p>{{end}}</section>{{end}}
+{{with .Data.Rep}}<section class="panel"><h2>Revenue by month</h2>{{if .Months}}<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr><th>Month</th><th class="n">Payments</th><th class="n">KES</th></tr></thead><tbody>{{range .Months}}<tr><td data-label="Month">{{.Month}}</td><td class="n" data-label="Payments">{{.Payments}}</td><td class="n" data-label="KES">{{.KES}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted nil">No payments through this router yet.</p>{{end}}</section>{{end}}
 </div>
 
 {{else if eq $tab "setup"}}

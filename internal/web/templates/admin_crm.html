@@ -37,7 +37,7 @@
 <div class="card"><b>National ID</b>
 {{if not .Data.NatID}}<p class="muted">Not enabled. Set DATA_KEY on the server (openssl rand -base64 32) to store IDs encrypted.</p>
 {{else}}<p class="muted" style="margin:4px 0">Stored encrypted. {{if $C.NationalIDLast4}}On file{{if .Data.SeeID4}}, ending <b>{{$C.NationalIDLast4}}</b>{{end}}.{{else}}None on file.{{end}} Revealing it is written to the audit log.</p>
-{{if .Data.Revealed}}<div class="banner" style="border-color:var(--warn);background:var(--warnbg)">National ID: <b style="font-size:18px">{{.Data.Revealed}}</b> <span class="muted">shown once; this reveal was logged</span></div>{{end}}
+{{if .Data.Revealed}}<div class="banner" style="border-color:var(--warn);background:var(--warn-soft)">National ID: <b style="font-size:18px">{{.Data.Revealed}}</b> <span class="muted">shown once; this reveal was logged</span></div>{{end}}
 <form method="post" action="/admin/customers/natid" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$C.ID}}"><label>{{if $C.NationalIDLast4}}Replace (blank removes){{else}}ID number{{end}}<input name="national_id" autocomplete="off"></label><button>Save</button></form>
 {{if $C.NationalIDLast4}}<form class="mt-2" method="post" action="/admin/customers/natid/reveal"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$C.ID}}"><button>Reveal the ID (logged)</button></form>{{end}}{{end}}</div></div>{{end}}
 <h3>Flats</h3>

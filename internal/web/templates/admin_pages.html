@@ -5,9 +5,9 @@
 <div class="stats">
 {{template "stat" (dict "K" "Money in today" "V" (kes $o.Today) "S" (printf "Yesterday %s" (kes $o.Yesterday)) "Icon" "cash" "Feature" true "Spark" $o.Spark "Href" "/admin/payments")}}
 {{template "stat" (dict "K" "Active flats" "V" $o.Active "Of" (printf "of %d" $o.TotalAccts) "S" (printf "%d end within 7 days" $o.Expiring7) "Icon" "accounts" "Tone" "ok" "Href" "/admin/accounts?tab=active")}}
-{{template "stat" (dict "K" "Online now" "V" $o.Online "S" "flats pulling traffic" "Icon" "live" "Tone" "teal" "Href" "/admin/live")}}
+{{template "stat" (dict "K" "Online now" "V" $o.Online "S" "flats pulling traffic" "Icon" "live" "Href" "/admin/live")}}
 {{template "stat" (dict "K" "Routers online" "V" $o.RoutersOnline "Of" (printf "of %d" $o.RoutersTotal) "S" (printf "%d need a look" (sub $o.RoutersTotal $o.RoutersOnline)) "Icon" "sites" "Tone" "info" "Href" "/admin/routers")}}
-{{template "stat" (dict "K" "Unmatched" "V" $o.Unmatched "S" "payments to assign" "Icon" "unmatched" "Tone" (cond (gt $o.Unmatched 0) "warn" "plum") "Href" "/admin/unmatched")}}
+{{template "stat" (dict "K" "Unmatched" "V" $o.Unmatched "S" "payments to assign" "Icon" "unmatched" "Tone" (cond (gt $o.Unmatched 0) "warn" "") "Href" "/admin/unmatched")}}
 </div>
 <div class="grid c21">
 <div class="stack-col">
@@ -17,7 +17,7 @@
 <section class="panel" aria-labelledby="h-renew"><div class="panel-h"><h2 id="h-renew">Renewals in 48 hours</h2><a href="/admin/accounts?tab=active">Subscribers</a></div>
 {{if $o.Renewals}}<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr><th>Flat</th><th>Plan</th><th>Router</th><th>Ends</th><th class="n">Left</th></tr></thead><tbody>
 {{range $o.Renewals}}<tr><td class="who" data-label="Flat"><b><a href="/admin/accounts/view?code={{.Code}}">{{.Flat}}</a></b><span>{{.Tenant}}</span></td><td data-label="Plan">{{.Package}}</td><td data-label="Router">{{.Router}}</td><td data-label="Ends">{{.Expires}}</td><td class="n" data-label="Left">{{.Left}}</td></tr>{{end}}</tbody></table></div>
-{{else}}<p class="muted">Nobody's plan ends in the next two days.</p>{{end}}</section>
+{{else}}<p class="muted nil">Nobody's plan ends in the next two days.</p>{{end}}</section>
 <section class="panel" aria-labelledby="h-exp"><div class="panel-h"><h2 id="h-exp">Plans ending, next 14 days</h2></div>{{$o.Expiries}}</section>
 </div>
 <div class="stack-col">
@@ -28,7 +28,7 @@
 {{if $o.Next}}<div class="next">{{range $o.Next}}<a href="{{.Href}}"><span>{{.Text}}</span><b>{{.Count}}</b></a>{{end}}</div>{{else}}<p class="muted">All clear. Nothing needs you right now.</p>{{end}}</section>
 <section class="panel" aria-labelledby="h-busy"><div class="panel-h"><h2 id="h-busy">Busiest routers</h2><a href="/admin/routers">All routers</a></div>
 {{if $o.Busiest}}<ul class="rank">{{range $o.Busiest}}<li><a href="/admin/routers/view?id={{.ID}}">{{.Name}}</a><span class="num"><b>{{.Rate}}</b> <span class="muted">{{.Online}} online</span></span><div class="meter" role="img" aria-label="{{f0 .Pct}} percent of WAN capacity"><i style="width:{{f0 .Pct}}%"></i></div></li>{{end}}</ul>
-{{else}}<p class="muted">No router has reported traffic yet.</p>{{end}}</section>
+{{else}}<p class="muted nil">No router has reported traffic yet.</p>{{end}}</section>
 <section class="panel" aria-labelledby="h-health"><div class="panel-h"><h2 id="h-health">Subscriber health</h2></div>
 <dl class="kv"><dt>Active, not seen for 7 days</dt><dd>{{$o.AtRisk}}</dd><dt>Plans ending in 7 days</dt><dd>{{$o.Expiring7}}</dd><dt>Gone for over 30 days</dt><dd>{{$o.Churned}}</dd></dl></section>
 </div></div>
@@ -41,10 +41,10 @@
 {{define "admin_accounts"}}{{template "ahead" .}}{{$d := .}}{{$c := .Data.Cnt}}
 <div class="stats">
 {{template "stat" (dict "K" "All subscribers" "V" .Data.Total "S" (printf "%d active" (index $c "active")) "Icon" "accounts" "Feature" true)}}
-{{template "stat" (dict "K" "Online" "V" .Data.Online "S" "connected right now" "Icon" "live" "Tone" "teal" "Href" "/admin/live")}}
+{{template "stat" (dict "K" "Online" "V" .Data.Online "S" "connected right now" "Icon" "live" "Href" "/admin/live")}}
 {{template "stat" (dict "K" "Expiring in 7 days" "V" .Data.Expiring "S" "plans about to end" "Icon" "clock" "Tone" "warn" "Href" "/admin/accounts?tab=active")}}
 {{template "stat" (dict "K" "New this week" "V" .Data.Fresh "S" "accounts added" "Icon" "plus" "Tone" "info")}}
-{{template "stat" (dict "K" "At risk" "V" .Data.AtRisk "S" "active, unseen for 7 days" "Icon" "warn" "Tone" (cond (gt .Data.AtRisk 0) "bad" "plum"))}}
+{{template "stat" (dict "K" "At risk" "V" .Data.AtRisk "S" "active, unseen for 7 days" "Icon" "warn" "Tone" (cond (gt .Data.AtRisk 0) "bad" ""))}}
 </div>
 <nav class="tabs" aria-label="Filter subscribers">
 {{range $t := (seq "all|All" "active|Active" "expired|Expired" "suspended|Suspended" "new|New" "conflict|MAC conflict")}}{{$k := index (split $t "|") 0}}{{$l := index (split $t "|") 1}}<a class="tab" href="/admin/accounts?tab={{$k}}{{if $d.Data.Q}}&amp;q={{$d.Data.Q}}{{end}}"{{if eq $k $d.Data.Tab}} aria-current="page"{{end}}>{{$l}}<span class="n">{{index $c $k}}</span></a>{{end}}
@@ -121,9 +121,9 @@
 {{else if eq $tab "usage"}}
 {{with .Data.Usage}}<div class="stats">
 {{template "stat" (dict "K" "Downloaded" "V" (printf "%.1f GB" .DownGB) "S" "this month" "Icon" "metrics" "Tone" "info")}}
-{{template "stat" (dict "K" "Uploaded" "V" (printf "%.1f GB" .UpGB) "S" "this month" "Icon" "metrics" "Tone" "teal")}}
-{{template "stat" (dict "K" "Peak speed" "V" (printf "%.0f Mbps" .PeakMbps) "S" (printf "plan %.0f Mbps" .CapMbps) "Icon" "pulse" "Tone" "plum")}}
-</div>{{else}}<div class="panel"><p class="muted">No usage has been recorded for this flat this month yet.</p></div>{{end}}
+{{template "stat" (dict "K" "Uploaded" "V" (printf "%.1f GB" .UpGB) "S" "this month" "Icon" "metrics")}}
+{{template "stat" (dict "K" "Peak speed" "V" (printf "%.0f Mbps" .PeakMbps) "S" (printf "plan %.0f Mbps" .CapMbps) "Icon" "pulse")}}
+</div>{{else}}<div class="panel"><p class="muted nil">No usage has been recorded for this flat this month yet.</p></div>{{end}}
 <p><a class="btn ghost" href="/admin/metrics/flat?code={{$A.Code}}">Open the full usage page</a></p>
 {{else}}
 {{if .Data.Events}}<section class="panel"><ul class="feed">{{range .Data.Events}}<li><time>{{eat .Time}}</time><span>{{.Msg}}</span></li>{{end}}</ul></section>
@@ -133,7 +133,7 @@
 
 {{define "admin_devices"}}{{template "ahead" .}}{{$d := .}}
 <div class="stats">
-{{template "stat" (dict "K" "Online now" "V" .Data.OnlineN "S" "unknown devices connected" "Icon" "devices" "Tone" "teal" "Feature" true)}}
+{{template "stat" (dict "K" "Online now" "V" .Data.OnlineN "S" "unknown devices connected" "Icon" "devices" "Feature" true)}}
 {{template "stat" (dict "K" "Seen today" "V" .Data.Today "S" "new since midnight" "Icon" "clock" "Tone" "info")}}
 {{template "stat" (dict "K" "Suggested swaps" "V" .Data.Suggested "S" "look like a changed ONT" "Icon" "accounts" "Tone" "warn")}}
 </div>
@@ -147,7 +147,7 @@
 <td data-label="Source">{{$r.Source}} <span class="muted">{{$r.Hits}}x</span></td>
 
 <td data-label="Last seen">{{eats $r.LastSeen}}</td>
-<td>{{if $r.BelongsTo}}{{$b := $r.BelongsTo}}<p class="bad" style="margin:0 0 6px"><b>Belongs to {{$b.Customer}} ({{$b.Apartment}}, unit {{$b.Unit}})</b></p>
+<td{{if $r.BelongsTo}} class="act-wrap"{{end}}>{{if $r.BelongsTo}}{{$b := $r.BelongsTo}}<p class="belongs"><b>Belongs to {{$b.Customer}} ({{$b.Apartment}}, unit {{$b.Unit}})</b></p>
 <div class="row" style="gap:6px"><button type="button" class="sm" disabled title="This MAC belongs to a customer of another apartment">Create customer</button><button type="button" class="ghost sm" disabled title="This MAC belongs to a customer of another apartment">Attach</button>
 {{if $d.CanWrite}}<details style="position:relative"><summary class="btn sm" style="display:inline-flex">Move customer here</summary><div class="card" style="position:absolute;right:0;z-index:5;min-width:300px">
 <form method="post" action="/admin/devices/move" class="stack-col"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$r.SiteID}}"><input type="hidden" name="mac" value="{{$r.MAC}}">
@@ -167,10 +167,10 @@
 {{define "admin_payments"}}{{template "ahead" .}}{{$F := .Data.F}}{{$c := .Data.PCnt}}{{$d := .}}
 <div class="stats">
 {{template "stat" (dict "K" "Today" "V" (kes .Data.PToday) "S" "money received" "Icon" "cash" "Feature" true)}}
-{{template "stat" (dict "K" "Last 7 days" "V" (kes .Data.PWeek) "S" "money received" "Icon" "cash" "Tone" "teal")}}
+{{template "stat" (dict "K" "Last 7 days" "V" (kes .Data.PWeek) "S" "money received" "Icon" "cash")}}
 {{template "stat" (dict "K" "This month" "V" (kes .Data.PMonth) "S" "money received" "Icon" "cash" "Tone" "info")}}
 {{template "stat" (dict "K" "M-Pesa share" "V" (printf "%d%%" .Data.PShare) "S" "of this month" "Icon" "payments" "Tone" "ok")}}
-{{template "stat" (dict "K" "Unmatched" "V" (index $c "unmatched") "S" "need a flat" "Icon" "unmatched" "Tone" (cond (gt (index $c "unmatched") 0) "warn" "plum") "Href" "/admin/unmatched")}}
+{{template "stat" (dict "K" "Unmatched" "V" (index $c "unmatched") "S" "need a flat" "Icon" "unmatched" "Tone" (cond (gt (index $c "unmatched") 0) "warn" "") "Href" "/admin/unmatched")}}
 </div>
 <nav class="tabs" aria-label="Payment filter">
 <a class="tab" href="/admin/payments"{{if eq .Data.PTab "all"}} aria-current="page"{{end}}>All<span class="n">{{index $c "all"}}</span></a>
@@ -210,7 +210,7 @@
 {{define "admin_unmatched"}}{{template "ahead" .}}{{$d := .}}
 <div class="stats">
 {{template "stat" (dict "K" "Waiting" "V" (len .Data.Open) "S" "payments to decide" "Icon" "unmatched" "Tone" (cond (gt (len .Data.Open) 0) "warn" "ok") "Feature" true)}}
-{{template "stat" (dict "K" "Decided" "V" (len .Data.Done) "S" "refunded or ignored" "Icon" "check" "Tone" "teal")}}
+{{template "stat" (dict "K" "Decided" "V" (len .Data.Done) "S" "refunded or ignored" "Icon" "check")}}
 </div>
 {{if .Data.Open}}<div class="tw"><table class="rs"><thead><tr>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>Paid</th><th>Receipt</th><th class="n">KES</th><th>Payer</th><th>Typed account</th><th>Why</th><th>Decide</th></tr></thead><tbody>
 {{range .Data.Open}}<tr>{{if $d.Data.ShowSite}}<td data-label="Router">{{index $d.Data.SiteNames .P.SiteID}}</td>{{end}}<td data-label="Paid">{{eat .P.PaidAt}}</td><td data-label="Receipt" class="mono">{{.P.Key}}</td><td class="n" data-label="KES">{{.P.AmountKES}}</td><td data-label="Payer">{{.P.Phone}} {{.P.Name}}</td><td data-label="Typed">{{.P.BillRef}}</td><td data-label="Why" class="nw">{{.P.Note}}</td>

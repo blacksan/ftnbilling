@@ -1,9 +1,9 @@
 {{define "admin_live"}}{{template "ahead" .}}{{$L := .Data.L}}
 <div data-live="/admin/live.json">
 <div class="stats">
-{{template "stat" (dict "K" "Flats online" "V" $L.FlatsOnline "Key" "online" "S" "pulling traffic now" "Icon" "live" "Tone" "teal" "Feature" true)}}
+{{template "stat" (dict "K" "Flats online" "V" $L.FlatsOnline "Key" "online" "S" "pulling traffic now" "Icon" "live" "Feature" true)}}
 {{template "stat" (dict "K" "Download" "V" (bps $L.Down) "Key" "down" "S" "all flats together" "Icon" "metrics" "Tone" "info")}}
-{{template "stat" (dict "K" "Upload" "V" (bps $L.Up) "Key" "up" "S" "all flats together" "Icon" "metrics" "Tone" "plum")}}
+{{template "stat" (dict "K" "Upload" "V" (bps $L.Up) "Key" "up" "S" "all flats together" "Icon" "metrics")}}
 {{template "stat" (dict "K" "Busiest flat" "V" (cond (ne $L.Busiest "") $L.Busiest "None") "Key" "busiest" "S" "right now" "Icon" "pulse" "Tone" "warn")}}
 </div>
 <div class="tabs" role="tablist" aria-label="Who is connected">

@@ -1,5 +1,5 @@
 {{define "portalcss"}}<script src="{{static "theme.js"}}"></script><link rel="stylesheet" href="{{static "tokens.css"}}"><link rel="stylesheet" href="{{static "portal.css"}}">{{end}}
 {{define "top"}}<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>{{.Brand}}</title><link rel="icon" type="image/svg+xml" href="/favicon.svg">{{template "portalcss"}}{{end}}
 {{define "head"}}{{template "top" .}}</head><body><main>{{end}}
-{{define "foot"}}<p class="muted" style="text-align:center;margin-top:24px"><a href="/admin/login" rel="nofollow">Admin login</a></p></main></body></html>{{end}}
+{{define "foot"}}<p class="muted center m-foot"><a href="/admin/login" rel="nofollow">Admin login</a></p></main></body></html>{{end}}
 {{define "brandbar"}}<div class="brandbar"><img src="/brand/logo-white-text.svg" alt="{{.}}"></div>{{end}}

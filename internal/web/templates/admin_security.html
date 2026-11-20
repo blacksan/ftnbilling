@@ -1,5 +1,5 @@
 {{define "admin_security"}}{{template "ahead" .}}
-{{with .Data.Reveal}}<div class="card" style="border-color:var(--accent)"><b>{{.Title}}</b><p class="muted">{{.Note}}</p>
+{{with .Data.Reveal}}<div class="card" style="border-color:var(--brand)"><b>{{.Title}}</b><p class="muted">{{.Note}}</p>
 <pre class="out" style="font-size:16px">{{range .Lines}}{{.}}
 {{end}}</pre></div>{{end}}
 <div class="grid2">
