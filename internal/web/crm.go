@@ -18,7 +18,7 @@ import (
 
 func (s *Server) crmRoutes(get, post func(string, http.HandlerFunc)) {
 	get("/admin/search", s.adminSearch)
-	get("/admin/customers", s.adminCustomers)
+	get("/admin/customers", s.adminCustomersGone)
 	get("/admin/customers/view", s.adminCustomer)
 	post("/admin/customers/save", s.adminCustomerSave)
 	post("/admin/customers/link", s.adminCustomerLink)
@@ -124,19 +124,10 @@ func (s *Server) adminSearch(w http.ResponseWriter, r *http.Request) {
 
 // ---- customers ------------------------------------------------------------------------
 
-func (s *Server) adminCustomers(w http.ResponseWriter, r *http.Request) {
-	p := s.page(r, "customers")
-	sc := s.scopeOf(r)
-	state := r.URL.Query().Get("state")
-	if state != "former" && state != "all" {
-		state = "current"
-	}
-	q := r.URL.Query().Get("q")
-	p.Data["SeeID4"] = p.Role == store.RoleOwner
-	rows := s.svc.ListCustomers(q, state, sc.Has, sc.ID)
-	sort.Slice(rows, func(i, j int) bool { return strings.ToLower(rows[i].C.Name) < strings.ToLower(rows[j].C.Name) })
-	p.Data["Rows"], p.Data["Q"], p.Data["State"] = rows, q, state
-	s.render(w, "admin_customers", p)
+// adminCustomersGone: the Contacts list was removed (people are reached from
+// their flat on Subscribers); old links land there.
+func (s *Server) adminCustomersGone(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/admin/accounts", http.StatusSeeOther)
 }
 
 func (s *Server) adminCustomer(w http.ResponseWriter, r *http.Request) {
@@ -153,7 +144,7 @@ func (s *Server) customerPage(w http.ResponseWriter, r *http.Request, revealed s
 		http.NotFound(w, r)
 		return
 	}
-	p := s.page(r, "customers")
+	p := s.page(r, "accounts")
 	sc := s.scopeOf(r)
 	var free []store.Account
 	siteOf := map[string]string{}
@@ -181,7 +172,7 @@ func (s *Server) adminCustomerSave(w http.ResponseWriter, r *http.Request) {
 		Note: r.PostFormValue("notes"), WASamePhone: r.PostFormValue("wa_same") == "1", WAOptOut: r.PostFormValue("wa_optout") == "1"}
 	c, err := s.svc.SaveCustomer(in)
 	if err != nil {
-		to := "/admin/customers"
+		to := "/admin/accounts"
 		if in.ID != "" {
 			to = "/admin/customers/view?id=" + url.QueryEscape(in.ID)
 		}
@@ -207,7 +198,7 @@ func (s *Server) adminCustomerMoveOut(w http.ResponseWriter, r *http.Request) {
 	}
 	to := r.PostFormValue("next")
 	if to == "" || !strings.HasPrefix(to, "/admin/") {
-		to = "/admin/customers"
+		to = "/admin/accounts"
 	}
 	s.back(w, r, to, msgOr(err, "Moved out. The flat is vacant."))
 }

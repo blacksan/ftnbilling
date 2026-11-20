@@ -1,6 +1,7 @@
 package web_test
 
 import (
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
@@ -35,6 +36,18 @@ func (a *app) customerID(t *testing.T, name string) string {
 	return id
 }
 
+func TestContactsListIsGone(t *testing.T) {
+	a := newApp(t, false)
+	resp := a.admin("GET", "/admin/customers", nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/admin/accounts" {
+		t.Fatalf("old Contacts link: %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if strings.Contains(a.adminGet(t, "/admin"), `href="/admin/customers"`) {
+		t.Error("the menu still links to Contacts")
+	}
+}
+
 func TestCustomersEquipmentSearchAndAccountCards(t *testing.T) {
 	a := newApp(t, false)
 	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"Flat 3B"}, "mac": {mac1}})
@@ -49,9 +62,8 @@ func TestCustomersEquipmentSearchAndAccountCards(t *testing.T) {
 	if l := a.adminPost(t, "/admin/accounts/customer", url.Values{"id": {acct.ID}, "customer": {cid}, "move_in": {"2026-10-01"}}); !strings.Contains(l, "Customer linked") {
 		t.Fatal(l)
 	}
-	list := a.adminGet(t, "/admin/customers")
-	if !strings.Contains(list, "Wanjiru Kamau") || !strings.Contains(list, "Flat 3B") {
-		t.Error("customer list")
+	if !strings.Contains(a.adminGet(t, "/admin/accounts/view?code="+acct.Code), "Wanjiru Kamau") {
+		t.Error("the flat's page misses its customer")
 	}
 	prof := a.adminGet(t, "/admin/customers/view?id="+cid)
 	if !strings.Contains(prof, "Flat 3B") || !strings.Contains(prof, "linked to Flat 3B") {
@@ -126,17 +138,14 @@ func TestCustomersEquipmentSearchAndAccountCards(t *testing.T) {
 	}
 
 	// Moving out vacates the flat but the customer and payments stay.
-	if l := a.adminPost(t, "/admin/customers/moveout", url.Values{"account": {acct.ID}, "move_out": {"2026-11-10"}, "next": {"/admin/customers"}}); strings.Contains(l, "Error") {
+	if l := a.adminPost(t, "/admin/customers/moveout", url.Values{"account": {acct.ID}, "move_out": {"2026-11-10"}, "next": {"/admin/accounts"}}); strings.Contains(l, "Error") {
 		t.Fatal(l)
 	}
 	if got := a.account(t, "Flat 3B"); got.CustomerID != "" {
 		t.Error("flat still occupied")
 	}
-	if strings.Contains(a.adminGet(t, "/admin/customers"), "Wanjiru Kamau") {
-		t.Error("former tenant listed as current")
-	}
-	if !strings.Contains(a.adminGet(t, "/admin/customers?state=former"), "Wanjiru Kamau") {
-		t.Error("former tenants filter")
+	if !strings.Contains(a.adminGet(t, "/admin/customers/view?id="+cid), "Wanjiru Kamau") {
+		t.Error("a former tenant's record should stay")
 	}
 }
 

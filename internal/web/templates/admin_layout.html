@@ -11,7 +11,6 @@
 <details data-g="customers" open><summary>Customers</summary><div>
 <a class="nav" href="/admin/accounts"{{if eq $a "accounts"}} aria-current="page"{{end}}>{{template "navi" "accounts"}}Subscribers</a>
 <a class="nav" href="/admin/apartments"{{if eq $a "apartments"}} aria-current="page"{{end}}>{{template "navi" "apartments"}}Apartments</a>
-<a class="nav" href="/admin/customers"{{if eq $a "customers"}} aria-current="page"{{end}}>{{template "navi" "customers"}}Contacts</a>
 <a class="nav" href="/admin/devices"{{if eq $a "devices"}} aria-current="page"{{end}}>{{template "navi" "devices"}}New devices{{if .UnregCount}}<span class="cnt" aria-label="{{.UnregCount}} online">{{.UnregCount}}</span>{{end}}</a></div></details>
 <details data-g="network" open><summary>Network</summary><div>
 <a class="nav" href="/admin/live"{{if eq $a "live"}} aria-current="page"{{end}}>{{template "navi" "live"}}Live now</a>
