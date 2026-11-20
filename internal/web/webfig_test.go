@@ -1027,11 +1027,15 @@ func TestAdminGETsDoNotChangeState(t *testing.T) {
 	if len(paths) < 40 {
 		t.Fatalf("only %d admin GET routes found: the scan is broken", len(paths))
 	}
-	snap := func() string {
+	snap := func(skipAudit bool) string {
 		var out string
 		r.st.View(func(d *store.Data) {
 			cp := *d
 			cp.AdminSessions = nil // last-seen times move on every request
+			if skipAudit {
+				// A voucher sheet print is read-only but writes its audit line (security-fixes M-3).
+				cp.Events, cp.EventSeq = nil, 0
+			}
 			b, _ := json.Marshal(cp)
 			out = string(b)
 		})
@@ -1047,11 +1051,12 @@ func TestAdminGETsDoNotChangeState(t *testing.T) {
 		if p == "/admin/logout" || strings.Contains(p, "{") {
 			continue
 		}
-		before := snap()
+		skip := p == "/admin/vouchers/print"
+		before := snap(skip)
 		resp := r.adminReq(r.br, "GET", p+"?id="+r.site, nil)
 		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
-		if after := snap(); after != before {
+		if after := snap(skip); after != before {
 			t.Errorf("GET %s changed stored data", p)
 		}
 	}
