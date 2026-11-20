@@ -353,6 +353,10 @@ data class NewDevice(
     @SerialName("host_name") val hostName: String = "",
     val ip: String = "",
     val source: String = "",
+    /** The router port the device sits on (from the bridge host table), when known. */
+    val port: String = "",
+    /** "On ether5, no address yet (it hasn't asked for one)" for a device seen only at layer 2; else blank. */
+    @SerialName("address_note") val addressNote: String = "",
     val online: Boolean = false,
     @SerialName("first_seen") val firstSeen: String? = null,
     @SerialName("last_seen") val lastSeen: String? = null,

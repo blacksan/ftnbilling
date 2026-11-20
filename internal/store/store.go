@@ -275,7 +275,9 @@ type Device struct {
 	SiteID string `json:"site_id"`
 	MAC    string `json:"mac"`
 	IP     string `json:"ip,omitempty"`
-	Source string `json:"source"` // portal, dhcp, arp
+	Source string `json:"source"` // portal, dhcp, arp, bridge (seen on a port, no address yet)
+	// Port is the router port the device sits on, when the bridge host table said so.
+	Port string `json:"port,omitempty"`
 	// Vendor (from the MAC prefix), HostName (DHCP) and Online (lease bound or
 	// ARP complete recently) help the operator pick the right MAC.
 	Vendor    string    `json:"vendor,omitempty"`

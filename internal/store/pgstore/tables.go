@@ -406,12 +406,12 @@ var paymentsC = (&codec[store.Payment]{
 
 var devicesC = (&codec[store.Device]{
 	name: "devices", pk: []string{"site_id", "mac"}, del: "site_id || '|' || mac", key: func(v store.Device) string { return store.DeviceKey(v.SiteID, v.MAC) },
-	cols: []string{"site_id", "mac", "ip", "source", "first_seen", "last_seen", "hits", "vendor", "host_name", "online"},
+	cols: []string{"site_id", "mac", "ip", "source", "first_seen", "last_seen", "hits", "vendor", "host_name", "online", "port"},
 	args: func(v store.Device) []any {
-		return []any{v.SiteID, v.MAC, v.IP, v.Source, nt(v.FirstSeen), nt(v.LastSeen), v.Hits, v.Vendor, v.HostName, v.Online}
+		return []any{v.SiteID, v.MAC, v.IP, v.Source, nt(v.FirstSeen), nt(v.LastSeen), v.Hits, v.Vendor, v.HostName, v.Online, v.Port}
 	},
 	dst: func(v *store.Device) []any {
-		return []any{&v.SiteID, &v.MAC, &v.IP, &v.Source, t_(&v.FirstSeen), t_(&v.LastSeen), &v.Hits, &v.Vendor, &v.HostName, &v.Online}
+		return []any{&v.SiteID, &v.MAC, &v.IP, &v.Source, t_(&v.FirstSeen), t_(&v.LastSeen), &v.Hits, &v.Vendor, &v.HostName, &v.Online, &v.Port}
 	},
 }).build()
 

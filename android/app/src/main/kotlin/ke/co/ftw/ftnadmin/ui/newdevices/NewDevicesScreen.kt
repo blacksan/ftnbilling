@@ -123,7 +123,7 @@ private fun DeviceRow(d: NewDevice, onClick: () -> Unit) {
             Column(Modifier.weight(1f).padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(d.mac, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                 Text(
-                    listOf(d.vendor.ifBlank { "Unknown vendor" }, d.hostName, d.ip).filter { it.isNotBlank() }.joinToString("  |  "),
+                    listOf(d.vendor.ifBlank { "Unknown vendor" }, d.hostName, d.ip.ifBlank { d.addressNote }).filter { it.isNotBlank() }.joinToString("  |  "),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
@@ -162,7 +162,7 @@ private fun DeviceSheetContent(
         ) {
             Text(d.mac, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
             Text(
-                listOf(d.vendor, d.hostName, d.ip, d.routerLabel).filter { it.isNotBlank() }.joinToString("  |  "),
+                listOf(d.vendor, d.hostName, d.ip.ifBlank { d.addressNote }, d.routerLabel).filter { it.isNotBlank() }.joinToString("  |  "),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

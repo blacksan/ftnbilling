@@ -129,6 +129,9 @@ type Service struct {
 	policy  Policy
 	box     *Secretbox // national-ID encryption; nil = feature off
 
+	ownMu   sync.Mutex
+	ownMACs map[string]map[string]bool // siteID -> the router's own MACs, from its last read
+
 	sites sync.Map                                                 // siteID -> *siteState
 	hook  func()                                                   // called after a payment was applied (tenant messages)
 	sweep atomic.Pointer[func(ctx context.Context, siteID string)] // per-building work after each sweep pass (set once at start)
@@ -276,6 +279,9 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 	if err != nil {
 		return store.Account{}, err
 	}
+	if s.isRouterMAC(mac) {
+		return store.Account{}, ErrRouterOwnMAC
+	}
 	phone, err := normPhone(in.Phone)
 	if err != nil {
 		return store.Account{}, err
@@ -364,6 +370,9 @@ func (s *Service) ChangeMAC(ctx context.Context, id, rawMAC string) error {
 	mac, err := NormalizeMAC(rawMAC)
 	if err != nil {
 		return err
+	}
+	if s.isRouterMAC(mac) {
+		return ErrRouterOwnMAC
 	}
 	err = s.st.Update(func(d *store.Data) error {
 		a, ok := d.Accounts[id]

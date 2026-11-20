@@ -210,7 +210,7 @@ func (s *Server) apiUnregistered(w http.ResponseWriter, r *http.Request, c *apiC
 				"site_id": bt.SiteID, "site_name": bt.SiteName, "same_apartment": bt.SameApartment, "move_to_choices": choices}
 		}
 		items = append(items, map[string]any{"site_id": dv.SiteID, "site_name": names[dv.SiteID], "mac": dv.MAC, "vendor": dv.Vendor,
-			"host_name": dv.HostName, "ip": dv.IP, "source": dv.Source, "online": on, "first_seen": tp(dv.FirstSeen), "last_seen": tp(dv.LastSeen),
+			"host_name": dv.HostName, "ip": dv.IP, "source": dv.Source, "port": dv.Port, "address_note": billing.UnregDevice{Device: dv}.AddrNote(), "online": on, "first_seen": tp(dv.FirstSeen), "last_seen": tp(dv.LastSeen),
 			"hits": dv.Hits, "suggested_account": suggested, "belongs_to": belongs})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})

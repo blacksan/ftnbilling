@@ -437,6 +437,8 @@ func (s *Server) billingErr(w http.ResponseWriter, err error, mac string) {
 			map[string]any{"mac": mac, "account": macOwnerDetails{dup.AccountID, dup.Code, dup.Flat, dup.SiteID, dup.SiteName}})
 	case errors.Is(err, store.ErrDuplicateMAC):
 		apiErr(w, http.StatusConflict, codeMACInUse, "That MAC address is already used by another account.", map[string]any{"mac": mac})
+	case errors.Is(err, billing.ErrRouterOwnMAC):
+		validationErr(w, map[string]string{"mac": billing.ErrRouterOwnMAC.Error()})
 	case errors.Is(err, billing.ErrBadMAC):
 		validationErr(w, map[string]string{"mac": "must be 12 hex digits, like AA:BB:CC:DD:EE:FF"})
 	case errors.Is(err, billing.ErrNotFound):

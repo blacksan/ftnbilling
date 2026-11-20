@@ -48,6 +48,9 @@ const (
 	pathList   = "/ip/firewall/address-list"
 	pathARP    = "/ip/arp"
 
+	pathInterface  = "/interface"
+	pathBridgeHost = "/interface/bridge/host"
+
 	// walledRate is the queue of a flat that has no package yet.
 	walledRate = "2M/2M"
 
@@ -371,13 +374,14 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	if err != nil {
 		return run, fmt.Errorf("reading bridges: %w", err)
 	}
+	facts := s.readFacts(ctx, rt, siteID)     // best effort: own MACs and the bridge hosts only feed the device list
 	arp, arpErr := rt.Rows(ctx, pathARP, nil) // best effort: only feeds the device list
 	if arpErr != nil {
 		arp = nil
 	}
 
 	// Device list and swap detection never depend on the writes below.
-	s.collectDevicesX(site, pl, true, arpErr == nil, wants, leases, arp, ps)
+	s.collectDevicesX(site, pl, true, arpErr == nil && facts.hostsOK, wants, leases, arp, facts, ps)
 
 	var ftn routeros.Row
 	for _, r := range servers {

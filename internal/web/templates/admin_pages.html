@@ -143,7 +143,7 @@
 {{range $i, $r := .Data.Rows}}<tr>
 <td class="who"><b class="mono" style="font-family:var(--f-mono);font-size:13px">{{$r.MAC}}</b><span><span class="pill {{if $r.Online}}online{{else}}offline{{end}}">{{if $r.Online}}online{{else}}offline{{end}}</span></span></td>
 <td data-label="Vendor">{{if $r.Vendor}}{{$r.Vendor}}{{else}}<span class="muted">unknown</span>{{end}}{{if $r.HostName}}<br><span class="muted">{{$r.HostName}}</span>{{end}}</td>
-<td data-label="IP" class="mono">{{$r.IP}}</td>{{if $d.Data.ShowSite}}<td data-label="Router">{{$r.SiteName}}</td>{{end}}
+<td data-label="IP" class="mono">{{if $r.IP}}{{$r.IP}}{{else if $r.AddrNote}}<span class="muted" style="font-family:inherit">{{$r.AddrNote}}</span>{{end}}</td>{{if $d.Data.ShowSite}}<td data-label="Router">{{$r.SiteName}}</td>{{end}}
 <td data-label="Source">{{$r.Source}} <span class="muted">{{$r.Hits}}x</span></td>
 
 <td data-label="Last seen">{{eats $r.LastSeen}}</td>
