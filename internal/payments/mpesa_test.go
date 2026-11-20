@@ -188,7 +188,7 @@ func stkCB(checkout string, code int, receipt string, amount int) []byte {
 		"MerchantRequestID": "m1", "CheckoutRequestID": checkout, "ResultCode": 0, "ResultDesc": "ok",
 		"CallbackMetadata": map[string]any{"Item": []map[string]any{
 			{"Name": "Amount", "Value": amount}, {"Name": "MpesaReceiptNumber", "Value": receipt},
-			{"Name": "TransactionDate", "Value": 20261117213000}, {"Name": "PhoneNumber", "Value": 254712345678},
+			{"Name": "TransactionDate", "Value": 20261118003000}, {"Name": "PhoneNumber", "Value": 254712345678},
 		}}}}})
 	return b
 }

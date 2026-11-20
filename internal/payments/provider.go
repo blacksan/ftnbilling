@@ -22,6 +22,7 @@ type Provider interface {
 type Completer interface {
 	CompleteOrder(ctx context.Context, orderID, receipt string) error
 	CompleteOrderAt(ctx context.Context, orderID, receipt string, paidAt time.Time) error
+	CompleteOrderSTK(ctx context.Context, orderID, receipt string, paidAt time.Time) error
 	FailOrder(ctx context.Context, orderID, reason string) error
 	SetCheckoutID(orderID, checkoutID string) error
 	Credit(ctx context.Context, in billing.CreditInput) (store.Payment, bool, error)

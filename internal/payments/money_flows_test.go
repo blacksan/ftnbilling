@@ -355,7 +355,9 @@ func TestMarkPaidOnAThenPaybillFirstForBCreditsB(t *testing.T) {
 	if err := r.svc.SetCheckoutID(b.ID, "ws_CO_B"); err != nil {
 		t.Fatal(err)
 	}
-	r.mp.HandleC2BConfirmation(ctx, c2b("RKTBBBB001", r.acct.Code, "50.00"))
+	r.advance(time.Minute)
+	paid := r.clock().In(time.FixedZone("EAT", 3*3600)).Format("20060102150405") // paid after the Mark paid
+	r.mp.HandleC2BConfirmation(ctx, c2bAt("RKTBBBB001", r.acct.Code, "50.00", paid))
 	if g, _ := r.svc.GetOrder(b.ID); g.Status != store.OrderPaid {
 		t.Fatalf("order B is %s after the Paybill confirmation: B's money was swallowed", g.Status)
 	}
@@ -545,7 +547,7 @@ func TestLegacyDeadlineFallsBackWhenTheDirIsNotWritable(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "file")
 	os.WriteFile(dir, []byte("x"), 0o600) // a file where the directory should be
 	got := payments.LegacyQueryDeadline(dir, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), func(m string, _ ...any) { warned = m })
-	if !got.Equal(payments.LegacyQueryFallback) || warned == "" {
+	if !got.Equal(payments.LegacyQueryFallback()) || warned == "" {
 		t.Fatalf("%v %q", got, warned)
 	}
 }

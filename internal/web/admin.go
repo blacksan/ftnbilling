@@ -853,7 +853,7 @@ func (s *Server) adminUnmatchedAssign(w http.ResponseWriter, r *http.Request) {
 		// that money. Ask before crediting it a second time.
 		p := s.page(r, "unmatched")
 		p.Data["Key"], p.Data["Account"], p.Data["Package"], p.Data["Note"], p.Data["Lower"] = key, acct, pkg, note, lower
-		p.Data["Manual"] = dup.ManualKey
+		p.Data["Manual"], p.Data["DupNote"] = dup.ManualKey, billing.ManualDupNote
 		w.WriteHeader(http.StatusConflict)
 		s.render(w, "admin_assign_dup", p)
 		return

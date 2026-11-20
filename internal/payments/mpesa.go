@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -757,14 +758,19 @@ func (m *Mpesa) stk(ctx context.Context, body []byte) error {
 		}
 		return m.c.FailOrder(ctx, order.ID, "amount paid is less than the price")
 	}
-	return m.completeOrder(ctx, order, receipt, paidAt)
+	return m.completeOrder(ctx, order, receipt, paidAt, true)
 }
 
 // completeOrder credits an order. A receipt that was already decided (refunded
 // or ignored) is not credited: that leaves the order unpaid, so the owners are
 // told.
-func (m *Mpesa) completeOrder(ctx context.Context, order store.Order, receipt string, paidAt time.Time) error {
-	err := m.c.CompleteOrderAt(ctx, order.ID, receipt, paidAt)
+func (m *Mpesa) completeOrder(ctx context.Context, order store.Order, receipt string, paidAt time.Time, fromSTK bool) error {
+	var err error
+	if fromSTK {
+		err = m.c.CompleteOrderSTK(ctx, order.ID, receipt, paidAt)
+	} else {
+		err = m.c.CompleteOrderAt(ctx, order.ID, receipt, paidAt)
+	}
 	if errors.Is(err, billing.ErrBadState) {
 		msg := "M-Pesa payment " + strings.ToUpper(receipt) + " (KES " + strconv.Itoa(order.AmountKES) + ") was NOT credited to order " + order.ID + ": " + err.Error() + ". Check Payments."
 		m.log.Error(msg)
@@ -777,6 +783,16 @@ func (m *Mpesa) completeOrder(ctx context.Context, order store.Order, receipt st
 		return nil // nothing more a retry could do
 	}
 	return err
+}
+
+func (m *Mpesa) tell(msg string) {
+	m.log.Warn(msg)
+	m.mu.Lock()
+	al := m.alert
+	m.mu.Unlock()
+	if al != nil {
+		al(msg)
+	}
 }
 
 // SetAlert sets what tells the owners about a payment that needs a person.
@@ -814,14 +830,18 @@ const matchWindow = time.Hour
 // dropped: an unambiguous recent order for the same phone and amount is
 // credited; anything else goes to Unmatched with the phone and receipt.
 func (m *Mpesa) stkUnknownCheckout(ctx context.Context, checkout, receipt, phone string, amount int, paidAt time.Time, inLedger bool) error {
-	cand := m.openOrders("", phone, amount, true)
+	var notAfter time.Time
+	if !paidAt.IsZero() {
+		notAfter = paidAt.Add(time.Minute)
+	}
+	cand := m.openOrders("", phone, amount, true, notAfter)
 	if len(cand) == 1 {
 		match := cand[0]
 		m.log.Warn("stk result for an unknown checkout id matched to the only recent order for this phone and amount", "order", match.ID, "checkout", checkout)
 		if err := m.c.SetCheckoutID(match.ID, checkout); err != nil && IsPersistError(err) {
 			return err
 		}
-		return m.completeOrder(ctx, match, receipt, paidAt)
+		return m.completeOrder(ctx, match, receipt, paidAt, true)
 	}
 	if inLedger {
 		return nil // credited by another route already; no order to close
@@ -839,7 +859,7 @@ func (m *Mpesa) stkUnknownCheckout(ctx context.Context, checkout, receipt, phone
 // amount. Only orders with no stored checkout id count when noCheckout is set.
 // Pending and expired orders are preferred; a failed one is used only when
 // there is no other, and never one that failed because Daraja refused the push.
-func (m *Mpesa) openOrders(accountID, phone string, amount int, noCheckout bool) []store.Order {
+func (m *Mpesa) openOrders(accountID, phone string, amount int, noCheckout bool, notAfter time.Time) []store.Order {
 	var live, failed []store.Order
 	now := m.now()
 	m.st.View(func(d *store.Data) {
@@ -852,6 +872,9 @@ func (m *Mpesa) openOrders(accountID, phone string, amount int, noCheckout bool)
 			}
 			if noCheckout && o.CheckoutRequestID != "" {
 				continue
+			}
+			if !notAfter.IsZero() && o.CreatedAt.After(notAfter) {
+				continue // created after the money was paid: it cannot be this payment's order
 			}
 			switch {
 			case o.Status == store.OrderPending || o.Status == store.OrderExpired:
@@ -877,7 +900,7 @@ func (m *Mpesa) orderAlreadyPaid(ctx context.Context, order store.Order, method,
 	case strings.EqualFold(order.Receipt, receipt):
 		return nil
 	case strings.HasPrefix(strings.ToUpper(order.Receipt), billing.ManualPrefix):
-		return m.completeOrder(ctx, order, receipt, paidAt)
+		return m.completeOrder(ctx, order, receipt, paidAt, false)
 	}
 	return m.unmatched(billing.UnmatchedInput{Key: receipt, Method: method, AmountKES: amount, Phone: phone, BillRef: order.ID,
 		AccountID: order.AccountID, Ord: order.ID, PaidAt: paidAt,
@@ -1069,11 +1092,11 @@ func (m *Mpesa) c2b(ctx context.Context, body []byte) (C2BResponse, error) {
 			Phone: p.MSISDN, Name: name, BillRef: p.BillRefNumber, AccountID: accountID, Note: note, PaidAt: paidAt})
 	}
 	kind, order, acct := m.refKind(p.BillRefNumber, amt)
-	if kind == "account" {
+	if kind == "account" && !paidAt.IsZero() && m.ledgerStatus(p.TransID) == "" {
 		// The STK push also reports to the Paybill with the account code. If the
 		// flat has exactly one unpaid M-Pesa order for this amount, this is its
 		// payment: complete that order, so the customer's wait page closes too.
-		if open := m.openOrders(acct.ID, "", amount, false); len(open) == 1 {
+		if open := m.openOrders(acct.ID, "", amount, false, paidAt.Add(time.Minute)); len(open) == 1 {
 			kind, order = "order", open[0]
 		}
 	}
@@ -1085,7 +1108,7 @@ func (m *Mpesa) c2b(ctx context.Context, body []byte) (C2BResponse, error) {
 		if amount < order.AmountKES {
 			return C2BAccept, unmatched(order.AccountID, "amount below the package price")
 		}
-		if err := m.completeOrder(ctx, order, p.TransID, paidAt); err != nil {
+		if err := m.completeOrder(ctx, order, p.TransID, paidAt, false); err != nil {
 			if IsPersistError(err) {
 				return C2BAccept, err
 			}
@@ -1096,8 +1119,12 @@ func (m *Mpesa) c2b(ctx context.Context, body []byte) (C2BResponse, error) {
 		if !ok {
 			return C2BAccept, unmatched(acct.ID, "no package costs KES "+strconv.Itoa(amount))
 		}
-		if _, _, err := m.c.Credit(ctx, billing.CreditInput{Key: p.TransID, Method: "mpesa-c2b", AccountID: acct.ID, PackageID: pkg.ID,
-			AmountKES: amount, Phone: p.MSISDN, Name: name, BillRef: p.BillRefNumber, PaidAt: paidAt}); err != nil {
+		if held, _, err := m.c.Credit(ctx, billing.CreditInput{Key: p.TransID, Method: "mpesa-c2b", AccountID: acct.ID, PackageID: pkg.ID,
+			AmountKES: amount, Phone: p.MSISDN, Name: name, BillRef: p.BillRefNumber, PaidAt: paidAt}); err == nil {
+			if held.Status == store.PayUnmatched && strings.HasPrefix(held.Note, "possible duplicate of manual payment") && m.now().Sub(held.CreatedAt) < 10*time.Second {
+				m.tell("M-Pesa payment " + held.Key + " (KES " + strconv.Itoa(amount) + ") for flat " + acct.Flat + " is held, not credited: " + held.Note + " Open Unmatched payments.")
+			}
+		} else {
 			if IsPersistError(err) {
 				return C2BAccept, err
 			}
@@ -1127,13 +1154,33 @@ func LegacyQueryDeadline(dir string, now time.Time, warn func(msg string, args .
 		// Without the file every restart would start a new 30 days. Use a fixed
 		// end instead, so a read-only data directory cannot keep the old form alive.
 		if warn != nil {
-			warn("cannot save the end of the old STK callback window (" + path + "): using the fixed date " + LegacyQueryFallback.Format("2006-01-02"))
+			warn("cannot save the end of the old STK callback window (" + path + "): using the fixed date " + LegacyQueryFallback().Format("2006-01-02"))
 		}
-		return LegacyQueryFallback
+		return LegacyQueryFallback()
 	}
 	return t
 }
 
 // LegacyQueryFallback is when the old STK callback form ends if the data
-// directory cannot hold the deadline file: 30 days after this version was built.
-var LegacyQueryFallback = time.Date(2026, 12, 20, 0, 0, 0, 0, time.UTC)
+// directory cannot hold the deadline file: 30 days after this binary was built
+// (the VCS time stamped into it, else the executable's modification time).
+func LegacyQueryFallback() time.Time { return legacyBuildTime().Add(LegacyQueryWindow) }
+
+// legacyBuildTime is replaced by tests.
+var legacyBuildTime = func() time.Time {
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, kv := range bi.Settings {
+			if kv.Key == "vcs.time" {
+				if t, err := time.Parse(time.RFC3339, kv.Value); err == nil {
+					return t
+				}
+			}
+		}
+	}
+	if exe, err := os.Executable(); err == nil {
+		if fi, err := os.Stat(exe); err == nil {
+			return fi.ModTime()
+		}
+	}
+	return time.Time{} // unknown: the old form ends at once, which is the safe side
+}

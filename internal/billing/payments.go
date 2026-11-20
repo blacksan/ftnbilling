@@ -24,6 +24,9 @@ type CreditInput struct {
 	PaidAt      time.Time // zero = now
 	VoucherCode string    // single use, checked in the same atomic update
 	Force       bool      // admin only: apply even if the package is slower than the active plan
+	// FromSTK says the order is proven by the STK result's own checkout id: only then
+	// may a receipt that was filed as another order's ignored duplicate be applied to it.
+	FromSTK bool
 }
 
 // errHeld is internal: the payment was put in Unmatched inside creditLocked
@@ -43,6 +46,9 @@ func (e *DuplicateError) Error() string {
 	return "this account has a payment marked paid by hand (" + e.ManualKey + ") for the same amount in the last 6 hours: it may be the same money"
 }
 func (e *DuplicateError) Is(t error) bool { return t == ErrPossibleDuplicate }
+
+// ManualDupNote starts the note of a receipt recorded as the duplicate of a manual payment.
+const ManualDupNote = "duplicate: already credited when an admin marked the order paid"
 
 // Notes that tie a manual payment and its real receipt together.
 const (
@@ -102,12 +108,14 @@ func (s *Service) creditLocked(d *store.Data, in CreditInput) (p store.Payment, 
 		switch {
 		case old.Status == store.PayApplied:
 			return old, false, nil
+		case old.Status == store.PayUnmatched && in.OrderID == "" && strings.HasPrefix(old.Note, possibleDupNote):
+			return old, false, nil // held for a person: a redelivery or a replay must not release it
 		case old.Status == store.PayUnmatched:
 			// The same receipt first arrived without a home (an odd amount, a
 			// deleted package, a lower plan) and now comes with an account and
 			// a package: apply that row instead of reporting "already exists".
 			return s.applyUnmatchedLocked(d, old, in)
-		case old.Status == store.PayIgnored && strings.HasPrefix(old.Note, manualDupNote) && in.OrderID != "" && in.OrderID != old.OrderID:
+		case old.Status == store.PayIgnored && strings.HasPrefix(old.Note, manualDupNote) && in.FromSTK && old.OrderID != "" && in.OrderID != old.OrderID:
 			// Wrongly recorded as the duplicate of another order's manual
 			// payment: this is a different order's money. Apply it here.
 			return s.applyUnmatchedLocked(d, old, in)
@@ -125,7 +133,7 @@ func (s *Service) creditLocked(d *store.Data, in CreditInput) (p store.Payment, 
 	// paid" of the same amount may be that very payment, or a new one: a person
 	// decides, so it waits in Unmatched instead of being credited or swallowed.
 	if in.OrderID == "" && in.Method == "mpesa-c2b" && in.AmountKES > 0 {
-		if mk, found := recentManual(d, in.AccountID, in.AmountKES, s.now()); found {
+		if mk, found := recentManual(d, in.AccountID, in.AmountKES, s.now(), in.PaidAt, false); found {
 			now := s.now()
 			paid := in.PaidAt
 			if paid.IsZero() {
@@ -223,13 +231,24 @@ func (s *Service) applyUnmatchedLocked(d *store.Data, old store.Payment, in Cred
 }
 
 // recentManual finds a payment an admin marked paid (key MANUAL-...) for the
-// account and amount within manualLinkWindow.
-func recentManual(d *store.Data, accountID string, amount int, now time.Time) (key string, ok bool) {
+// account and amount that the money at hand may be the confirmation of: marked
+// within manualLinkWindow and, unless anyTime, paid BEFORE it was marked (money
+// paid after a Mark paid is a new payment). Without a known payment time only a
+// Mark paid from the last 30 minutes counts.
+func recentManual(d *store.Data, accountID string, amount int, now, paidAt time.Time, anyTime bool) (key string, ok bool) {
 	var best store.Payment
 	for k, m := range d.Payments {
 		if !strings.HasPrefix(k, ManualPrefix) || m.Status != store.PayApplied || m.AccountID != accountID ||
 			m.AmountKES != amount || now.Sub(m.CreatedAt) > manualLinkWindow {
 			continue
+		}
+		if !anyTime {
+			if paidAt.IsZero() && now.Sub(m.CreatedAt) > 30*time.Minute {
+				continue
+			}
+			if !paidAt.IsZero() && paidAt.After(m.CreatedAt) {
+				continue
+			}
 		}
 		if !ok || m.CreatedAt.After(best.CreatedAt) {
 			best, ok = m, true
@@ -377,7 +396,7 @@ func (s *Service) AssignPaymentOpts(ctx context.Context, key, accountID, pkgID, 
 			return errors.New("choose a package")
 		}
 		now := s.now()
-		if mk, dup := recentManual(d, a.ID, p.AmountKES, now); dup && !opt.AcceptDuplicate {
+		if mk, dup := recentManual(d, a.ID, p.AmountKES, now, time.Time{}, true); dup && !opt.AcceptDuplicate {
 			return &DuplicateError{ManualKey: mk}
 		}
 		switch {
@@ -651,6 +670,16 @@ func (s *Service) CompleteOrder(ctx context.Context, orderID, receipt string) er
 // (receipt MANUAL-...) takes the real receipt when it arrives and is not
 // credited again.
 func (s *Service) CompleteOrderAt(ctx context.Context, orderID, receipt string, paidAt time.Time) error {
+	return s.completeOrder(ctx, orderID, receipt, paidAt, false)
+}
+
+// CompleteOrderSTK is CompleteOrderAt for an STK result: the order was found by
+// the result's own CheckoutRequestID, which proves the money is this order's.
+func (s *Service) CompleteOrderSTK(ctx context.Context, orderID, receipt string, paidAt time.Time) error {
+	return s.completeOrder(ctx, orderID, receipt, paidAt, true)
+}
+
+func (s *Service) completeOrder(ctx context.Context, orderID, receipt string, paidAt time.Time, fromSTK bool) error {
 	var o store.Order
 	var acct store.Account
 	already, lowered, gone := false, false, false
@@ -669,15 +698,21 @@ func (s *Service) CompleteOrderAt(ctx context.Context, orderID, receipt string, 
 				// The real receipt may already wait in Unmatched as "possible duplicate"
 				// of this very manual payment: the order id proves it is.
 				t, taken := d.Payments[key]
-				if !taken || (t.Status == store.PayUnmatched && strings.HasPrefix(t.Note, possibleDupNote+m.Key)) {
+				if !taken || (t.Status == store.PayUnmatched && strings.HasPrefix(t.Note, possibleDupNote+m.Key)) ||
+					(t.Status == store.PayIgnored && t.OrderID == "" && strings.HasPrefix(t.Note, manualDupNote)) {
 					linkManualRow(d, m, key, orderMethodLabel(o.Method), o.AmountKES, o.Phone, paidAt, s.now())
 					return nil
 				}
 			}
 			return store.ErrNoChange
 		}
+		// A receipt already credited to a different order does not close this one.
+		if p, ok := d.Payments[strings.ToUpper(strings.TrimSpace(receipt))]; ok && o.VoucherCode == "" && p.Status == store.PayApplied && p.OrderID != "" && p.OrderID != o.ID {
+			already = true
+			return store.ErrNoChange
+		}
 		if _, _, err := s.creditLocked(d, CreditInput{
-			Key: receipt, Method: orderMethodLabel(o.Method), AccountID: o.AccountID, PackageID: o.PackageID,
+			FromSTK: fromSTK, Key: receipt, Method: orderMethodLabel(o.Method), AccountID: o.AccountID, PackageID: o.PackageID,
 			AmountKES: o.AmountKES, Phone: o.Phone, OrderID: o.ID, VoucherCode: o.VoucherCode, PaidAt: paidAt,
 		}); err != nil {
 			if errors.Is(err, ErrBadState) {
