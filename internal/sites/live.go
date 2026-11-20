@@ -781,7 +781,10 @@ type ClientInput struct {
 	Now      time.Time
 	Accounts []ClientAccount
 	Devices  []ClientDevice
-	Tables   LiveTables
+	// Dismissed are the MACs the operator dismissed on this router: a bound lease of one of them is not listed
+	// as a new device (it comes back only when the device opens the portal again, which clears the dismissal).
+	Dismissed []string
+	Tables    LiveTables
 }
 
 // MergeClients joins accounts, unregistered devices and the router's tables.
@@ -900,8 +903,17 @@ func MergeClients(in ClientInput) []Client {
 	for _, d := range in.Devices {
 		addDev(d)
 	}
-	// devices the router shows that the server has not noted yet
+	// devices the router shows that the server has not noted yet (not the ones the operator dismissed)
+	dismissed := map[string]bool{}
+	for _, m := range in.Dismissed {
+		if c, _ := store.CanonMAC(m); c != "" {
+			dismissed[c] = true
+		}
+	}
 	for _, l := range in.Tables.Leases {
+		if c, _ := store.CanonMAC(l.MAC); c != "" && dismissed[c] {
+			continue
+		}
 		if l.MAC != "" && l.Status == "bound" && !macs[l.MAC] {
 			addDev(ClientDevice{MAC: l.MAC, IP: l.IP, HostName: l.Host})
 		}

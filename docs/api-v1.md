@@ -60,7 +60,7 @@ Write (role operator/owner):
 | PATCH `/accounts/{id}` | `{flat?,tenant?,phone?,notes?}` | `Account` |
 | PUT `/accounts/{id}/mac` | `{mac}` | `Account`; 409 `mac_in_use`; 400 `validation_failed` |
 | POST `/accounts/{id}/suspend`, `/unsuspend` | – | `Account` |
-| POST `/accounts/{id}/package` | `{package_id,keep_time}` | `Account` |
+| POST `/accounts/{id}/package` | `{package_id,keep_time?}` (default `true`: keep the paid time; `false` starts the new package fresh from now) | `Account` |
 | POST `/accounts/{id}/extend` | `{package_id,note?,force?}` | `Account`; 409 `lower_plan_active` (this is also "activate") |
 | POST `/accounts/{id}/reconcile` | – | 202 `{queued:true}` |
 | POST `/payments` | `{account_id,amount_kes,trans_code?,package_id?,paid_at?,note?,force?}` | 201 `Payment`; 409 `duplicate_payment` |
@@ -89,7 +89,7 @@ Supersedes the `GET /unregistered` row above. `GET /unregistered?site=&online=` 
 |---|---|---|
 | POST `/sites/{id}/unregistered/refresh` | – | 202 `{queued:true}` |
 | POST `/unregistered/attach` | `{site_id,mac,account_id}` | `Account`; 409 `mac_in_use` (details name the owning flat) |
-| POST `/unregistered/create` | `{site_id,mac,flat,tenant?,phone?,package_id?}` | 201 `Account`; 409 `mac_in_use` / `flat_in_use` |
+| POST `/unregistered/create` | `{site_id,mac,flat,tenant?,phone?,package_id?,activate?}` (a package is only the plan; `activate:true` grants its first period free, like `POST /accounts`) | 201 `Account`; 409 `mac_in_use` / `flat_in_use` |
 | POST `/unregistered/dismiss` | `{site_id,mac}` | 204 |
 
 `attach` goes through the same rule as `PUT /accounts/{id}/mac`: one MAC can never be on more than one open account in any router.
@@ -125,7 +125,7 @@ All rows below are additive; the D8 aliases apply to every row.
 |---|---|---|---|
 | GET `/overview?router=` | viewer | | `Overview` |
 | POST `/routers` | owner | `{name,serving_customers?:false,wan_interface?,olt_interface?,vlan_id?,customer_subnet?,wan_cap_mbps?,support_phone?}` | 201 `{router:Site,join:{command,command_nocheck,expires_at}}`, `no-store`, never replayed |
-| PATCH `/routers/{id}` | owner | same optional fields | `Site` |
+| PATCH `/routers/{id}` | owner | same optional fields; `base_lan_ports`, `base_customer_ports`, `base_olt_interface`, `base_vlan_id` = the layout the client was shown (each `base_X` counts only when X itself is sent; a PATCH without port fields never conflicts): a port/OLT/VLAN change from a stale base is 409 `bad_state`, an unchanged one keeps the stored value | `Site` |
 | GET `/routers/{id}/setup` | viewer | | `Setup` |
 | POST `/routers/{id}/setup/run`, `/setup/migrate`, `/setup/rollback` | viewer (the route answers every role with the 410) | | removed in v5: **410 `gone`** (a router is set up by pasting one line; see `docs/api/v5-bootstrap.md`) |
 | GET `/routers/{id}/live` | viewer | | `RouterLive` |

@@ -33,11 +33,15 @@ const (
 	SessionIdle     = 30 * time.Minute
 	SessionAbsolute = 12 * time.Hour
 	// PreMFALife is how long a session that has only passed the password lasts.
-	PreMFALife        = 15 * time.Minute
-	AccessLife        = 15 * time.Minute
-	RefreshLife       = 30 * 24 * time.Hour
-	RefreshAbsolute   = 90 * 24 * time.Hour
-	RefreshGrace      = 60 * time.Second
+	PreMFALife      = 15 * time.Minute
+	AccessLife      = 15 * time.Minute
+	RefreshLife     = 30 * 24 * time.Hour
+	RefreshAbsolute = 90 * 24 * time.Hour
+	RefreshGrace    = 60 * time.Second
+	// RefreshLostGrace is how long the previous refresh token still works, once, when the phone never used
+	// the answer to the last refresh (a response lost to a coverage gap). After the phone uses the new pair
+	// the previous token is dead and reusing it revokes the device.
+	RefreshLostGrace  = 2 * time.Hour
 	SetupCodeLife     = 14 * 24 * time.Hour
 	touchEvery        = 60 * time.Second
 	revokedKeep       = 30 * 24 * time.Hour

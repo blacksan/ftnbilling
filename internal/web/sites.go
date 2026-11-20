@@ -182,7 +182,7 @@ func (s *Server) adminSiteUpdate(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	err := s.mgr.UpdateSite(st.ID, siteInput(r))
+	err := s.mgr.UpdateSiteCtx(r.Context(), st.ID, siteInput(r))
 	s.back(w, r, "/admin/routers/view?id="+st.ID, msgOr(err, "Saved"))
 }
 

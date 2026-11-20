@@ -162,12 +162,13 @@ type provState struct {
 }
 
 type acctSnap struct {
-	leaseStatus string // bound | waiting | none
-	lastSeen    time.Time
-	suspended   bool // on the router's suspended list
-	clash       bool // a foreign row or a flag keeps this flat from being provisioned
-	inSync      bool
-	err         string
+	leaseStatus     string // bound | waiting | none
+	lastSeen        time.Time
+	suspended       bool // on the router's suspended list
+	suspendedBefore bool // what the router had before this pass wrote
+	clash           bool // a foreign row or a flag keeps this flat from being provisioned
+	inSync          bool
+	err             string
 }
 
 func (s *Service) prov(siteID string) *provState {
@@ -376,7 +377,7 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	}
 
 	// Device list and swap detection never depend on the writes below.
-	s.collectDevices(site, pl, wants, leases, arp, ps)
+	s.collectDevicesX(site, pl, true, arpErr == nil, wants, leases, arp, ps)
 
 	var ftn routeros.Row
 	for _, r := range servers {
@@ -402,6 +403,9 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 		}
 	}
 	ps.mu.Unlock()
+	// A flat that was given an address the router's own static lease already holds (the server had not run a pass
+	// yet when it was made) is moved to a free one; this pass leaves it alone, the next one writes the new address.
+	s.readdressClashes(siteID, pl, pd.foreignIPs, pd.readdress)
 	for code, why := range blocked {
 		snap[code] = acctSnap{leaseStatus: "none", clash: true, err: why}
 	}
@@ -424,6 +428,7 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 
 	var firstErr error
 	failed := map[string]bool{}
+	suspFailed := map[string]bool{} // the suspended-list write of this account failed
 	sort.SliceStable(pd.ops, func(i, j int) bool { return pd.ops[i].phase < pd.ops[j].phase })
 	for _, op := range pd.ops {
 		if ctx.Err() != nil {
@@ -442,6 +447,9 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 		if e != nil {
 			run.Failed++
 			failed[op.code] = true
+			if op.path == pathList {
+				suspFailed[op.code] = true
+			}
 			if firstErr == nil {
 				firstErr = fmt.Errorf("%s %s: %w", op.kind, op.desc, e)
 			}
@@ -454,6 +462,9 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	// What the router holds now: a flat is in sync when its rows were all
 	// written (or already right) and nothing clashes.
 	for code, sn := range snap {
+		if suspFailed[code] || run.Waiting || firstErr != nil {
+			sn.suspended = sn.suspendedBefore // the write may not have happened: report what the router had
+		}
 		sn.inSync = !sn.clash && !failed[code] && !run.Waiting
 		if failed[code] {
 			sn.err = "a router write failed"
@@ -502,6 +513,7 @@ type planExtra struct {
 // opSet collects what a pass wants to do.
 type opSet struct {
 	foreignIPs []string // addresses held by the router's own static leases
+	readdress  []string // account codes whose address is held by another device's foreign static lease
 	ops        []provOp
 	conflicts  []string
 }
@@ -568,6 +580,34 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 	for _, r := range foreignLeases {
 		if r["address"] != "" {
 			out.foreignIPs = append(out.foreignIPs, r["address"])
+		}
+	}
+	// A flat is re-addressed only when a foreign static lease of ANOTHER device holds its address. A foreign lease
+	// on the flat's own MAC is a MAC clash (moving the account cannot help: the device keeps the lease's address),
+	// and a device that currently holds the address through a dynamic lease is not moved away from it either.
+	for _, w := range wants {
+		a := w.a
+		if a.IP == "" {
+			continue
+		}
+		held, own := false, false
+		for _, r := range foreignLeases {
+			if strings.EqualFold(r["mac-address"], a.MAC) {
+				own = true
+			} else if r["address"] == a.IP {
+				held = true
+			}
+		}
+		if !held || own {
+			continue
+		}
+		for _, r := range dynLeases {
+			if strings.EqualFold(r["mac-address"], a.MAC) && r["address"] == a.IP {
+				own = true
+			}
+		}
+		if !own {
+			out.readdress = append(out.readdress, a.Code)
 		}
 	}
 	for _, w := range wants {
@@ -722,7 +762,9 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 			add(provOp{phase: phaseSuspend, kind: "add", path: pathList, code: a.Code,
 				body: map[string]string{"list": SuspendedList, "address": a.IP, "comment": w.comment}, desc: fmt.Sprintf("suspend %s (%s)", a.IP, a.Flat)})
 		}
-		sn.suspended = keep != nil
+		// What the router holds once this pass's writes are done (a failed write flips it back below): the answer
+		// to the admin's Suspend must not say "not suspended" for the entry the same pass just added.
+		sn.suspended, sn.suspendedBefore = wantIn, keep != nil
 		snap[a.Code] = sn
 	}
 	for code, rows := range ourList {

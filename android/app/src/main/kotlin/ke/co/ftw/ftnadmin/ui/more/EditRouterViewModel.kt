@@ -125,7 +125,7 @@ class EditRouterViewModel(
     private fun send(form: RouterForm, confirm: Boolean, confirmName: String = "") {
         _state.update { it.copy(busy = true, error = null, fieldErrors = emptyMap()) }
         viewModelScope.launch {
-            val r = apiResult { repo.updateRouter(routerId, form.toInput(confirm, confirmName)) }
+            val r = apiResult { repo.updateRouter(routerId, form.toInput(confirm, confirmName), base = _state.value.original?.toInput()) }
             r.fold(
                 { _ ->
                     _state.update { it.copy(busy = false, saved = true) }

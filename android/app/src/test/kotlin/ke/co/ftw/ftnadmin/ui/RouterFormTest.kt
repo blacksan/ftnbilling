@@ -20,6 +20,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -140,6 +141,15 @@ class RouterFormTest {
         assertFalse("empty password leaves it unchanged", b.containsKey("pppoe_pass"))
         assertFalse(b.containsKey("pppoe_pass_clear"))
         assertEquals("pppoe", b["wan_mode"]!!.jsonPrimitive.content)
+        // unchanged fields stay out of the PATCH, so a Ports-tab change made meanwhile is not undone
+        assertFalse(b.containsKey("lan_ports"))
+        assertFalse(b.containsKey("lan_subnet"))
+        assertFalse(b.containsKey("pppoe_user"))
+        // the layout the form was shown travels as the base the server compares against
+        assertEquals("ether2", b["base_lan_ports"]!!.jsonPrimitive.content)
+        assertEquals(0, b["base_vlan_id"]!!.jsonPrimitive.intOrNull)
+        assertTrue(b["base_customer_ports"] is kotlinx.serialization.json.JsonArray)
+        assertEquals("", b["base_olt_interface"]!!.jsonPrimitive.content)
     }
 
     @Test fun clearingThePasswordSendsPppoePassClear() = runTest(main.dispatcher) {

@@ -101,7 +101,7 @@ status_load() {
   [ -r "$STATUS_JSON" ] || return 0
   local k v
   while IFS='|' read -r k v; do [ -n "$k" ] && ST[$k]=$v; done < <(
-    sed -n 's/^ *"\([A-Za-z_]*\)": *"\{0,1\}\([^",]*\)"\{0,1\},\{0,1\} *$/\1|\2/p' "$STATUS_JSON")
+    sed -n 's/^ *"\([A-Za-z_]*\)": *"\{0,1\}\(.*[^",]\|\)"\{0,1\},\{0,1\} *$/\1|\2/p' "$STATUS_JSON")
 }
 status_save() {
   local k first=1 out="$STATUS_JSON.tmp"
@@ -138,6 +138,9 @@ status_set() {
 declare -A SEEN=()
 
 write_state() { # status snapshot bytes sha256 error
+  # A JSON-store server has no database dump: its backup is the snapshot, so dump_at follows the upload
+  # (otherwise the app's "Backup problem" alert says "no database dump has been made yet" for good).
+  if [ "$1" = ok ] && [ -z "$(envval DATABASE_URL)" ]; then status_set "dump_at=$(date -u +%FT%TZ)" "dump_file=${2:-}" "dump_bytes=${3:-0}" || true; fi
   if [ "$1" = ok ]; then status_set "upload_at=$(date -u +%FT%TZ)" upload_ok=true; else status_set "upload_at=$(date -u +%FT%TZ)" upload_ok=false; fi || true
   mkdir -p "$STATEDIR"
   umask 077
@@ -154,17 +157,30 @@ rclone_ver_ok() { # rclone present and >= 1.60
   [ -n "$v" ] && [ "$(printf '%s\n1.60\n' "$v" | sort -V | head -1)" = "1.60" ]
 }
 
+# apt_run ARGS...: apt-get that waits (up to 15 min) for another apt/dpkg process instead of failing on its locks.
+apt_run() {
+  local n=0 err rc
+  err=$(mktemp)
+  while :; do
+    if DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 apt-get -o DPkg::Lock::Timeout=900 "$@" </dev/null 2>"$err"; then rc=0; else rc=$?; fi
+    if [ "$rc" -ne 0 ] && [ "$n" -lt 900 ] && grep -q "Could not get lock\|Unable to acquire the dpkg" "$err"; then sleep 5; n=$((n + 5)); continue; fi
+    break
+  done
+  cat "$err" >&2; rm -f "$err"
+  return "$rc"
+}
+
 ensure_rclone() {
   rclone_ver_ok && return 0
   need_root
   log "Installing rclone..."
   if command -v apt-get >/dev/null; then
-    DEBIAN_FRONTEND=noninteractive apt-get update -qq || true
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq rclone unzip >/dev/null || true
+    apt_run update -qq || true
+    apt_run install -y -qq rclone unzip >/dev/null || true
   fi
   if ! rclone_ver_ok; then
     log "The distro rclone is missing or older than 1.60; using the official installer."
-    command -v unzip >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq unzip >/dev/null
+    command -v unzip >/dev/null || apt_run install -y -qq unzip >/dev/null
     curl -fsSL https://rclone.org/install.sh | bash >/dev/null || die "could not install rclone"
     hash -r
   fi
@@ -391,6 +407,11 @@ cmd_dump() {
     log "No DATABASE_URL: the app uses the JSON file; only the file backups are taken."
   fi
   local_tars
+  if [ -z "$(envval DATABASE_URL)" ]; then
+    local newest
+    newest=$(ls -1t "$BACKDIR"/$APP-2*.tgz 2>/dev/null | head -1 || true)
+    [ -z "$newest" ] || status_set "dump_at=$(date -u +%FT%TZ)" "dump_file=$(basename "$newest")" "dump_bytes=$(stat -c %s "$newest")" "error=" || true
+  fi
   JOB=""
 }
 
@@ -518,7 +539,13 @@ cmd_run() {
 }
 
 # ---------------------------------------------------------------- list
-snaps() { rclone lsf --format "sp" --separator " " "$REMOTE:$SNAPDIR" --include "$APP-*.tar.gz" 2>/dev/null | sort -k2 || true; }
+# Oldest first, by the date in the name (ftnbilling-<host>-YYYY-MM-DD[-HHMM].tar.gz), then by name. Sorting by
+# name would put the host name first: after a rebuild on a new VPS an old host's snapshot could look "latest".
+snaps() {
+  rclone lsf --format "sp" --separator " " "$REMOTE:$SNAPDIR" --include "$APP-*.tar.gz" 2>/dev/null \
+    | awk '{ d = "0000-00-00"; if (match($2, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)) d = substr($2, RSTART, RLENGTH); print d "\t" $0 }' \
+    | LC_ALL=C sort -t "$(printf '\t')" -k1,1 -k2,2 | cut -f2- || true
+}
 
 cmd_list() {
   need_root
@@ -582,6 +609,10 @@ Nothing on this server was changed. To put it back, step by step:
   6. PostgreSQL (only if the folder contains database.dump; the installer has
      already made the empty database and role, DATABASE_URL is in the env file):
                             DBURL=\$(grep '^DATABASE_URL=' /etc/$APP/$APP.env | cut -d= -f2-)
+     Step 3 put the OLD server's DATABASE_URL (and its database password) in place; give the
+     new database role that same password first (re-running the installer does this too):
+                            DBPW=\$(printf '%s' "\$DBURL" | sed -E 's#^postgres(ql)?://[^:]+:([^@]*)@.*#\2#')
+                            sudo -u postgres psql -c "ALTER ROLE $APP PASSWORD '\$DBPW'"
                             pg_restore --clean --if-exists --no-owner -d "\$DBURL" $dir/database.dump
   7. Start the app:         sudo systemctl start $APP
 

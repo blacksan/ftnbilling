@@ -127,7 +127,7 @@ func (s *Service) DeleteAccount(ctx context.Context, id, confirm string) error {
 	})
 	if err == nil {
 		s.log.Info("account deleted", "id", id)
-		s.RunSiteTasks(ctx, site)
+		s.runSitesShort(ctx, site)
 	}
 	return err
 }
@@ -223,8 +223,7 @@ func (s *Service) MoveAccount(ctx context.Context, id, toSiteID string) error {
 		return nil
 	})
 	if err == nil {
-		s.RunSiteTasks(ctx, from)
-		s.RunSiteTasks(ctx, toSiteID)
+		s.runSitesShort(ctx, toSiteID, from)
 	}
 	return err
 }

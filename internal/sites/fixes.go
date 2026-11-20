@@ -97,7 +97,13 @@ type fixWriter struct {
 	walled    map[string]bool // comments of the walled-garden rules a fix may write (set by fixWalled)
 	serverIP  string          // the server's tunnel address: the only traffic-flow target a fix may touch
 	applied   []string
+	// stop, when set, is asked before every write: the server's own passes stop at once when the owner pauses
+	// the automatic fixes while a pass is running (between and inside fixes).
+	stop func() bool
 }
+
+// ErrAutoFixesPaused: the owner paused the automatic fixes while this pass was running; it stopped.
+var ErrAutoFixesPaused = errors.New("the automatic fixes were paused: the pass stopped")
 
 func (w *fixWriter) note(format string, a ...any) {
 	w.applied = append(w.applied, fmt.Sprintf(format, a...))
@@ -107,6 +113,9 @@ func forbid(what string) error { return fmt.Errorf("%w: %s", ErrFixNotAllowed, w
 
 // call sends a command POST. Only two are allowed.
 func (w *fixWriter) call(ctx context.Context, path string, body map[string]string) error {
+	if w.stop != nil && w.stop() {
+		return ErrAutoFixesPaused
+	}
 	switch path {
 	case "/ip/dns/set":
 		if len(body) != 1 || body["allow-remote-requests"] == "" {
@@ -171,6 +180,9 @@ func (w *fixWriter) allowedRow(path string, row routeros.Row) error {
 }
 
 func (w *fixWriter) addRow(ctx context.Context, path string, body map[string]string) error {
+	if w.stop != nil && w.stop() {
+		return ErrAutoFixesPaused
+	}
 	switch path {
 	case "/interface/bridge/port":
 		if body["bridge"] == LANBridge {
@@ -231,6 +243,9 @@ func (w *fixWriter) addRow(ctx context.Context, path string, body map[string]str
 // addRowID is addRow for the walled-garden rules: it returns the new row's id
 // (the next rule goes above it).
 func (w *fixWriter) addRowID(ctx context.Context, path string, body map[string]string) (string, error) {
+	if w.stop != nil && w.stop() {
+		return "", ErrAutoFixesPaused
+	}
 	if !w.walled[body["comment"]] || (path != "/ip/firewall/filter" && path != "/ip/firewall/nat") {
 		return "", forbid("a rule that is not part of the walled garden")
 	}
@@ -254,6 +269,9 @@ func ruleProp(k string) bool {
 
 // setRow changes one existing row; row is the row as just read.
 func (w *fixWriter) setRow(ctx context.Context, path string, row routeros.Row, diff map[string]string) error {
+	if w.stop != nil && w.stop() {
+		return ErrAutoFixesPaused
+	}
 	if err := w.allowedRow(path, row); err != nil {
 		return err
 	}
@@ -306,6 +324,9 @@ func (w *fixWriter) setRow(ctx context.Context, path string, row routeros.Row, d
 
 // removeRow deletes one existing row; row is the row as just read.
 func (w *fixWriter) removeRow(ctx context.Context, path string, row routeros.Row) error {
+	if w.stop != nil && w.stop() {
+		return ErrAutoFixesPaused
+	}
 	switch path {
 	case "/interface/vlan":
 		if !w.oldVLANs[row["name"]] || row["comment"] != CustVLANComment {
@@ -558,7 +579,9 @@ func roleRank(role string) int {
 func (m *Manager) ApplyFix(ctx context.Context, siteID, checkID string, confirm bool, actorRole string) (FixResult, error) {
 	// one writer at a time per router: the sweep's passes and this fix never run together
 	e := m.cport.entry(siteID)
-	e.run.Lock()
+	if err := e.run.LockCtx(ctx); err != nil {
+		return FixResult{Applied: []string{}}, err
+	}
 	defer e.run.Unlock()
 	return m.applyFix(ctx, siteID, checkID, confirm, actorRole, false)
 }
@@ -624,6 +647,7 @@ func (m *Manager) applyFix(ctx context.Context, siteID, checkID string, confirm 
 	role := actor
 	if actor == ActorSystem {
 		role = store.RoleOperator
+		w.stop = func() bool { return m.AutoFixPause(siteID).Paused }
 	}
 	fe := &fixEnv{m: m, site: eff, w: w, rd: rt, confirm: confirm, role: role, partial: partial}
 	werr := fn(ctx, fe)
@@ -687,7 +711,9 @@ type AutoFixOutcome struct {
 // call it after a successful join; it is safe to call again.
 func (m *Manager) ApplyAutoFixes(ctx context.Context, siteID string) ([]AutoFixOutcome, error) {
 	e := m.cport.entry(siteID)
-	e.run.Lock()
+	if err := e.run.LockCtx(ctx); err != nil {
+		return nil, err
+	}
 	defer e.run.Unlock()
 	if m.AutoFixPause(siteID).Paused {
 		return nil, nil
@@ -709,6 +735,9 @@ func (m *Manager) ApplyAutoFixes(ctx context.Context, siteID string) ([]AutoFixO
 		}
 		if it.Fix.Kind != FixAuto {
 			continue
+		}
+		if m.AutoFixPause(siteID).Paused {
+			break // paused while this pass runs: no more fixes
 		}
 		res, err := m.applyFix(ctx, siteID, it.ID, false, ActorSystem, false)
 		o := AutoFixOutcome{ID: it.ID, Applied: res.Applied}

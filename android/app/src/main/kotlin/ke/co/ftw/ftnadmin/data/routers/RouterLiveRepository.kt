@@ -49,33 +49,49 @@ class RouterLiveRepository(private val api: ApiClient) {
     suspend fun createRouter(r: RouterInput): CreatedRouter = api.post("routers", body = routerBody(r, patch = false))
 
     /**
-     * Owner only. Only the fields present change: the form sends every field so a blank clears it, except the
-     * write-only password, which is sent only when typed (or cleared with `pppoe_pass_clear`).
+     * Owner only. Only the fields present change. With [base] (what the form was loaded with) the PATCH carries just
+     * the fields the person changed, plus the `base_*` layout the form was shown: a Ports-tab change made while the
+     * form was open is then neither undone by an unrelated save nor overwritten by a stale port edit (the server
+     * answers 409 for that). Without [base] every field is sent, so a blank clears it. The write-only password is
+     * sent only when typed (or cleared with `pppoe_pass_clear`).
      */
-    suspend fun updateRouter(id: String, r: RouterInput): Site = api.patch("routers", id, body = routerBody(r, patch = true))
+    suspend fun updateRouter(id: String, r: RouterInput, base: RouterInput? = null): Site =
+        api.patch("routers", id, body = routerBody(r, patch = true, base = base))
 
-    private fun routerBody(r: RouterInput, patch: Boolean) = buildJsonObject {
-        fun str(key: String, v: String) {
-            if (patch) put(key, v.trim()) else putIfNotBlank(key, v.trim())
+    private fun routerBody(r: RouterInput, patch: Boolean, base: RouterInput? = null) = buildJsonObject {
+        fun str(key: String, v: String, was: String?) {
+            when {
+                !patch -> putIfNotBlank(key, v.trim())
+                base == null || v.trim() != was?.trim() -> put(key, v.trim())
+            }
         }
         put("name", r.name.trim())
-        str("wan_interface", r.wanInterface)
+        str("wan_interface", r.wanInterface, base?.wanInterface)
         put("wan_mode", r.wanMode)
-        str("wan_address", r.wanAddress)
-        str("wan_gateway", r.wanGateway)
-        str("wan_dns", r.wanDns)
-        str("pppoe_user", r.pppoeUser)
+        str("wan_address", r.wanAddress, base?.wanAddress)
+        str("wan_gateway", r.wanGateway, base?.wanGateway)
+        str("wan_dns", r.wanDns, base?.wanDns)
+        str("pppoe_user", r.pppoeUser, base?.pppoeUser)
         if (r.pppoePass.isNotEmpty()) put("pppoe_pass", r.pppoePass)
         if (r.pppoePassClear) put("pppoe_pass_clear", true)
-        str("lan_ports", r.lanPorts)
-        str("lan_subnet", r.lanSubnet)
-        str("olt_interface", r.oltInterface)
-        r.vlanId?.let { put("vlan_id", it) }
-        str("customer_subnet", r.customerSubnet)
-        if (patch || r.customerPorts.isNotEmpty()) put("customer_ports", JsonArray(r.customerPorts.map { JsonPrimitive(it) }))
-        r.wanCapMbps?.let { put("wan_cap_mbps", it) }
-        str("support_phone", r.supportPhone)
+        str("lan_ports", r.lanPorts, base?.lanPorts)
+        str("lan_subnet", r.lanSubnet, base?.lanSubnet)
+        str("olt_interface", r.oltInterface, base?.oltInterface)
+        if (base == null || r.vlanId != base.vlanId) r.vlanId?.let { put("vlan_id", it) }
+        str("customer_subnet", r.customerSubnet, base?.customerSubnet)
+        if ((patch && (base == null || r.customerPorts != base.customerPorts)) || (!patch && r.customerPorts.isNotEmpty())) {
+            put("customer_ports", JsonArray(r.customerPorts.map { JsonPrimitive(it) }))
+        }
+        if (base == null || r.wanCapMbps != base.wanCapMbps) r.wanCapMbps?.let { put("wan_cap_mbps", it) }
+        str("support_phone", r.supportPhone, base?.supportPhone)
         if (r.confirm) put("confirm", true)
         if (r.confirmName.isNotBlank()) put("confirm_name", r.confirmName.trim())
+        if (patch && base != null) {
+            // the layout the form was shown: the server refuses a port edit when it has moved on since
+            put("base_lan_ports", base.lanPorts.trim())
+            put("base_customer_ports", JsonArray(base.customerPorts.map { JsonPrimitive(it) }))
+            put("base_olt_interface", base.oltInterface.trim())
+            put("base_vlan_id", base.vlanId ?: 0)
+        }
     }
 }

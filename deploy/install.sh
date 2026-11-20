@@ -75,7 +75,16 @@ BIN=/usr/local/bin/$APP
 SBIN=/usr/local/sbin
 BACKUPS=/var/backups/$APP
 WG_IF=wg0
+# A re-run is an upgrade: WG_PORT and WG_SUBNET not given again come from the settings file
+# (or the live wg0.conf), so wg-sync, ufw and the WinBox rules keep matching the tunnel.
+_envk() { if [ -f "$ENVF" ]; then grep -m1 "^$1=" "$ENVF" | cut -d= -f2- | tr -d "\"'" || true; fi; }
+if [ -z "${WG_PORT:-}" ]; then
+  WG_PORT=$(_envk WG_PORT)
+  [ -n "$WG_PORT" ] || { WG_PORT=$(_envk WG_ENDPOINT); WG_PORT=${WG_PORT##*:}; case $WG_PORT in ""|*[!0-9]*) WG_PORT="" ;; esac; }
+  [ -n "$WG_PORT" ] || WG_PORT=$(awk '/^\[Peer\]/{exit} /^ListenPort *=/{print $3; exit}' "/etc/wireguard/wg0.conf" 2>/dev/null || true)
+fi
 WG_PORT="${WG_PORT:-51820}"
+WG_SUBNET="${WG_SUBNET:-$(_envk WG_SUBNET)}"
 WG_SUBNET="${WG_SUBNET:-10.99.0.0/22}"
 WG_NET=${WG_SUBNET%/*}
 WG_SERVER_IP=${WG_NET%.*}.1
@@ -124,12 +133,48 @@ writef() {
 # Wait (up to 15 min) for the dpkg lock instead of failing: a new VPS often runs
 # unattended-upgrades in the background for the first few minutes. APT_CONFIG
 # applies to every apt-get call in this script, including the bare ones.
+# DPkg::Lock::Timeout only covers the dpkg lock; "apt-get update" and "install" also take
+# /var/lib/apt/lists/lock and /var/cache/apt/archives/lock and do NOT wait for them, so
+# apt_get waits for those itself before each call and retries when apt still loses the race.
 if [ "$DRY" != 1 ]; then
   APT_CONFIG=$(mktemp /tmp/ftn-apt.XXXXXX)
-  printf 'DPkg::Lock::Timeout "900";\n' >"$APT_CONFIG"
+  printf 'DPkg::Lock::Timeout "900";\nAcquire::Retries "3";\n' >"$APT_CONFIG"
   export APT_CONFIG
 fi
-apt_get() { run env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 apt-get "$@" </dev/null; }
+# apt_locks_busy: true while any process holds one of apt's lock files (POSIX or flock, from /proc/locks).
+apt_locks_busy() {
+  local f ino
+  for f in /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock; do
+    [ -e "$f" ] || continue
+    ino=$(stat -c %i "$f" 2>/dev/null) || continue
+    if awk -v i="$ino" '{ n = split($6, a, ":"); if (n == 3 && a[3] == i) found = 1 } END { exit !found }' /proc/locks 2>/dev/null; then return 0; fi
+  done
+  return 1
+}
+apt_wait_locks() {
+  local waited=0
+  while apt_locks_busy; do
+    [ "$waited" -lt 900 ] || { warn "apt is still locked by another process after 15 minutes"; return 0; }
+    [ "$waited" -ne 0 ] || note "another apt/dpkg process is running; waiting for it to finish"
+    sleep 5; waited=$((waited + 5))
+  done
+}
+apt_get() {
+  if [ "$DRY" = 1 ]; then printf '    [dry-run] apt-get %s\n' "$*"; return 0; fi
+  local err rc waited=0
+  err=$(mktemp /tmp/ftn-apt-err.XXXXXX)
+  while :; do
+    apt_wait_locks
+    if env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 apt-get "$@" </dev/null 2>"$err"; then rc=0; else rc=$?; fi
+    cat "$err" >&2
+    if [ "$rc" -ne 0 ] && [ "$waited" -lt 900 ] && grep -q "Could not get lock\|Unable to acquire the dpkg\|Could not open lock file" "$err"; then
+      sleep 5; waited=$((waited + 5)); continue
+    fi
+    break
+  done
+  rm -f "$err"
+  return "$rc"
+}
 apt_install() { if [ "$DRY" = 1 ]; then printf '    [dry-run] apt-get install %s\n' "$*"; else apt_get install -y -qq --no-install-recommends "$@" >/dev/null; fi; }
 have() { command -v "$1" >/dev/null 2>&1; }
 envget() { [ -f "$ENVF" ] && grep -m1 "^$1=" "$ENVF" | cut -d= -f2- || true; }
@@ -203,12 +248,25 @@ int2ip_masked() {
 }
 
 # ---------------------------------------------------------------------------
+# recover_domain: a re-run without DOMAIN= keeps the HTTPS site of the first install. An explicit
+# empty DOMAIN= (set but empty) is the one way to ask for plain http again.
+recover_domain() {
+  if [ -n "${DOMAIN+x}" ]; then return 0; fi
+  local base host
+  base=$(envget PUBLIC_BASE_URL)
+  case "$base" in
+    https://*) host=${base#https://}; host=${host%%[:/]*}; [ -z "$host" ] || { DOMAIN=$host; note "keeping the HTTPS site $host from the earlier install (pass DOMAIN= to change it)"; } ;;
+  esac
+  return 0
+}
+
 preflight() {
   step "checking this server"
   if [ "$DRY" = 1 ]; then note "DRY_RUN=1: nothing below is executed, only printed"; fi
   if [ "$DRY" != 1 ] && [ "$(id -u)" != 0 ]; then die "run as root (pipe into: sudo ... bash)"; fi
   # An existing settings file means this run upgrades a server that is already installed.
   if [ -f "$ENVF" ]; then UPGRADE=1; note "existing install found: this run is an in-place upgrade"; fi
+  recover_domain
   mgmt_settings
   local ID ID_LIKE VERSION_ID PRETTY_NAME
   eval "$( (. /etc/os-release 2>/dev/null; printf 'ID=%q ID_LIKE=%q VERSION_ID=%q PRETTY_NAME=%q' "${ID:-}" "${ID_LIKE:-}" "${VERSION_ID:-}" "${PRETTY_NAME:-}") || true)"
@@ -333,12 +391,19 @@ get_bundle_from_release() {
   case "$code" in
     200) ;;
     401 | 403) rm -rf "$tmp"; die "GitHub refused the token (HTTP $code). Check GH_TOKEN (needs Contents: read on $REPO)." ;;
-    *) note "no release found (HTTP ${code:-none}; for a private repo a missing or wrong GH_TOKEN also looks like this)"; rm -rf "$tmp"; return 1 ;;
+    *)
+      rm -rf "$tmp"
+      [ "$WANT_VERSION" = latest ] || die "release $tag was not found (HTTP ${code:-none}). VERSION is a pin, so the installer will not build another version instead. Check the tag, and GH_TOKEN for a private repo."
+      note "no release found (HTTP ${code:-none}; for a private repo a missing or wrong GH_TOKEN also looks like this)"; return 1 ;;
   esac
   name=$(jq -r --arg re "^ftnbilling-.*-linux-${GOARCH}\\.tar\\.gz\$" '.assets[]? | select(.name|test($re)) | .name' "$tmp/meta.json" | head -1)
   id=$(jq -r --arg n "$name" '.assets[]? | select(.name==$n) | .id' "$tmp/meta.json" | head -1)
   sid=$(jq -r '.assets[]? | select(.name=="SHA256SUMS") | .id' "$tmp/meta.json" | head -1)
-  if [ -z "$name" ] || [ -z "$id" ]; then note "the release has no linux-$GOARCH bundle"; rm -rf "$tmp"; return 1; fi
+  if [ -z "$name" ] || [ -z "$id" ]; then
+    rm -rf "$tmp"
+    [ "$WANT_VERSION" = latest ] || die "release $tag has no linux-$GOARCH bundle. VERSION is a pin, so the installer will not build another version instead."
+    note "the release has no linux-$GOARCH bundle"; return 1
+  fi
   [ -n "$sid" ] || { rm -rf "$tmp"; die "the release has no SHA256SUMS: refusing to install an unverified download"; }
   PROG_VERSION=$(jq -r '.tag_name' "$tmp/meta.json")
   note "release $PROG_VERSION: downloading $name"
@@ -531,7 +596,7 @@ WGEOF
   fi
   writef 644 root:root /etc/systemd/system/wg-quick@$WG_IF.service.d/$APP.conf <<WGEOF
 [Service]
-ExecStartPost=$SBIN/$APP-wg-sync
+ExecStartPost=-$SBIN/$APP-wg-sync
 WGEOF
   run systemctl daemon-reload
   try systemctl enable wg-quick@$WG_IF
@@ -877,6 +942,16 @@ SQL
     runuser -u postgres -- psql -q -v ON_ERROR_STOP=1 <<SQL
 ALTER ROLE ftnbilling PASSWORD '$pw';
 SQL
+  elif [ -n "$dburl" ] && [ -n "$pw" ] && [ "$DRY" != 1 ]; then
+    # The password in DATABASE_URL is the truth: after a disaster-recovery restore of the old env file onto a
+    # new server the role still has the new server's random password, and the app could not connect.
+    case $pw in
+      *"'"* | *'\\'*) warn "the password in DATABASE_URL has a quote or backslash; not syncing it to the database role" ;;
+      *) runuser -u postgres -- psql -q -v ON_ERROR_STOP=1 <<SQL
+ALTER ROLE ftnbilling PASSWORD '$pw';
+SQL
+        ;;
+    esac
   fi
   if [ "$DRY" = 1 ]; then printf '    [dry-run] ALTER ROLE statement_timeout=30s; createdb -O ftnbilling -E UTF8 -T template0 ftnbilling; REVOKE CONNECT ON DATABASE ftnbilling FROM PUBLIC\n'
   else
@@ -1203,8 +1278,16 @@ pre_upgrade_database() {
 # must not make the installer fail.
 make_setup_code() {
   SETUP_OUT=""
-  local out rc=0
+  OWNER_ENROLLED=0
+  local out rc=0 st
+  # An owner who already has the authenticator app needs no setup code: skip the call (it would stop and
+  # restart the service for nothing) and never print a FIRST SIGN-IN block for them.
+  if [ -n "$(envget DATABASE_URL)" ]; then
+    st=$(app_cli admin-status -json 2>/dev/null || true)
+    case "$st" in *'"totp_enrolled":true'*) OWNER_ENROLLED=1; return 0 ;; esac
+  fi
   out=$("$SBIN/$APP-admin-reset" --setup-code 2>&1) || rc=$?
+  case "$out" in *"already has an authenticator"*) OWNER_ENROLLED=1; return 0 ;; esac
   if [ "$rc" = 0 ]; then SETUP_OUT=$out
   else
     SETUP_OUT=""
@@ -1257,8 +1340,13 @@ doctor_and_banner() {
     printf '\n    [dry-run] finished: nothing was changed.\n'
     return 0
   fi
-  local pwtext="your existing admin password"
-  if [ "$UPGRADE" != 1 ]; then pwtext="the password $(envget ADMIN_PASS)"; fi
+  # The generated password is printed until a banner has been shown once: a first install that failed
+  # after the settings step wrote ADMIN_PASS but never displayed it, and its re-run is an "upgrade".
+  local pwtext="your admin password" shown
+  shown="$(dirname "$ENVF")/.install-banner-shown"
+  # An owner who has already set up the authenticator has signed in with the password: it may have been changed
+  # since, and it is not printed again (servers installed before the marker file existed).
+  if [ "${OWNER_ENROLLED:-0}" != 1 ] && { [ "$UPGRADE" != 1 ] || [ ! -e "$shown" ]; }; then pwtext="the password $(envget ADMIN_PASS) (from $ENVF)"; fi
   if [ -n "$(envget DATABASE_URL)" ]; then backend="PostgreSQL (local socket)"; fi
   cat <<EOF
 
@@ -1310,6 +1398,7 @@ EOF
   echo " Health check any time:  sudo $APP-doctor"
   if [ "$DOC_RC" != 0 ]; then echo " The doctor above found problems (FAIL lines): fix them before relying on this server."; fi
   echo "────────────────────────────────────────────────────────────────────"
+  date -u +%FT%TZ >"$shown" 2>/dev/null || true
 }
 
 main() {

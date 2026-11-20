@@ -93,7 +93,11 @@ func (s *Service) RunSiteTasks(ctx context.Context, siteID string) int {
 		return 0
 	}
 	state := s.state(siteID)
-	state.taskMu.Lock()
+	// The wait for a pass already running on this building (a sweep on a slow or dead router) ends with ctx: an
+	// admin action gives up after its cap and leaves the task queued for the retry loop.
+	if !state.taskMu.LockCtx(ctx) {
+		return 0
+	}
 	defer state.taskMu.Unlock()
 	now := s.now()
 	var due []store.Task
@@ -119,6 +123,11 @@ func (s *Service) RunSiteTasks(ctx context.Context, siteID string) int {
 			batchDone = true
 		}
 		err := batchErr
+		if err != nil && ctx.Err() != nil {
+			// our own deadline (an admin action's cap), not the router refusing: the task stays due and is not
+			// counted as a failed attempt
+			break
+		}
 		_ = s.st.Update(func(d *store.Data) error {
 			cur, found := d.Tasks[t.ID]
 			if !found {
@@ -220,9 +229,25 @@ func (s *Service) hasDueTasks(siteID string) (due bool) {
 	return
 }
 
-// RunSweeper retries router tasks every few seconds and sweeps every interval.
+// RunSweeper retries router tasks every few seconds and sweeps every interval. The sweep runs in its own
+// goroutine (one at a time; a tick that finds one still running is skipped): it waits for every building's
+// hook, up to 90 s each, and one slow router must not starve the task retries of the others.
 func (s *Service) RunSweeper(ctx context.Context, every time.Duration) {
-	s.Sweep(ctx)
+	var sweeping atomic.Bool
+	var wg sync.WaitGroup
+	runSweep := func() {
+		if !sweeping.CompareAndSwap(false, true) {
+			return
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer sweeping.Store(false)
+			s.Sweep(ctx)
+		}()
+	}
+	defer wg.Wait()
+	runSweep()
 	tasks := time.NewTicker(10 * time.Second)
 	sweep := time.NewTicker(every)
 	defer tasks.Stop()
@@ -234,7 +259,7 @@ func (s *Service) RunSweeper(ctx context.Context, every time.Duration) {
 		case <-tasks.C:
 			s.RunTasks(ctx)
 		case <-sweep.C:
-			s.Sweep(ctx)
+			runSweep()
 		}
 	}
 }

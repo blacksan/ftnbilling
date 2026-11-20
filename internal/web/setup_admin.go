@@ -55,7 +55,7 @@ func (s *Server) adminSetupGone(w http.ResponseWriter, r *http.Request) {
 }
 
 // adminSetupReset is POST /admin/routers/setup/reset: form fields id and confirm_name.
-// It answers the new Setup plus a fresh line.
+// It answers the new Setup only; the admin makes the fresh line with the "Make line" button (the API reset also returns one).
 func (s *Server) adminSetupReset(w http.ResponseWriter, r *http.Request) {
 	st, ok := s.siteID(r)
 	if !ok {

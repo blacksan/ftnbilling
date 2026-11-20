@@ -162,6 +162,9 @@ type Checks struct {
 	AutoFixes *PauseState `json:"auto_fixes,omitempty"`
 	// Slow is true when some read of the router timed out: the server repeats the pass by itself.
 	Slow bool `json:"slow,omitempty"`
+	// MgmtWinbox: the router's firewall has the "ftn: mgmt winbox" accept for the server's current management
+	// subnet, read from the router itself (so a lost join report does not make a built router look unbuilt).
+	MgmtWinbox bool `json:"mgmt_winbox,omitempty"`
 }
 
 // Item returns the item with the id.
@@ -1708,6 +1711,7 @@ func (m *Manager) runChecks(ctx context.Context, site store.Site) Checks {
 	out := Checks{SiteID: site.ID, GeneratedAt: now, Items: items, JoinReport: m.loadJoinReport(site.ID),
 		Router: RouterInfo{Reachable: e.sn.errs["/system/resource"] == nil, Version: res["version"], Board: res["board-name"]}}
 	out.Layout = layout
+	out.MgmtWinbox = hasMgmtWinboxRule(e.sn, m.mgmt.String())
 	out.Slow = e.slow
 	out.Summary = summarize(items)
 	return out
@@ -1738,4 +1742,17 @@ func lanNetOf(site store.Site) string {
 		return lan.Network
 	}
 	return site.LANSubnet
+}
+
+// hasMgmtWinboxRule: an enabled input rule with the remote-WinBox comment that accepts the management subnet.
+func hasMgmtWinboxRule(sn *snapshot, mgmt string) bool {
+	if sn.errs["/ip/firewall/filter"] != nil || mgmt == "" {
+		return false
+	}
+	for _, r := range sn.tbl("/ip/firewall/filter") {
+		if r["comment"] == MgmtWinboxComment && r["chain"] == "input" && r["src-address"] == mgmt && !yes(r["disabled"]) {
+			return true
+		}
+	}
+	return false
 }

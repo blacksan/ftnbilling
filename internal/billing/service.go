@@ -323,6 +323,16 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 // UpdateAccount edits the unit, tenant, phone and notes. Code and MAC are not
 // touched (use ChangeMAC for an ONT swap); the apartment and router change
 // with MoveToApartment.
+// ValidateAccountEdit checks the fields UpdateAccount would refuse for their own form (no store access), so a
+// caller that does something irreversible first (a move) can refuse the whole request up front.
+func (s *Service) ValidateAccountEdit(flat, phone string) error {
+	if cleanText(flat, 40) == "" {
+		return errors.New("the unit (flat or door number) is required")
+	}
+	_, err := normPhone(phone)
+	return err
+}
+
 func (s *Service) UpdateAccount(id, flat, tenant, phone, notes string) error {
 	unit := cleanText(flat, 40)
 	if unit == "" {
@@ -512,11 +522,43 @@ func (s *Service) Ping(ctx context.Context, siteID string) error { return s.rout
 
 // ---- login --------------------------------------------------------------
 
-// runAccountSite runs the router tasks of the building that holds the account.
+// AdminRunCap is how long an admin action waits for the router before it answers: the change is saved, the
+// router work stays queued and the retry loop finishes it (as for payments, which cap at runSiteShort).
+const AdminRunCap = 4 * time.Second
+
+// runAccountSite runs the router tasks of the building that holds the account, for at most AdminRunCap.
 func (s *Service) runAccountSite(ctx context.Context, accountID string) {
+	c, cancel := context.WithTimeout(ctx, AdminRunCap)
+	defer cancel()
+	s.runAccountSiteNoCap(c, accountID)
+}
+
+// runAccountSiteNoCap is runAccountSite for callers that already set their own deadline.
+func (s *Service) runAccountSiteNoCap(ctx context.Context, accountID string) {
 	if a, ok := s.GetAccount(accountID); ok {
 		s.RunSiteTasks(ctx, a.SiteID)
 	}
+}
+
+// runSitesShort runs the router tasks of several buildings at the same time, for at most AdminRunCap: a move
+// must not make the new router wait behind a dead old one.
+func (s *Service) runSitesShort(ctx context.Context, siteIDs ...string) {
+	c, cancel := context.WithTimeout(ctx, AdminRunCap)
+	defer cancel()
+	var wg sync.WaitGroup
+	seen := map[string]bool{}
+	for _, id := range siteIDs {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.RunSiteTasks(c, id)
+		}()
+	}
+	wg.Wait()
 }
 
 // DescribeMinutes renders 90 as "1 h 30 min", 1440 as "1 day".

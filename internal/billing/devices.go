@@ -51,12 +51,15 @@ func arpOnline(r routeros.Row) bool {
 // pass, and refreshes "last seen" of the flats' own MACs. It writes nothing to
 // the router.
 func (s *Service) collectDevices(site store.Site, pl netplan.Plan, wants []wantAcct, leases, arp []routeros.Row, ps *provState) {
-	s.collectDevicesX(site, pl, true, wants, leases, arp, ps)
+	s.collectDevicesX(site, pl, true, true, wants, leases, arp, ps)
 }
 
 // collectDevicesX is collectDevices with hasPlan: it
 // hasPlan false (the plan could not be computed) turns the network filter off.
-func (s *Service) collectDevicesX(site store.Site, pl netplan.Plan, hasPlan bool, wants []wantAcct, leases, arp []routeros.Row, ps *provState) {
+//
+// complete is false when one of the two reads failed: the devices not seen this time are then left as they were
+// (a failed ARP read must not flip every device seen only through ARP offline and count a new hit when it returns).
+func (s *Service) collectDevicesX(site store.Site, pl netplan.Plan, hasPlan, complete bool, wants []wantAcct, leases, arp []routeros.Row, ps *provState) {
 	now := s.now()
 	byMAC := map[string]*devObs{}
 	order := []string{}
@@ -112,12 +115,15 @@ func (s *Service) collectDevicesX(site store.Site, pl netplan.Plan, hasPlan bool
 	for _, m := range order {
 		obs = append(obs, *byMAC[m])
 	}
-	s.noteDevices(site.ID, obs)
+	s.noteDevices(site.ID, obs, complete)
 }
+
+// maxDevicesPerSite bounds the unregistered-device table of one building.
+const maxDevicesPerSite = 500
 
 // noteDevices records the observed MACs that have no open account, and marks
 // the building's other known devices offline. It is one store update.
-func (s *Service) noteDevices(siteID string, obs []devObs) {
+func (s *Service) noteDevices(siteID string, obs []devObs, complete bool) {
 	now := s.now()
 	_ = s.st.Update(func(d *store.Data) error {
 		if st, ok := d.Sites[siteID]; !ok || st.Removed {
@@ -153,16 +159,42 @@ func (s *Service) noteDevices(siteID string, obs []devObs) {
 			changed = true
 		}
 		for key, dev := range d.Devices {
-			if dev.SiteID == siteID && !seen[key] && dev.Online {
+			if complete && dev.SiteID == siteID && !seen[key] && dev.Online {
 				dev.Online = false
 				d.Devices[key] = dev
 				changed = true
 			}
 		}
-		for len(d.Devices) > 500 { // bounded: drop the stalest
+		// Bounded per building (a noisy network must not push a quiet building's devices out): drop the stalest,
+		// dismissed ones last (losing one would list it as new again).
+		for {
+			n := 0
+			for _, v := range d.Devices {
+				if v.SiteID == siteID {
+					n++
+				}
+			}
+			if n <= maxDevicesPerSite {
+				break
+			}
 			var oldest string
 			for m, v := range d.Devices {
-				if oldest == "" || v.LastSeen.Before(d.Devices[oldest].LastSeen) {
+				if v.SiteID != siteID {
+					continue
+				}
+				if oldest == "" {
+					oldest = m
+					continue
+				}
+				o := d.Devices[oldest]
+				ov, vv := o.Source == SourceDismissed, v.Source == SourceDismissed
+				if ov != vv {
+					if ov {
+						oldest = m // keep the dismissed one, drop this
+					}
+					continue
+				}
+				if v.LastSeen.Before(o.LastSeen) {
 					oldest = m
 				}
 			}
@@ -207,6 +239,19 @@ type UnregDevice struct {
 	Suggested *SuggestedAccount
 	// BelongsTo is set when the MAC is the ONT of an open account on another router.
 	BelongsTo *BelongsTo
+}
+
+// DismissedMACs lists the MACs the operator dismissed on a building's router.
+func (s *Service) DismissedMACs(siteID string) []string {
+	var out []string
+	s.st.View(func(d *store.Data) {
+		for _, dv := range d.DeviceList() {
+			if dv.SiteID == siteID && dv.Source == SourceDismissed {
+				out = append(out, dv.MAC)
+			}
+		}
+	})
+	return out
 }
 
 // Unregistered lists the devices that have no account, online first, then by
@@ -488,7 +533,7 @@ func (s *Service) refreshDevices(ctx context.Context, site store.Site) error {
 			}
 		}
 	})
-	s.collectDevicesX(site, pl, perr == nil, wants, leases, arp, s.prov(site.ID))
+	s.collectDevicesX(site, pl, perr == nil, lerr == nil && aerr == nil, wants, leases, arp, s.prov(site.ID))
 	return nil
 }
 
@@ -606,7 +651,7 @@ func (s *Service) CreateCustomer(ctx context.Context, in AddCustomerInput) (stor
 	}
 	rc, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	s.runAccountSite(rc, a.ID)
+	s.runAccountSiteNoCap(rc, a.ID)
 	a, _ = s.GetAccount(a.ID)
 	return a, s.AccountRouterState(a.ID), nil
 }

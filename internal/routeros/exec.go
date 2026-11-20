@@ -135,7 +135,7 @@ func (c *REST) Traceroute(ctx context.Context, target string, maxHops int) ([]Ho
 	}
 	var rows []map[string]any
 	body := map[string]string{"address": target, "count": "1", "max-hops": strconv.Itoa(maxHops)}
-	if err := c.doT(ctx, executeTimeout, http.MethodPost, "/tool/traceroute", nil, body, &rows); err != nil {
+	if err := c.doTool(ctx, executeTimeout, http.MethodPost, "/tool/traceroute", nil, body, &rows); err != nil {
 		return nil, err
 	}
 	return parseTraceroute(rows), nil

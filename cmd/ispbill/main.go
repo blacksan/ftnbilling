@@ -172,6 +172,7 @@ func run(log *slog.Logger) error {
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
 
+	var lockErr error
 	select {
 	case err := <-errc:
 		stop()
@@ -179,6 +180,10 @@ func run(log *slog.Logger) error {
 		mgr.Wait()
 		svc.Wait()
 		return err
+	case <-st.LockLost(): // nil channel (JSON store) blocks for ever
+		lockErr = st.Healthy()
+		stop() // end every loop (sweeper, spool, ops, manager) so run() returns and the service manager restarts the app
+		log.Error("the database writer lock was lost; exiting so that the service manager restarts the app", "err", lockErr)
 	case <-ctx.Done():
 	}
 	log.Info("shutting down")
@@ -190,6 +195,9 @@ func run(log *slog.Logger) error {
 	svc.Wait()
 	if errors.Is(err, http.ErrServerClosed) {
 		err = nil
+	}
+	if lockErr != nil {
+		return lockErr
 	}
 	return err
 }

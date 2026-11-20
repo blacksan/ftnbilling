@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -33,6 +34,8 @@ type Options struct {
 	NoLock bool
 	// AppName shows in pg_stat_activity.
 	AppName string
+	// LockCheck is how often the held lock is verified (default 5 s).
+	LockCheck time.Duration
 
 	maxVersion int // tests: migrate only up to this version
 }
@@ -41,6 +44,11 @@ type Options struct {
 type Backend struct {
 	pool   *pgxpool.Pool
 	lock   *pgx.Conn
+	lockMu sync.Mutex // the lock connection serves one query at a time
+	lostCh chan struct{}
+	stopCh chan struct{}
+	lostMu sync.Mutex
+	lostE  error
 	opt    Options
 	schema string
 }
@@ -116,6 +124,8 @@ func Open(ctx context.Context, url string, opt Options) (*Backend, error) {
 			return nil, errors.New("another ispbill process is already using this database (only one may write at a time)")
 		}
 		b.lock = lc
+		b.lostCh, b.stopCh = make(chan struct{}), make(chan struct{})
+		go b.watchLock()
 	}
 	if !opt.NoMigrate {
 		if err := b.Migrate(ctx); err != nil {
@@ -150,12 +160,85 @@ func (b *Backend) Pool() *pgxpool.Pool { return b.pool }
 
 // Ping checks that the database answers.
 func (b *Backend) Ping(ctx context.Context) error {
+	if err := b.LockErr(); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	return b.pool.Ping(ctx)
 }
 
+// LockLost is closed when the single-writer lock is gone (the Postgres server restarted or the connection
+// that holds it dropped). From then on a second writer may be running, so the caller must stop and let the
+// service manager restart it. Nil when this backend holds no lock.
+func (b *Backend) LockLost() <-chan struct{} { return b.lostCh }
+
+// LockErr is why the lock was lost, or nil while it is held.
+func (b *Backend) LockErr() error {
+	b.lostMu.Lock()
+	defer b.lostMu.Unlock()
+	return b.lostE
+}
+
+func (b *Backend) lockHeld() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	b.lockMu.Lock()
+	defer b.lockMu.Unlock()
+	if b.lock == nil {
+		return errors.New("lock connection closed")
+	}
+	var n int
+	// The session must still exist and still hold the advisory lock (a restarted server loses both).
+	if err := b.lock.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND granted AND pid = pg_backend_pid()`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		return errors.New("the single-writer lock is no longer held")
+	}
+	return nil
+}
+
+func (b *Backend) watchLock() {
+	every := b.opt.LockCheck
+	if every <= 0 {
+		every = 5 * time.Second
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	fails := 0
+	for {
+		select {
+		case <-b.stopCh:
+			return
+		case <-t.C:
+		}
+		if err := b.lockHeld(); err != nil {
+			// One failed check can be a slow server; two in a row, or a clean "not held", is a loss.
+			fails++
+			if fails < 2 && !strings.Contains(err.Error(), "no longer held") {
+				continue
+			}
+			b.lostMu.Lock()
+			b.lostE = fmt.Errorf("database writer lock lost: %w", redactErr(err))
+			b.lostMu.Unlock()
+			close(b.lostCh)
+			return
+		}
+		fails = 0
+	}
+}
+
 func (b *Backend) Close() error {
+	if b.stopCh != nil {
+		select {
+		case <-b.stopCh:
+		default:
+			close(b.stopCh)
+		}
+	}
+	b.lockMu.Lock()
+	defer b.lockMu.Unlock()
 	if b.lock != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		b.lock.Close(ctx)
@@ -301,6 +384,9 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 
 // Commit writes one change set in a single transaction.
 func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet) error {
+	if err := b.LockErr(); err != nil {
+		return err
+	}
 	if len(cs.Payments.Delete) > 0 {
 		return errors.New("payments are never deleted")
 	}
