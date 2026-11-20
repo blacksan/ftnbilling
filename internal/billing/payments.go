@@ -186,6 +186,10 @@ const ManualPrefix = "MANUAL-"
 
 // manualLinkWindow is how long after "Mark paid" the real confirmation of the
 // same money is still recognised and linked instead of credited again.
+// manualSkew is the clock-skew margin: money whose payment time is up to this
+// long after a Mark paid still counts as possibly the same payment.
+const manualSkew = 5 * time.Minute
+
 const manualLinkWindow = 6 * time.Hour
 
 // applyUnmatchedLocked turns an Unmatched row into an applied payment.
@@ -246,8 +250,8 @@ func recentManual(d *store.Data, accountID string, amount int, now, paidAt time.
 			if paidAt.IsZero() && now.Sub(m.CreatedAt) > 30*time.Minute {
 				continue
 			}
-			if !paidAt.IsZero() && paidAt.After(m.CreatedAt) {
-				continue
+			if !paidAt.IsZero() && paidAt.After(m.CreatedAt.Add(manualSkew)) {
+				continue // paid clearly after the Mark paid: new money
 			}
 		}
 		if !ok || m.CreatedAt.After(best.CreatedAt) {
@@ -273,6 +277,14 @@ func linkManualRow(d *store.Data, m store.Payment, key, method string, amount in
 		Note: manualDupNote + " (" + m.Key + "); not credited twice", PaidAt: paidAt, CreatedAt: now, ResolvedAt: now}
 	m.Note = joinNote(m.Note, "confirmed by M-Pesa receipt "+key)
 	d.Payments[m.Key] = m
+}
+
+// PossibleManualDuplicate reports whether money paid at paidAt (zero = unknown)
+// may be the confirmation of a payment an admin marked paid by hand: the same
+// test that holds such a Paybill payment in Unmatched.
+func (s *Service) PossibleManualDuplicate(accountID string, amount int, paidAt time.Time) (key string, ok bool) {
+	s.st.View(func(d *store.Data) { key, ok = recentManual(d, accountID, amount, s.now(), paidAt, false) })
+	return
 }
 
 // Credit applies a package to an account and records the ledger entry. A

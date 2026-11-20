@@ -27,6 +27,7 @@ type Completer interface {
 	SetCheckoutID(orderID, checkoutID string) error
 	Credit(ctx context.Context, in billing.CreditInput) (store.Payment, bool, error)
 	RecordUnmatched(in billing.UnmatchedInput) (bool, error)
+	PossibleManualDuplicate(accountID string, amount int, paidAt time.Time) (key string, ok bool)
 	PackageForAmount(siteID string, amount int) (store.Package, bool)
 }
 

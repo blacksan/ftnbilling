@@ -355,7 +355,7 @@ func TestMarkPaidOnAThenPaybillFirstForBCreditsB(t *testing.T) {
 	if err := r.svc.SetCheckoutID(b.ID, "ws_CO_B"); err != nil {
 		t.Fatal(err)
 	}
-	r.advance(time.Minute)
+	r.advance(6 * time.Minute)                                                   // clearly after the Mark paid (more than the 5 minute clock-skew margin)
 	paid := r.clock().In(time.FixedZone("EAT", 3*3600)).Format("20060102150405") // paid after the Mark paid
 	r.mp.HandleC2BConfirmation(ctx, c2bAt("RKTBBBB001", r.acct.Code, "50.00", paid))
 	if g, _ := r.svc.GetOrder(b.ID); g.Status != store.OrderPaid {

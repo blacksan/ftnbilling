@@ -100,8 +100,9 @@ type Mpesa struct {
 	closed bool
 	stop   chan struct{}
 
-	pushTO time.Duration // 0 = defaultPushTimeout; guarded by mu
-	alert  func(string)  // owner alert for a payment that was not credited; guarded by mu
+	pushTO  time.Duration   // 0 = defaultPushTimeout; guarded by mu
+	alerted map[string]bool // held receipts already announced; guarded by mu
+	alert   func(string)    // owner alert for a payment that was not credited; guarded by mu
 
 	legacyQueryUntil time.Time // the old STK callback form (?t=) is accepted until then
 }
@@ -785,6 +786,21 @@ func (m *Mpesa) completeOrder(ctx context.Context, order store.Order, receipt st
 	return err
 }
 
+// firstAlert is true once per held receipt (per process), so a redelivery does
+// not alert the owners again.
+func (m *Mpesa) firstAlert(key string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.alerted == nil || len(m.alerted) > 2000 {
+		m.alerted = map[string]bool{}
+	}
+	if m.alerted[key] {
+		return false
+	}
+	m.alerted[key] = true
+	return true
+}
+
 func (m *Mpesa) tell(msg string) {
 	m.log.Warn(msg)
 	m.mu.Lock()
@@ -1093,12 +1109,20 @@ func (m *Mpesa) c2b(ctx context.Context, body []byte) (C2BResponse, error) {
 	}
 	kind, order, acct := m.refKind(p.BillRefNumber, amt)
 	if kind == "account" && !paidAt.IsZero() && m.ledgerStatus(p.TransID) == "" {
+		if _, dup := m.c.PossibleManualDuplicate(acct.ID, amount, paidAt); dup {
+			kind = "held" // may be the money of a Mark paid: hold it, do not give it to another order
+		}
+	}
+	if kind == "account" && !paidAt.IsZero() && m.ledgerStatus(p.TransID) == "" {
 		// The STK push also reports to the Paybill with the account code. If the
 		// flat has exactly one unpaid M-Pesa order for this amount, this is its
 		// payment: complete that order, so the customer's wait page closes too.
 		if open := m.openOrders(acct.ID, "", amount, false, paidAt.Add(time.Minute)); len(open) == 1 {
 			kind, order = "order", open[0]
 		}
+	}
+	if kind == "held" {
+		kind = "account"
 	}
 	switch kind {
 	case "order": // an STK push also triggers C2B; the reference may be the order id
@@ -1121,7 +1145,7 @@ func (m *Mpesa) c2b(ctx context.Context, body []byte) (C2BResponse, error) {
 		}
 		if held, _, err := m.c.Credit(ctx, billing.CreditInput{Key: p.TransID, Method: "mpesa-c2b", AccountID: acct.ID, PackageID: pkg.ID,
 			AmountKES: amount, Phone: p.MSISDN, Name: name, BillRef: p.BillRefNumber, PaidAt: paidAt}); err == nil {
-			if held.Status == store.PayUnmatched && strings.HasPrefix(held.Note, "possible duplicate of manual payment") && m.now().Sub(held.CreatedAt) < 10*time.Second {
+			if held.Status == store.PayUnmatched && strings.HasPrefix(held.Note, "possible duplicate of manual payment") && m.firstAlert(held.Key) {
 				m.tell("M-Pesa payment " + held.Key + " (KES " + strconv.Itoa(amount) + ") for flat " + acct.Flat + " is held, not credited: " + held.Note + " Open Unmatched payments.")
 			}
 		} else {
