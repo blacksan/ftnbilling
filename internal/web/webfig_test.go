@@ -880,7 +880,7 @@ func TestWebFigOneOriginHardening(t *testing.T) {
 	// the open response wipes what an earlier router left in this browser
 	tok := ticketOf(t, r.adminReq(r.br, "POST", "/admin/routers/webfig", url.Values{"id": {r.site}}))
 	resp := r.techReq("GET", "/_ftn/open?t="+tok, r.clientIP, nil, nil, wc)
-	if got := resp.Header.Get("Clear-Site-Data"); got != `"cache", "storage"` {
+	if got := resp.Header.Get("Clear-Site-Data"); got != `"storage"` {
 		t.Fatalf("open: Clear-Site-Data %q", got)
 	}
 	wc = nil
@@ -921,7 +921,7 @@ func TestWebFigOneOriginHardening(t *testing.T) {
 	// a session that ended wipes the browser's copy too
 	r.advance(31 * time.Minute)
 	resp = r.techReq("GET", "/", r.clientIP, nil, nil, wc)
-	if resp.StatusCode != 401 || resp.Header.Get("Clear-Site-Data") != `"cache", "storage"` {
+	if resp.StatusCode != 401 || resp.Header.Get("Clear-Site-Data") != `"storage"` {
 		t.Fatalf("ended session: %d %q", resp.StatusCode, resp.Header.Get("Clear-Site-Data"))
 	}
 	// a request with no cookie at all gets no wipe header
@@ -1274,6 +1274,7 @@ func TestWebFigCacheNeedsSessionAndIsPerRouter(t *testing.T) {
 }
 
 func tagOf(r *wfRig) string { v, _ := r.tag.Load().(string); return v }
+
 // Chrome checks form-action against where a form's redirect lands. "Open WebFig"
 // posts to the admin and is redirected to the WebFig host, so admin pages must
 // allow that host in form-action, or Chrome blocks the redirect.

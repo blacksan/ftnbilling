@@ -274,7 +274,9 @@ render_webfig_block() {
   printf '# the one-time ticket an owner gets after a fresh password and code, and proxies to that one\n'
   printf '# router over the tunnel. Same rule as above: Caddy is the only proxy in front of it. No gzip\n'
   printf '# here: compressing can hold back WebFig'"'"'s long requests.\n'
-  printf '%s {\n\treverse_proxy 127.0.0.1:%s {\n\t\tflush_interval -1\n\t}\n}\n' "$WEBFIG_DOMAIN" "${WEBFIG_PORT:-8082}"
+  printf '# Access log to the journal (journalctl -u caddy): the ticket (?t=) and cookies are removed.\n'
+  printf '# X-Ftn-Proto tells the app the browser'"'"'s protocol (HTTP/1.1, HTTP/2.0 or HTTP/3.0) for its own log.\n'
+  printf '%s {\n\tlog {\n\t\tformat filter {\n\t\t\trequest>uri query {\n\t\t\t\tdelete t\n\t\t\t}\n\t\t\trequest>headers>Cookie delete\n\t\t}\n\t}\n\treverse_proxy 127.0.0.1:%s {\n\t\tflush_interval -1\n\t\theader_up X-Ftn-Proto {http.request.proto}\n\t}\n}\n' "$WEBFIG_DOMAIN" "${WEBFIG_PORT:-8082}"
 }
 # int2ip_masked ADDR BITS [N]: the network address of ADDR/BITS, plus N.
 int2ip_masked() {

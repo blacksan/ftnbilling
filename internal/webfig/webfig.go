@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -106,6 +107,8 @@ type Options struct {
 	CacheBytes int64
 	// SlotWait is how long a request over a limit waits for a free slot (default SlotWait).
 	SlotWait time.Duration
+	// Log receives one line per proxied request (rate-limited, see reqlog.go); nil = no request log.
+	Log *slog.Logger
 }
 
 // Session is one WebFig session: one browser, one router.
@@ -152,6 +155,7 @@ type Manager struct {
 	jsTotal int
 	px      *proxyState
 	cache   *fileCache
+	rl      reqLimiter
 }
 
 // New returns a Manager.

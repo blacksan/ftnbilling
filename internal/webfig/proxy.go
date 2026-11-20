@@ -46,9 +46,13 @@ func newProxyState(m *Manager) *proxyState {
 	}}
 }
 
-// clearSiteData wipes caches, storage and service workers of the WebFig origin
-// (not cookies: the open response sets the new one).
-const clearSiteData = `"cache", "storage"`
+// clearSiteData wipes storage and service workers of the WebFig origin (not
+// cookies: the open response sets the new one). No "cache": Chrome blocks the
+// navigation while it walks its whole HTTP cache for that directive, which can
+// take many seconds (WebFig looked dead and the owner opened it again and
+// again); every router response here is no-store anyway, and the static files
+// that may be cached are keyed per router on the server, not in the browser.
+const clearSiteData = `"storage"`
 
 const noSessionPage = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>WebFig</title>` +
 	`<body style="font:16px/1.45 system-ui,sans-serif;background:#0E1420;color:#F1F5F9;display:grid;place-items:center;height:90vh;margin:0;padding:16px;text-align:center"><p>Open WebFig from the router page in the admin.</p>`
@@ -109,7 +113,11 @@ func (m *Manager) Handler() http.Handler {
 	return http.HandlerFunc(m.serve)
 }
 
-func (m *Manager) serve(w http.ResponseWriter, r *http.Request) {
+func (m *Manager) serve(rw http.ResponseWriter, r *http.Request) {
+	lw := &logWriter{ResponseWriter: rw}
+	w := http.ResponseWriter(lw)
+	rec := reqRecord{start: time.Now()}
+	defer func() { m.logRequest(r, lw, &rec) }()
 	m.baseHeaders(w)
 	if r.Method == http.MethodConnect || r.Method == http.MethodTrace {
 		plain(w, http.StatusMethodNotAllowed, "Method not allowed.")
@@ -148,11 +156,14 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, tg, ok := m.lookup(cv)
 	if !ok {
-		if cv != "" {
-			// The session ended: drop the cookie and what the router left in this browser.
+		// The session ended: drop the cookie and what the router left in this browser, but only on a page load.
+		// A script or /jsproxy call that left with the previous cookie and lands after the owner opened WebFig
+		// again would otherwise delete the NEW cookie (same name and path) and clear the new page's storage.
+		if cv != "" && isNavigation(r) {
 			http.SetCookie(w, m.cookie("", -1))
 			w.Header().Set("Clear-Site-Data", clearSiteData)
 		}
+		rec.note = "no session"
 		plain(w, http.StatusUnauthorized, "")
 		return
 	}
@@ -165,14 +176,22 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if static {
 		if e := m.cache.get(sess.SiteID, ver, r); e != nil {
+			rec.site, rec.note = sess.SiteID, "cache hit"
 			m.serveCached(w, e)
 			m.touch(sess.hash)
 			return
 		}
 	}
 	// /jsproxy calls are long-lived: they have their own small pools so the files never wait behind them.
+	rec.site = sess.SiteID
+	waitStart := time.Now()
 	release, ok := m.acquireWait(r.Context(), sess.SiteID, sess.hash, isJSProxy(r))
+	rec.wait = time.Since(waitStart)
 	if !ok {
+		rec.note = "no slot"
+		if r.Context().Err() != nil {
+			rec.note = "client left while waiting for a slot"
+		}
 		w.Header().Set("Retry-After", "5")
 		plain(w, http.StatusServiceUnavailable, "Too many WebFig requests at once for this router. Wait a moment and reload.")
 		return
@@ -220,6 +239,11 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request) {
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			rec.upErr = err
+			if r.Context().Err() != nil {
+				rec.note = "client went away"
+				return // the browser went away (Chrome cancels freely): nothing to answer
+			}
 			m.baseHeaders(w)
 			plain(w, http.StatusBadGateway, "The router did not answer on its web port. Check that the router is online, then reload.")
 		},
@@ -230,6 +254,13 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request) {
 		delete(w.Header(), k)
 	}
 	rp.ServeHTTP(w, r.WithContext(ctx))
+}
+
+// isNavigation: a top-level page load (Sec-Fetch-* are sent by every current browser; a
+// browser without them is treated as a navigation, as before).
+func isNavigation(r *http.Request) bool {
+	mode := r.Header.Get("Sec-Fetch-Mode")
+	return mode == "" || mode == "navigate"
 }
 
 func isJSProxy(r *http.Request) bool {

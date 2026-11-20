@@ -677,7 +677,7 @@ func TestInstallCaddyfileWithWebFig(t *testing.T) {
 	if wf := on[strings.Index(on, "tech.ftw.co.ke {"):]; strings.Contains(wf, "encode") {
 		t.Errorf("the WebFig site must not compress (long requests):\n%s", wf)
 	}
-	if site := on[strings.Index(on, "tech.ftw.co.ke {"):]; strings.Contains(site, "header_up") || strings.Contains(site, "trusted_proxies") {
+	if site := on[strings.Index(on, "tech.ftw.co.ke {"):]; strings.Contains(site, "header_up X-Forwarded") || strings.Contains(site, "header_up -X-Forwarded") || strings.Contains(site, "trusted_proxies") {
 		t.Errorf("the WebFig site must not touch X-Forwarded-For handling:\n%s", on)
 	}
 }

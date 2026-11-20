@@ -64,6 +64,7 @@ func (s *Server) initWebFig() {
 		UserOK:    func(id string) bool { u, ok := s.userByID(id); return ok && !u.Disabled && u.Role == store.RoleOwner },
 		ClientIP:  realIP,
 		Now:       s.wfNow,
+		Log:       s.log,
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if s.wf.dial != nil {
 				return s.wf.dial(ctx, network, addr)
