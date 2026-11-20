@@ -13,7 +13,7 @@ import (
 const (
 	ColDown  = "#0072b2" // download / primary
 	ColUp    = "#009e73" // upload
-	ColAqua  = "#56b4e9"
+	ColAqua  = "#1b7fb8"
 	ColViol  = "#b8628f"
 	ColMag   = "#64748b"
 	ColCap   = "#c0283d" // capacity / limit line
@@ -72,19 +72,56 @@ func fmtTick(v float64) string {
 // chartBox wraps a chart so that on a narrow screen it scrolls sideways instead of
 // shrinking: the SVG never renders narrower than its drawing width, so axis text keeps
 // at least its designed pixel size (11 to 14 px) on every viewport.
+// tokClass maps a series colour onto the theme's chart token (and the danger colour for the
+// capacity line), so the SVG follows light/dark; the hex stays as the light fallback.
+func tokClass(kind, c string) string {
+	t := ""
+	switch strings.ToLower(c) {
+	case ColDown:
+		t = "1"
+	case ColUp:
+		t = "2"
+	case ColViol:
+		t = "3"
+	case ColMag:
+		t = "4"
+	case ColAqua:
+		t = "5"
+	case ColCap:
+		t = "b"
+	}
+	if t == "" {
+		return ""
+	}
+	return ` class="` + kind + t + `"`
+}
+
+// seriesDash gives each series its own dash pattern, so lines differ by more than colour.
+func seriesDash(i int) string {
+	switch i % 4 {
+	case 1:
+		return ` stroke-dasharray="9 3"`
+	case 2:
+		return ` stroke-dasharray="1 4.5"`
+	case 3:
+		return ` stroke-dasharray="9 3 2 3"`
+	}
+	return ""
+}
+
 func chartBox(svg string) template.HTML {
 	return template.HTML(`<div class="chartbox" tabindex="0" role="region" aria-label="Chart, scrolls sideways on small screens">` + svg + `</div>`)
 }
 
 func svgOpen(w, h int, label string) *strings.Builder {
 	var b strings.Builder
-	fmt.Fprintf(&b, `<svg class="chart" viewBox="0 0 %d %d" role="img" aria-label="%s" style="width:100%%;min-width:%dpx;max-width:%dpx;height:auto;display:block;font-family:inherit">`, w, h, esc(label), w, w*5/4)
+	fmt.Fprintf(&b, `<svg class="chart" viewBox="0 0 %d %d" role="img" aria-label="%s" style="--w:%dpx;width:100%%;max-width:%dpx;height:auto;display:block;font-family:inherit">`, w, h, esc(label), w, w*5/4)
 	return &b
 }
 
 // emptyChart is the no-data state: a plain themed message (no SVG, so its text never scales).
 func emptyChart(w, h int, label, msg string) template.HTML {
-	return template.HTML(`<p class="muted nil" role="img" aria-label="` + esc(label) + `">` + esc(msg) + `</p>`)
+	return template.HTML(`<p class="muted nil">` + esc(msg) + `</p>`)
 }
 
 // LineChart draws a time series chart as inline SVG. It never panics on empty
@@ -163,17 +200,17 @@ func LineChart(o LineOpts) template.HTML {
 		fmt.Fprintf(b, `<text x="%.1f" y="%d" text-anchor="%s" font-size="11.5" class="cm" fill="%s">%s</text>`, x(i), H-9, anchor, colMuted, esc(o.T[i].In(EAT).Format(layout)))
 	}
 	if o.CapLine > 0 {
-		fmt.Fprintf(b, `<line x1="%d" x2="%d" y1="%.1f" y2="%.1f" stroke="%s" stroke-width="1.5" stroke-dasharray="6 4"/>`, L, W-R, y(o.CapLine), y(o.CapLine), ColCap)
+		fmt.Fprintf(b, `<line x1="%d" x2="%d" y1="%.1f" y2="%.1f"%s stroke="%s" stroke-width="1.5" stroke-dasharray="3 3"/>`, L, W-R, y(o.CapLine), y(o.CapLine), tokClass("ss", ColCap), ColCap)
 	}
 	// series
-	for _, s := range o.Series {
+	for si, s := range o.Series {
 		var d strings.Builder
 		pen := false
 		runLen := 0
 		lastX, lastY := 0.0, 0.0
 		flush := func() {
 			if runLen == 1 {
-				fmt.Fprintf(b, `<circle cx="%.1f" cy="%.1f" r="2.5" fill="%s"/>`, lastX, lastY, s.Color)
+				fmt.Fprintf(b, `<circle cx="%.1f" cy="%.1f" r="2.5"%s fill="%s"/>`, lastX, lastY, tokClass("fs", s.Color), s.Color)
 			}
 		}
 		for i, v := range s.Vals {
@@ -195,40 +232,28 @@ func LineChart(o LineOpts) template.HTML {
 		}
 		flush()
 		if d.Len() > 0 {
-			fmt.Fprintf(b, `<path d="%s" fill="none" stroke="%s" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`, d.String(), s.Color)
+			fmt.Fprintf(b, `<path d="%s" fill="none"%s stroke="%s" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"%s/>`, d.String(), tokClass("ss", s.Color), s.Color, seriesDash(si))
 		}
 	}
-	// legend (top right)
-	lx := float64(W - R)
-	items := len(o.Series)
+	// legend: HTML under the chart (not inside the scrolling SVG), so series names stay in
+	// view on a phone; each swatch repeats the series' colour and dash pattern.
+	var lg strings.Builder
+	nl := len(o.Series)
 	if o.CapLine > 0 {
-		items++
+		nl++
 	}
-	_ = items
-	type leg struct {
-		name, col string
-		dash      bool
-	}
-	var legs []leg
-	for _, s := range o.Series {
-		legs = append(legs, leg{s.Name, s.Color, false})
-	}
-	if o.CapLine > 0 {
-		legs = append(legs, leg{o.CapLabel, ColCap, true})
-	}
-	for i := len(legs) - 1; i >= 0; i-- {
-		l := legs[i]
-		w := float64(len(l.name))*6.4 + 26
-		lx -= w
-		if l.dash {
-			fmt.Fprintf(b, `<line x1="%.1f" x2="%.1f" y1="11" y2="11" stroke="%s" stroke-width="2" stroke-dasharray="4 3"/>`, lx, lx+16, l.col)
-		} else {
-			fmt.Fprintf(b, `<line x1="%.1f" x2="%.1f" y1="11" y2="11" stroke="%s" stroke-width="3" stroke-linecap="round"/>`, lx, lx+16, l.col)
+	if nl > 0 {
+		lg.WriteString(`<ul class="clegend">`)
+		for si, s := range o.Series {
+			fmt.Fprintf(&lg, `<li><svg class="sw" width="26" height="8" viewBox="0 0 26 8" aria-hidden="true"><line x1="1" x2="25" y1="4" y2="4"%s stroke="%s" stroke-width="3" stroke-linecap="round"%s/></svg>%s</li>`, tokClass("ss", s.Color), s.Color, seriesDash(si), esc(s.Name))
 		}
-		fmt.Fprintf(b, `<text x="%.1f" y="15" font-size="12" class="ci" fill="%s">%s</text>`, lx+20, colInk, esc(l.name))
+		if o.CapLine > 0 {
+			fmt.Fprintf(&lg, `<li><svg class="sw" width="26" height="8" viewBox="0 0 26 8" aria-hidden="true"><line x1="1" x2="25" y1="4" y2="4"%s stroke="%s" stroke-width="2" stroke-dasharray="3 3"/></svg>%s</li>`, tokClass("ss", ColCap), ColCap, esc(o.CapLabel))
+		}
+		lg.WriteString(`</ul>`)
 	}
 	b.WriteString(`</svg>`)
-	return chartBox(b.String())
+	return template.HTML(string(chartBox(b.String())) + lg.String())
 }
 
 // BarRow is one bar of BarsH.
@@ -272,7 +297,7 @@ func BarsH(rows []BarRow, color, empty string) template.HTML {
 		if w < 2 && r.Value > 0 {
 			w = 2
 		}
-		fmt.Fprintf(b, `<rect x="%d" y="%d" width="%.1f" height="16" rx="3" fill="%s"/>`, labW+8, y+4, w, color)
+		fmt.Fprintf(b, `<rect x="%d" y="%d" width="%.1f" height="16" rx="3"%s fill="%s"/>`, labW+8, y+4, w, tokClass("fs", color), color)
 		fmt.Fprintf(b, `<text x="%.1f" y="%d" font-size="12" class="cm" fill="%s">%s</text>`, float64(labW+8)+w+6, y+16, colMuted, esc(r.Text))
 	}
 	b.WriteString(`</svg>`)
@@ -307,7 +332,7 @@ func HourStrip(vals [24]float64) template.HTML {
 			g := 247 + (109-247)*t
 			bl := 247 + (107-247)*t
 			txt := "hd" // cell text: dark on light cells, white on dark ones, in both themes
-			if t > 0.75 {
+			if t > 0.82 {
 				txt = "hw"
 			}
 			fmt.Fprintf(b, `<rect x="%.1f" y="12" width="%.1f" height="36" rx="3" fill="rgb(%.0f,%.0f,%.0f)"><title>%02d:00 EAT: %.1f%%</title></rect>`, x+1, cw-2, r, g, bl, h, v)

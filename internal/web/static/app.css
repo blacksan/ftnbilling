@@ -311,8 +311,10 @@ svg.spark{display:block;overflow:visible}svg.spark .l{fill:none;stroke:currentCo
 svg.chart{font-family:var(--f-sans)}
 svg.chart .ci{fill:var(--ink)}svg.chart .cm{fill:var(--muted)}svg.chart .cg{stroke:var(--chart-grid)}
 svg.chart .cbg{fill:var(--surface);stroke:var(--line)}svg.chart .cna{fill:var(--surface-3)}
+svg.chart .fs1,svg.sw .fs1{fill:var(--chart-1)}svg.chart .ss1,svg.sw .ss1{stroke:var(--chart-1)}svg.chart .fs2,svg.sw .fs2{fill:var(--chart-2)}svg.chart .ss2,svg.sw .ss2{stroke:var(--chart-2)}svg.chart .fs3,svg.sw .fs3{fill:var(--chart-3)}svg.chart .ss3,svg.sw .ss3{stroke:var(--chart-3)}svg.chart .fs4,svg.sw .fs4{fill:var(--chart-4)}svg.chart .ss4,svg.sw .ss4{stroke:var(--chart-4)}svg.chart .fs5,svg.sw .fs5{fill:var(--chart-5)}svg.chart .ss5,svg.sw .ss5{stroke:var(--chart-5)}svg.chart .fsb,svg.sw .fsb{fill:var(--bad)}svg.chart .ssb,svg.sw .ssb{stroke:var(--bad)}
 svg.chart .hd{fill:#0F172A}svg.chart .hw{fill:#FFFFFF}
-/* a chart never renders narrower than it was drawn, so its axis text keeps its pixel size; on a phone it scrolls */
+/* below 900px a chart never renders narrower than it was drawn (--w), so its axis text keeps its pixel size and it scrolls sideways; above that it scales by at most ~10% */
+@media(max-width:900px){svg.chart{min-width:var(--w)}}
 .chartbox{overflow-x:auto;max-width:100%;scrollbar-width:thin}
 .card svg,.tw svg,.panel svg{max-width:100%;height:auto}
 .ustrip{display:flex;gap:2px;margin:8px 0 4px}.ustrip i{flex:1;min-width:3px;height:38px;border-radius:3px;background:var(--surface-3)}.ustrip i.a{background:var(--ok)}.ustrip i.b{background:var(--info)}.ustrip i.c{background:var(--warn)}.ustrip i.d{background:var(--bad)}
@@ -463,3 +465,4 @@ body.vprint{background:#fff;color:#000;padding:16px;font:14px var(--f-sans)}
 .belongs{margin:0 0 var(--sp-2);padding:var(--sp-2) var(--sp-3);border-radius:var(--r1);background:var(--warn-soft);color:var(--warn);border-left:3px solid var(--warn-fill);font-size:var(--fs-13);white-space:normal}
 .tw td.act-wrap{white-space:normal;max-width:380px;padding-top:var(--sp-2);padding-bottom:var(--sp-2)}.act-wrap .row{flex-wrap:wrap}
 .panel>h2+.tw,.panel>h2+table,.panel>h2+.chartbox{margin-top:var(--sp-3)}
+.clegend{display:flex;flex-wrap:wrap;gap:var(--sp-1) var(--sp-4);list-style:none;margin:var(--sp-2) 0 0;padding:0;font-size:var(--fs-13);color:var(--ink-2)}.clegend li{display:inline-flex;align-items:center;gap:var(--sp-2)}.clegend svg{flex:0 0 auto}

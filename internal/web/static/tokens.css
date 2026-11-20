@@ -19,7 +19,7 @@
   --warn:#7A5800;--warn-soft:#FFF6D6;--warn-fill:#F5B800;--on-warn-fill:#0F172A;
   --bad:#C0283D;--bad-soft:#FDECEF;
   --info:#1F5FBF;--info-soft:#E8F0FD;
-  --chart-1:#0072B2;--chart-2:#009E73;--chart-3:#B8628F;--chart-4:#64748B;--chart-5:#56B4E9;--chart-grid:#CBD5E1;
+  --chart-1:#0072B2;--chart-2:#009E73;--chart-3:#B8628F;--chart-4:#64748B;--chart-5:#1B7FB8;--chart-grid:#CBD5E1;
   --teal-50:#EDF7F7;--teal-100:#D2EDEC;--teal-200:#A6DAD8;--teal-300:#6FC0BE;--teal-400:#3FA2A0;--teal-500:#238683;--teal-600:#1A6D6B;--teal-700:#175756;--teal-800:#144645;--teal-900:#0F3433;
 }
 /* ---- tokens: dark, when the system asks and nothing is chosen ------------ */

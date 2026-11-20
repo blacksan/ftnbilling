@@ -241,7 +241,8 @@ func (n *notFoundWriter) Unwrap() http.ResponseWriter { return n.ResponseWriter 
 // plain one-line answer.
 func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
-	if strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/pay/cb/") || strings.HasPrefix(p, "/wa/") || strings.HasPrefix(p, "/static/") || strings.HasPrefix(p, "/brand/") || strings.HasPrefix(p, "/j/") {
+	if strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/pay/cb/") || strings.HasPrefix(p, "/wa/") || strings.HasPrefix(p, "/static/") || strings.HasPrefix(p, "/brand/") || strings.HasPrefix(p, "/j/") || s.fromTunnel(r) {
+		// Routers on the tunnel never see a themed page or a link to the admin.
 		http.NotFound(w, r)
 		return
 	}
