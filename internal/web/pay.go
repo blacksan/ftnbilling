@@ -427,7 +427,7 @@ func (s *Server) payStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.log.Warn("payment start failed", "order", o.ID, "method", method, "err", err)
-		_ = s.svc.FailOrder(r.Context(), o.ID, "the payment prompt could not be sent")
+		_ = s.svc.FailOrder(r.Context(), o.ID, billing.ReasonPromptNotSent)
 		again(http.StatusBadGateway, "We could not send the payment prompt. Please try again in a minute, or call "+p.Support+".")
 		return
 	}

@@ -97,7 +97,7 @@ func run(log *slog.Logger) error {
 	mp := payments.NewMpesa(mpesaConf(setm.Effective()), svc, st, log)
 	// Callbacks the database could not take are kept on disk and replayed.
 	mp.SetSpool(payments.NewSpool(filepath.Join(cfg.DataDir, "spool")))
-	mp.SetLegacyQueryUntil(payments.LegacyQueryDeadline(cfg.DataDir, time.Now()))
+	mp.SetLegacyQueryUntil(payments.LegacyQueryDeadline(cfg.DataDir, time.Now(), log.Warn))
 	defer mp.Close()
 	wg.Add(1)
 	go func() {
@@ -150,6 +150,7 @@ func run(log *slog.Logger) error {
 	}
 	webSrv := web.New(cfg, st, svc, providers, mp, mgr, log)
 	webSrv.SetSettings(setm)
+	mp.SetAlert(webSrv.PaymentAlert)
 	webSrv.SetOps(ops)
 	wg.Add(1)
 	go func() {

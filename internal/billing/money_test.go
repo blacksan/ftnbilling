@@ -111,3 +111,40 @@ func TestExpireOrders(t *testing.T) {
 		t.Fatal(g.Status)
 	}
 }
+
+// Expired orders are failed too when their account is deleted or moved.
+func TestDeleteAndMoveFailExpiredOrdersToo(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	siteB, _ := e.addSite(t, "Block B")
+	apt := store.MigratedApartmentID(e.site)
+	e.st.Update(func(d *store.Data) error { // the building must serve the flat's apartment
+		d.ApartmentSites[store.ApartmentSiteKey(apt, siteB)] = store.ApartmentSite{ApartmentID: apt, SiteID: siteB, CreatedAt: e.now}
+		return nil
+	})
+	mk := func(label, mac string) (store.Account, store.Order) {
+		a := e.flat(t, label, mac)
+		o, err := e.svc.CreateOrder(OrderInput{AccountID: a.ID, PackageID: e.pkg("1 Day").ID, Phone: "254712345678", Method: "mpesa"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a, o
+	}
+	a1, o1 := mk("Flat 1", mac1)
+	a2, o2 := mk("Flat 2", "AA:BB:CC:DD:EE:02")
+	e.now = e.now.Add(OrderTTL + time.Minute)
+	if n, _ := e.svc.ExpireOrders(); n != 2 {
+		t.Fatalf("setup: %d", n)
+	}
+	if err := e.svc.MoveAccount(ctx, a1.ID, siteB); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.DeleteAccount(ctx, a2.ID, a2.Code); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{o1.ID, o2.ID} {
+		if g, _ := e.svc.GetOrder(id); g.Status != store.OrderFailed {
+			t.Fatalf("order %s is %s", id, g.Status)
+		}
+	}
+}

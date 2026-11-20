@@ -11,7 +11,13 @@ import (
 // monitoring alerts) that something about sign-in needs a look. It never
 // carries a secret. Without the outbox (tests, or no messaging set up) it only
 // leaves the audit trail the caller already wrote.
-func (s *Server) securityAlert(msg string) {
+func (s *Server) securityAlert(msg string) { s.ownerAlert("Admin sign-in", msg) }
+
+// PaymentAlert tells the owners about a payment that needs a person (it was not
+// credited, and nothing else will say so).
+func (s *Server) PaymentAlert(msg string) { s.ownerAlert("Payment needs attention", msg) }
+
+func (s *Server) ownerAlert(subject, msg string) {
 	if s.alertSink != nil { // tests
 		s.alertSink(msg)
 		return
@@ -27,13 +33,13 @@ func (s *Server) securityAlert(msg string) {
 	for _, to := range live.WAAdminNumbers {
 		m := base
 		m.Channel, m.To, m.Template, m.Lang = notify.ChanWhatsApp, to, notify.TplAdminAlert, live.WALang
-		m.Params = []string{"PROBLEM", "Admin sign-in", "Fast Tech Net", msg, stamp}
-		m.Text = "PROBLEM: Admin sign-in\n" + msg + "\nTime: " + stamp
+		m.Params = []string{"PROBLEM", subject, "Fast Tech Net", msg, stamp}
+		m.Text = "PROBLEM: " + subject + "\n" + msg + "\nTime: " + stamp
 		box.Enqueue(m)
 	}
 	for _, to := range live.AlertEmailTo {
 		m := base
-		m.Channel, m.To, m.Subject = notify.ChanEmail, to, "[Fast Tech Net] Admin sign-in: "+msg
+		m.Channel, m.To, m.Subject = notify.ChanEmail, to, "[Fast Tech Net] "+subject+": "+msg
 		m.Text = msg + "\nTime: " + stamp
 		box.Enqueue(m)
 	}

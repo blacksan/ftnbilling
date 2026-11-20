@@ -100,6 +100,7 @@ type Mpesa struct {
 	stop   chan struct{}
 
 	pushTO time.Duration // 0 = defaultPushTimeout; guarded by mu
+	alert  func(string)  // owner alert for a payment that was not credited; guarded by mu
 
 	legacyQueryUntil time.Time // the old STK callback form (?t=) is accepted until then
 }
@@ -731,8 +732,11 @@ func (m *Mpesa) stk(ctx context.Context, body []byte) error {
 		return errors.New("stk callback without receipt number")
 	}
 	inLedger := m.ledgerStatus(receipt)
-	if (found && order.Status == store.OrderPaid && strings.EqualFold(order.Receipt, receipt)) || (!found && inLedger != "") {
+	if found && order.Status == store.OrderPaid && strings.EqualFold(order.Receipt, receipt) {
 		return nil // a repeated delivery
+	}
+	if !found && inLedger != "" && inLedger != store.PayApplied {
+		return nil // already decided or waiting in Unmatched
 	}
 	// A receipt already credited needs no confirmation; the order is only closed.
 	if !verifiedCtx(ctx) && m.confirmOn() && inLedger != store.PayApplied {
@@ -740,10 +744,10 @@ func (m *Mpesa) stk(ctx context.Context, body []byte) error {
 	}
 	paidAt := m.transTime(date)
 	if !found {
-		return m.stkUnknownCheckout(ctx, k.CheckoutRequestID, receipt, phone, int(math.Floor(amount)), paidAt)
+		return m.stkUnknownCheckout(ctx, k.CheckoutRequestID, receipt, phone, int(math.Floor(amount)), paidAt, inLedger == store.PayApplied)
 	}
 	if order.Status == store.OrderPaid {
-		return m.orderAlreadyPaid(ctx, order, receipt, int(math.Floor(amount)), phone, paidAt)
+		return m.orderAlreadyPaid(ctx, order, "mpesa-stk", receipt, int(math.Floor(amount)), phone, paidAt)
 	}
 	if amount < float64(order.AmountKES) {
 		m.log.Warn("stk amount below order amount", "order", order.ID, "paid", amount, "expected", order.AmountKES)
@@ -753,7 +757,33 @@ func (m *Mpesa) stk(ctx context.Context, body []byte) error {
 		}
 		return m.c.FailOrder(ctx, order.ID, "amount paid is less than the price")
 	}
-	return m.c.CompleteOrderAt(ctx, order.ID, receipt, paidAt)
+	return m.completeOrder(ctx, order, receipt, paidAt)
+}
+
+// completeOrder credits an order. A receipt that was already decided (refunded
+// or ignored) is not credited: that leaves the order unpaid, so the owners are
+// told.
+func (m *Mpesa) completeOrder(ctx context.Context, order store.Order, receipt string, paidAt time.Time) error {
+	err := m.c.CompleteOrderAt(ctx, order.ID, receipt, paidAt)
+	if errors.Is(err, billing.ErrBadState) {
+		msg := "M-Pesa payment " + strings.ToUpper(receipt) + " (KES " + strconv.Itoa(order.AmountKES) + ") was NOT credited to order " + order.ID + ": " + err.Error() + ". Check Payments."
+		m.log.Error(msg)
+		m.mu.Lock()
+		al := m.alert
+		m.mu.Unlock()
+		if al != nil {
+			al(msg)
+		}
+		return nil // nothing more a retry could do
+	}
+	return err
+}
+
+// SetAlert sets what tells the owners about a payment that needs a person.
+func (m *Mpesa) SetAlert(f func(msg string)) {
+	m.mu.Lock()
+	m.alert = f
+	m.mu.Unlock()
 }
 
 // ledgerStatus is the status of a receipt in the ledger, "" if it is not there.
@@ -783,32 +813,58 @@ const matchWindow = time.Hour
 // (timeout, restart, a callback faster than the store). The money is never
 // dropped: an unambiguous recent order for the same phone and amount is
 // credited; anything else goes to Unmatched with the phone and receipt.
-func (m *Mpesa) stkUnknownCheckout(ctx context.Context, checkout, receipt, phone string, amount int, paidAt time.Time) error {
-	var match store.Order
-	n := 0
-	now := m.now()
-	m.st.View(func(d *store.Data) {
-		for _, o := range d.Orders {
-			if o.Method == "mpesa" && o.CheckoutRequestID == "" && o.Status != store.OrderPaid && phone != "" && o.Phone == phone &&
-				o.AmountKES == amount && now.Sub(o.CreatedAt) <= matchWindow && !o.CreatedAt.After(now.Add(time.Minute)) {
-				match = o
-				n++
-			}
-		}
-	})
-	if n == 1 {
+func (m *Mpesa) stkUnknownCheckout(ctx context.Context, checkout, receipt, phone string, amount int, paidAt time.Time, inLedger bool) error {
+	cand := m.openOrders("", phone, amount, true)
+	if len(cand) == 1 {
+		match := cand[0]
 		m.log.Warn("stk result for an unknown checkout id matched to the only recent order for this phone and amount", "order", match.ID, "checkout", checkout)
 		if err := m.c.SetCheckoutID(match.ID, checkout); err != nil && IsPersistError(err) {
 			return err
 		}
-		return m.c.CompleteOrderAt(ctx, match.ID, receipt, paidAt)
+		return m.completeOrder(ctx, match, receipt, paidAt)
+	}
+	if inLedger {
+		return nil // credited by another route already; no order to close
 	}
 	note := "STK payment for a checkout id this system never stored (the prompt was sent but the answer was lost)"
-	if n > 1 {
-		note = "STK payment for an unknown checkout id; " + strconv.Itoa(n) + " recent orders have the same phone and amount"
+	if len(cand) > 1 {
+		note = "STK payment for an unknown checkout id; " + strconv.Itoa(len(cand)) + " recent orders have the same phone and amount"
 	}
 	m.log.Warn("stk success for an unknown checkout id: recorded as unmatched", "checkout", checkout, "receipt", receipt, "amount", amount)
 	return m.unmatched(billing.UnmatchedInput{Key: receipt, Method: "mpesa-stk", AmountKES: amount, Phone: phone, Note: note, PaidAt: paidAt})
+}
+
+// openOrders lists the unpaid mpesa orders of the last hour that could be the
+// one a payment belongs to: by account (accountID) or by phone, with this
+// amount. Only orders with no stored checkout id count when noCheckout is set.
+// Pending and expired orders are preferred; a failed one is used only when
+// there is no other, and never one that failed because Daraja refused the push.
+func (m *Mpesa) openOrders(accountID, phone string, amount int, noCheckout bool) []store.Order {
+	var live, failed []store.Order
+	now := m.now()
+	m.st.View(func(d *store.Data) {
+		for _, o := range d.Orders {
+			if o.Method != "mpesa" || o.Status == store.OrderPaid || o.AmountKES != amount || now.Sub(o.CreatedAt) > matchWindow || o.CreatedAt.After(now.Add(time.Minute)) {
+				continue
+			}
+			if (accountID != "" && o.AccountID != accountID) || (phone != "" && o.Phone != phone) || (accountID == "" && phone == "") {
+				continue
+			}
+			if noCheckout && o.CheckoutRequestID != "" {
+				continue
+			}
+			switch {
+			case o.Status == store.OrderPending || o.Status == store.OrderExpired:
+				live = append(live, o)
+			case o.Status == store.OrderFailed && o.Reason != billing.ReasonPromptNotSent:
+				failed = append(failed, o)
+			}
+		}
+	})
+	if len(live) > 0 {
+		return live
+	}
+	return failed
 }
 
 // orderAlreadyPaid handles a payment confirmation for an order that is paid.
@@ -816,14 +872,14 @@ func (m *Mpesa) stkUnknownCheckout(ctx context.Context, checkout, receipt, phone
 // marked paid by hand is the real confirmation of that money and replaces the
 // manual receipt without crediting again. Any other receipt is a second payment
 // that is kept, visibly, in Unmatched.
-func (m *Mpesa) orderAlreadyPaid(ctx context.Context, order store.Order, receipt string, amount int, phone string, paidAt time.Time) error {
+func (m *Mpesa) orderAlreadyPaid(ctx context.Context, order store.Order, method, receipt string, amount int, phone string, paidAt time.Time) error {
 	switch {
 	case strings.EqualFold(order.Receipt, receipt):
 		return nil
 	case strings.HasPrefix(strings.ToUpper(order.Receipt), billing.ManualPrefix):
-		return m.c.CompleteOrderAt(ctx, order.ID, receipt, paidAt)
+		return m.completeOrder(ctx, order, receipt, paidAt)
 	}
-	return m.unmatched(billing.UnmatchedInput{Key: receipt, Method: "mpesa-stk", AmountKES: amount, Phone: phone, BillRef: order.ID,
+	return m.unmatched(billing.UnmatchedInput{Key: receipt, Method: method, AmountKES: amount, Phone: phone, BillRef: order.ID,
 		AccountID: order.AccountID, Ord: order.ID, PaidAt: paidAt,
 		Note: "a second payment for an order that was already paid with " + order.Receipt + ": refund it or assign it"})
 }
@@ -1013,15 +1069,23 @@ func (m *Mpesa) c2b(ctx context.Context, body []byte) (C2BResponse, error) {
 			Phone: p.MSISDN, Name: name, BillRef: p.BillRefNumber, AccountID: accountID, Note: note, PaidAt: paidAt})
 	}
 	kind, order, acct := m.refKind(p.BillRefNumber, amt)
+	if kind == "account" {
+		// The STK push also reports to the Paybill with the account code. If the
+		// flat has exactly one unpaid M-Pesa order for this amount, this is its
+		// payment: complete that order, so the customer's wait page closes too.
+		if open := m.openOrders(acct.ID, "", amount, false); len(open) == 1 {
+			kind, order = "order", open[0]
+		}
+	}
 	switch kind {
 	case "order": // an STK push also triggers C2B; the reference may be the order id
 		if order.Status == store.OrderPaid {
-			return C2BAccept, m.orderAlreadyPaid(ctx, order, p.TransID, amount, p.MSISDN, paidAt)
+			return C2BAccept, m.orderAlreadyPaid(ctx, order, "mpesa-c2b", p.TransID, amount, p.MSISDN, paidAt)
 		}
 		if amount < order.AmountKES {
 			return C2BAccept, unmatched(order.AccountID, "amount below the package price")
 		}
-		if err := m.c.CompleteOrderAt(ctx, order.ID, p.TransID, paidAt); err != nil {
+		if err := m.completeOrder(ctx, order, p.TransID, paidAt); err != nil {
 			if IsPersistError(err) {
 				return C2BAccept, err
 			}
@@ -1050,7 +1114,7 @@ func (m *Mpesa) c2b(ctx context.Context, body []byte) (C2BResponse, error) {
 // LegacyQueryDeadline returns when the old STK callback form stops working. The
 // first run of this version writes now+LegacyQueryWindow to dir/stk-query-until
 // and later runs read it back, so a restart does not extend the window.
-func LegacyQueryDeadline(dir string, now time.Time) time.Time {
+func LegacyQueryDeadline(dir string, now time.Time, warn func(msg string, args ...any)) time.Time {
 	path := filepath.Join(dir, "stk-query-until")
 	if b, err := os.ReadFile(path); err == nil {
 		if t, err := time.Parse(time.RFC3339, strings.TrimSpace(string(b))); err == nil {
@@ -1059,6 +1123,17 @@ func LegacyQueryDeadline(dir string, now time.Time) time.Time {
 	}
 	t := now.Add(LegacyQueryWindow)
 	_ = os.MkdirAll(dir, 0o700)
-	_ = store.WriteFileAtomic(path, []byte(t.UTC().Format(time.RFC3339)+"\n"))
+	if err := store.WriteFileAtomic(path, []byte(t.UTC().Format(time.RFC3339)+"\n")); err != nil {
+		// Without the file every restart would start a new 30 days. Use a fixed
+		// end instead, so a read-only data directory cannot keep the old form alive.
+		if warn != nil {
+			warn("cannot save the end of the old STK callback window (" + path + "): using the fixed date " + LegacyQueryFallback.Format("2006-01-02"))
+		}
+		return LegacyQueryFallback
+	}
 	return t
 }
+
+// LegacyQueryFallback is when the old STK callback form ends if the data
+// directory cannot hold the deadline file: 30 days after this version was built.
+var LegacyQueryFallback = time.Date(2026, 12, 20, 0, 0, 0, 0, time.UTC)

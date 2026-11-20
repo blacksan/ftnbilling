@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -231,6 +232,7 @@ func TestC2BUnmatchedThenSTKCreditsTheAccountOnce(t *testing.T) {
 	ctx := context.Background()
 	o := r.order(t, "1 Day") // KES 50
 	r.mp.Start(ctx, o)
+	r.order(t, "1 Day") // a second open order: the Paybill confirmation cannot tell which one it is for
 	p := r.pkg("1 Day") // admin re-prices before the confirmation lands
 	p.PriceKES = 60
 	if _, err := r.svc.SavePackage(ctx, p); err != nil {
@@ -320,19 +322,233 @@ func (r *rig) wantLinked(t *testing.T, o store.Order, receipt string) {
 	}
 }
 
-func TestMarkPaidThenTheRealPaybillConfirmationIsLinkedNotCreditedTwice(t *testing.T) {
+func TestMarkPaidThenThePaybillConfirmationWaitsForAPersonThenLinksToTheOrder(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
 	o := r.order(t, "1 Day")
 	r.mp.Start(ctx, o)
 	markPaid(t, r, o)
 	first := r.expiry()
-	r.mp.HandleC2BConfirmation(ctx, c2b("RKTREAL002", r.acct.Code, "50.00")) // BillRef = the account code, a new key
+	// The confirmation carries the account code, not the order: it may be the same money or a new payment.
+	r.mp.HandleC2BConfirmation(ctx, c2b("RKTREAL002", r.acct.Code, "50.00"))
+	r.expectExpiry(t, first, "no second credit without a person")
+	p, ok := r.payment("RKTREAL002")
+	if !ok || p.Status != store.PayUnmatched || !strings.Contains(p.Note, "possible duplicate of manual payment MANUAL-") {
+		t.Fatalf("must be visible in Unmatched, never silently ignored: %+v", p)
+	}
+	// The STK result of the same order proves it is the confirmation of the manual payment.
 	r.mp.HandleSTKCallback(ctx, stkCB("ws_CO_123", 0, "RKTREAL002", 50))
 	r.expectExpiry(t, first, "double credit")
 	r.wantLinked(t, o, "RKTREAL002")
 }
 
+// The review's probe: Mark paid on order A; the same flat buys again (order B,
+// same amount); the Paybill confirmation for B arrives before the STK result.
+func TestMarkPaidOnAThenPaybillFirstForBCreditsB(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	a := r.order(t, "1 Day")
+	r.mp.Start(ctx, a)
+	markPaid(t, r, a)
+	afterA := r.expiry()
+	b := r.order(t, "1 Day")
+	if err := r.svc.SetCheckoutID(b.ID, "ws_CO_B"); err != nil {
+		t.Fatal(err)
+	}
+	r.mp.HandleC2BConfirmation(ctx, c2b("RKTBBBB001", r.acct.Code, "50.00"))
+	if g, _ := r.svc.GetOrder(b.ID); g.Status != store.OrderPaid {
+		t.Fatalf("order B is %s after the Paybill confirmation: B's money was swallowed", g.Status)
+	}
+	r.mp.HandleSTKCallback(ctx, stkCB("ws_CO_B", 0, "RKTBBBB001", 50))
+	r.expectExpiry(t, afterA.Add(24*time.Hour), "B adds its own day")
+	if r.revenue() != 100 || r.countStatus(store.PayUnmatched) != 0 {
+		t.Fatalf("revenue %d, unmatched %d, rows %+v", r.revenue(), r.countStatus(store.PayUnmatched), r.ledger())
+	}
+}
+
+// Same, but the STK result for B arrives first.
+func TestMarkPaidOnAThenSTKFirstForBCreditsB(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	a := r.order(t, "1 Day")
+	r.mp.Start(ctx, a)
+	markPaid(t, r, a)
+	afterA := r.expiry()
+	b := r.order(t, "1 Day")
+	r.svc.SetCheckoutID(b.ID, "ws_CO_B")
+	r.mp.HandleSTKCallback(ctx, stkCB("ws_CO_B", 0, "RKTBBBB002", 50))
+	r.mp.HandleC2BConfirmation(ctx, c2b("RKTBBBB002", r.acct.Code, "50.00"))
+	r.expectExpiry(t, afterA.Add(24*time.Hour), "B adds its own day, once")
+	if r.revenue() != 100 {
+		t.Fatalf("revenue %d", r.revenue())
+	}
+}
+
+// A plain Paybill payment of the same amount after a Mark paid, with no open
+// order, is not credited blindly and not hidden: a person decides in Unmatched.
+func TestPlainPaybillAfterMarkPaidWaitsInUnmatched(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	o := r.order(t, "1 Day")
+	r.mp.Start(ctx, o)
+	markPaid(t, r, o)
+	first := r.expiry()
+	r.mp.HandleC2BConfirmation(ctx, c2b("RKTPLAIN01", r.acct.Code, "50.00"))
+	r.expectExpiry(t, first, "held")
+	if p, _ := r.payment("RKTPLAIN01"); p.Status != store.PayUnmatched || !strings.Contains(p.Note, "possible duplicate") {
+		t.Fatalf("%+v", p)
+	}
+	// The admin decides it is a new payment: assigning needs the explicit yes.
+	pk := r.pkg("1 Day")
+	err := r.svc.AssignPayment(ctx, "RKTPLAIN01", r.acct.ID, pk.ID, "")
+	var dup *billing.DuplicateError
+	if !errors.As(err, &dup) || !errors.Is(err, billing.ErrPossibleDuplicate) {
+		t.Fatalf("assign must warn about the manual payment: %v", err)
+	}
+	r.expectExpiry(t, first, "the warning changed nothing")
+	if err := r.svc.AssignPaymentOpts(ctx, "RKTPLAIN01", r.acct.ID, pk.ID, "paid again", billing.AssignOpts{AcceptDuplicate: true}); err != nil {
+		t.Fatal(err)
+	}
+	r.expectExpiry(t, first.Add(24*time.Hour), "assigned on purpose")
+}
+
+// A receipt an older build filed as the ignored duplicate of another order's
+// manual payment is applied when its own order completes.
+func TestIgnoredDuplicateOfADifferentOrderIsAppliedToThisOrder(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	a := r.order(t, "1 Day")
+	markPaid(t, r, a)
+	afterA := r.expiry()
+	mk := billing.ManualPrefix + strings.ToUpper(a.ID)
+	r.st.Update(func(d *store.Data) error {
+		m := d.Payments[mk]
+		m.Note = "confirmed by M-Pesa receipt RKTWRONG01"
+		d.Payments[mk] = m
+		d.Payments["RKTWRONG01"] = store.Payment{Key: "RKTWRONG01", SiteID: m.SiteID, Method: "mpesa-c2b", Status: store.PayIgnored, AmountKES: 50,
+			AccountID: m.AccountID, OrderID: a.ID, Note: "duplicate: already credited when an admin marked the order paid (" + mk + "); not credited twice", PaidAt: m.PaidAt, CreatedAt: m.CreatedAt}
+		return nil
+	})
+	b := r.order(t, "1 Day")
+	r.svc.SetCheckoutID(b.ID, "ws_CO_B")
+	if err := r.mp.HandleSTKCallback(ctx, stkCB("ws_CO_B", 0, "RKTWRONG01", 50)); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := r.svc.GetOrder(b.ID); g.Status != store.OrderPaid {
+		t.Fatalf("B is %s", g.Status)
+	}
+	r.expectExpiry(t, afterA.Add(24*time.Hour), "B credited")
+	row, _ := r.payment("RKTWRONG01")
+	m, _ := r.payment(mk)
+	if row.Status != store.PayApplied || row.OrderID != b.ID || strings.Contains(m.Note, "RKTWRONG01") || r.revenue() != 100 {
+		t.Fatalf("row %+v\nmanual %+v revenue %d", row, m, r.revenue())
+	}
+}
+
+// A refused (refunded or ignored) receipt on an STK success is not credited, but it is visible.
+func TestStkSuccessForADecidedReceiptRaisesAnAlert(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	var alerts []string
+	r.mp.SetAlert(func(m string) { alerts = append(alerts, m) })
+	r.mp.HandleC2BConfirmation(ctx, c2b("RKTDEC0001", "NOSUCH", "50.00"))
+	r.svc.ResolvePayment("RKTDEC0001", store.PayRefunded, "sent back")
+	o := r.order(t, "1 Day")
+	r.mp.Start(ctx, o)
+	if err := r.mp.HandleSTKCallback(ctx, stkCB("ws_CO_123", 0, "RKTDEC0001", 50)); err != nil {
+		t.Fatal(err)
+	}
+	if len(alerts) != 1 || !strings.Contains(alerts[0], "RKTDEC0001") {
+		t.Fatalf("alerts %v", alerts)
+	}
+	if g, _ := r.svc.GetOrder(o.ID); g.Status == store.OrderPaid || !strings.Contains(g.Reason, "RKTDEC0001") {
+		t.Fatalf("%+v", g)
+	}
+	if !r.expiry().IsZero() {
+		t.Fatal("credited")
+	}
+}
+
+// F2: the Paybill confirmation credited first and the checkout id was never
+// stored: the STK result still closes the order.
+func TestUnknownCheckoutAfterPaybillStillMarksTheOrderPaid(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	o := r.order(t, "1 Day") // no checkout id: the push answer was lost
+	r.mp.HandleC2BConfirmation(ctx, c2b("RKTF20001", r.acct.Code, "50.00"))
+	exp := r.expiry()
+	if exp.IsZero() {
+		t.Fatal("setup: the Paybill payment must be credited")
+	}
+	r.mp.HandleSTKCallback(ctx, stkCB("ws_CO_LOST", 0, "RKTF20001", 50))
+	if g, _ := r.svc.GetOrder(o.ID); g.Status != store.OrderPaid {
+		t.Fatalf("the wait page would say the payment never arrived: %s", g.Status)
+	}
+	r.expectExpiry(t, exp, "credited once")
+	if n := len(r.ledger()); n != 1 {
+		t.Fatalf("rows %d", n)
+	}
+}
+
+// F3: an order Daraja refused outright is not a candidate for an unknown checkout id.
+func TestUnknownCheckoutIgnoresOrdersTheDarajaRefused(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	refused := r.order(t, "1 Day")
+	r.svc.FailOrder(ctx, refused.ID, billing.ReasonPromptNotSent)
+	retry := r.order(t, "1 Day") // its push timed out
+	r.mp.HandleSTKCallback(ctx, stkCB("ws_CO_LOST", 0, "RKTF30001", 50))
+	if g, _ := r.svc.GetOrder(retry.ID); g.Status != store.OrderPaid {
+		t.Fatalf("the retry should be matched: %s", g.Status)
+	}
+	if g, _ := r.svc.GetOrder(refused.ID); g.Status != store.OrderFailed {
+		t.Fatalf("the refused order must stay failed: %s", g.Status)
+	}
+	// An expired order is still a candidate.
+	r2 := newRig(t)
+	e := r2.order(t, "1 Day")
+	r2.advance(20 * time.Minute)
+	r2.svc.ExpireOrders()
+	r2.mp.HandleSTKCallback(ctx, stkCB("ws_CO_LOST", 0, "RKTF30002", 50))
+	if g, _ := r2.svc.GetOrder(e.ID); g.Status != store.OrderPaid {
+		t.Fatalf("expired order not matched: %s", g.Status)
+	}
+}
+
+// F5 / nits: Order.PaidAt, the legacy deadline fallback, the C2B label.
+func TestOrderPaidAtIsTheTransactionTime(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	o := r.order(t, "1 Day")
+	r.mp.Start(ctx, o)
+	r.mp.HandleSTKCallback(ctx, stkCBAt("ws_CO_123", "RKTNIT0001", 50, "20261117213000"))
+	g, _ := r.svc.GetOrder(o.ID)
+	if got := g.PaidAt.In(billing.EAT).Format("15:04:05"); got != "21:30:00" {
+		t.Fatalf("Order.PaidAt(EAT)=%s", got)
+	}
+}
+
+func TestSecondPaybillPaymentForAPaidOrderIsLabelledC2B(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	o := r.order(t, "1 Day")
+	r.mp.Start(ctx, o)
+	r.mp.HandleSTKCallback(ctx, stkCB("ws_CO_123", 0, "RKTONE00002", 50))
+	r.mp.HandleC2BConfirmation(ctx, c2b("RKTTWO00002", strings.ToLower(o.ID), "50.00")) // BillRef = the order id
+	if p, _ := r.payment("RKTTWO00002"); p.Method != "mpesa-c2b" || p.Status != store.PayUnmatched {
+		t.Fatalf("%+v", p)
+	}
+}
+
+func TestLegacyDeadlineFallsBackWhenTheDirIsNotWritable(t *testing.T) {
+	var warned string
+	dir := filepath.Join(t.TempDir(), "file")
+	os.WriteFile(dir, []byte("x"), 0o600) // a file where the directory should be
+	got := payments.LegacyQueryDeadline(dir, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), func(m string, _ ...any) { warned = m })
+	if !got.Equal(payments.LegacyQueryFallback) || warned == "" {
+		t.Fatalf("%v %q", got, warned)
+	}
+}
 func TestSecondDifferentReceiptForAPaidOrderIsKeptInUnmatched(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()

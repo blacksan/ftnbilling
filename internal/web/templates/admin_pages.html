@@ -230,8 +230,17 @@
 <p>{{.Data.Flat}} is active on <b>{{.Data.Cur.Name}}</b> until {{eat .Data.Expires}}. The payment is for <b>{{.Data.Want.Name}}</b> ({{.Data.Want.SpeedMbps}} Mbps against {{.Data.Cur.SpeedMbps}} Mbps). Choose how to apply it:</p>
 <ul><li><b>Add time at the current plan</b>: the flat keeps {{.Data.Cur.Name}} and its expiry moves later by {{.Data.Want.Name}}'s duration. Nothing gets slower.</li>
 <li><b>Switch to the slower plan</b>: the flat drops to {{.Data.Want.Name}} now, with the remaining time and the new time at that speed.</li></ul>
-<form method="post" action="/admin/unmatched/assign"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="key" value="{{.Data.Key}}"><input type="hidden" name="account" value="{{.Data.Account}}"><input type="hidden" name="package" value="{{.Data.Package}}"><input type="hidden" name="note" value="{{.Data.Note}}">
+<form method="post" action="/admin/unmatched/assign"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="key" value="{{.Data.Key}}"><input type="hidden" name="account" value="{{.Data.Account}}"><input type="hidden" name="package" value="{{.Data.Package}}"><input type="hidden" name="note" value="{{.Data.Note}}"><input type="hidden" name="dup" value="{{.Data.Dup}}">
 <button class="sm" name="lower" value="extend">Add time at the current plan</button> <button class="ghost sm" name="lower" value="switch">Switch to the slower plan</button> <a class="btn ghost sm" href="/admin/unmatched">Cancel</a></form></div>
+{{template "afoot" .}}{{end}}
+
+{{define "admin_assign_dup"}}{{template "ahead" .}}{{$d := .}}
+<div class="card" style="max-width:70ch"><h3>This may be money you already credited</h3>
+<p>This flat has a payment marked paid by hand (<span class="mono">{{.Data.Manual}}</span>) for the same amount in the last 6 hours. If this payment is the real confirmation of that one, crediting it again would give the flat a second period for one payment.</p>
+<form method="post" action="/admin/unmatched/resolve"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="key" value="{{.Data.Key}}"><input type="hidden" name="status" value="ignored"><input type="hidden" name="note" value="confirmation of {{.Data.Manual}}">
+<button class="sm">It is the same money: mark it ignored</button></form>
+<form method="post" action="/admin/unmatched/assign" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="key" value="{{.Data.Key}}"><input type="hidden" name="account" value="{{.Data.Account}}"><input type="hidden" name="package" value="{{.Data.Package}}"><input type="hidden" name="note" value="{{.Data.Note}}"><input type="hidden" name="lower" value="{{.Data.Lower}}"><input type="hidden" name="dup" value="1">
+<button class="ghost sm">The customer paid again: assign it anyway</button> <a class="btn ghost sm" href="/admin/unmatched">Cancel</a></form></div>
 {{template "afoot" .}}{{end}}
 
 {{define "admin_orders"}}{{template "ahead" .}}{{$d := .}}

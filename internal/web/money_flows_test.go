@@ -257,3 +257,34 @@ func TestAPIPaymentsMpesaGroupAndLowerPlanChoice(t *testing.T) {
 		t.Fatalf("extend kept the plan and added a day: %+v", after)
 	}
 }
+
+// Assigning an Unmatched payment warns when the flat has a "Mark paid" payment
+// of the same amount from the last hours, and needs a yes.
+func TestAssignWarnsAboutAPossibleDuplicateOfMarkPaid(t *testing.T) {
+	a := newApp(t, false)
+	acct := a.flat(t)
+	ctx := context.Background()
+	day := a.pkgID("1 Day")
+	o, err := a.svc.CreateOrder(billing.OrderInput{AccountID: acct.ID, PackageID: day, Phone: "254712345678", Method: "mpesa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.adminPost(t, "/admin/orders/markpaid", url.Values{"id": {o.ID}})
+	a.svc.RecordUnmatched(billing.UnmatchedInput{Key: "RKTDUP0001", Method: "mpesa-c2b", AmountKES: 50, BillRef: acct.Code, AccountID: acct.ID})
+	before := a.account(t, "Flat 3B")
+	f := url.Values{"key": {"RKTDUP0001"}, "account": {acct.ID}, "package": {day}}
+	r := a.admin("POST", "/admin/unmatched/assign", f)
+	html := body(t, r)
+	if r.StatusCode != http.StatusConflict || !strings.Contains(html, "may be money you already credited") || !strings.Contains(html, "MANUAL-") {
+		t.Fatalf("no warning: %d %s", r.StatusCode, html)
+	}
+	if cur := a.account(t, "Flat 3B"); !cur.ExpiresAt.Equal(before.ExpiresAt) {
+		t.Fatal("the warning credited the flat")
+	}
+	f.Set("dup", "1")
+	a.adminPost(t, "/admin/unmatched/assign", f)
+	if cur := a.account(t, "Flat 3B"); cur.ExpiresAt.Sub(before.ExpiresAt) != 24*time.Hour {
+		t.Fatalf("assigned on purpose: +%v", cur.ExpiresAt.Sub(before.ExpiresAt))
+	}
+	_ = ctx
+}

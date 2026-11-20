@@ -209,11 +209,11 @@ func TestConfirmationOffCreditsAtOnce(t *testing.T) {
 func TestLegacyQueryDeadlineIsStable(t *testing.T) {
 	dir := t.TempDir()
 	t0 := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
-	a := payments.LegacyQueryDeadline(dir, t0)
+	a := payments.LegacyQueryDeadline(dir, t0, nil)
 	if want := t0.Add(30 * 24 * time.Hour); !a.Equal(want) {
 		t.Fatalf("%v want %v", a, want)
 	}
-	if b := payments.LegacyQueryDeadline(dir, t0.Add(10*24*time.Hour)); !b.Equal(a) {
+	if b := payments.LegacyQueryDeadline(dir, t0.Add(10*24*time.Hour), nil); !b.Equal(a) {
 		t.Fatalf("a restart moved the deadline: %v", b)
 	}
 }

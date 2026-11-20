@@ -846,14 +846,25 @@ func (s *Server) adminUnmatchedAssign(w http.ResponseWriter, r *http.Request) {
 	if lower != billing.AssignSwitchPlan && lower != billing.AssignAddTime {
 		lower = billing.AssignRefuseLower
 	}
-	err := s.svc.AssignPaymentMode(r.Context(), key, acct, pkg, note, lower)
+	err := s.svc.AssignPaymentOpts(r.Context(), key, acct, pkg, note, billing.AssignOpts{Lower: lower, AcceptDuplicate: r.PostFormValue("dup") == "1"})
+	var dup *billing.DuplicateError
+	if errors.As(err, &dup) {
+		// The account has a "Mark paid" payment of the same amount: this may be
+		// that money. Ask before crediting it a second time.
+		p := s.page(r, "unmatched")
+		p.Data["Key"], p.Data["Account"], p.Data["Package"], p.Data["Note"], p.Data["Lower"] = key, acct, pkg, note, lower
+		p.Data["Manual"] = dup.ManualKey
+		w.WriteHeader(http.StatusConflict)
+		s.render(w, "admin_assign_dup", p)
+		return
+	}
 	if errors.Is(err, billing.ErrLowerPlan) {
 		// Do not downgrade silently: ask which way the admin wants it.
 		a, _ := s.svc.GetAccount(acct)
 		var cur, want store.Package
 		s.st.View(func(d *store.Data) { cur, want = d.Packages[a.PackageID], d.Packages[pkg] })
 		p := s.page(r, "unmatched")
-		p.Data["Key"], p.Data["Account"], p.Data["Package"], p.Data["Note"] = key, acct, pkg, note
+		p.Data["Key"], p.Data["Account"], p.Data["Package"], p.Data["Note"], p.Data["Dup"] = key, acct, pkg, note, r.PostFormValue("dup")
 		p.Data["Flat"], p.Data["Cur"], p.Data["Want"], p.Data["Expires"] = a.Flat, cur, want, a.ExpiresAt
 		w.WriteHeader(http.StatusConflict)
 		s.render(w, "admin_assign_lower", p)

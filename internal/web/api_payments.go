@@ -203,7 +203,8 @@ func (s *Server) apiPaymentAssign(w http.ResponseWriter, r *http.Request, c *api
 		AccountID string `json:"account_id"`
 		PackageID string `json:"package_id"`
 		Note      string `json:"note"`
-		Lower     string `json:"lower_plan"` // "" = refuse a slower plan, "extend" = add time at the current plan, "switch" = move to the slower plan
+		AcceptDup bool   `json:"accept_duplicate"` // assign even if the account has a "Mark paid" payment of the same amount in the last 6 hours
+		Lower     string `json:"lower_plan"`       // "" = refuse a slower plan, "extend" = add time at the current plan, "switch" = move to the slower plan
 	}
 	if !decode(w, r, &req, false) {
 		return
@@ -226,7 +227,7 @@ func (s *Server) apiPaymentAssign(w http.ResponseWriter, r *http.Request, c *api
 		apiErr(w, http.StatusNotFound, codeNotFound, "No such payment.", nil)
 		return
 	}
-	if err := s.svc.AssignPaymentMode(r.Context(), key, req.AccountID, req.PackageID, req.Note, req.Lower); err != nil {
+	if err := s.svc.AssignPaymentOpts(r.Context(), key, req.AccountID, req.PackageID, req.Note, billing.AssignOpts{Lower: req.Lower, AcceptDuplicate: req.AcceptDup}); err != nil {
 		s.billingErr(w, err, "")
 		return
 	}

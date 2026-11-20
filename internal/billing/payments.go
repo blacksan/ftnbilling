@@ -26,9 +26,30 @@ type CreditInput struct {
 	Force       bool      // admin only: apply even if the package is slower than the active plan
 }
 
-// errLinked is internal: the receipt replaced the key of a payment an admin had
-// marked paid, so the data changed but nothing was credited.
-var errLinked = errors.New("receipt linked to a manual payment")
+// errHeld is internal: the payment was put in Unmatched inside creditLocked
+// (it may be the confirmation of a payment an admin marked paid by hand), so the
+// data changed but nothing was credited.
+var errHeld = errors.New("payment held in Unmatched")
+
+// ErrPossibleDuplicate is returned by AssignPayment when the account has a
+// "Mark paid" payment of the same amount from the last few hours: the money may
+// be the same. DuplicateError carries the manual payment's key.
+var ErrPossibleDuplicate = errors.New("possible duplicate of a payment marked paid by hand")
+
+// DuplicateError says which manual payment the assigned money may duplicate.
+type DuplicateError struct{ ManualKey string }
+
+func (e *DuplicateError) Error() string {
+	return "this account has a payment marked paid by hand (" + e.ManualKey + ") for the same amount in the last 6 hours: it may be the same money"
+}
+func (e *DuplicateError) Is(t error) bool { return t == ErrPossibleDuplicate }
+
+// Notes that tie a manual payment and its real receipt together.
+const (
+	manualDupNote       = "duplicate: already credited when an admin marked the order paid"
+	possibleDupNote     = "possible duplicate of manual payment "
+	ReasonPromptNotSent = "the payment prompt could not be sent"
+)
 
 // ErrLowerPlan is returned when an active account would be moved to a slower
 // package. Downgrades wait for the end of the current plan.
@@ -78,24 +99,44 @@ func (s *Service) creditLocked(d *store.Data, in CreditInput) (p store.Payment, 
 		}
 	}
 	if old, ok := d.Payments[key]; ok {
-		switch old.Status {
-		case store.PayApplied:
+		switch {
+		case old.Status == store.PayApplied:
 			return old, false, nil
-		case store.PayUnmatched:
+		case old.Status == store.PayUnmatched:
 			// The same receipt first arrived without a home (an odd amount, a
 			// deleted package, a lower plan) and now comes with an account and
 			// a package: apply that row instead of reporting "already exists".
 			return s.applyUnmatchedLocked(d, old, in)
+		case old.Status == store.PayIgnored && strings.HasPrefix(old.Note, manualDupNote) && in.OrderID != "" && in.OrderID != old.OrderID:
+			// Wrongly recorded as the duplicate of another order's manual
+			// payment: this is a different order's money. Apply it here.
+			return s.applyUnmatchedLocked(d, old, in)
+		case old.Status == store.PayIgnored && strings.HasPrefix(old.Note, manualDupNote):
+			return old, false, nil // a true duplicate of this order's manual payment
 		default:
 			return old, false, fmt.Errorf("%w: receipt %s was already marked %s", ErrBadState, key, old.Status)
 		}
 	}
-	if p, ok := linkManualLocked(d, key, in, s.now()); ok {
-		return p, false, errLinked
-	}
 	a, ok := d.Accounts[in.AccountID]
 	if !ok {
 		return p, false, ErrNotFound
+	}
+	// A Paybill confirmation by account code (no order id) right after a "Mark
+	// paid" of the same amount may be that very payment, or a new one: a person
+	// decides, so it waits in Unmatched instead of being credited or swallowed.
+	if in.OrderID == "" && in.Method == "mpesa-c2b" && in.AmountKES > 0 {
+		if mk, found := recentManual(d, in.AccountID, in.AmountKES, s.now()); found {
+			now := s.now()
+			paid := in.PaidAt
+			if paid.IsZero() {
+				paid = now
+			}
+			p = store.Payment{Key: key, SiteID: a.SiteID, Method: in.Method, Status: store.PayUnmatched, AmountKES: in.AmountKES,
+				Phone: in.Phone, Name: in.Name, BillRef: in.BillRef, AccountID: a.ID, CustomerID: a.CustomerID,
+				Note: possibleDupNote + mk + ": if it is the same money, mark it ignored; if the customer paid again, assign it", PaidAt: paid, CreatedAt: now}
+			d.Payments[key] = p
+			return p, false, errHeld
+		}
 	}
 	pkg, ok := d.Packages[in.PackageID]
 	if !ok {
@@ -159,6 +200,15 @@ func (s *Service) applyUnmatchedLocked(d *store.Data, old store.Payment, in Cred
 	a = applyPackage(a, pkg, now)
 	d.Accounts[a.ID] = a
 	s.enqueueLocked(d, a, "payment "+old.Key)
+	if strings.HasPrefix(old.Note, manualDupNote) { // it was filed as another order's duplicate: undo that
+		mk := ManualPrefix + strings.ToUpper(old.OrderID)
+		if m, ok := d.Payments[mk]; ok {
+			c := "confirmed by M-Pesa receipt " + old.Key
+			m.Note = strings.TrimSpace(strings.NewReplacer(" | "+c, "", c+" | ", "", c, "").Replace(m.Note))
+			d.Payments[mk] = m
+		}
+		old.Note = "was wrongly filed as a duplicate of " + mk
+	}
 	old.Status, old.AccountID, old.CustomerID, old.SiteID, old.PackageID = store.PayApplied, a.ID, a.CustomerID, a.SiteID, pkg.ID
 	old.ResolvedAt = now
 	if in.OrderID != "" {
@@ -172,33 +222,20 @@ func (s *Service) applyUnmatchedLocked(d *store.Data, old store.Payment, in Cred
 	return old, true, nil
 }
 
-// linkManualLocked recognises the real confirmation of money an admin already
-// marked paid by hand (key MANUAL-<order>): the real receipt is recorded as a
-// duplicate of that payment and nothing is credited a second time. The caller
-// sees created=false, the same as for any duplicate.
-func linkManualLocked(d *store.Data, key string, in CreditInput, now time.Time) (store.Payment, bool) {
-	if !strings.HasPrefix(in.Method, "mpesa") || in.AmountKES <= 0 || strings.HasPrefix(key, ManualPrefix) {
-		return store.Payment{}, false
-	}
+// recentManual finds a payment an admin marked paid (key MANUAL-...) for the
+// account and amount within manualLinkWindow.
+func recentManual(d *store.Data, accountID string, amount int, now time.Time) (key string, ok bool) {
 	var best store.Payment
-	found := false
 	for k, m := range d.Payments {
-		if !strings.HasPrefix(k, ManualPrefix) || m.Status != store.PayApplied || m.AccountID != in.AccountID ||
-			m.AmountKES != in.AmountKES || now.Sub(m.CreatedAt) > manualLinkWindow {
+		if !strings.HasPrefix(k, ManualPrefix) || m.Status != store.PayApplied || m.AccountID != accountID ||
+			m.AmountKES != amount || now.Sub(m.CreatedAt) > manualLinkWindow {
 			continue
 		}
-		if in.OrderID != "" && m.OrderID != in.OrderID {
-			continue
-		}
-		if !found || m.CreatedAt.After(best.CreatedAt) {
-			best, found = m, true
+		if !ok || m.CreatedAt.After(best.CreatedAt) {
+			best, ok = m, true
 		}
 	}
-	if !found {
-		return store.Payment{}, false
-	}
-	linkManualRow(d, best, key, in.Method, in.AmountKES, in.Phone, in.PaidAt, now)
-	return d.Payments[key], true
+	return best.Key, ok
 }
 
 // linkManualRow records the real confirmation of money an admin already marked
@@ -214,7 +251,7 @@ func linkManualRow(d *store.Data, m store.Payment, key, method string, amount in
 	}
 	d.Payments[key] = store.Payment{Key: key, SiteID: m.SiteID, Method: method, Status: store.PayIgnored, AmountKES: amount,
 		Phone: phone, BillRef: m.BillRef, AccountID: m.AccountID, CustomerID: m.CustomerID, PackageID: m.PackageID, OrderID: m.OrderID,
-		Note: "duplicate: already credited when an admin marked the order paid (" + m.Key + "); not credited twice", PaidAt: paidAt, CreatedAt: now, ResolvedAt: now}
+		Note: manualDupNote + " (" + m.Key + "); not credited twice", PaidAt: paidAt, CreatedAt: now, ResolvedAt: now}
 	m.Note = joinNote(m.Note, "confirmed by M-Pesa receipt "+key)
 	d.Payments[m.Key] = m
 }
@@ -227,8 +264,8 @@ func (s *Service) Credit(ctx context.Context, in CreditInput) (store.Payment, bo
 	err := s.st.Update(func(d *store.Data) error {
 		var err error
 		p, created, err = s.creditLocked(d, in)
-		if errors.Is(err, errLinked) {
-			return nil // the ledger row was re-keyed; the caller sees created=false, a duplicate
+		if errors.Is(err, errHeld) {
+			return nil // kept in Unmatched; the caller sees created=false and the row
 		}
 		if err != nil || !created {
 			if err == nil {
@@ -307,6 +344,21 @@ func (s *Service) AssignPayment(ctx context.Context, key, accountID, pkgID, note
 
 // AssignPaymentMode is AssignPayment with the admin's choice for a lower plan.
 func (s *Service) AssignPaymentMode(ctx context.Context, key, accountID, pkgID, note, lower string) error {
+	return s.AssignPaymentOpts(ctx, key, accountID, pkgID, note, AssignOpts{Lower: lower})
+}
+
+// AssignOpts are the admin's answers to the warnings Assign can raise.
+type AssignOpts struct {
+	Lower           string // AssignSwitchPlan or AssignAddTime for a plan slower than the active one
+	AcceptDuplicate bool   // assign even though the account has a "Mark paid" payment of the same amount from the last 6 hours
+}
+
+// AssignPaymentOpts applies an unmatched payment. It refuses (ErrPossibleDuplicate)
+// when the money may be the confirmation of a payment already marked paid by
+// hand, and (ErrLowerPlan) when the plan is slower than the active one, unless
+// the admin said how to go on.
+func (s *Service) AssignPaymentOpts(ctx context.Context, key, accountID, pkgID, note string, opt AssignOpts) error {
+	lower := opt.Lower
 	var site string
 	err := s.st.Update(func(d *store.Data) error {
 		p, ok := d.Payments[key]
@@ -325,6 +377,9 @@ func (s *Service) AssignPaymentMode(ctx context.Context, key, accountID, pkgID, 
 			return errors.New("choose a package")
 		}
 		now := s.now()
+		if mk, dup := recentManual(d, a.ID, p.AmountKES, now); dup && !opt.AcceptDuplicate {
+			return &DuplicateError{ManualKey: mk}
+		}
 		switch {
 		case !lowerWhileActive(d, a, pkg, now):
 			a = applyPackage(a, pkg, now)
@@ -599,6 +654,7 @@ func (s *Service) CompleteOrderAt(ctx context.Context, orderID, receipt string, 
 	var o store.Order
 	var acct store.Account
 	already, lowered, gone := false, false, false
+	var refused error // the receipt was already decided (refunded or ignored)
 	err := s.st.Update(func(d *store.Data) error {
 		var ok bool
 		o, ok = d.Orders[orderID]
@@ -610,7 +666,10 @@ func (s *Service) CompleteOrderAt(ctx context.Context, orderID, receipt string, 
 			key := strings.ToUpper(strings.TrimSpace(receipt))
 			if m, ok := d.Payments[strings.ToUpper(o.Receipt)]; ok && strings.HasPrefix(m.Key, ManualPrefix) && key != "" &&
 				!strings.HasPrefix(key, ManualPrefix) && m.Status == store.PayApplied {
-				if _, taken := d.Payments[key]; !taken {
+				// The real receipt may already wait in Unmatched as "possible duplicate"
+				// of this very manual payment: the order id proves it is.
+				t, taken := d.Payments[key]
+				if !taken || (t.Status == store.PayUnmatched && strings.HasPrefix(t.Note, possibleDupNote+m.Key)) {
 					linkManualRow(d, m, key, orderMethodLabel(o.Method), o.AmountKES, o.Phone, paidAt, s.now())
 					return nil
 				}
@@ -620,7 +679,17 @@ func (s *Service) CompleteOrderAt(ctx context.Context, orderID, receipt string, 
 		if _, _, err := s.creditLocked(d, CreditInput{
 			Key: receipt, Method: orderMethodLabel(o.Method), AccountID: o.AccountID, PackageID: o.PackageID,
 			AmountKES: o.AmountKES, Phone: o.Phone, OrderID: o.ID, VoucherCode: o.VoucherCode, PaidAt: paidAt,
-		}); err != nil && !errors.Is(err, errLinked) {
+		}); err != nil {
+			if errors.Is(err, ErrBadState) {
+				// Leave a trace a person will see: the order says why it is not paid,
+				// and the event log carries it. The caller raises the alert.
+				o.Reason = "payment " + strings.ToUpper(receipt) + " not credited: " + err.Error()
+				d.Orders[o.ID] = o
+				d.AddEvent(store.Event{Time: s.now(), SiteID: o.SiteID, Kind: "info", AccountID: o.AccountID,
+					Msg: "payment " + strings.ToUpper(receipt) + " for order " + o.ID + " was not credited: " + err.Error()})
+				refused = err
+				return nil
+			}
 			_, acctExists := d.Accounts[o.AccountID]
 			if errors.Is(err, ErrLowerPlan) || !acctExists { // plan changed, or account deleted, while the payment was in flight
 				why := ErrLowerPlan.Error()
@@ -633,8 +702,12 @@ func (s *Service) CompleteOrderAt(ctx context.Context, orderID, receipt string, 
 					k := strings.ToUpper(receipt)
 					if _, dup := d.Payments[k]; !dup {
 						now := s.now()
+						when := now
+						if !paidAt.IsZero() {
+							when = paidAt
+						}
 						d.Payments[k] = store.Payment{Key: k, SiteID: o.SiteID, Method: "mpesa-stk", Status: store.PayUnmatched, AmountKES: o.AmountKES,
-							Phone: o.Phone, BillRef: o.ID, AccountID: o.AccountID, OrderID: o.ID, Note: why, PaidAt: now, CreatedAt: now}
+							Phone: o.Phone, BillRef: o.ID, AccountID: o.AccountID, OrderID: o.ID, Note: why, PaidAt: when, CreatedAt: now}
 					}
 				}
 				lowered, gone = acctExists, !acctExists
@@ -643,10 +716,16 @@ func (s *Service) CompleteOrderAt(ctx context.Context, orderID, receipt string, 
 			return err
 		}
 		o.Status, o.Reason, o.Receipt, o.PaidAt = store.OrderPaid, "", strings.ToUpper(receipt), s.now()
+		if !paidAt.IsZero() {
+			o.PaidAt = paidAt
+		}
 		d.Orders[o.ID] = o
 		acct = d.Accounts[o.AccountID]
 		return nil
 	})
+	if err == nil && refused != nil {
+		return refused
+	}
 	if err == nil && gone {
 		s.log.Warn("payment for a deleted account put in Unmatched", "order", o.ID)
 		return nil
