@@ -47,6 +47,7 @@ type apiAccount struct {
 	Tenant      string         `json:"tenant"`
 	Phone       string         `json:"phone"`
 	WhatsApp    string         `json:"whatsapp"`
+	WASamePhone bool           `json:"wa_same_phone"` // the WhatsApp number is the phone number (and follows it)
 	Notes       string         `json:"notes"`
 	State       string         `json:"state"`
 	Suspended   bool           `json:"suspended"`
@@ -94,7 +95,7 @@ func (s *Server) accountsJSON(accts []store.Account) []apiAccount {
 		out = append(out, apiAccount{
 			ID: a.ID, Code: a.Code, SiteID: a.SiteID, SiteName: siteNames[a.SiteID], Flat: a.Flat, Floor: a.Floor,
 			Apartment: aptRefs[a.ApartmentID], Unit: a.Unit, Problem: s.svc.AccountProblem(a.ID),
-			MAC: a.MAC, MACConflict: a.MACConflict, IP: a.IP, Tenant: a.Tenant, Phone: a.Phone, WhatsApp: a.WhatsApp, Notes: a.Notes,
+			MAC: a.MAC, MACConflict: a.MACConflict, IP: a.IP, Tenant: a.Tenant, Phone: a.Phone, WhatsApp: a.WhatsApp, WASamePhone: a.WASamePhone, Notes: a.Notes,
 			State: billing.AccountState(a, now), Suspended: a.Suspended, Package: pkgs[a.SiteID+"|"+a.PackageID], ExpiresAt: tp(a.ExpiresAt),
 			Router: apiRouterState{InSync: rs.InSync, SuspendedOnRouter: rs.SuspendedOnRouter, LeaseStatus: leaseStatus(rs.LeaseStatus),
 				LastSeen: tp(rs.LastSeen), PendingTask: rs.PendingTask, LastError: rs.LastError},
@@ -330,6 +331,8 @@ func (s *Server) apiAccountPatch(w http.ResponseWriter, r *http.Request, c *apiC
 		Tenant      *string `json:"tenant"`
 		Phone       *string `json:"phone"`
 		Notes       *string `json:"notes"`
+		WhatsApp    *string `json:"whatsapp"`
+		WASamePhone *bool   `json:"wa_same_phone"`
 	}
 	if !decode(w, r, &req, false) {
 		return
@@ -392,6 +395,20 @@ func (s *Server) apiAccountPatch(w http.ResponseWriter, r *http.Request, c *apiC
 	if err := s.svc.UpdateAccount(a.ID, flat, tenant, phone, notes); err != nil {
 		s.billingErr(w, err, "")
 		return
+	}
+	if req.WhatsApp != nil || req.WASamePhone != nil {
+		cur, _ := s.svc.GetAccount(a.ID)
+		wa, same := cur.WhatsApp, cur.WASamePhone
+		if req.WhatsApp != nil {
+			wa = *req.WhatsApp
+		}
+		if req.WASamePhone != nil {
+			same = *req.WASamePhone
+		}
+		if err := s.svc.SetWhatsApp(a.ID, wa, same, cur.WAOptOut); err != nil {
+			s.billingErr(w, err, "")
+			return
+		}
 	}
 	c.audit(s, "account "+a.Code+" edited")
 	s.respondAccount(w, http.StatusOK, a.ID)

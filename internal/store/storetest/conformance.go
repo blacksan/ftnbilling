@@ -33,14 +33,14 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 		d.Sites["s222222"] = store.Site{ID: "s222222", Name: "Env", Mode: store.SiteModeEnv, CreatedAt: at}
 		d.Packages["p1"] = store.Package{ID: "p1", Name: "1 Day", Slug: "1-day", DurationMin: 1440, SpeedMbps: 10, PriceKES: 50, Sort: 1}
 		d.Packages["p2"] = store.Package{ID: "p2", Name: "Old", Slug: "old", DurationMin: 60, SpeedMbps: 5, PriceKES: 10, Disabled: true, Deleted: true, Sort: 2}
-		d.Customers["c1"] = store.Customer{ID: "c1", Name: "Alice", Phone: "254711000001", Phone2: "254711000002", WhatsApp: "254711000003", WAOptOut: true,
+		d.Customers["c1"] = store.Customer{ID: "c1", Name: "Alice", Phone: "254711000001", Phone2: "254711000002", WhatsApp: "254711000003", WAOptOut: true, WASamePhone: true,
 			Email: "a@example.com", Notes: "vip", NationalIDEnc: "enc", NationalIDHMAC: "hmac", NationalIDLast4: "1234", AnonymizedAt: at, CreatedAt: at, UpdatedAt: at}
 		d.Equipment["e1"] = store.Equipment{ID: "e1", Kind: store.KindONT, Serial: "SN1", MAC: "AA:BB:CC:DD:EE:01", Model: "F601", Firmware: "1.0",
 			Status: store.EqInstalled, SiteID: "s111111", AccountID: "a1", Notes: "n", InstalledAt: at, CreatedAt: at, UpdatedAt: at}
 		d.Equipment["e2"] = store.Equipment{ID: "e2", Kind: store.KindSplitter, Status: store.EqInStock, CreatedAt: at}
 		d.Equipment["e3"] = store.Equipment{ID: "e3", Kind: store.KindRouter, Serial: "sn1", Status: store.EqInstalled, SiteID: "s111111", CreatedAt: at}
 		d.Accounts["a1"] = store.Account{ID: "a1", SiteID: "s111111", Code: "ABC234", Flat: "Flat 1", Floor: "2", MAC: "AA:BB:CC:DD:EE:01", Tenant: "Alice",
-			Phone: "254711000001", Notes: "n", WhatsApp: "254711000003", WAOptOut: true, PackageID: "p1", ExpiresAt: at, Suspended: true,
+			Phone: "254711000001", Notes: "n", WhatsApp: "254711000003", WAOptOut: true, WASamePhone: true, PackageID: "p1", ExpiresAt: at, Suspended: true,
 			RemindedFor: at, ExpiredFor: at, CustomerID: "c1", ODB: "ODB-1", SplitterID: "e2", SplitterPort: 4, IP: "10.20.0.60", CreatedAt: at,
 			ApartmentID: "ap1", Unit: "Flat 1"}
 		// Flagged by a migration: same MAC as a1, kept, not provisioned.

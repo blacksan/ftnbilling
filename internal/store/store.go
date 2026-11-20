@@ -195,6 +195,8 @@ type Account struct {
 	// WhatsApp (format 2547XXXXXXXX) and WAOptOut are used by tenant messaging.
 	WhatsApp string `json:"whatsapp,omitempty"`
 	WAOptOut bool   `json:"wa_opt_out,omitempty"`
+	// WASamePhone: the WhatsApp number is the phone number, now and when the phone changes.
+	WASamePhone bool `json:"wa_same_phone,omitempty"`
 
 	PackageID string    `json:"package_id,omitempty"`
 	ExpiresAt time.Time `json:"expires_at,omitempty"`
@@ -331,6 +333,8 @@ type Customer struct {
 	Email    string `json:"email,omitempty"`
 	Notes    string `json:"notes,omitempty"`
 	WAOptOut bool   `json:"wa_opt_out,omitempty"`
+	// WASamePhone: the WhatsApp number follows the phone number.
+	WASamePhone bool `json:"wa_same_phone,omitempty"`
 	// The national ID is optional and kept encrypted (see billing.Secretbox):
 	// ciphertext, the last four digits, and a keyed hash for exact search.
 	NationalIDEnc   string    `json:"national_id_enc,omitempty"`

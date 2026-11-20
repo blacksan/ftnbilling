@@ -258,7 +258,19 @@ func (s *Service) SetWhatsApp(id, raw string, samePhone, optOut bool) error {
 		if err != nil {
 			return err
 		}
-		if !d.SetWhatsApp(id, wa, optOut) { // also updates the linked customer
+		changed := d.SetWhatsApp(id, wa, optOut) // also updates the linked customer
+		// The box itself is stored too, so it stays ticked and the number follows the phone.
+		if a, ok := d.Accounts[id]; ok && a.WASamePhone != samePhone {
+			a.WASamePhone = samePhone
+			d.Accounts[id] = a
+			changed = true
+		}
+		if c, ok := d.Customers[a.CustomerID]; ok && c.WASamePhone != samePhone {
+			c.WASamePhone = samePhone
+			d.Customers[c.ID] = c
+			changed = true
+		}
+		if !changed {
 			return store.ErrNoChange
 		}
 		return nil
@@ -305,7 +317,7 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 		a = store.Account{
 			ID: RandomID(), SiteID: siteID, ApartmentID: aptID, Code: s.uniqueCode(d), Flat: unit, Unit: unit, MAC: mac,
 			Tenant: cleanText(in.Tenant, 60), Phone: phone, Notes: cleanText(in.Notes, 300), WhatsApp: wa,
-			CreatedAt: s.now(),
+			WASamePhone: in.WASamePhone, CreatedAt: s.now(),
 		}
 		// A flat gets its fixed address now, and the router a task.
 		pl, err := s.PlanFor(d.Sites[siteID])
@@ -359,6 +371,13 @@ func (s *Service) UpdateAccount(id, flat, tenant, phone, notes string) error {
 			}
 		}
 		a.Flat, a.Unit, a.Tenant, a.Phone, a.Notes = unit, unit, cleanText(tenant, 60), ph, cleanText(notes, 300)
+		if a.WASamePhone { // the WhatsApp number follows the phone
+			a.WhatsApp = ph
+			if c, ok := d.Customers[a.CustomerID]; ok && c.WASamePhone && c.WhatsApp != ph {
+				c.WhatsApp = ph
+				d.Customers[c.ID] = c
+			}
+		}
 		d.Accounts[id] = a
 		return nil
 	})

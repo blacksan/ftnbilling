@@ -30,7 +30,7 @@ func syncAccountLocked(d *store.Data, accountID string, c store.Customer) {
 	if !ok {
 		return
 	}
-	a.Tenant, a.Phone, a.WhatsApp, a.WAOptOut = c.Name, c.Phone, c.WhatsApp, c.WAOptOut
+	a.Tenant, a.Phone, a.WhatsApp, a.WAOptOut, a.WASamePhone = c.Name, c.Phone, c.WhatsApp, c.WAOptOut, c.WASamePhone
 	d.Accounts[accountID] = a
 }
 
@@ -84,6 +84,7 @@ func (s *Service) SaveCustomer(in CustomerInput) (store.Customer, error) {
 			c = store.Customer{ID: RandomID(), CreatedAt: now}
 		}
 		c.Name, c.Phone, c.Phone2, c.WhatsApp, c.WAOptOut = name, phone, phone2, wa, in.WAOptOut
+		c.WASamePhone = in.WASamePhone
 		c.Email, c.Notes, c.UpdatedAt = email, cleanText(in.Note, 500), now
 		d.Customers[c.ID] = c
 		for _, a := range d.Accounts {
@@ -155,7 +156,7 @@ func (s *Service) MoveOut(accountID string, at time.Time) error {
 		}
 		closeTenancyLocked(d, accountID, at)
 		who := d.Customers[a.CustomerID].Name
-		a.CustomerID, a.Tenant, a.Phone, a.WhatsApp, a.WAOptOut = "", "", "", "", false
+		a.CustomerID, a.Tenant, a.Phone, a.WhatsApp, a.WAOptOut, a.WASamePhone = "", "", "", "", false, false
 		d.Accounts[accountID] = a
 		custEvent(d, now, t.CustomerID, accountID, a.SiteID, fmt.Sprintf("%s moved out of %s", nameOr(who, "tenant"), a.Flat))
 		return nil
@@ -297,7 +298,7 @@ func (s *Service) AnonymizeCustomer(id, confirm string) error {
 		now := s.now()
 		for _, a := range d.Accounts {
 			if a.CustomerID == id { // the flat becomes vacant for messaging
-				a.CustomerID, a.Tenant, a.Phone, a.WhatsApp, a.WAOptOut = "", "", "", "", false
+				a.CustomerID, a.Tenant, a.Phone, a.WhatsApp, a.WAOptOut, a.WASamePhone = "", "", "", "", false, false
 				d.Accounts[a.ID] = a
 				closeTenancyLocked(d, a.ID, now)
 			}

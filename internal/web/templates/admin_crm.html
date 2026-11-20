@@ -19,7 +19,7 @@
 {{if not .Data.Anon}}<div class="grid2">
 <div class="card"><b>Details</b><form class="mt-2" method="post" action="/admin/customers/save"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$C.ID}}">
 <div class="row"><label>Name<input name="name" value="{{$C.Name}}" required></label><label>Phone<input name="phone" value="{{$C.Phone}}"></label><label>Second phone<input name="phone2" value="{{$C.Phone2}}"></label></div>
-<div class="mt-2 row"><label>WhatsApp<input name="whatsapp" value="{{$C.WhatsApp}}"></label><label class="ck muted"><input type="checkbox" name="wa_same" value="1"> same as phone</label><label class="ck muted"><input type="checkbox" name="wa_optout" value="1"{{if $C.WAOptOut}} checked{{end}}> opted out of WhatsApp</label><label>Email<input name="email" value="{{$C.Email}}"></label></div>
+<div class="mt-2 row"><label>WhatsApp<input name="whatsapp" value="{{$C.WhatsApp}}"></label><label class="ck muted"><input type="checkbox" name="wa_same" value="1"{{if $C.WASamePhone}} checked{{end}}> same as phone</label><label class="ck muted"><input type="checkbox" name="wa_optout" value="1"{{if $C.WAOptOut}} checked{{end}}> opted out of WhatsApp</label><label>Email<input name="email" value="{{$C.Email}}"></label></div>
 <label class="muted">Notes<br><textarea name="notes" rows="2" style="width:100%">{{$C.Notes}}</textarea></label><button>Save details</button></form></div>
 <div class="card"><b>National ID</b>
 {{if not .Data.NatID}}<p class="muted">Not enabled. Set DATA_KEY on the server (openssl rand -base64 32) to store IDs encrypted.</p>
@@ -100,7 +100,7 @@
 <p class="muted" style="margin:6px 0 0">Moving out vacates the house; the customer record and payments stay.</p>{{else}}<p class="muted" style="margin:4px 0">{{if $A.Tenant}}Typed-in tenant: {{$A.Tenant}} {{$A.Phone}}. Link a customer record to keep their history.{{else}}Vacant.{{end}}</p>{{end}}
 <form class="mt-2" method="post" action="/admin/accounts/customer"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <div class="row"><label>{{if .Data.Cust.ID}}Replace with{{else}}Existing customer{{end}}<select name="customer"><option value="">new customer (fill in below)</option>{{range .Data.Custs}}<option value="{{.ID}}">{{.Name}}{{if .Phone}} - {{.Phone}}{{end}}</option>{{end}}</select></label><label>Move-in<input type="date" name="move_in"></label></div>
-<div class="mt-2 row"><label>New name<input name="name" value="{{if not .Data.Cust.ID}}{{$A.Tenant}}{{end}}"></label><label>Phone<input name="phone" value="{{if not .Data.Cust.ID}}{{$A.Phone}}{{end}}"></label><button>Link</button></div></form></div>
+<div class="mt-2 row"><label>New name<input name="name" value="{{if not .Data.Cust.ID}}{{$A.Tenant}}{{end}}"></label><label>Phone<input name="phone" value="{{if not .Data.Cust.ID}}{{$A.Phone}}{{end}}"></label><label>WhatsApp<input name="whatsapp" value="{{if not .Data.Cust.ID}}{{$A.WhatsApp}}{{end}}"></label><label class="ck muted"><input type="checkbox" name="wa_same" value="1"{{if not .Data.Cust.ID}}{{if $A.WASamePhone}} checked{{end}}{{end}}> same as phone</label><button>Link</button></div></form></div>
 <div class="card"><b>Floor and fibre box</b>
 <form method="post" action="/admin/accounts/location" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <label>Floor<input name="floor" value="{{$A.Floor}}" size="6"></label><label>ODB box<input name="odb" value="{{$A.ODB}}" size="10"></label>

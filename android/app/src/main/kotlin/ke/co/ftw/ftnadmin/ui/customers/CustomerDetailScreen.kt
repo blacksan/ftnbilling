@@ -171,6 +171,7 @@ private fun SummaryCard(a: Account) {
         LabeledValue("Router", a.routerLabel)
         LabeledValue("Tenant", a.tenant)
         LabeledValue("Phone", a.phone)
+        LabeledValue("WhatsApp", if (a.waSamePhone) "Same as the phone" else a.whatsapp)
         LabeledValue("Account code", a.code)
         LabeledValue("Package", a.pkg?.let { "${it.name} (${it.speedMbps} Mbps)" }.orEmpty())
         LabeledValue("Expires", formatExpiry(a.expiresAt))

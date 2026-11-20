@@ -290,14 +290,14 @@ var packagesC = (&codec[store.Package]{
 var customersC = (&codec[store.Customer]{
 	name: "customers", pk: []string{"id"}, key: func(v store.Customer) string { return v.ID },
 	cols: []string{"id", "name", "phone", "phone2", "whatsapp", "wa_opt_out", "email", "notes", "national_id_enc", "national_id_hmac", "national_id_last4",
-		"anonymized_at", "created_at", "updated_at"},
+		"anonymized_at", "created_at", "updated_at", "wa_same_phone"},
 	args: func(v store.Customer) []any {
 		return []any{v.ID, v.Name, v.Phone, v.Phone2, v.WhatsApp, v.WAOptOut, v.Email, v.Notes, v.NationalIDEnc, v.NationalIDHMAC, v.NationalIDLast4,
-			nt(v.AnonymizedAt), tm(v.CreatedAt), nt(v.UpdatedAt)}
+			nt(v.AnonymizedAt), tm(v.CreatedAt), nt(v.UpdatedAt), v.WASamePhone}
 	},
 	dst: func(v *store.Customer) []any {
 		return []any{&v.ID, &v.Name, &v.Phone, &v.Phone2, &v.WhatsApp, &v.WAOptOut, &v.Email, &v.Notes, &v.NationalIDEnc, &v.NationalIDHMAC, &v.NationalIDLast4,
-			t_(&v.AnonymizedAt), t_(&v.CreatedAt), t_(&v.UpdatedAt)}
+			t_(&v.AnonymizedAt), t_(&v.CreatedAt), t_(&v.UpdatedAt), &v.WASamePhone}
 	},
 }).build()
 
@@ -316,16 +316,16 @@ var accountsC = (&codec[store.Account]{
 	name: "accounts", pk: []string{"id"}, key: func(v store.Account) string { return v.ID },
 	cols: []string{"id", "site_id", "code", "flat", "floor", "mac", "tenant", "phone", "notes", "whatsapp", "wa_opt_out", "customer_id", "package_id",
 		"expires_at", "suspended", "reminded_for", "expired_for", "odb", "splitter_id", "splitter_port", "created_at", "closed_at",
-		"mac_conflict", "ip", "apartment_id", "unit"},
+		"mac_conflict", "ip", "apartment_id", "unit", "wa_same_phone"},
 	args: func(v store.Account) []any {
 		return []any{v.ID, v.SiteID, v.Code, v.Flat, v.Floor, v.MAC, v.Tenant, v.Phone, v.Notes, v.WhatsApp, v.WAOptOut, fk(v.CustomerID), fk(v.PackageID),
 			nt(v.ExpiresAt), v.Suspended, nt(v.RemindedFor), nt(v.ExpiredFor), v.ODB, fk(v.SplitterID), v.SplitterPort, tm(v.CreatedAt), nt(v.ClosedAt),
-			v.MACConflict, v.IP, fk(v.ApartmentID), v.Unit}
+			v.MACConflict, v.IP, fk(v.ApartmentID), v.Unit, v.WASamePhone}
 	},
 	dst: func(v *store.Account) []any {
 		return []any{&v.ID, &v.SiteID, &v.Code, &v.Flat, &v.Floor, &v.MAC, &v.Tenant, &v.Phone, &v.Notes, &v.WhatsApp, &v.WAOptOut, s_(&v.CustomerID), s_(&v.PackageID),
 			t_(&v.ExpiresAt), &v.Suspended, t_(&v.RemindedFor), t_(&v.ExpiredFor), &v.ODB, s_(&v.SplitterID), &v.SplitterPort, t_(&v.CreatedAt), t_(&v.ClosedAt),
-			&v.MACConflict, &v.IP, s_(&v.ApartmentID), &v.Unit}
+			&v.MACConflict, &v.IP, s_(&v.ApartmentID), &v.Unit, &v.WASamePhone}
 	},
 }).build()
 

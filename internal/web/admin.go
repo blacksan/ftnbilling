@@ -350,7 +350,9 @@ func (s *Server) createCustomer(ctx context.Context, in customerForm) (store.Acc
 			_ = s.svc.UpdateAccount(a.ID, a.Flat, a.Tenant, a.Phone, in.Notes)
 		}
 		if in.WhatsApp != "" || in.WASame {
-			_ = s.svc.SetWhatsApp(a.ID, in.WhatsApp, in.WASame, false)
+			if werr := s.svc.SetWhatsApp(a.ID, in.WhatsApp, in.WASame, false); werr != nil && err == nil {
+				err = werr // not silent: a WhatsApp number that was refused must be said
+			}
 		}
 		a, _ = s.svc.GetAccount(a.ID)
 	}

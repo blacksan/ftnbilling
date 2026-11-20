@@ -76,7 +76,7 @@
 <section class="panel"><h2>Details</h2><form method="post" action="/admin/accounts/update" class="mt-3 stack-col"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <div class="two"><label class="field">House number<input name="flat" value="{{$A.Flat}}" required></label><label class="field">Tenant<input name="tenant" value="{{$A.Tenant}}"></label></div>
 <div class="two"><label class="field">Phone<input name="phone" value="{{$A.Phone}}"></label><label class="field">WhatsApp<input name="whatsapp" value="{{$A.WhatsApp}}" placeholder="0712345678"></label></div>
-<label class="ck"><input type="checkbox" name="wa_same" value="1"> WhatsApp is the same as the phone</label>
+<label class="ck"><input type="checkbox" name="wa_same" value="1"{{if $A.WASamePhone}} checked{{end}}> WhatsApp is the same as the phone</label>
 <label class="ck"><input type="checkbox" name="wa_optout" value="1"{{if $A.WAOptOut}} checked{{end}}> Tenant opted out of WhatsApp messages</label>
 <label class="field">Notes<textarea name="notes" rows="2">{{$A.Notes}}</textarea></label><div><button>Save details</button></div></form></section>
 <div class="stack-col">

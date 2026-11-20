@@ -238,3 +238,61 @@ func TestSettingsBackupStatusAndHealthzDB(t *testing.T) {
 		t.Errorf("healthz %s", b)
 	}
 }
+
+// "WhatsApp is the same as the phone": the box is stored, comes back ticked after a reload, and the number follows the phone.
+func TestWhatsAppSameAsPhoneIsSavedAndShownTicked(t *testing.T) {
+	a := newApp(t, false)
+	ticked := func(page string) bool {
+		return regexp.MustCompile(`<input type="checkbox" name="wa_same" value="1" checked>`).MatchString(page)
+	}
+	a.adminPost(t, "/admin/customers/save", url.Values{"name": {"Njeri Wa"}, "phone": {"0712345678"}, "wa_same": {"1"}})
+	cid := a.customerID(t, "Njeri Wa")
+	var c store.Customer
+	a.st.View(func(d *store.Data) { c = d.Customers[cid] })
+	if !c.WASamePhone || c.WhatsApp != "254712345678" || c.WhatsApp != c.Phone {
+		t.Fatalf("saved customer %+v", c)
+	}
+	page := a.adminGet(t, "/admin/customers/view?id="+cid)
+	if !ticked(page) {
+		t.Fatal("the customer page does not show the box ticked after saving")
+	}
+	// the phone changes with the box still ticked: WhatsApp follows
+	a.adminPost(t, "/admin/customers/save", url.Values{"id": {cid}, "name": {"Njeri Wa"}, "phone": {"0722000111"}, "wa_same": {"1"}})
+	a.st.View(func(d *store.Data) { c = d.Customers[cid] })
+	if c.WhatsApp != "254722000111" || !c.WASamePhone {
+		t.Fatalf("after the phone change %+v", c)
+	}
+	// unticked with another number: the box is off and the number is kept
+	a.adminPost(t, "/admin/customers/save", url.Values{"id": {cid}, "name": {"Njeri Wa"}, "phone": {"0722000111"}, "whatsapp": {"0733555666"}})
+	a.st.View(func(d *store.Data) { c = d.Customers[cid] })
+	if c.WASamePhone || c.WhatsApp != "254733555666" {
+		t.Fatalf("after unticking %+v", c)
+	}
+	if ticked(a.adminGet(t, "/admin/customers/view?id="+cid)) {
+		t.Fatal("the box is ticked although the number differs")
+	}
+
+	// the account page: saving with the box ticked, then reloading
+	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"Flat 9"}, "mac": {mac1}})
+	acct := a.account(t, "Flat 9")
+	a.adminPost(t, "/admin/accounts/update", url.Values{"id": {acct.ID}, "flat": {"Flat 9"}, "phone": {"0744123123"}, "wa_same": {"1"}})
+	got := a.account(t, "Flat 9")
+	if !got.WASamePhone || got.WhatsApp != got.Phone || got.WhatsApp != "254744123123" {
+		t.Fatalf("account %+v", got)
+	}
+	if !ticked(a.adminGet(t, "/admin/accounts/view?code="+got.Code)) {
+		t.Fatal("the account page does not show the box ticked after saving")
+	}
+	// linking a new customer from the account page keeps the box
+	a.adminPost(t, "/admin/accounts/customer", url.Values{"id": {acct.ID}, "name": {"Otieno"}, "phone": {"0755000999"}, "wa_same": {"1"}, "move_in": {"2026-10-01"}})
+	got = a.account(t, "Flat 9")
+	if !got.WASamePhone || got.WhatsApp != "254755000999" {
+		t.Fatalf("after linking %+v", got)
+	}
+	// the phone is edited on the account with the box ticked on the customer too: still the same
+	a.adminPost(t, "/admin/accounts/update", url.Values{"id": {acct.ID}, "flat": {"Flat 9"}, "phone": {"0766111000"}, "wa_same": {"1"}})
+	got = a.account(t, "Flat 9")
+	if got.WhatsApp != "254766111000" {
+		t.Fatalf("WhatsApp did not follow the phone: %+v", got)
+	}
+}
