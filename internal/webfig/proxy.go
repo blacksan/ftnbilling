@@ -155,7 +155,7 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request) {
 		plain(w, http.StatusUnauthorized, "")
 		return
 	}
-	release, ok := m.acquire(sess.SiteID)
+	release, ok := m.acquireWait(r.Context(), sess.SiteID)
 	if !ok {
 		w.Header().Set("Retry-After", "5")
 		plain(w, http.StatusServiceUnavailable, "Too many WebFig requests at once for this router. Wait a moment and reload.")
@@ -220,7 +220,9 @@ func (m *Manager) fixResponse(resp *http.Response, tg Target) error {
 	h.Del("Pragma")
 	h.Del("Expires")
 	h.Set("Referrer-Policy", "no-referrer")
-	h.Set("X-Content-Type-Options", "nosniff")
+	// No nosniff on the router's own responses: RouterOS serves some WebFig scripts
+	// with a content type Chrome would then refuse to run, leaving WebFig on
+	// "Connecting". The WebFig host is its own origin, so this exposes nothing else.
 	if m.o.Secure {
 		h.Set("Strict-Transport-Security", "max-age=31536000")
 	}

@@ -23,6 +23,7 @@ import (
 
 	"ispbill/internal/config"
 	"ispbill/internal/store"
+	"ispbill/internal/webfig"
 )
 
 const wfDomain = "tech.example.co.ke"
@@ -49,6 +50,9 @@ func (r *wfRig) clock() time.Time {
 	return time.Now()
 }
 func (r *wfRig) advance(d time.Duration) { r.now.Store(r.clock().Add(d).UnixNano()) }
+
+// wfSlotWait keeps the tests quick: in production a request waits webfig.SlotWait.
+const wfSlotWait = 400 * time.Millisecond
 
 func newWF(t *testing.T) *wfRig {
 	t.Helper()
@@ -107,6 +111,7 @@ func newWF(t *testing.T) *wfRig {
 		c.WGSubnet = "10.99.0.0/22"
 	})
 	r.srv.SetWebFigClock(r.clock)
+	r.srv.SetWebFigSlotWait(wfSlotWait)
 	upAddr := r.up.Listener.Addr().String()
 	r.srv.SetWebFigDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
 		r.dialMu.Lock()
@@ -421,7 +426,7 @@ func TestWebFigCookieScopeAndNoLeaks(t *testing.T) {
 	if strings.Join(names, ",") != "sid" {
 		t.Fatalf("cookies passed on: %v", names)
 	}
-	for h, want := range map[string]string{"Cache-Control": "no-store", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"} {
+	for h, want := range map[string]string{"Cache-Control": "no-store", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer"} {
 		if v := resp.Header.Values(h); len(v) != 1 || v[0] != want {
 			t.Fatalf("%s: %v (want exactly %q)", h, v, want)
 		}
@@ -726,7 +731,7 @@ func TestWebFigConnectionLimits(t *testing.T) {
 	wc := r.open(t, r.br, r.owner, r.site)
 	r.holding.Store(true)
 	var wg sync.WaitGroup
-	for i := 0; i < 4; i++ {
+	for i := 0; i < webfig.PerRouterMax; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -734,34 +739,48 @@ func TestWebFigConnectionLimits(t *testing.T) {
 			resp.Body.Close()
 		}()
 	}
-	waitFor(t, func() bool { return len(r.dials()) >= 4 })
+	waitFor(t, func() bool { return len(r.dials()) >= webfig.PerRouterMax })
+	// one over the limit waits for a slot, then gives up with 503
+	start := time.Now()
 	resp := r.techReq("GET", "/", r.clientIP, nil, nil, wc)
 	resp.Body.Close()
 	if resp.StatusCode != 503 || resp.Header.Get("Retry-After") == "" {
-		t.Fatalf("5th request on one router: %d", resp.StatusCode)
+		t.Fatalf("request over the limit on one router: %d", resp.StatusCode)
+	}
+	if time.Since(start) < wfSlotWait {
+		t.Fatalf("request over the limit was refused without waiting")
 	}
 	// the REST budget is separate: the admin keeps working while WebFig is busy
 	if resp := r.adminReq(r.br, "GET", "/admin/routers/view?id="+r.site, nil); resp.StatusCode != 200 {
 		t.Fatalf("admin page while WebFig is busy: %d", resp.StatusCode)
 	}
-	// another router still has its own 4
+	// another router still has its own slots
 	id2 := seedSite(t, r.st, "Block B")
 	resp2 := r.techReq("GET", "/", r.clientIP, nil, nil, r.open(t, r.br, r.owner, id2))
 	resp2.Body.Close()
 	if resp2.StatusCode != 200 {
 		t.Fatalf("second router while the first is full: %d", resp2.StatusCode)
 	}
+	// a request that arrives while full is served once a slot frees up
+	got := make(chan int, 1)
+	go func() {
+		resp := r.techReq("GET", "/", r.clientIP, nil, nil, wc)
+		resp.Body.Close()
+		got <- resp.StatusCode
+	}()
+	time.Sleep(wfSlotWait / 4)
 	close(r.hold)
-	wg.Wait()
-	if resp := r.techReq("GET", "/", r.clientIP, nil, nil, wc); resp.StatusCode != 200 {
-		t.Fatalf("after release: %d", resp.StatusCode)
+	if code := <-got; code != 200 {
+		t.Fatalf("waiting request after release: %d", code)
 	}
+	wg.Wait()
 }
 
 func TestWebFigTotalLimit(t *testing.T) {
 	r := newWF(t)
+	full := webfig.TotalMax / webfig.PerRouterMax
 	ids := []string{r.site}
-	for i := 0; i < 4; i++ {
+	for i := 0; i < full; i++ {
 		ids = append(ids, seedSite(t, r.st, fmt.Sprintf("Block %d", i)))
 	}
 	cks := map[string]*http.Cookie{}
@@ -770,8 +789,8 @@ func TestWebFigTotalLimit(t *testing.T) {
 	}
 	r.holding.Store(true)
 	var wg sync.WaitGroup
-	for _, id := range ids[:4] {
-		for i := 0; i < 4; i++ {
+	for _, id := range ids[:full] {
+		for i := 0; i < webfig.PerRouterMax; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -780,11 +799,11 @@ func TestWebFigTotalLimit(t *testing.T) {
 			}()
 		}
 	}
-	waitFor(t, func() bool { return len(r.dials()) >= 16 })
-	resp := r.techReq("GET", "/", r.clientIP, nil, nil, cks[ids[4]])
+	waitFor(t, func() bool { return len(r.dials()) >= webfig.TotalMax })
+	resp := r.techReq("GET", "/", r.clientIP, nil, nil, cks[ids[full]])
 	resp.Body.Close()
 	if resp.StatusCode != 503 {
-		t.Fatalf("17th request overall: %d", resp.StatusCode)
+		t.Fatalf("request over the overall limit: %d", resp.StatusCode)
 	}
 	close(r.hold)
 	wg.Wait()

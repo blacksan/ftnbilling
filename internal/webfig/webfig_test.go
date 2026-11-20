@@ -1,6 +1,7 @@
 package webfig
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"sync/atomic"
@@ -95,5 +96,58 @@ func TestStoreLookupsAreOutsideTheLock(t *testing.T) {
 	close(block)
 	if !<-done {
 		t.Fatal("lookup failed")
+	}
+}
+
+// WebFig's page fetches its scripts in parallel. A request over the per-router
+// limit waits for a free slot instead of being refused: one refused script left
+// WebFig stuck on "Connecting" on the bench router.
+func TestRequestOverTheLimitWaitsForASlot(t *testing.T) {
+	m := New(Options{Domain: "tech.example.co.ke", Secure: true,
+		Resolve:   func(string) (Target, bool) { return Target{IP: "10.99.0.2", Port: 8081}, true },
+		UserOK:    func(string) bool { return true },
+		AdminLive: func(string) bool { return true }})
+	var held []func()
+	for i := 0; i < m.o.PerRouter; i++ {
+		rel, ok := m.acquire("s1")
+		if !ok {
+			t.Fatalf("slot %d refused below the limit", i)
+		}
+		held = append(held, rel)
+	}
+	got := make(chan bool, 1)
+	go func() {
+		rel, ok := m.acquireWait(context.Background(), "s1")
+		if ok {
+			rel()
+		}
+		got <- ok
+	}()
+	select {
+	case <-got:
+		t.Fatal("the request over the limit did not wait")
+	case <-time.After(100 * time.Millisecond):
+	}
+	held[0]()
+	select {
+	case ok := <-got:
+		if !ok {
+			t.Fatal("the waiting request was refused after a slot freed up")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the waiting request never got the freed slot")
+	}
+	for _, rel := range held[1:] {
+		rel()
+	}
+	// A request whose client went away stops waiting.
+	for i := 0; i < m.o.PerRouter; i++ {
+		rel, _ := m.acquire("s1")
+		defer rel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, ok := m.acquireWait(ctx, "s1"); ok {
+		t.Fatal("a cancelled request got a slot")
 	}
 }

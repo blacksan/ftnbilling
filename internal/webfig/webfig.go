@@ -28,8 +28,9 @@ const (
 	TicketTTL    = 60 * time.Second
 	IdleTimeout  = 30 * time.Minute
 	MaxLife      = 2 * time.Hour
-	PerRouterMax = 4  // concurrent proxied requests per router
-	TotalMax     = 16 // concurrent proxied requests overall
+	PerRouterMax = 8                // concurrent proxied requests per router (WebFig loads several scripts at once)
+	TotalMax     = 32               // concurrent proxied requests overall
+	SlotWait     = 20 * time.Second // how long a request waits for a free slot before 503
 )
 
 // Reasons a session ends (shown in the activity record).
@@ -89,6 +90,8 @@ type Options struct {
 	Now      func() time.Time
 	// Limits (zero = defaults above).
 	PerRouter, Total int
+	// SlotWait is how long a request over a limit waits for a free slot (default SlotWait).
+	SlotWait time.Duration
 }
 
 // Session is one WebFig session: one browser, one router.
@@ -142,6 +145,9 @@ func New(o Options) *Manager {
 	}
 	if o.Total <= 0 {
 		o.Total = TotalMax
+	}
+	if o.SlotWait <= 0 {
+		o.SlotWait = SlotWait
 	}
 	if o.ClientIP == nil {
 		o.ClientIP = func(r *http.Request) string {
@@ -465,6 +471,38 @@ func (m *Manager) acquire(siteID string) (release func(), ok bool) {
 			m.mu.Unlock()
 		})
 	}, true
+}
+
+// SetSlotWait changes how long a request waits for a slot (a test hook).
+func (m *Manager) SetSlotWait(d time.Duration) {
+	m.mu.Lock()
+	m.o.SlotWait = d
+	m.mu.Unlock()
+}
+
+// acquireWait waits for a proxy slot instead of refusing at once: WebFig's page
+// fetches its scripts in parallel, and one refused script leaves it stuck on
+// "Connecting". It gives up when the request ends or after SlotWait.
+func (m *Manager) acquireWait(ctx context.Context, siteID string) (release func(), ok bool) {
+	m.mu.Lock()
+	wait := m.o.SlotWait
+	m.mu.Unlock()
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	tick := time.NewTicker(25 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if rel, ok := m.acquire(siteID); ok {
+			return rel, true
+		}
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case <-deadline.C:
+			return nil, false
+		case <-tick.C:
+		}
+	}
 }
 
 // Busy is how many proxied requests are in flight now (tests wait for it to

@@ -139,6 +139,13 @@ func (s *Server) SetWebFigDial(f func(ctx context.Context, network, addr string)
 }
 func (s *Server) SetWebFigClock(f func() time.Time) { s.wf.now = f }
 
+// SetWebFigSlotWait shortens how long a WebFig request waits for a free slot (a test hook).
+func (s *Server) SetWebFigSlotWait(d time.Duration) {
+	if s.wf.mgr != nil {
+		s.wf.mgr.SetSlotWait(d)
+	}
+}
+
 // webfigRecheck ends WebFig sessions whose admin session just ended (sign-out,
 // revoked sessions, password or second-factor reset). The proxy checks on every
 // request anyway; this writes the record at once.
