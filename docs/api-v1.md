@@ -125,7 +125,7 @@ All rows below are additive; the D8 aliases apply to every row.
 |---|---|---|---|
 | GET `/overview?router=` | viewer | | `Overview` |
 | POST `/routers` | owner | `{name,serving_customers?:false,wan_interface?,olt_interface?,vlan_id?,customer_subnet?,wan_cap_mbps?,support_phone?}` | 201 `{router:Site,join:{command,command_nocheck,expires_at}}`, `no-store`, never replayed |
-| PATCH `/routers/{id}` | owner | same optional fields; `base_lan_ports`, `base_customer_ports`, `base_olt_interface`, `base_vlan_id` = the layout the client was shown: a port/OLT/VLAN change from a stale base is 409 `bad_state`, an unchanged one keeps the stored value | `Site` |
+| PATCH `/routers/{id}` | owner | same optional fields; `base_lan_ports`, `base_customer_ports`, `base_olt_interface`, `base_vlan_id` = the layout the client was shown (each `base_X` counts only when X itself is sent; a PATCH without port fields never conflicts): a port/OLT/VLAN change from a stale base is 409 `bad_state`, an unchanged one keeps the stored value | `Site` |
 | GET `/routers/{id}/setup` | viewer | | `Setup` |
 | POST `/routers/{id}/setup/run` | operator | | 202 `Setup` |
 | POST `/routers/{id}/setup/migrate` | operator | `{confirm_name,keep_unknown?:false}` | 202 `Setup` |

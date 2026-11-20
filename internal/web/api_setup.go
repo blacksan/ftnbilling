@@ -292,17 +292,17 @@ func (s *Server) apiRouterPatch(w http.ResponseWriter, r *http.Request, c *apiCt
 		return
 	}
 	in := sites.SiteInputOf(st)
-	base := in // only the fields that were sent change; the rest keep what is stored now, even if the Ports tab moved it meanwhile
-	if req.BaseLANPorts != nil {
+	base := in // a base_X counts only when X itself was sent; only the fields that were sent change; the rest keep what is stored now, even if the Ports tab moved it meanwhile
+	if req.BaseLANPorts != nil && req.LANPorts != nil {
 		base.LANPorts = *req.BaseLANPorts
 	}
-	if req.BaseCustomerPorts != nil {
+	if req.BaseCustomerPorts != nil && (req.CustomerPorts != nil || req.BenchPort != nil) {
 		base.CustomerPorts = strings.Join(*req.BaseCustomerPorts, ",")
 	}
-	if req.BaseOLTInterface != nil {
+	if req.BaseOLTInterface != nil && req.OLTInterface != nil {
 		base.OLTInterface = *req.BaseOLTInterface
 	}
-	if req.BaseVLANID != nil {
+	if req.BaseVLANID != nil && req.VLANID != nil {
 		base.VLANID = *req.BaseVLANID
 	}
 	in = applyRouterReq(in, req)

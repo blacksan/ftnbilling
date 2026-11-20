@@ -289,3 +289,23 @@ func TestP5WgSyncOneBadPeerBlocksEveryRouter(t *testing.T) {
 		t.Fatalf("2 valid routers were not applied because a third entry is bad: %s", strings.TrimSpace(out))
 	}
 }
+
+// A server installed before the banner marker file existed, with an owner who has already set up the
+// authenticator, must not have ADMIN_PASS printed again on its first upgrade.
+func TestRerunNeverPrintsAdminPassForEnrolledOwner(t *testing.T) {
+	d := t.TempDir()
+	envf := filepath.Join(d, "ftnbilling.env")
+	os.WriteFile(envf, []byte("ADMIN_USER=admin\nADMIN_PASS=Generated18CharsXyz\nPUBLIC_BASE_URL=https://billing.example.co.ke\n"), 0o640)
+	sbin := fakeBin(t, map[string]string{"ftnbilling-doctor": "exit 0"})
+	os.WriteFile(filepath.Join(sbin, "ftnbilling-admin-reset"), []byte("#!/bin/bash\necho '\"admin\" already has an authenticator app, so no setup code was issued'\n"), 0o755)
+	script := fmt.Sprintf(`set +e; source %q 2>/dev/null; trap - ERR; set +E
+ENVF=%s; SBIN=%s; DRY=0
+PROG_VERSION=v1; BASE=https://billing.example.co.ke; WG_PUB=k; MGMT_ON=0; MAC_REPORT=""; REMOVED_NOTE=""; BK_MSG=""; DOC_RC=0; DB_COUNTS=""; HEALTH=""
+UPGRADE=1
+OWNER_ENROLLED=1; SETUP_OUT="code-1234"   # an enrolled owner whose program still issued a code
+doctor_and_banner 2>&1`, installLib(t), envf, sbin)
+	out, _ := bash(t, nil, script)
+	if strings.Contains(out, "Generated18CharsXyz") {
+		t.Fatalf("the admin password was printed again for an enrolled owner:\n%s", out)
+	}
+}

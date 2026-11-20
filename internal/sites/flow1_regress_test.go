@@ -264,3 +264,26 @@ func TestRouterFlow_SweepOnDeadRouterBlocksEdit(t *testing.T) {
 		t.Fatalf("a notes edit waited %v for the sweep", el)
 	}
 }
+
+// A "fail" report is posted over the WAN before the first handshake: for the first two minutes the page keeps
+// waiting (a non-fatal section may fail on a router that is about to join); then it says stalled.
+func TestRouterFlow_FailedReportWaitsForTheTunnelFirst(t *testing.T) {
+	f := newFixture(t, nil)
+	s := f.create("Block A")
+	tok, _, _ := f.m.MintJoin(s.ID)
+	if _, _, err := f.m.ConsumeJoin(tok, "RouterOS 7.25.1", "1.2.3.4", false); err != nil {
+		t.Fatal(err)
+	}
+	f.advance(time.Minute)
+	if err := f.m.SubmitJoinReport(tok, []byte("result fail ros 7.25.1\n5 NTP: failure: no server")); err != nil {
+		t.Fatal(err)
+	}
+	f.advance(30 * time.Second)
+	if v, _ := f.m.SetupView(nil, s.ID); v.State == StateStalled {
+		t.Fatalf("30 s after a failed report the page already says stalled")
+	}
+	f.advance(3 * time.Minute)
+	if v, _ := f.m.SetupView(nil, s.ID); v.State != StateStalled {
+		t.Fatalf("3 min after a failed report with no tunnel the state is %q, want stalled", v.State)
+	}
+}

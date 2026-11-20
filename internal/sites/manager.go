@@ -518,8 +518,13 @@ func (m *Manager) UpdateSite(id string, in SiteInput) error {
 func (m *Manager) UpdateSiteCtx(ctx context.Context, id string, in SiteInput) error {
 	var portsChanged bool
 	e := m.cport.entry(id)
-	if err := e.run.LockCtx(ctx); err != nil {
-		return err
+	// The wait for the router's lock is capped like every admin action (billing.AdminRunCap): a sweep or port pass
+	// on a slow router must not hold a form for minutes. Nothing is saved when it gives up.
+	lctx, lcancel := context.WithTimeout(ctx, billing.AdminRunCap)
+	lerr := e.run.LockCtx(lctx)
+	lcancel()
+	if lerr != nil {
+		return lerr
 	}
 	defer e.run.Unlock()
 	var cur0 store.Site

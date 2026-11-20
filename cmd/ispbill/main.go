@@ -182,6 +182,7 @@ func run(log *slog.Logger) error {
 		return err
 	case <-st.LockLost(): // nil channel (JSON store) blocks for ever
 		lockErr = st.Healthy()
+		stop() // end every loop (sweeper, spool, ops, manager) so run() returns and the service manager restarts the app
 		log.Error("the database writer lock was lost; exiting so that the service manager restarts the app", "err", lockErr)
 	case <-ctx.Done():
 	}

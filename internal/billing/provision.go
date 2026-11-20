@@ -405,7 +405,7 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	ps.mu.Unlock()
 	// A flat that was given an address the router's own static lease already holds (the server had not run a pass
 	// yet when it was made) is moved to a free one; this pass leaves it alone, the next one writes the new address.
-	s.readdressClashes(siteID, pl, pd.foreignIPs)
+	s.readdressClashes(siteID, pl, pd.foreignIPs, pd.readdress)
 	for code, why := range blocked {
 		snap[code] = acctSnap{leaseStatus: "none", clash: true, err: why}
 	}
@@ -513,6 +513,7 @@ type planExtra struct {
 // opSet collects what a pass wants to do.
 type opSet struct {
 	foreignIPs []string // addresses held by the router's own static leases
+	readdress  []string // account codes whose address is held by another device's foreign static lease
 	ops        []provOp
 	conflicts  []string
 }
@@ -579,6 +580,34 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 	for _, r := range foreignLeases {
 		if r["address"] != "" {
 			out.foreignIPs = append(out.foreignIPs, r["address"])
+		}
+	}
+	// A flat is re-addressed only when a foreign static lease of ANOTHER device holds its address. A foreign lease
+	// on the flat's own MAC is a MAC clash (moving the account cannot help: the device keeps the lease's address),
+	// and a device that currently holds the address through a dynamic lease is not moved away from it either.
+	for _, w := range wants {
+		a := w.a
+		if a.IP == "" {
+			continue
+		}
+		held, own := false, false
+		for _, r := range foreignLeases {
+			if strings.EqualFold(r["mac-address"], a.MAC) {
+				own = true
+			} else if r["address"] == a.IP {
+				held = true
+			}
+		}
+		if !held || own {
+			continue
+		}
+		for _, r := range dynLeases {
+			if strings.EqualFold(r["mac-address"], a.MAC) && r["address"] == a.IP {
+				own = true
+			}
+		}
+		if !own {
+			out.readdress = append(out.readdress, a.Code)
 		}
 	}
 	for _, w := range wants {

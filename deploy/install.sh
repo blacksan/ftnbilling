@@ -1249,15 +1249,16 @@ pre_upgrade_database() {
 # must not make the installer fail.
 make_setup_code() {
   SETUP_OUT=""
+  OWNER_ENROLLED=0
   local out rc=0 st
   # An owner who already has the authenticator app needs no setup code: skip the call (it would stop and
   # restart the service for nothing) and never print a FIRST SIGN-IN block for them.
   if [ -n "$(envget DATABASE_URL)" ]; then
     st=$(app_cli admin-status -json 2>/dev/null || true)
-    case "$st" in *'"totp_enrolled":true'*) return 0 ;; esac
+    case "$st" in *'"totp_enrolled":true'*) OWNER_ENROLLED=1; return 0 ;; esac
   fi
   out=$("$SBIN/$APP-admin-reset" --setup-code 2>&1) || rc=$?
-  case "$out" in *"already has an authenticator"*) return 0 ;; esac
+  case "$out" in *"already has an authenticator"*) OWNER_ENROLLED=1; return 0 ;; esac
   if [ "$rc" = 0 ]; then SETUP_OUT=$out
   else
     SETUP_OUT=""
@@ -1314,7 +1315,9 @@ doctor_and_banner() {
   # after the settings step wrote ADMIN_PASS but never displayed it, and its re-run is an "upgrade".
   local pwtext="your admin password" shown
   shown="$(dirname "$ENVF")/.install-banner-shown"
-  if [ "$UPGRADE" != 1 ] || [ ! -e "$shown" ]; then pwtext="the password $(envget ADMIN_PASS) (from $ENVF)"; fi
+  # An owner who has already set up the authenticator has signed in with the password: it may have been changed
+  # since, and it is not printed again (servers installed before the marker file existed).
+  if [ "${OWNER_ENROLLED:-0}" != 1 ] && { [ "$UPGRADE" != 1 ] || [ ! -e "$shown" ]; }; then pwtext="the password $(envget ADMIN_PASS) (from $ENVF)"; fi
   if [ -n "$(envget DATABASE_URL)" ]; then backend="PostgreSQL (local socket)"; fi
   cat <<EOF
 

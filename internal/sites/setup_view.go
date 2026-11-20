@@ -30,6 +30,9 @@ const TunnelFresh = 3 * time.Minute
 // about two minutes, so ten is generous.
 const StallAfter = 10 * time.Minute
 
+// FailedReportWait: a failed join report only means "stalled" this long after it was posted, if the tunnel is still down.
+const FailedReportWait = 2 * time.Minute
+
 // SetupJoin is the join part of Setup.
 type SetupJoin struct {
 	State     string      `json:"state"` // none | waiting | used | expired
@@ -169,7 +172,10 @@ func (m *Manager) SetupView(_ context.Context, siteID string) (Setup, bool) {
 	// report that says "ok" and then no tunnel still means it did not join), or the script itself reported
 	// that it failed, which no waiting will fix.
 	failedReport := out.Join.Report != nil && !out.Join.Report.OK
-	stalled := !tunnel && !joined && !site.Join.UsedAt.IsZero() && (failedReport || now.Sub(site.Join.UsedAt) > StallAfter)
+	// A "fail" report is not the end while the tunnel may still be coming up (the report is posted over the WAN
+	// before the first handshake): it counts as stalled only when the tunnel is still down FailedReportWait later.
+	failedStalled := failedReport && now.Sub(out.Join.Report.At) > FailedReportWait
+	stalled := !tunnel && !joined && !site.Join.UsedAt.IsZero() && (failedStalled || now.Sub(site.Join.UsedAt) > StallAfter)
 	switch {
 	case !fetched:
 		out.State = StateNotStarted
@@ -206,7 +212,7 @@ func (m *Manager) SetupView(_ context.Context, siteID string) (Setup, bool) {
 	}
 	if tunnel {
 		s2.Status, s2.At = "ok", handshakeAt
-	} else if stalled && failedReport {
+	} else if stalled && failedStalled {
 		s2.Status, s2.Detail = "failed", "The script stopped before the tunnel was built."
 	} else if stalled {
 		s2.Status, s2.Detail = "failed", "The router fetched the script but never came back."

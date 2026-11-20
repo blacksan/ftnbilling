@@ -245,9 +245,13 @@ var _ = routeros.RowID
 
 // readdressClashes gives every open flat of the building whose address is held by one of the router's own
 // static leases a fresh address from the static range, and queues its router work.
-func (s *Service) readdressClashes(siteID string, pl netplan.Plan, foreignList []string) {
-	if len(foreignList) == 0 {
+func (s *Service) readdressClashes(siteID string, pl netplan.Plan, foreignList, codes []string) {
+	if len(foreignList) == 0 || len(codes) == 0 {
 		return
+	}
+	only := make(map[string]bool, len(codes))
+	for _, c := range codes {
+		only[c] = true
 	}
 	foreign := make(map[string]bool, len(foreignList))
 	for _, ip := range foreignList {
@@ -256,7 +260,7 @@ func (s *Service) readdressClashes(siteID string, pl netplan.Plan, foreignList [
 	_ = s.st.Update(func(d *store.Data) error {
 		changed := false
 		for _, a := range d.AccountList() {
-			if a.SiteID != siteID || a.IP == "" || !foreign[a.IP] {
+			if a.SiteID != siteID || a.IP == "" || !foreign[a.IP] || !only[a.Code] {
 				continue
 			}
 			fresh, err := FreeIPLocked(d, siteID, pl, foreign)

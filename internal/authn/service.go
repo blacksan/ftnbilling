@@ -41,7 +41,7 @@ const (
 	// RefreshLostGrace is how long the previous refresh token still works, once, when the phone never used
 	// the answer to the last refresh (a response lost to a coverage gap). After the phone uses the new pair
 	// the previous token is dead and reusing it revokes the device.
-	RefreshLostGrace  = 24 * time.Hour
+	RefreshLostGrace  = 2 * time.Hour
 	SetupCodeLife     = 14 * 24 * time.Hour
 	touchEvery        = 60 * time.Second
 	revokedKeep       = 30 * 24 * time.Hour

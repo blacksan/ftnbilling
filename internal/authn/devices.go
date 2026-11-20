@@ -172,6 +172,11 @@ func (s *Service) Refresh(refreshToken, ip string) (Tokens, store.APIDevice, sto
 	if result != nil {
 		return Tokens{}, store.APIDevice{}, store.AdminUser{}, result
 	}
+	// The first use of the new pair must always be recorded (it confirms the phone got this answer), so the
+	// 60 s activity throttle starts afresh.
+	s.mu.Lock()
+	delete(s.touch, id)
+	s.mu.Unlock()
 	return tok, dev, user, nil
 }
 

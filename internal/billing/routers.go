@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"context"
 	"sync"
 
 	"ispbill/internal/routeros"
@@ -33,7 +34,7 @@ func (m MockRouters) Router(siteID string) routeros.Client {
 // siteState is the per-building state of the service: a lock that serialises
 // task runs and the last reconcile pass.
 type siteState struct {
-	taskMu   sync.Mutex
+	taskMu   ctxMutex
 	provOnce sync.Once
 	prov     *provState
 }
@@ -69,3 +70,30 @@ func (s *Service) runnableSites() (ids []string) {
 
 // Wait blocks until background work started by the service has finished. Used at shutdown and in tests.
 func (s *Service) Wait() { s.bg.Wait() }
+
+// ctxMutex is a mutex whose wait ends with a context. The zero value is ready to use.
+type ctxMutex struct {
+	once sync.Once
+	ch   chan struct{}
+}
+
+func (m *ctxMutex) init() { m.once.Do(func() { m.ch = make(chan struct{}, 1) }) }
+
+// LockCtx takes the lock, or gives up when ctx ends first.
+func (m *ctxMutex) LockCtx(ctx context.Context) bool {
+	m.init()
+	select {
+	case m.ch <- struct{}{}:
+		return true
+	default:
+	}
+	select {
+	case m.ch <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// Unlock releases a lock taken by LockCtx.
+func (m *ctxMutex) Unlock() { <-m.ch }

@@ -93,7 +93,11 @@ func (s *Service) RunSiteTasks(ctx context.Context, siteID string) int {
 		return 0
 	}
 	state := s.state(siteID)
-	state.taskMu.Lock()
+	// The wait for a pass already running on this building (a sweep on a slow or dead router) ends with ctx: an
+	// admin action gives up after its cap and leaves the task queued for the retry loop.
+	if !state.taskMu.LockCtx(ctx) {
+		return 0
+	}
 	defer state.taskMu.Unlock()
 	now := s.now()
 	var due []store.Task
@@ -119,6 +123,11 @@ func (s *Service) RunSiteTasks(ctx context.Context, siteID string) int {
 			batchDone = true
 		}
 		err := batchErr
+		if err != nil && ctx.Err() != nil {
+			// our own deadline (an admin action's cap), not the router refusing: the task stays due and is not
+			// counted as a failed attempt
+			break
+		}
 		_ = s.st.Update(func(d *store.Data) error {
 			cur, found := d.Tasks[t.ID]
 			if !found {

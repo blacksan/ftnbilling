@@ -7,7 +7,7 @@ import (
 )
 
 // ErrRouterBusy: another change or pass holds this router's writer lock and the caller's time ran out waiting for it.
-var ErrRouterBusy = errors.New("the router is busy with another change; try again in a moment")
+var ErrRouterBusy = errors.New("the router is busy with another change, so nothing was saved; try again in a few seconds")
 
 // runLock is a mutex whose waiters give up with their context. The zero value is ready to use.
 type runLock struct {
