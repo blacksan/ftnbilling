@@ -39,6 +39,7 @@ type app struct {
 	cookie *http.Cookie // extra admin cookie (building selection)
 	csrf   string
 	cl     *http.Client
+	tp     *payments.Test // the test-payment provider (Wait for its delayed completions)
 	srv    *web.Server
 	owner  *who
 	br     *browser
@@ -79,7 +80,7 @@ func newAppCfg(t *testing.T, testMode bool, mut func(*config.Config)) *app {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	a := &app{ts: ts, st: st, svc: svc, rt: rt, mgr: mgr, site: envID, srv: srv,
-		cl: &http.Client{CheckRedirect: noRedirect}}
+		cl: &http.Client{CheckRedirect: noRedirect}, tp: tp}
 	a.owner = seedUser(t, srv, st, "admin", store.RoleOwner, pw)
 	a.br = signIn(t, ts, srv, st, a.owner)
 	a.csrf = a.br.CSRF

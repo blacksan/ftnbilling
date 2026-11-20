@@ -98,16 +98,22 @@ class ApiClient(
         }
         val req = Request.Builder().url(url).method(method, rb).header("Accept", "application/json").build()
         val response = http.newCall(req).await()
-        return withContext(io) {
-            response.use { r ->
-                val text = try {
-                    r.body?.string().orEmpty()
-                } catch (e: IOException) {
-                    throw ApiError.network(e)
+        // If the caller is cancelled after the response arrived but before the block below starts, the block never
+        // runs; the finally closes the response then (closing twice is harmless).
+        try {
+            return withContext(io) {
+                response.use { r ->
+                    val text = try {
+                        r.body?.string().orEmpty()
+                    } catch (e: IOException) {
+                        throw ApiError.network(e)
+                    }
+                    if (!r.isSuccessful) throw parseError(r, text)
+                    text.ifBlank { "null" }.let { if (it == "null") "{}" else it }
                 }
-                if (!r.isSuccessful) throw parseError(r, text)
-                text.ifBlank { "null" }.let { if (it == "null") "{}" else it }
             }
+        } finally {
+            response.close()
         }
     }
 

@@ -127,7 +127,7 @@ All rows below are additive; the D8 aliases apply to every row.
 | POST `/routers` | owner | `{name,serving_customers?:false,wan_interface?,olt_interface?,vlan_id?,customer_subnet?,wan_cap_mbps?,support_phone?}` | 201 `{router:Site,join:{command,command_nocheck,expires_at}}`, `no-store`, never replayed |
 | PATCH `/routers/{id}` | owner | same optional fields | `Site` |
 | GET `/routers/{id}/setup` | viewer | | `Setup` |
-| POST `/routers/{id}/setup/run`, `/setup/migrate`, `/setup/rollback` | operator | | removed in v5: **410 `gone`** (a router is set up by pasting one line; see `docs/api/v5-bootstrap.md`) |
+| POST `/routers/{id}/setup/run`, `/setup/migrate`, `/setup/rollback` | viewer (the route answers every role with the 410) | | removed in v5: **410 `gone`** (a router is set up by pasting one line; see `docs/api/v5-bootstrap.md`) |
 | GET `/routers/{id}/live` | viewer | | `RouterLive` |
 | GET `/routers/{id}/interfaces` | viewer | | `{items:[Interface],generated_at}` |
 | GET `/routers/{id}/clients?q=&kind=all\|flats\|unregistered&online=` | viewer | | `{items:[Client],counts:{flats,online,unregistered}}` |
