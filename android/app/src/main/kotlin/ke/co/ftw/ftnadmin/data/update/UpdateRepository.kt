@@ -6,6 +6,7 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.security.MessageDigest
 import javax.net.ssl.SSLException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -36,6 +37,7 @@ class UpdateRepository(
     private val repo: String = "blacksan/ftnbilling",
     private val policy: UpdatePolicy = UpdatePolicy.Production,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val io: CoroutineDispatcher = Dispatchers.IO,
 ) : UpdateSource {
     private val client = http.newBuilder().followRedirects(false).followSslRedirects(false).build()
 
@@ -89,7 +91,7 @@ class UpdateRepository(
     }
 
     override suspend fun download(update: AvailableUpdate, onProgress: (done: Long, total: Long) -> Unit): File =
-        withContext(Dispatchers.IO) {
+        withContext(io) {
             val url = update.apkUrl.toHttpUrlOrNull()
             if (url == null || !policy.allows(url)) throw refused(update.apkUrl)
             if (!APK_NAME.matches(update.apkName)) throw UpdateException("The release names its file ${update.apkName}, which is not a valid app file name.")
@@ -198,7 +200,7 @@ class UpdateRepository(
      * as built by this class (the API address) rather than taken from release data.
      */
     private suspend fun <T> withResponse(start: HttpUrl, trusted: Boolean, accept: String, block: (Response) -> T): T =
-        withContext(Dispatchers.IO) {
+        withContext(io) {
             var url = start
             var skipCheck = trusted
             for (hop in 0..MAX_REDIRECTS) {

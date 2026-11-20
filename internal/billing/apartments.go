@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
-	"sort"
 	"strings"
 	"time"
 
@@ -609,14 +608,4 @@ func (s *Service) MoveToApartment(ctx context.Context, in MoveInput) (store.Acco
 		}
 	}
 	return out, err
-}
-
-// SortedUnits lists the units of the accounts, for messages.
-func SortedUnits(as []store.Account) []string {
-	out := make([]string, 0, len(as))
-	for _, a := range as {
-		out = append(out, a.Unit)
-	}
-	sort.Slice(out, func(i, j int) bool { return store.NaturalLess(out[i], out[j]) })
-	return out
 }

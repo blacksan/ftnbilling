@@ -32,6 +32,15 @@ func TestConformance(t *testing.T) {
 	storetest.Run(t)
 }
 
+// TestStrictStaysOnAfterConformance runs after TestConformance (source order): the
+// suite must not leave store.Strict switched off for the tests that follow it.
+func TestStrictStaysOnAfterConformance(t *testing.T) {
+	storetest.New(t)
+	if !store.Strict {
+		t.Fatal("store.Strict is false after storetest.New: a test helper turned it off")
+	}
+}
+
 func TestMigrationsIdempotentChecksumAndDowngradeGuard(t *testing.T) {
 	url := storetest.RequirePostgres(t)
 	schema := storetest.NewSchema(t, url)

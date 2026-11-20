@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/netip"
 	"sort"
 	"strings"
 	"time"
@@ -229,16 +228,6 @@ func firstNonEmpty(v ...string) string {
 		}
 	}
 	return ""
-}
-
-// ipLess orders dotted-quad strings numerically.
-func ipLess(a, b string) bool {
-	x, e1 := netip.ParseAddr(a)
-	y, e2 := netip.ParseAddr(b)
-	if e1 != nil || e2 != nil {
-		return a < b
-	}
-	return x.Less(y)
 }
 
 var _ = routeros.RowID

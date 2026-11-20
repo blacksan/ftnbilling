@@ -67,13 +67,12 @@ class RoutersV4Test {
         server.start()
         val sessions = SessionManager(MemoryTokenStore(Session("a", "", "r", "", "d", owner)))
         sessions.restore()
-        api = ApiClient.create(server.url("/").toString(), sessions)
+        api = ApiClient.create(server.url("/").toString(), sessions, io = main.dispatcher)
     }
 
     @After fun tearDown() {
-        // Let responses still in flight land while the test Main dispatcher exists, so nothing leaks into the next test.
-        Thread.sleep(300)
-        main.dispatcher.scheduler.advanceUntilIdle()
+        // Cancel the view models first, so no call is resumed on a Main that is about to be reset.
+        main.cancelViewModels()
         server.shutdown()
     }
 
@@ -108,7 +107,7 @@ class RoutersV4Test {
         routes["GET /api/v1/routers/r1/live"] = ok(live)
         routes["GET /api/v1/overview"] = ok("""{"revenue":{"today_kes":900,"spark_7d":[1,2,3]},"active":40,"online_now":31,"routers":{"total":3,"online":2},"health":{"expiring_7d":5}}""")
         val sel = MutableStateFlow<String?>("r1")
-        val vm = HomeViewModel(RouterLiveRepository(api), sel, pollMs = 10)
+        val vm = main.track(HomeViewModel(RouterLiveRepository(api), sel, pollMs = 10))
         await(vm.state) { it.live is Loadable.Ready }
 
         val l = (vm.state.value.live as Loadable.Ready).value
@@ -134,7 +133,7 @@ class RoutersV4Test {
 
     @Test fun liveDashboardPollsWhileResumedAndStopsWhenPaused() = runTest(main.dispatcher) {
         routes["GET /api/v1/routers/r1/live"] = ok(live)
-        val vm = HomeViewModel(RouterLiveRepository(api), MutableStateFlow("r1"), pollMs = 10)
+        val vm = main.track(HomeViewModel(RouterLiveRepository(api), MutableStateFlow("r1"), pollMs = 10))
         await(vm.state) { it.live is Loadable.Ready }
         vm.startPolling()
         await(vm.state) { it.cpuHistory.size >= 4 }
@@ -150,7 +149,7 @@ class RoutersV4Test {
 
     @Test fun liveDashboardKeepsOldNumbersWhenARefreshFails() = runTest(main.dispatcher) {
         sequences["GET /api/v1/routers/r1/live"] = mutableListOf(ok(live), err(503, "router_unreachable"))
-        val vm = HomeViewModel(RouterLiveRepository(api), MutableStateFlow("r1"))
+        val vm = main.track(HomeViewModel(RouterLiveRepository(api), MutableStateFlow("r1")))
         await(vm.state) { it.live is Loadable.Ready }
         vm.refresh()
         await(vm.state) { it.staleError != null }
@@ -165,7 +164,7 @@ class RoutersV4Test {
         "counts":{"flats":1,"online":2,"unregistered":1}}"""
 
     private fun networkVm(sel: StateFlow<String?> = MutableStateFlow("r1")) =
-        NetworkViewModel(RouterLiveRepository(api), AccountsRepository(api), NewDevicesRepository(api), sel, searchDebounceMs = 10)
+        main.track(NetworkViewModel(RouterLiveRepository(api), AccountsRepository(api), NewDevicesRepository(api), sel, searchDebounceMs = 10))
 
     @Test fun clientsSearchSendsTheQueryAndFilters() = runTest(main.dispatcher) {
         routes["GET /api/v1/routers/r1/clients"] = ok(clients)
@@ -233,10 +232,10 @@ class RoutersV4Test {
         routes["GET /api/v1/routers/r1/clients"] = ok(deviceList)
     }
 
-    private fun addVm() = AddCustomerViewModel(
+    private fun addVm() = main.track(AddCustomerViewModel(
         AccountsRepository(api), RouterLiveRepository(api), SitesRepository(api), ApartmentsRepository(api),
         initialRouterId = "r1", initialMac = null, pollMs = 10, maxPolls = 5,
-    )
+    ))
 
     private fun TestScope.fill(vm: AddCustomerViewModel) {
         await(vm.state) { it.routers.isNotEmpty() && it.apartmentId != null && it.packages is Loadable.Ready && it.devices is Loadable.Ready }
@@ -346,7 +345,7 @@ class RoutersV4Test {
         Loadable.Ready(listOf(Site(id = "r1", name = "Kilimani", online = true))),
     )
 
-    private fun actionsVm(user: UserInfo) = RouterActionsViewModel(SiteSetupRepository(api), MutableStateFlow("r1"), routerList(), user)
+    private fun actionsVm(user: UserInfo) = main.track(RouterActionsViewModel(SiteSetupRepository(api), MutableStateFlow("r1"), routerList(), user))
 
     @Test fun rebootIsOwnerOnlyAndNeedsTheTypedRouterName() = runTest(main.dispatcher) {
         routes["POST /api/v1/routers/r1/actions/reboot"] = ok("""{"queued":true}""", code = 202)

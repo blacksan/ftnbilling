@@ -103,6 +103,9 @@ func TestPayRejectsSlowerPlanWhileActiveServerSide(t *testing.T) {
 	if r.StatusCode != 303 {
 		t.Errorf("upgrade status %d", r.StatusCode)
 	}
+	// The test payment completes after a short delay; let it land first, or it would
+	// overwrite the package the admin forces below.
+	a.tp.Wait()
 	// Admin form: the force box applies a slower package.
 	a.adminPost(t, "/admin/accounts/extend", url.Values{"id": {acct.ID}, "package": {a.pkgID("1 Hour")}, "force": {"1"}})
 	if cur := a.account(t, "Flat 3B"); cur.PackageID != a.pkgID("1 Hour") {

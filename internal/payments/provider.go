@@ -4,6 +4,7 @@ package payments
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"ispbill/internal/billing"
@@ -34,7 +35,13 @@ type Test struct {
 	Delay    time.Duration
 	C        Completer
 	Logf     func(msg string, args ...any)
+
+	wg sync.WaitGroup // the delayed completions in flight
 }
+
+// Wait blocks until every delayed completion started by Start has finished
+// (tests call it before the store goes away).
+func (t *Test) Wait() { t.wg.Wait() }
 
 func (t *Test) Name() string  { return "test" }
 func (t *Test) Enabled() bool { return t.Enabled_ }
@@ -43,7 +50,9 @@ func (t *Test) Start(_ context.Context, o store.Order) error {
 	if !t.Enabled_ {
 		return errors.New("test payments are disabled")
 	}
+	t.wg.Add(1)
 	go func() {
+		defer t.wg.Done()
 		time.Sleep(t.Delay)
 		if err := t.C.CompleteOrder(context.Background(), o.ID, "TEST-"+o.ID); err != nil && t.Logf != nil {
 			t.Logf("test payment completion failed", "order", o.ID, "err", err)

@@ -96,6 +96,10 @@ func (e *env) open(t *testing.T) {
 	e.st = st
 	e.svc = NewService(st, e.routers, quiet())
 	e.svc.SetClock(func() time.Time { return e.now })
+	// Background work (ResyncAll after SavePackage) must end before the store is closed
+	// and before the next test starts; registered after the store's cleanup, so it runs first.
+	svc := e.svc
+	t.Cleanup(svc.Wait)
 }
 
 func (e *env) pkg(name string) store.Package {

@@ -3,10 +3,8 @@ package payments
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,12 +21,6 @@ import (
 	"ispbill/internal/billing"
 	"ispbill/internal/store"
 )
-
-func newID() string {
-	b := make([]byte, 6)
-	rand.Read(b)
-	return hex.EncodeToString(b)
-}
 
 var eat = time.FixedZone("EAT", 3*3600)
 

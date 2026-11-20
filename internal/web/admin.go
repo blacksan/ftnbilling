@@ -198,36 +198,6 @@ func countsAsRevenue(p store.Payment) bool {
 
 // ---- accounts ----------------------------------------------------------------
 
-// routerSummary pings the selected building, or every runnable one.
-func (s *Server) routerSummary(ctx context.Context, sc scope) (bool, string) {
-	if !sc.All {
-		err := s.svc.Ping(ctx, sc.ID)
-		return err == nil, errString(err)
-	}
-	up, n := 0, 0
-	var firstErr string
-	for _, st := range sc.Sites {
-		if !st.Runnable() {
-			continue
-		}
-		n++
-		if err := s.svc.Ping(ctx, st.ID); err != nil {
-			if firstErr == "" {
-				firstErr = st.Name + ": " + err.Error()
-			}
-			continue
-		}
-		up++
-	}
-	if n == 0 {
-		return false, "no router is connected yet"
-	}
-	if up == n {
-		return true, strconv.Itoa(n) + " of " + strconv.Itoa(n) + " routers reachable"
-	}
-	return false, strconv.Itoa(up) + " of " + strconv.Itoa(n) + " routers reachable. " + firstErr
-}
-
 type acctRow struct {
 	A         store.Account
 	Pkg       store.Package

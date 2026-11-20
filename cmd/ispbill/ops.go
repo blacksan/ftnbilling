@@ -108,7 +108,6 @@ func startOps(ctx context.Context, wg *sync.WaitGroup, setm *settings.Manager, m
 			return alerts.Targets{Email: emailTargets(c), WhatsApp: waTargets(c)}
 		},
 	})
-	mgr.SetAnnouncer(engine.Announce)
 	tenant := notify.NewTenant(notify.TenantOptions{
 		Store: st, Box: box, Log: log, Lang: cfg.WALang, Policy: svc.Policy, PayHint: payHintOf(cfg), MinConfirmKES: cfg.WAMinConfirmKES,
 		Mode:      func() string { return engine.Settings().OutageNotice },

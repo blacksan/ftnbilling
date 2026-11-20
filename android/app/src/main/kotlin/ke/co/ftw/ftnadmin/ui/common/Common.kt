@@ -140,11 +140,6 @@ fun StatusChip(text: String, tone: Tone, modifier: Modifier = Modifier) {
 
 fun Context.isDeviceSecure(): Boolean = getSystemService(KeyguardManager::class.java)?.isDeviceSecure == true
 
-@Composable
-fun FullWidth(content: @Composable () -> Unit) {
-    Box(Modifier.fillMaxWidth()) { content() }
-}
-
 /** Top bar shared by the top-level screens: title plus a settings shortcut. */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable

@@ -50,6 +50,4 @@ class SettingsViewModel(private val auth: AuthRepository) : ViewModel() {
             if (r.isSuccess) loadDevices()
         }
     }
-
-    fun dismissMessage() = _state.update { it.copy(message = null) }
 }

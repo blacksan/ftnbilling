@@ -59,8 +59,6 @@ type Manager struct {
 
 	refused refusals // join fetches turned away for their User-Agent (joinreport.go)
 
-	foreignIPs atomic.Pointer[func(string) map[string]bool] // set by billing.NewService
-
 	chk          checksState   // cache of the setup checks (checks.go)
 	autoFixDelay time.Duration // wait after the first answer before the post-join fixes (runtime.go)
 
@@ -69,17 +67,6 @@ type Manager struct {
 	live      liveState  // live router views (live.go)
 	portRates portsRates // byte counters of the Ports view (ports.go)
 	box       *secretbox.Box
-}
-
-// SetForeignIPs lets the billing service tell the sites package which addresses
-// the router's own static leases hold, so no flat is given one of them.
-func (m *Manager) SetForeignIPs(f func(siteID string) map[string]bool) { m.foreignIPs.Store(&f) }
-
-func (m *Manager) foreignIPsOf(siteID string) map[string]bool {
-	if f := m.foreignIPs.Load(); f != nil {
-		return (*f)(siteID)
-	}
-	return nil
 }
 
 // New builds a Manager. Nothing runs until Start.
@@ -738,8 +725,6 @@ func (m *Manager) Status(ctx context.Context, siteID string) (SiteStatus, bool) 
 	}
 	return st, true
 }
-
-func nowFn() time.Time { return time.Now() }
 
 // checkLANChange guards the admin LAN ports of a set-up router: a change needs the typed router name, and when a
 // port leaves the list at least one port that stays must be switched on and have a link (it is read from the

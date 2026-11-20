@@ -108,20 +108,6 @@ func greeting(now time.Time, user string) (string, string) {
 	return a, name + "."
 }
 
-// greetingPeriod is the API's greeting_period word for the same hour.
-func greetingPeriod(now time.Time) string {
-	h := now.In(billing.EAT).Hour()
-	switch {
-	case h < 4:
-		return "late"
-	case h < 12:
-		return "morning"
-	case h < 17:
-		return "afternoon"
-	}
-	return "evening"
-}
-
 func titleName(u string) string {
 	u = strings.TrimSpace(u)
 	if i := strings.IndexAny(u, ".@_- "); i > 0 {

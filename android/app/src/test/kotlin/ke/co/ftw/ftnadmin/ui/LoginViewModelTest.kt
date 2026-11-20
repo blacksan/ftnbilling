@@ -33,11 +33,14 @@ class LoginViewModelTest {
     @Before fun setUp() {
         server = MockWebServer().also { it.start() }
         sessions = SessionManager(MemoryTokenStore())
-        val api = ApiClient.create(server.url("/").toString(), sessions)
-        vm = LoginViewModel(AuthRepository(api, sessions, { DeviceInfo("i", "n", "m", "1") }))
+        val api = ApiClient.create(server.url("/").toString(), sessions, io = main.dispatcher)
+        vm = main.track(LoginViewModel(AuthRepository(api, sessions, { DeviceInfo("i", "n", "m", "1") })))
     }
 
-    @After fun tearDown() = server.shutdown()
+    @After fun tearDown() {
+        main.cancelViewModels()
+        server.shutdown()
+    }
 
     /** The network runs on real threads, so poll until the view model stops being busy. */
     private fun TestScope.settle() {

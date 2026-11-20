@@ -83,7 +83,7 @@ Payment {"key","site_id","method","status","amount_kes","phone","name","bill_ref
 
 ## Addendum H: unregistered devices (pick the MAC from what asked for an address)
 
-Supersedes the `GET /unregistered` row above. `GET /unregistered?site=&online=` returns `{items:[{site_id,site_name,mac,vendor,host_name,ip,source,online,first_seen,last_seen,hits,suggested_account:{id,code,flat}|null,router_user}]}`. `source` is `dhcp`, `arp`, `portal` or `hotspot-host`; `online` is true when the lease is bound or ARP was complete within the last 3 minutes; `vendor` and `host_name` are blank when unknown; `online=true` filters to online devices. Sorted online first, then `last_seen` newest first.
+Supersedes the `GET /unregistered` row above. `GET /unregistered?site=&online=` returns `{items:[{site_id,site_name,mac,vendor,host_name,ip,source,online,first_seen,last_seen,hits,suggested_account:{id,code,flat}|null}]}`. `source` is `dhcp`, `arp` or `portal` (the Hotspot is gone; there is no `hotspot-host`); `online` is true when the lease is bound or ARP was complete within the last 3 minutes; `vendor` and `host_name` are blank when unknown; `online=true` filters to online devices. Sorted online first, then `last_seen` newest first.
 
 | Method/path | Body | Result |
 |---|---|---|
@@ -102,7 +102,7 @@ Supersedes the `GET /unregistered` row above. `GET /unregistered?site=&online=` 
 - Account detail: `customer` is always an object `{id,name,phone,email}` (`id` is empty and name/phone come from the account when no customer record is linked); `events` are `{time,msg,actor}` (last 20); `usage.month_bytes`.
 - `lease_status` is `bound`, `waiting` or `none`. Account `state` is `active`, `expired`, `suspended` or `new`.
 - `/unregistered` items include `site_name` and a nullable `suggested_account` `{id,code,flat}`: in that router, an open account with no MAC first, else an account whose MAC has not been seen for over 24 h. `?online=true` is accepted (`online` = seen within the last 3 minutes and flagged online).
-- `/unregistered` items also carry `router_user` (string, may be empty; added with the router setup automation, API 1.x additive): who holds that MAC on the router itself although no server account does, as of the last device refresh. It is the hotspot session user (`test1`), else a hotspot user bound to the MAC, else `ip-binding (<type>)`. Devices are now discovered in every access mode (DHCP leases, ARP and the hotspot host table), including hotspot hosts that are already authorised or bypassed on the router; a MAC with an open account is never listed.
+- Devices are discovered from DHCP leases and ARP (and the tenant portal). `router_user` was a Hotspot-era field; the server no longer sends it and clients must ignore it if present. A MAC with an open account is never listed (a MAC is unique across all routers).
 - `POST /sites/{id}/unregistered/refresh` answers 202 `{queued:true}`.
 - `Idempotency-Key`: the identical stored status and body are replayed (header `Idempotent-Replayed: true`) for 24 h per device; only answers below 500 are kept; the same key with a different request is 400 `bad_request`. The store is in memory, so a server restart forgets it.
 - `GET /audit?limit=&cursor=`: newest first; the cursor is opaque (`s<seq>`); owner only.
@@ -127,9 +127,7 @@ All rows below are additive; the D8 aliases apply to every row.
 | POST `/routers` | owner | `{name,serving_customers?:false,wan_interface?,olt_interface?,vlan_id?,customer_subnet?,wan_cap_mbps?,support_phone?}` | 201 `{router:Site,join:{command,command_nocheck,expires_at}}`, `no-store`, never replayed |
 | PATCH `/routers/{id}` | owner | same optional fields | `Site` |
 | GET `/routers/{id}/setup` | viewer | | `Setup` |
-| POST `/routers/{id}/setup/run` | operator | | 202 `Setup` |
-| POST `/routers/{id}/setup/migrate` | operator | `{confirm_name,keep_unknown?:false}` | 202 `Setup` |
-| POST `/routers/{id}/setup/rollback` | operator | | 202 `Setup` |
+| POST `/routers/{id}/setup/run`, `/setup/migrate`, `/setup/rollback` | viewer (the route answers every role with the 410) | | removed in v5: **410 `gone`** (a router is set up by pasting one line; see `docs/api/v5-bootstrap.md`) |
 | GET `/routers/{id}/live` | viewer | | `RouterLive` |
 | GET `/routers/{id}/interfaces` | viewer | | `{items:[Interface],generated_at}` |
 | GET `/routers/{id}/clients?q=&kind=all\|flats\|unregistered&online=` | viewer | | `{items:[Client],counts:{flats,online,unregistered}}` |
@@ -138,7 +136,7 @@ All rows below are additive; the D8 aliases apply to every row.
 | POST `/routers/{id}/actions/resync` | operator | | 202 `{queued:true}` |
 | POST `/accounts` (extended) | operator | adds `package_id?`, `activate?:false`, `note?`, `router_id` alias | 201 `Account` with `router` filled after one synchronous attempt |
 
-W5 plan section 6 endpoints stay (`checks`, `fix`, `mode`, `join-command`, `cutover`, `cutover/start`, `cutover/rollback`, `bench/*`); `cutover*` are thin views over the job. `cutover/confirm` is removed from clients (A1).
+Still served: `checks`, `fix`, `join-command`, `bench/*`. Removed in v5 and answered **410 `gone`** for one release: `PUT /sites/{id}/mode`, `GET /sites/{id}/cutover`, `POST /sites/{id}/cutover/start|confirm|rollback`, and the three `setup/*` calls above. The set-up job, migration, cutover and access mode no longer exist; the contract for what replaced them is `docs/api/v5-bootstrap.md` (and `docs/api/v6-apartments.md` for apartments).
 
 ```json
 Setup {"router_id","state","kind":"fresh|migrate|","serving_customers":false,"auto_start":true,
@@ -162,7 +160,7 @@ Interface {"name","type","running":true,"disabled":false,"comment","mac","mtu":0
 Client {"kind":"flat|unregistered","account_id":"","code":"","flat":"","tenant":"","state":"",
  "mac","vendor","host_name","ip","online":true,"lease_status":"bound|waiting|none","last_seen":null,
  "port":"","queue_limit":"","down_bps":0,"up_bps":0,"usage_today_bytes":0,"usage_month_bytes":0,
- "suspended_on_router":false,"in_sync":true,"router_user":""}
+ "suspended_on_router":false,"in_sync":true}
 Overview {"greeting_period":"morning|afternoon|evening|late","setup":{"done":0,"total":0,"pct":0,"steps":[{"key","title","done":true,"href"}]},
  "revenue":{"today_kes":0,"yesterday_kes":0,"month_kes":0,"spark_7d":[]},"active":0,"online_now":0,
  "routers":{"total":0,"online":0},"today":[{"time","kind","text","account_id","router_id"}],

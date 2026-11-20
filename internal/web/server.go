@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -97,16 +96,7 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 	s.idem = newIdemStore()
 	s.refreshRL = newLimiter(30, time.Minute)
 	funcs := template.FuncMap{
-		"kes": func(n int) string { return "KES " + itoa(n) },
-		// brandParts splits "Fast Tech Net" into {"Fast Tech", "Net"} so the
-		// last word can be drawn in the accent colour.
-		"brandParts": func(b string) []string {
-			b = strings.TrimSpace(b)
-			if i := strings.LastIndex(b, " "); i > 0 {
-				return []string{b[:i], b[i+1:]}
-			}
-			return []string{b, ""}
-		},
+		"kes":    func(n int) string { return "KES " + itoa(n) },
 		"dur":    billing.DescribeMinutes,
 		"eat":    func(t time.Time) string { return t.In(billing.EAT).Format("Mon 2 Jan 2006, 15:04") + " EAT" },
 		"eats":   func(t time.Time) string { return t.In(billing.EAT).Format("2 Jan 2006, 15:04") },
@@ -457,13 +447,6 @@ func packageGroups(all []store.Package) []packageGroup {
 	return out
 }
 
-func isHTTPURL(s string) bool {
-	u, err := url.Parse(s)
-	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && len(s) <= 1024
-}
-
-var _ = strings.TrimSpace
-
 func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
 
 // fromTunnel reports whether the request came from inside the WireGuard
@@ -477,6 +460,6 @@ func (s *Server) fromTunnel(r *http.Request) bool {
 	return err == nil && s.wgNet.Contains(a.Unmap())
 }
 
-// Auth is the sign-in service (users, sessions, devices); main seeds the owner
-// through it and the tests sign in with it.
+// Auth is the sign-in service (users, sessions, devices); only the tests use
+// it (main seeds the owner through its own authn service).
 func (s *Server) Auth() *authn.Service { return s.authn }
