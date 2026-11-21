@@ -3,6 +3,7 @@ package web_test
 import (
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"ispbill/internal/sites"
 	"ispbill/internal/store"
 	"ispbill/internal/web"
+	"ispbill/internal/wg"
 )
 
 // regForm is a valid registration of the captive harness's building.
@@ -56,7 +58,7 @@ func TestRegisterPageShowsThisBuildingsApartmentsAndTheNotice(t *testing.T) {
 	apartmentFor(t, c.st, other.ID, "Hidden Heights Block")
 	html := body(t, c.visit("GET", "/pay/register", "isp.ftw.co.ke", nil))
 	for _, want := range []string{"Register for internet", "Riverside Court", `name="name"`, `name="phone"`, `name="unit"`, `name="apartment_id"`, `name="email"`,
-		`name="consent"`, "Kenya Data Protection Act", "How we use your details", `name="website"`, `name="_pcsrf"`} {
+		`name="consent"`, "Kenya Data Protection Act", "How we use your details", `name="ftn_hp_url"`, `name="device_name"`, "not decided within 30 days is deleted", `name="_pcsrf"`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("form lacks %q", want)
 		}
@@ -99,8 +101,8 @@ func TestRegisterCreatesAPendingRegistrationBoundToTheBuildingNeverToAPostedMAC(
 	if r.Status != store.RegPending || r.SiteID != c.site.ID || r.MAC != "" || r.Name != "Njeri Mwangi" || r.Phone != "254722111222" || r.Unit != "b7" || r.Email != "njeri@example.com" || r.ConsentAt.IsZero() {
 		t.Fatalf("%+v", r)
 	}
-	if r.GuessMAC != "00:E0:4C:68:01:02" {
-		t.Fatalf("the one online unknown device should be the owner's hint: %q", r.GuessMAC)
+	if v := c.svc.PendingRegistrations(nil); len(v) != 1 || v[0].GuessMAC != "00:E0:4C:68:01:02" {
+		t.Fatalf("the one device first seen around the request should be the owner's hint: %+v", v)
 	}
 	done := body(t, c.visit("GET", "/pay/register/done", "isp.ftw.co.ke", nil))
 	if !strings.Contains(done, "We received your registration") || !strings.Contains(done, "offline until then") {
@@ -182,7 +184,8 @@ func TestRegisterNeedsTheCSRFTokenAndIgnoresTheHoneypotFiller(t *testing.T) {
 	}
 	// the honeypot: looks like success, keeps nothing
 	h := c.regForm(t, "Bot Botson", "0722999000", "BOT1")
-	h.Set("website", "http://spam.example")
+	h.Set("ftn_hp_url", "http://spam.example")
+	before := web.RegHoneypotHits()
 	code, _, resp := c.register(t, h)
 	if code != http.StatusSeeOther || resp.Header.Get("Location") != "/pay/register/done" {
 		t.Errorf("honeypot: %d %s", code, resp.Header.Get("Location"))
@@ -190,25 +193,110 @@ func TestRegisterNeedsTheCSRFTokenAndIgnoresTheHoneypotFiller(t *testing.T) {
 	if n := len(c.regs()); n != 0 {
 		t.Fatalf("registrations kept: %d", n)
 	}
+	if web.RegHoneypotHits() != before+1 {
+		t.Errorf("honeypot hit not counted")
+	}
+	// the form carries the honeypot under a name autofill never uses, and hides it from assistive tech and the tab order
+	page := body(t, c.visit("GET", "/pay/register", "isp.ftw.co.ke", nil))
+	if !strings.Contains(page, `name="ftn_hp_url" tabindex="-1" autocomplete="off" aria-hidden="true"`) || strings.Contains(page, `name="website"`) {
+		t.Errorf("honeypot markup: %s", page)
+	}
+}
+
+// Without the signed browser token (a script that never opened the form) nothing is stored and nothing counts.
+func TestRegisterNeedsTheBrowserToken(t *testing.T) {
+	web.ResetRegLimits()
+	c := newCaptive(t, true)
+	c.browser = ""
+	code, html, _ := c.register(t, c.regForm(t, "Script Kid", "0722777888", "K1"))
+	if code != http.StatusForbidden || !strings.Contains(html, "expired") {
+		t.Errorf("no token: %d", code)
+	}
+	c.browser = "x"
+	forged := c.visit("GET", "/pay/register", "isp.ftw.co.ke", nil) // a GET issues a cookie
+	forged.Body.Close()
+	var set *http.Cookie
+	for _, ck := range forged.Cookies() {
+		if ck.Name == "ftn_reg" {
+			set = ck
+		}
+	}
+	if set == nil || !set.HttpOnly || set.SameSite != http.SameSiteLaxMode || set.Path != "/pay" {
+		t.Fatalf("token cookie: %+v", set)
+	}
+	// a token with a bad signature is refused
+	f := c.regForm(t, "Script Kid", "0722777888", "K1")
+	f.Set("_pcsrf", payCSRFValue)
+	req, _ := http.NewRequest("POST", c.ts.URL+"/pay/register", strings.NewReader(f.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-Forwarded-For", capWANIP)
+	req.AddCookie(&http.Cookie{Name: "ftn_pay_csrf", Value: payCSRFValue})
+	req.AddCookie(&http.Cookie{Name: "ftn_reg", Value: "abc.AAAAAAAAAAAAAAAAAAAAAA"})
+	r, _ := c.cl.Do(req)
+	r.Body.Close()
+	if r.StatusCode != http.StatusForbidden {
+		t.Errorf("forged token: %d", r.StatusCode)
+	}
+	// the token the page handed out works
+	req, _ = http.NewRequest("POST", c.ts.URL+"/pay/register", strings.NewReader(f.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-Forwarded-For", capWANIP)
+	req.AddCookie(&http.Cookie{Name: "ftn_pay_csrf", Value: payCSRFValue})
+	req.AddCookie(set)
+	r, _ = c.cl.Do(req)
+	r.Body.Close()
+	if r.StatusCode != http.StatusSeeOther || len(c.regs()) != 1 {
+		t.Errorf("issued token: %d, regs %d", r.StatusCode, len(c.regs()))
+	}
 }
 
 func TestRegisterRateLimits(t *testing.T) {
 	web.ResetRegLimits()
 	c := newCaptive(t, true)
-	// per phone: three tries an hour
-	for i := 0; i < 4; i++ {
-		f := c.regForm(t, "Same Phone", "0711000999", "P"+string(rune('1'+i)))
+	// a form that does not validate never uses a try: ten mistakes, then a good form still goes through
+	for i := 0; i < 10; i++ {
+		f := c.regForm(t, "Same Phone", "0711000999", "P"+string(rune('A'+i)))
 		f.Del("consent")
-		code, _, _ := c.register(t, f)
-		want := http.StatusUnprocessableEntity
-		if i == 3 {
-			want = http.StatusTooManyRequests
-		}
-		if code != want {
-			t.Errorf("phone try %d: %d, want %d", i, code, want)
+		if code, _, _ := c.register(t, f); code != http.StatusUnprocessableEntity {
+			t.Fatalf("mistake %d: %d", i, code)
 		}
 	}
+	if code, _, _ := c.register(t, c.regForm(t, "Same Phone", "0711000999", "PZ")); code != http.StatusSeeOther {
+		t.Fatalf("a valid form after ten mistakes: %d", code)
+	}
+	// per browser: five registrations an hour, whatever the numbers
+	for i := 1; i < 5; i++ {
+		if code, _, _ := c.register(t, c.regForm(t, "Many Numbers", "07120000"+strings.Repeat(string(rune('0'+i)), 2), "N"+string(rune('0'+i)))); code != http.StatusSeeOther {
+			t.Fatalf("browser try %d: %d", i+1, code)
+		}
+	}
+	code, html, _ := c.register(t, c.regForm(t, "Many Numbers", "0712000077", "N9"))
+	if code != http.StatusTooManyRequests || !strings.Contains(html, "Too many attempts") {
+		t.Errorf("sixth from one browser: %d", code)
+	}
+	// another browser behind the same address is not blocked by it
+	c.browser = "second-browser"
+	if code, _, _ := c.register(t, c.regForm(t, "Other Tenant", "0712000088", "N8")); code != http.StatusSeeOther {
+		t.Errorf("a second browser: %d", code)
+	}
+	// a number cannot be locked out from unrelated browsers: tries from a browser do not use up another's
+	// (the same number twice from one browser is a duplicate and counts there; ten an hour overall)
+	web.ResetRegLimits()
+	for i := 0; i < 10; i++ {
+		c.browser = "br" + string(rune('a'+i))
+		c.register(t, c.regForm(t, "Victim Number", "0733111222", "V"+string(rune('a'+i))))
+	}
+	c.browser = "br-late"
+	if code, _, _ := c.register(t, c.regForm(t, "Victim Number", "0733111222", "VZ")); code != http.StatusTooManyRequests {
+		t.Errorf("the global per-phone cap: %d", code)
+	}
+	c.browser = "br-late2"
+	if code, html, _ := c.register(t, c.regForm(t, "Someone Else", "0733111999", "VY")); code != http.StatusSeeOther {
+		t.Errorf("an unrelated number after that: %d %s", code, html)
+	}
+
 	// per address, a stranger on the internet: four tries
+	web.ResetRegLimits()
 	form := func(i int) url.Values {
 		f := c.regForm(t, "Stranger", "072200"+strings.Repeat(string(rune('0'+i)), 4), "S1")
 		f.Set("_pcsrf", payCSRFValue)
@@ -231,10 +319,11 @@ func TestRegisterRateLimits(t *testing.T) {
 	if code := post(5); code != http.StatusTooManyRequests {
 		t.Errorf("stranger 5th try: %d", code)
 	}
-	// per address, a recognised building: 40 in ten minutes (the building's flats share one address)
+	// per address, a recognised building: 200 in ten minutes, so one tenant cannot use it up for the building
 	web.ResetRegLimits()
-	for i := 0; i < 40; i++ {
-		f := c.regForm(t, "Many", "07330"+strings.Repeat(string(rune('0'+i%10)), 1)+string(rune('0'+i/10))+"000", "M"+string(rune('A'+i%26)))
+	c.browser = "flood"
+	for i := 0; i < 200; i++ {
+		f := c.regForm(t, "Many", "07330"+strings.Repeat(string(rune('0'+i%10)), 1)+string(rune('0'+i/10%10))+"000", "M"+string(rune('A'+i%26)))
 		f.Del("consent")
 		if code, _, _ := c.register(t, f); code == http.StatusTooManyRequests {
 			t.Fatalf("building limited at try %d", i)
@@ -243,10 +332,7 @@ func TestRegisterRateLimits(t *testing.T) {
 	f := c.regForm(t, "Many", "0733999111", "MZ")
 	f.Del("consent")
 	if code, _, _ := c.register(t, f); code != http.StatusTooManyRequests {
-		t.Errorf("41st try from the building's address: %d", code)
-	}
-	if n := len(c.regs()); n != 0 {
-		t.Fatalf("limited or refused forms were kept: %d", n)
+		t.Errorf("201st try from the building's address: %d", code)
 	}
 }
 
@@ -262,14 +348,12 @@ func TestRegisterWithAnIdentifiedDeviceBindsItsMACAndLimitsPerMAC(t *testing.T) 
 	if rs := c.regs(); len(rs) != 1 || rs[0].MAC != "00:E0:4C:68:01:02" || rs[0].GuessMAC != "" {
 		t.Fatalf("%+v", rs)
 	}
-	for i := 0; i < 2; i++ { // two more tries are allowed; the fourth is limited
-		f := c.regForm(t, "Device Owner", "0722123456", "D1")
-		f.Del("consent")
-		c.register(t, f)
+	for i := 0; i < 2; i++ { // two more valid tries are allowed (a refused form does not count); the fourth is limited
+		if code, _, _ := c.register(t, c.regForm(t, "Device Owner", "072212345"+string(rune('7'+i)), "E"+string(rune('1'+i)))); code != http.StatusSeeOther {
+			t.Fatalf("try %d: %d", i+2, code)
+		}
 	}
-	f := c.regForm(t, "Device Owner", "0722654321", "D2")
-	f.Del("consent")
-	if code, _, _ := c.register(t, f); code != http.StatusTooManyRequests {
+	if code, _, _ := c.register(t, c.regForm(t, "Device Owner", "0722654321", "D2")); code != http.StatusTooManyRequests {
 		t.Errorf("per-MAC limit: %d", code)
 	}
 }
@@ -421,5 +505,97 @@ func TestCaptivePagesShowTheSupportContactsAndHideEmptyOnes(t *testing.T) {
 	h := body(t, onlyMail.visit("GET", "/pay", "isp.ftw.co.ke", nil))
 	if !strings.Contains(h, `mailto:help@example.com`) || strings.Contains(h, "tel:") || strings.Contains(h, "wa.me") {
 		t.Errorf("only the email should show: %s", h)
+	}
+}
+
+// Two routers whose WireGuard peers have the same public address cannot be told apart: the form reveals no
+// apartment name, asks for free text, and the registration is attached to no router until the owner assigns it.
+func TestRegisterBehindOneAddressSharedByTwoRoutersAsksForFreeText(t *testing.T) {
+	web.ResetRegLimits()
+	c := newCaptive(t, true)
+	other, err := c.mgr.CreateSite(sites.SiteInput{Name: "Hidden Heights"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherApt := apartmentFor(t, c.st, other.ID, "Hidden Heights Block")
+	_, otherKey, _ := wg.GenerateKeypair()
+	c.st.Update(func(d *store.Data) error {
+		s := d.Sites[other.ID]
+		s.WGPublicKey = otherKey
+		d.Sites[other.ID] = s
+		return nil
+	})
+	c.mgr.Reload(other.ID)
+	var k1 string
+	c.st.View(func(d *store.Data) { k1 = d.Sites[c.site.ID].WGPublicKey })
+	dump := k1 + "\t" + capWANIP + ":51820\t10.99.0.2/32\t1\t1\t2\n" + otherKey + "\t" + capWANIP + ":51821\t10.99.0.6/32\t1\t1\t2\n"
+	if err := os.WriteFile(c.dump, []byte(dump), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	html := body(t, c.visit("GET", "/pay/register", "isp.ftw.co.ke", nil))
+	if !strings.Contains(html, `name="apartment_name"`) || strings.Contains(html, `name="apartment_id"`) || strings.Contains(html, "Riverside Court") || strings.Contains(html, "Hidden Heights") {
+		t.Fatalf("a shared address must show no apartment name and ask for free text: %s", html)
+	}
+	f := url.Values{"name": {"Shared Address"}, "phone": {"0722123123"}, "unit": {"S1"}, "apartment_name": {" Riverside   Court "}, "device_name": {"Shared's phone"}, "consent": {"1"},
+		"apartment_id": {otherApt}, "site_id": {other.ID}} // nothing posted can pick a router or an apartment
+	code, h, _ := c.register(t, f)
+	if code != http.StatusSeeOther {
+		t.Fatalf("%d %s", code, h)
+	}
+	rs := c.regs()
+	if len(rs) != 1 || rs[0].SiteID != "" || rs[0].ApartmentID != "" || rs[0].Building != "Riverside Court" || rs[0].DeviceName != "Shared's phone" {
+		t.Fatalf("%+v", rs)
+	}
+	// the free-text name is required
+	f2 := url.Values{"name": {"No Building"}, "phone": {"0722123124"}, "unit": {"S2"}, "consent": {"1"}}
+	if code, h, _ := c.register(t, f2); code != http.StatusUnprocessableEntity || !strings.Contains(h, "name of your apartment") {
+		t.Errorf("missing apartment name: %d", code)
+	}
+	// the owner sees it with an assign form, assigns it, then the usual approval applies
+	adm := func(path string, v url.Values) *http.Response { return c.br.Do(c.cl, c.ts.URL, "POST", path, v) }
+	page := body(t, c.br.Do(c.cl, c.ts.URL, "GET", "/admin/devices", nil))
+	if !strings.Contains(page, "Riverside Court") || !strings.Contains(page, "/admin/registrations/assign") || !strings.Contains(page, "no router yet") {
+		t.Errorf("owner page: %s", page)
+	}
+	var apt string
+	c.st.View(func(d *store.Data) {
+		for _, id := range d.SiteApartmentIDs(c.site.ID) {
+			apt = id
+		}
+	})
+	resp := adm("/admin/registrations/assign", url.Values{"id": {rs[0].ID}, "target": {c.site.ID + "|" + apt}})
+	resp.Body.Close()
+	if got, _ := c.svc.GetRegistration(rs[0].ID); got.SiteID != c.site.ID || got.ApartmentID != apt || got.Building != "" {
+		t.Fatalf("after assign: %+v (%s)", got, resp.Header.Get("Location"))
+	}
+}
+
+// The owner's page lists candidates with host name, vendor, port, first and last seen, and the visitor's device name;
+// "Reject all" empties one router's queue.
+func TestOwnerSeesCandidatesAndCanRejectAll(t *testing.T) {
+	web.ResetRegLimits()
+	c := newCaptive(t, true)
+	c.unknownDevice("00:E0:4C:68:01:02", "10.5.50.20")
+	c.reconcile(t)
+	f := c.regForm(t, "Wanjiku Ngugi", "0722000555", "C3")
+	f.Set("device_name", "phone")
+	c.register(t, f)
+	c.browser = "second"
+	c.register(t, c.regForm(t, "Second Person", "0722000666", "C4"))
+	page := body(t, c.br.Do(c.cl, c.ts.URL, "GET", "/admin/devices", nil))
+	for _, want := range []string{"Device name given: phone", "00:E0:4C:68:01:02", "Realtek", "first seen", "last seen", "matches the name given", "checked", "Reject all 2 for Riverside Court", "/admin/registrations/reject-all"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("owner page lacks %q", want)
+		}
+	}
+	resp := c.br.Do(c.cl, c.ts.URL, "POST", "/admin/registrations/reject-all", url.Values{"site": {c.site.ID}})
+	resp.Body.Close()
+	if n := c.svc.PendingRegistrationCount(nil); n != 0 {
+		t.Fatalf("pending after reject-all: %d (%s)", n, resp.Header.Get("Location"))
+	}
+	for _, r := range c.regs() {
+		if r.Name != "" || r.Phone != "" || r.DeviceName != "" {
+			t.Errorf("details kept: %+v", r)
+		}
 	}
 }

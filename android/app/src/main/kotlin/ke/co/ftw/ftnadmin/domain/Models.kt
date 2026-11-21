@@ -380,6 +380,13 @@ data class RegistrationCandidate(
     val online: Boolean = false,
     val ip: String = "",
     val port: String = "",
+    /** ISO-8601 UTC. The server sorts the candidates by how close first-seen is to the registration. */
+    @SerialName("first_seen") val firstSeen: String? = null,
+    @SerialName("last_seen") val lastSeen: String? = null,
+    /** The DHCP host name looks like the device name the visitor gave. */
+    @SerialName("name_match") val nameMatch: Boolean = false,
+    /** The only device first seen within 10 minutes of the registration (the one preselected). */
+    val likely: Boolean = false,
 )
 
 /**
@@ -401,6 +408,11 @@ data class PendingRegistration(
     @SerialName("guess_mac") val guessMac: String = "",
     @SerialName("created_at") val createdAt: String? = null,
     val candidates: List<RegistrationCandidate> = emptyList(),
+    /** What the visitor says their phone or laptop is called (free text, shown next to the candidates). */
+    @SerialName("device_name") val deviceName: String = "",
+    /** The apartment name typed when the server could not tell the router; [unassigned] rows have no router yet. */
+    val building: String = "",
+    val unassigned: Boolean = false,
 )
 
 /** A MAC that is connected to a router's network but not configured on any account. */

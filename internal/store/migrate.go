@@ -665,3 +665,29 @@ func (d *Data) migrateV7toV8() {
 		}
 	}
 }
+
+// backfillWASame is migration 0013 of the Postgres store for the JSON file: a row saved before the "WhatsApp is
+// the same as the phone" flag existed, whose WhatsApp number equals its phone, gets the flag, so the box shows
+// ticked. The flag has never shipped without this backfill, so running it on every load only ever touches such
+// rows (a row saved since carries the flag it was saved with; an equal number with the box unticked is the same
+// thing as the box ticked).
+func (d *Data) backfillWASame() {
+	for id, a := range d.Accounts {
+		if !a.WASamePhone && a.WhatsApp != "" && a.WhatsApp == a.Phone {
+			a.WASamePhone = true
+			d.Accounts[id] = a
+		}
+	}
+	for id, a := range d.ClosedAccounts {
+		if !a.WASamePhone && a.WhatsApp != "" && a.WhatsApp == a.Phone {
+			a.WASamePhone = true
+			d.ClosedAccounts[id] = a
+		}
+	}
+	for id, c := range d.Customers {
+		if !c.WASamePhone && c.WhatsApp != "" && c.WhatsApp == c.Phone {
+			c.WASamePhone = true
+			d.Customers[id] = c
+		}
+	}
+}

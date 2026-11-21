@@ -75,6 +75,8 @@ type captive struct {
 	now    time.Time
 	mu     sync.Mutex
 	dump   string
+	// browser is the id of the registration browser token the test visitor carries ("" = none)
+	browser string
 }
 
 func (c *captive) clock() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.now }
@@ -92,7 +94,7 @@ func newCaptiveCfg(t *testing.T, mpesaOn bool, mod func(*config.Config)) *captiv
 	dir := t.TempDir()
 	_, pub, _ := wg.GenerateKeypair()
 	_, sitePub, _ := wg.GenerateKeypair()
-	c := &captive{now: time.Date(2026, 11, 19, 20, 0, 0, 0, time.UTC), daraja: &fakeDaraja{}, dump: filepath.Join(dir, "wg0.dump")}
+	c := &captive{browser: "test-browser", now: time.Date(2026, 11, 19, 20, 0, 0, 0, time.UTC), daraja: &fakeDaraja{}, dump: filepath.Join(dir, "wg0.dump")}
 	cfg := config.Config{BrandName: "Fast Tech Net", AdminUser: "admin", AdminPass: pw, SupportPhone: "0100 133 133",
 		NetflowAddr: "off", PingTargets: []string{"8.8.8.8"}, WGPublicKey: pub, WGEndpoint: "203.0.113.10:51820", WGSubnet: "10.99.0.0/22",
 		DataKey: testKey, JoinTokenTTL: 30 * time.Minute, PublicIP: "203.0.113.10", PublicBaseURL: "https://isp.ftw.co.ke", DataDir: dir, WGDumpPath: c.dump,
@@ -222,6 +224,9 @@ func (c *captive) visit(method, path, host string, form url.Values) *http.Respon
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.AddCookie(&http.Cookie{Name: "ftn_pay_csrf", Value: payCSRFValue})
+		if c.browser != "" && path == "/pay/register" {
+			req.AddCookie(&http.Cookie{Name: "ftn_reg", Value: web.RegBrowserToken(c.browser)})
+		}
 	}
 	r, err := c.cl.Do(req)
 	if err != nil {

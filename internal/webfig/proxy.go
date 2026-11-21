@@ -177,7 +177,7 @@ func (m *Manager) serve(rw http.ResponseWriter, r *http.Request) {
 	if static {
 		if e := m.cache.get(sess.SiteID, ver, r); e != nil {
 			rec.site, rec.note = sess.SiteID, "cache hit"
-			m.serveCached(w, e)
+			m.serveCached(w, r, e)
 			m.touch(sess.hash)
 			return
 		}
@@ -223,6 +223,9 @@ func (m *Manager) serve(rw http.ResponseWriter, r *http.Request) {
 			}
 			if err := m.fixResponse(resp, tg); err != nil {
 				return err
+			}
+			if static && resp.StatusCode == http.StatusNotModified {
+				cc = StaticCacheControl // the router answered the browser's revalidation: keep the same policy
 			}
 			if cc != "" {
 				resp.Header.Set("Cache-Control", cc)
@@ -273,7 +276,7 @@ func isJSProxy(r *http.Request) bool {
 
 // serveCached answers from the cache. baseHeaders already ran; the router's
 // own responses carry no nosniff (see fixResponse), so neither do these.
-func (m *Manager) serveCached(w http.ResponseWriter, e *cacheEntry) {
+func (m *Manager) serveCached(w http.ResponseWriter, r *http.Request, e *cacheEntry) {
 	h := w.Header()
 	h.Del("X-Content-Type-Options")
 	h.Set("Cache-Control", StaticCacheControl)
@@ -290,8 +293,14 @@ func (m *Manager) serveCached(w http.ResponseWriter, e *cacheEntry) {
 	if e.lastMod != "" {
 		h.Set("Last-Modified", e.lastMod)
 	}
-	h.Set("Content-Length", strconv.Itoa(len(e.body)))
 	h.Set("X-Ftn-Cache", "hit")
+	if e.notModified(r) { // the browser revalidates (Cache-Control: no-cache): nothing to send
+		h.Del("Content-Type")
+		h.Del("Content-Encoding")
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	h.Set("Content-Length", strconv.Itoa(len(e.body)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(e.body)
 }

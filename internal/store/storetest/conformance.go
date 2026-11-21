@@ -71,7 +71,8 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 		d.EquipmentEvents["ee1"] = store.EquipmentEvent{ID: "ee1", EquipmentID: "e1", Kind: store.EqEvAssigned, FromStatus: "in_stock", ToStatus: "installed",
 			SiteID: "s111111", AccountID: "a1", CustomerID: "c1", Note: "n", Time: at}
 		d.Registrations["r1"] = store.Registration{ID: "r1", SiteID: "s111111", ApartmentID: "", Unit: "B4", Name: "Wanjiru", Phone: "254712345678", Email: "w@example.com",
-			GuessMAC: "AA:BB:CC:DD:EE:09", Status: store.RegPending, ConsentAt: at, CreatedAt: at}
+			GuessMAC: "AA:BB:CC:DD:EE:09", DeviceName: "Wanjiru's iPhone", Status: store.RegPending, ConsentAt: at, CreatedAt: at}
+		d.Registrations["r2"] = store.Registration{ID: "r2", Unit: "C2", Name: "Otieno", Phone: "254722000111", Building: "Riverside Court", Status: store.RegPending, ConsentAt: at, CreatedAt: at}
 		d.Notes["n1"] = store.Note{ID: "n1", CustomerID: "c1", AccountID: "a1", SiteID: "s111111", EquipmentID: "e1", Text: "hello", Time: at}
 		d.Settings["wa.token"] = store.Setting{Key: "wa.token", Value: "c2VhbGVk", Enc: true, UpdatedAt: at}
 		d.Settings["wa.lang"] = store.Setting{Key: "wa.lang", Value: "sw", UpdatedAt: at}

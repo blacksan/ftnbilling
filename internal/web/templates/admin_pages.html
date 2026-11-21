@@ -139,16 +139,23 @@
 </div>
 {{if .Data.HostErr}}<div class="banner" role="alert">Could not read the router: {{.Data.HostErr}}</div>{{end}}
 {{if .Data.Regs}}<section class="panel" id="registrations"><h2>Waiting for approval <span class="n">{{len .Data.Regs}}</span></h2>
-<p class="muted">These people registered on the payment page. Pick the device they are using, then approve. Their device stays offline until you do.</p>
+<p class="muted">These people registered on the payment page. Pick the device they are using, then approve. Their device stays offline until you do. Devices are listed with the one first seen closest to the request first; one is ticked only when it is the only device first seen within 10 minutes of the request.</p>
+{{if $.Data.RegGroups}}{{if .CanWrite}}<div class="row">{{range $.Data.RegGroups}}<form method="post" action="/admin/registrations/reject-all" data-confirm="Reject all {{.N}} waiting registrations of {{.SiteName}}? Their details are erased."><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{if .SiteID}}{{.SiteID}}{{else}}none{{end}}"><button class="ghost sm">Reject all {{.N}} for {{.SiteName}}</button></form>{{end}}</div>{{end}}{{end}}
 <div class="tw"><table class="rs"><thead><tr><th>Who</th><th>Where</th><th>When</th><th>Device and decision</th></tr></thead><tbody>
-{{range $g := .Data.Regs}}<tr><td class="who"><b>{{$g.Name}}</b><span class="muted">{{$g.Phone}}{{if $g.Email}} &middot; {{$g.Email}}{{end}}</span></td>
-<td data-label="Where">{{$g.ApartmentName}}, house number {{$g.Unit}}{{if $d.Data.ShowSite}}<br><span class="muted">{{$g.SiteName}}</span>{{end}}</td>
+{{range $g := .Data.Regs}}<tr><td class="who"><b>{{$g.Name}}</b><span class="muted">{{$g.Phone}}{{if $g.Email}} &middot; {{$g.Email}}{{end}}</span>{{if $g.DeviceName}}<span class="muted">Device name given: {{$g.DeviceName}}</span>{{end}}</td>
+<td data-label="Where">{{if $g.Unassigned}}<i>{{$g.Building}}</i>, house number {{$g.Unit}}<br><span class="muted">no router yet</span>{{else}}{{$g.ApartmentName}}, house number {{$g.Unit}}{{if $d.Data.ShowSite}}<br><span class="muted">{{$g.SiteName}}</span>{{end}}{{end}}</td>
 <td data-label="When">{{eats $g.CreatedAt}}</td>
-<td>{{if $d.CanWrite}}<form method="post" action="/admin/registrations/approve" class="stack-col"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$g.ID}}">
-<label class="field">Device<select name="mac"><option value="">{{if $g.Candidates}}Choose the device{{else}}No device seen yet{{end}}</option>{{range $g.Candidates}}<option value="{{.MAC}}"{{if eq .MAC $g.GuessMAC}} selected{{end}}>{{.MAC}} &middot; {{if .Vendor}}{{.Vendor}}{{else}}unknown{{end}}{{if .Online}} &middot; online{{end}}{{if eq .MAC $g.GuessMAC}} &middot; likely{{end}}</option>{{end}}</select></label>
+<td>{{if $d.CanWrite}}{{if $g.Unassigned}}<form method="post" action="/admin/registrations/assign" class="stack-col"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$g.ID}}">
+<p class="muted" style="margin:0">The visitor's address matches more than one router, so they typed the apartment name. Choose the router and apartment.</p>
+<label class="field">Router and apartment<select name="target"><option value="">Choose</option>{{range $d.Data.AssignChoices}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select></label>
+<div class="row"><button class="sm">Assign</button></div></form>
+{{else}}<form method="post" action="/admin/registrations/approve" class="stack-col"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$g.ID}}">
+<fieldset class="field" style="border:0;padding:0;margin:0"><legend>Device</legend>
+{{range $g.Candidates}}<label class="ck" style="display:block"><input type="radio" name="mac" value="{{.MAC}}"{{if .Likely}} checked{{end}}> <span class="mono" style="font-family:var(--f-mono)">{{.MAC}}</span> &middot; {{if .Vendor}}{{.Vendor}}{{else}}unknown{{end}}{{if .HostName}} &middot; <b>{{.HostName}}</b>{{end}}{{if .Port}} &middot; port {{.Port}}{{end}}{{if .Online}} &middot; online{{end}}<br><span class="muted">first seen {{eats .FirstSeen}} &middot; last seen {{eats .LastSeen}}{{if .NameMatch}} &middot; <b>matches the name given</b>{{end}}{{if .Likely}} &middot; likely{{end}}</span></label>
+{{else}}<p class="muted" style="margin:0">No device seen yet.</p>{{end}}</fieldset>
 <label class="field">or type a MAC<input name="mac_typed" placeholder="AA:BB:CC:DD:EE:FF" style="font-family:var(--f-mono)" autocomplete="off"></label>
-{{if $g.GuessMAC}}<p class="muted" style="margin:0">Likely: the only unknown device online when the form arrived. Check it before approving.</p>{{end}}
-<div class="row"><button class="sm">Approve</button></div></form>
+{{if $g.GuessMAC}}<p class="muted" style="margin:0">Likely: the only device first seen within 10 minutes of the request. Check it before approving.</p>{{end}}
+<div class="row"><button class="sm">Approve</button></div></form>{{end}}
 <form method="post" action="/admin/registrations/reject" class="mt-2" data-confirm="Reject this registration? The details are erased."><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$g.ID}}"><button class="ghost sm">Reject</button></form>{{else}}<span class="muted">Only an owner or operator can decide.</span>{{end}}</td></tr>{{end}}</tbody></table></div></section>{{end}}
 <nav class="tabs" aria-label="Which devices"><a class="tab" href="/admin/devices?online=1"{{if .Data.OnlineOnly}} aria-current="page"{{end}}>Online</a><a class="tab" href="/admin/devices"{{if not .Data.OnlineOnly}} aria-current="page"{{end}}>All<span class="n">{{.Data.Count}}</span></a></nav>
 {{if .Data.Rows}}<div class="tw tall"><table class="rs"><thead><tr><th>MAC</th><th>Vendor and host</th><th>IP</th>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>Source</th><th>Last seen</th><th>Actions</th></tr></thead><tbody>

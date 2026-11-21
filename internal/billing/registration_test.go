@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"ispbill/internal/store"
 )
@@ -80,7 +81,7 @@ func TestSubmitRegistrationValidates(t *testing.T) {
 
 func TestSubmitRegistrationCapsPendingPerRouter(t *testing.T) {
 	e := newEnv(t)
-	for i := 0; i < MaxPendingPerRouter; i++ {
+	for i := 0; i < MinPendingPerRouter; i++ {
 		ph := "07" + strings.Repeat("1", 2) + string(rune('0'+i/10)) + string(rune('0'+i%10)) + "0000"
 		if _, err := e.svc.SubmitRegistration(e.regIn("Person X", ph, "H"+ph)); err != nil {
 			t.Fatalf("%d: %v", i, err)
@@ -90,24 +91,278 @@ func TestSubmitRegistrationCapsPendingPerRouter(t *testing.T) {
 	wantRegErr(t, err, "Too many registrations")
 }
 
-func TestRegistrationGuessesOnlyASingleOnlineDevice(t *testing.T) {
+func TestRegistrationPreselectsOnlyOneDeviceFirstSeenNearTheRequest(t *testing.T) {
 	e := newEnv(t)
 	e.dynLease(macHuawei, "10.5.50.11", "ont", "bound")
 	e.reconcile(t)
 	r, err := e.svc.SubmitRegistration(e.regIn("Guess Me", "0712345678", "G1"))
-	if err != nil || r.GuessMAC != macHuawei || r.MAC != "" {
-		t.Fatalf("one online device: %+v %v", r, err)
+	if err != nil || r.MAC != "" || r.GuessMAC != "" {
+		t.Fatalf("nothing is guessed at submission: %+v %v", r, err)
+	}
+	if v := e.svc.PendingRegistrations(nil); len(v) != 1 || v[0].GuessMAC != macHuawei || !v[0].Candidates[0].Likely {
+		t.Fatalf("one device first seen at the request: %+v", v)
+	}
+	// a second device first seen a minute later: two within the window, nothing is preselected
+	e.now = e.now.Add(time.Minute)
+	e.dynLease(macNew, "10.5.50.12", "phone", "bound")
+	e.reconcile(t)
+	if v := e.svc.PendingRegistrations(nil); v[0].GuessMAC != "" || len(v[0].Candidates) != 2 {
+		t.Fatalf("two devices near the request must give no preselection: %+v", v[0])
+	}
+}
+
+func TestRegistrationCandidatesAreSortedByFirstSeenAndMatchTheDeviceName(t *testing.T) {
+	reg := store.Registration{CreatedAt: time.Date(2026, 11, 17, 9, 0, 0, 0, time.UTC), DeviceName: "Wanjiru's iPhone"}
+	at := func(m int) time.Time { return reg.CreatedAt.Add(time.Duration(m) * time.Minute) }
+	dev := func(mac, host string, first time.Time) UnregDevice {
+		return UnregDevice{Device: store.Device{MAC: mac, HostName: host, FirstSeen: first, LastSeen: first}}
+	}
+	devs := []UnregDevice{dev("M1", "android-1", at(-300)), dev("M2", "Wanjirus-iPhone", at(40)), dev("M3", "laptop", at(-3)), dev("M4", "", at(25))}
+	got, pre := registrationCandidates(devs, reg)
+	if got[0].MAC != "M3" || got[1].MAC != "M4" || got[2].MAC != "M2" || got[3].MAC != "M1" {
+		t.Fatalf("order: %v %v %v %v", got[0].MAC, got[1].MAC, got[2].MAC, got[3].MAC)
+	}
+	if pre != "M3" || !got[0].Likely {
+		t.Fatalf("one device within 10 minutes should be preselected: %q", pre)
+	}
+	for _, c := range got {
+		if c.NameMatch != (c.MAC == "M2") {
+			t.Errorf("name match of %s (%s): %v", c.MAC, c.HostName, c.NameMatch)
+		}
+	}
+	// two within the window: no preselection; none within the window: none
+	devs = append(devs, dev("M5", "x", at(9)))
+	if _, pre := registrationCandidates(devs, reg); pre != "" {
+		t.Errorf("two near devices: %q", pre)
+	}
+	if _, pre := registrationCandidates(devs[:2], reg); pre != "" {
+		t.Errorf("none near: %q", pre)
+	}
+	for host, want := range map[string]bool{"Wanjiru-s-iPhone": true, "iphone": true, "Wanjiru-laptop": true, "": false, "Galaxy-S21": false} {
+		if got := deviceNameMatches("Wanjiru's iPhone", host); got != want {
+			t.Errorf("%q: %v want %v", host, got, want)
+		}
+	}
+}
+
+func TestPendingCapGrowsWithTheBuilding(t *testing.T) {
+	if PendingCap(0) != 25 || PendingCap(12) != 25 || PendingCap(13) != 26 || PendingCap(100) != 200 {
+		t.Fatalf("%d %d %d %d", PendingCap(0), PendingCap(12), PendingCap(13), PendingCap(100))
+	}
+	e := newEnv(t)
+	for i := 0; i < 15; i++ { // 15 houses: the cap is 30
+		e.flat(t, "H"+string(rune('A'+i)), "AA:BB:CC:00:10:"+string(rune('0'+i/10))+string(rune('0'+i%10)))
+	}
+	for i := 0; i < 30; i++ {
+		ph := "07" + strings.Repeat("1", 2) + string(rune('0'+i/10)) + string(rune('0'+i%10)) + "0000"
+		if _, err := e.svc.SubmitRegistration(e.regIn("Person X", ph, "Q"+ph)); err != nil {
+			t.Fatalf("%d: %v", i, err)
+		}
+	}
+	_, err := e.svc.SubmitRegistration(e.regIn("One More", "0799888777", "LAST"))
+	wantRegErr(t, err, "Too many registrations")
+}
+
+// The rate-limit hook runs only once the form has validated, and a refusal by it stores nothing.
+func TestAdmitIsCalledOnlyForValidForms(t *testing.T) {
+	e := newEnv(t)
+	calls := 0
+	in := e.regIn("Valid Name", "0712345678", "A1")
+	in.Admit = func(string) bool { calls++; return calls < 2 }
+	bad := in
+	bad.Consent = false
+	if _, err := e.svc.SubmitRegistration(bad); err == nil || calls != 0 {
+		t.Fatalf("a form without consent reached Admit: %v %d", err, calls)
+	}
+	if _, err := e.svc.SubmitRegistration(in); err != nil || calls != 1 {
+		t.Fatalf("valid form: %v %d", err, calls)
+	}
+	in2 := e.regIn("Valid Two", "0722222222", "A2")
+	in2.Admit = in.Admit
+	if _, err := e.svc.SubmitRegistration(in2); !errors.Is(err, ErrRegRateLimited) {
+		t.Fatalf("refused by Admit: %v", err)
+	}
+	if n := e.svc.PendingRegistrationCount(nil); n != 1 {
+		t.Fatalf("pending %d", n)
+	}
+}
+
+// A registration that names only an apartment (two routers behind one address) is held, assigned by the owner, then approved.
+func TestUnassignedRegistrationIsAssignedThenApproved(t *testing.T) {
+	e := newEnv(t)
+	in := RegistrationInput{Unit: "B4", Name: "Free Text", Phone: "0712345678", Building: "  Riverside   Court ", DeviceName: "Free's phone", Consent: true}
+	reg, err := e.svc.SubmitRegistration(in)
+	if err != nil || reg.SiteID != "" || reg.Building != "Riverside Court" || reg.ApartmentID != "" || reg.DeviceName != "Free's phone" {
+		t.Fatalf("%+v %v", reg, err)
+	}
+	if _, err := e.svc.SubmitRegistration(RegistrationInput{Unit: "B5", Name: "No Name", Phone: "0722222222", Consent: true}); err == nil {
+		t.Fatal("a registration with neither router nor apartment name was accepted")
+	}
+	if _, err := e.svc.ApproveRegistration(context.Background(), reg.ID, macHuawei, "owner"); !errors.Is(err, ErrRegUnassigned) {
+		t.Fatalf("approve before assigning: %v", err)
+	}
+	if v := e.svc.PendingRegistrations(func(string) bool { return false }); len(v) != 1 || !v[0].Unassigned {
+		t.Fatalf("unassigned rows are listed in every view: %+v", v)
+	}
+	if err := e.svc.AssignRegistration(reg.ID, e.site, "nope", "owner"); err == nil {
+		t.Fatal("assigned to an apartment the router does not serve")
+	}
+	if err := e.svc.AssignRegistration(reg.ID, e.site, e.aptID(), "owner"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := e.svc.GetRegistration(reg.ID)
+	if got.SiteID != e.site || got.ApartmentID != e.aptID() || got.Building != "" {
+		t.Fatalf("%+v", got)
+	}
+	e.dynLease(macHuawei, "10.5.50.11", "ont", "bound")
+	e.reconcile(t)
+	if a, err := e.svc.ApproveRegistration(context.Background(), reg.ID, macHuawei, "owner"); err != nil || a.Unit != "B4" {
+		t.Fatalf("%+v %v", a, err)
+	}
+	// the unassigned pool has its own cap
+	for i := 0; i < MaxPendingUnassigned; i++ {
+		ph := "07" + strings.Repeat("3", 2) + string(rune('0'+i/10)) + string(rune('0'+i%10)) + "0000"
+		if _, err := e.svc.SubmitRegistration(RegistrationInput{Unit: "U" + ph, Name: "Person X", Phone: ph, Building: "Somewhere", Consent: true}); err != nil {
+			t.Fatalf("%d: %v", i, err)
+		}
+	}
+	_, err = e.svc.SubmitRegistration(RegistrationInput{Unit: "LAST", Name: "Person X", Phone: "0799000111", Building: "Somewhere", Consent: true})
+	wantRegErr(t, err, "Too many registrations")
+}
+
+func TestRejectAllPendingOfOneRouterErasesThem(t *testing.T) {
+	e := newEnv(t)
+	other, _ := e.addSite(t, "Block B")
+	otherApt := store.MigratedApartmentID(other)
+	for i, ph := range []string{"0711111111", "0722222222", "0733333333"} {
+		if _, err := e.svc.SubmitRegistration(e.regIn("Junk "+string(rune('A'+i)), ph, "J"+string(rune('1'+i)))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep, err := e.svc.SubmitRegistration(RegistrationInput{SiteID: other, ApartmentID: otherApt, Unit: "K1", Name: "Keep Me", Phone: "0744444444", Consent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := e.svc.RejectAllPending(e.site, "owner")
+	if err != nil || n != 3 {
+		t.Fatalf("%d %v", n, err)
+	}
+	for _, r := range e.svc.PendingRegistrations(nil) {
+		if r.ID != keep.ID {
+			t.Fatalf("a rejected row is still pending: %+v", r)
+		}
+	}
+	e.st.View(func(d *store.Data) {
+		for _, r := range d.Registrations {
+			if r.ID != keep.ID && (r.Status != store.RegRejected || r.Name != "" || r.Phone != "" || r.DecidedBy != "owner") {
+				t.Errorf("not erased: %+v", r)
+			}
+		}
+	})
+	if n, _ := e.svc.RejectAllPending(e.site, "owner"); n != 0 {
+		t.Fatalf("second call rejected %d", n)
+	}
+}
+
+// An approval whose claim is older than five minutes (a crash in between) is pending again, on read and in the sweep.
+func TestStaleApprovingReturnsToPending(t *testing.T) {
+	e := newEnv(t)
+	reg, err := e.svc.SubmitRegistration(e.regIn("Stuck Row", "0712345678", "S1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.st.Update(func(d *store.Data) error {
+		r := d.Registrations[reg.ID]
+		r.Status, r.DecidedAt = store.RegApproving, e.now
+		d.Registrations[reg.ID] = r
+		return nil
+	})
+	if n := e.svc.PendingRegistrationCount(nil); n != 0 {
+		t.Fatalf("a fresh claim must not count: %d", n)
+	}
+	e.now = e.now.Add(6 * time.Minute)
+	if n := e.svc.PendingRegistrationCount(nil); n != 1 || len(e.svc.PendingRegistrations(nil)) != 1 {
+		t.Fatalf("a stale claim is pending on read: %d", n)
+	}
+	e.svc.MaintainRegistrations()
+	if got, _ := e.svc.GetRegistration(reg.ID); got.Status != store.RegPending || !got.DecidedAt.IsZero() {
+		t.Fatalf("after the sweep: %+v", got)
+	}
+	// and it can be approved or rejected again
+	if err := e.svc.RejectRegistration(reg.ID, "owner"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Old rows go on a timer, not only when someone submits: decided, undecided and the rows of a removed router.
+func TestMaintainRegistrationsDeletesOldAndOrphanedRows(t *testing.T) {
+	e := newEnv(t)
+	gone, _ := e.addSite(t, "Block Gone")
+	oldPending, _ := e.svc.SubmitRegistration(e.regIn("Old Pending", "0711111111", "O1"))
+	orphan, _ := e.svc.SubmitRegistration(RegistrationInput{SiteID: gone, ApartmentID: store.MigratedApartmentID(gone), Unit: "G1", Name: "Orphan", Phone: "0722222222", Consent: true})
+	e.now = e.now.Add(20 * 24 * time.Hour)
+	fresh, _ := e.svc.SubmitRegistration(e.regIn("Fresh One", "0733333333", "F1"))
+	e.st.Update(func(d *store.Data) error {
+		s := d.Sites[gone]
+		s.Removed = true
+		d.Sites[gone] = s
+		return nil
+	})
+	e.now = e.now.Add(11 * 24 * time.Hour) // oldPending is 31 days old, fresh 11
+	e.svc.MaintainRegistrations()
+	for id, want := range map[string]bool{oldPending.ID: false, orphan.ID: false, fresh.ID: true} {
+		if _, ok := e.svc.GetRegistration(id); ok != want {
+			t.Errorf("registration %s kept=%v want %v", id, ok, want)
+		}
+	}
+}
+
+// A returning tenant is linked to the customer record they have, not duplicated, unless that customer lives elsewhere.
+func TestApproveLinksTheExistingCustomerWithTheSamePhone(t *testing.T) {
+	e := newEnv(t)
+	old, err := e.svc.SaveCustomer(CustomerInput{Name: "Returning Tenant", Phone: "0712345678"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.dynLease(macHuawei, "10.5.50.11", "ont", "bound")
+	e.reconcile(t)
+	reg, _ := e.svc.SubmitRegistration(e.regIn("Returning T", "0712345678", "B4"))
+	a, err := e.svc.ApproveRegistration(context.Background(), reg.ID, macHuawei, "owner")
+	if err != nil || a.CustomerID != old.ID {
+		t.Fatalf("existing customer not linked: %+v %v", a, err)
+	}
+	n := 0
+	e.st.View(func(d *store.Data) { n = len(d.Customers) })
+	if n != 1 {
+		t.Fatalf("customers: %d", n)
+	}
+	// the same number, but that customer already has an open account in ANOTHER apartment: a new customer
+	other, _ := e.addSite(t, "Block B")
+	oc, _ := e.svc.SaveCustomer(CustomerInput{Name: "Lives Elsewhere", Phone: "0722222222"})
+	acc := e.flatAt(t, other, "Z1", macB)
+	if err := e.svc.LinkCustomer(acc.ID, oc.ID, time.Time{}); err != nil {
+		t.Fatal(err)
 	}
 	e.dynLease(macNew, "10.5.50.12", "phone", "bound")
 	e.reconcile(t)
-	r, err = e.svc.SubmitRegistration(e.regIn("No Guess", "0722222222", "G2"))
-	if err != nil || r.GuessMAC != "" {
-		t.Fatalf("two online devices must give no guess: %+v %v", r, err)
+	reg2, err := e.svc.SubmitRegistration(e.regIn("Lives Elsewhere", "0722222222", "B5"))
+	if err != nil {
+		t.Fatal(err)
 	}
+	a2, err := e.svc.ApproveRegistration(context.Background(), reg2.ID, macNew, "owner")
+	if err != nil || a2.CustomerID == "" || a2.CustomerID == oc.ID {
+		t.Fatalf("a customer of another apartment must not be reused: %+v %v", a2, err)
+	}
+}
+
+func TestRegistrationKeepsOnlyAValidFreeNamedMAC(t *testing.T) {
+	e := newEnv(t)
+	var r store.Registration
+	var err error
 	// a MAC named by the caller is kept only when it is a real, free, non-router MAC
 	x := e.regIn("Named", "0733333333", "G3")
 	x.MAC = "aa-bb-cc-dd-ee-01"
-	if r, err = e.svc.SubmitRegistration(x); err != nil || r.MAC != "AA:BB:CC:DD:EE:01" || r.GuessMAC != "" {
+	if r, err = e.svc.SubmitRegistration(x); err != nil || r.MAC != "AA:BB:CC:DD:EE:01" {
 		t.Fatalf("named MAC: %+v %v", r, err)
 	}
 	e.flat(t, "TAKEN", macA)
@@ -132,7 +387,7 @@ func TestApproveRegistrationMakesTheAccountAndLiftsTheWall(t *testing.T) {
 	if _, err := e.svc.ApproveRegistration(context.Background(), reg.ID, "", "owner"); !errors.Is(err, ErrRegNeedsMAC) {
 		t.Fatalf("approving without a device: %v", err)
 	}
-	a, err := e.svc.ApproveRegistration(context.Background(), reg.ID, reg.GuessMAC, "owner")
+	a, err := e.svc.ApproveRegistration(context.Background(), reg.ID, macHuawei, "owner")
 	if err != nil {
 		t.Fatal(err)
 	}

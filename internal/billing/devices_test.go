@@ -28,6 +28,8 @@ func TestVendorLookup(t *testing.T) {
 		macNew:              "ZTE",
 		macPhone:            PrivateAddress,
 		"00:0c:42:11:22:33": "MikroTik",
+		"38:32:7A:00:00:01": "MikroTik",     // verified on maclookup.app: Routerboard.com
+		"6C:1F:F7:00:00:01": "Ugreen",       // verified on maclookup.app: Ugreen Group Limited
 		"AA:BB:CC:DD:EE:01": PrivateAddress, // 0xAA has the local bit set
 		"04:00:00:00:00:01": "",
 		"garbage":           "",

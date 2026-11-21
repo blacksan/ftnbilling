@@ -110,6 +110,7 @@ func newWF(t *testing.T) *wfRig {
 			if strings.HasPrefix(q.URL.Path, "/webfig/") && strings.HasSuffix(q.URL.Path, ".js") {
 				w.Header().Set("Content-Type", "application/javascript")
 				w.Header().Set("Content-Encoding", "identity-test")
+				w.Header().Set("Etag", `"e-`+strings.ReplaceAll(q.URL.Path, "/", "_")+`"`)
 				fmt.Fprint(w, "// file "+q.URL.Path+" site "+tagOf(r))
 				return
 			}
@@ -1165,7 +1166,7 @@ func TestWebFigStaticCache(t *testing.T) {
 	}
 	before := r.hits.Load()
 	resp, b1 := get("/webfig/a.js?v=1", wc, nil)
-	if resp.StatusCode != 200 || resp.Header.Get("Cache-Control") != "private, max-age=86400" || resp.Header.Get("Content-Encoding") != "identity-test" ||
+	if resp.StatusCode != 200 || resp.Header.Get("Cache-Control") != "private, no-cache" || resp.Header.Get("Content-Encoding") != "identity-test" ||
 		resp.Header.Get("Content-Type") != "application/javascript" {
 		t.Fatalf("miss: %d %v", resp.StatusCode, resp.Header)
 	}
@@ -1178,7 +1179,7 @@ func TestWebFigStaticCache(t *testing.T) {
 	// hit: no upstream call, no slot, same headers and body
 	resp, b2 := get("/webfig/a.js?v=1", wc, map[string]string{"Accept-Encoding": "identity-test, gzip"})
 	if r.hits.Load() != before+1 || resp.Header.Get("X-Ftn-Cache") != "hit" || b1 != b2 ||
-		resp.Header.Get("Content-Encoding") != "identity-test" || resp.Header.Get("Cache-Control") != "private, max-age=86400" ||
+		resp.Header.Get("Content-Encoding") != "identity-test" || resp.Header.Get("Cache-Control") != "private, no-cache" ||
 		resp.Header.Get("X-Frame-Options") != "DENY" || resp.Header.Get("Referrer-Policy") != "no-referrer" {
 		t.Fatalf("hit: hits %d, %v", r.hits.Load()-before, resp.Header)
 	}
@@ -1233,6 +1234,32 @@ func TestWebFigStaticCache(t *testing.T) {
 	}
 	if r.hits.Load() != h+2 {
 		t.Error("/jsproxy was cached")
+	}
+}
+
+// The browser is told to revalidate (file names are not known to be versioned), and the server answers the
+// revalidation from its cache: a 304 when the validator matches, the body when it does not, no router call.
+func TestWebFigBrowserRevalidatesAndServerCacheAnswers(t *testing.T) {
+	r := newWF(t)
+	wc := r.open(t, r.br, r.owner, r.site)
+	get := func(hdr map[string]string) (*http.Response, string) {
+		resp := r.techReq("GET", "/webfig/rv.js", r.clientIP, nil, hdr, wc)
+		b, _ := io.ReadAll(resp.Body)
+		return resp, string(b)
+	}
+	resp, body := get(nil)
+	etag := resp.Header.Get("Etag")
+	if resp.Header.Get("Cache-Control") != "private, no-cache" || etag == "" || body == "" {
+		t.Fatalf("first load: %v %q", resp.Header, body)
+	}
+	n := r.hits.Load()
+	resp, body = get(map[string]string{"If-None-Match": etag, "Accept-Encoding": "identity-test"})
+	if resp.StatusCode != 304 || body != "" || resp.Header.Get("Cache-Control") != "private, no-cache" || resp.Header.Get("X-Ftn-Cache") != "hit" || r.hits.Load() != n {
+		t.Fatalf("matching validator: %d %v %q hits %d", resp.StatusCode, resp.Header, body, r.hits.Load()-n)
+	}
+	resp, body = get(map[string]string{"If-None-Match": `"something-else"`, "Accept-Encoding": "identity-test"})
+	if resp.StatusCode != 200 || body == "" || r.hits.Load() != n {
+		t.Fatalf("other validator: %d %q hits %d", resp.StatusCode, body, r.hits.Load()-n)
 	}
 }
 

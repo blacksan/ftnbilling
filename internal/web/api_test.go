@@ -1105,4 +1105,14 @@ func TestAPIAccountDetailDevicesAndWhatsApp(t *testing.T) {
 	if j := p.JSON(t); j["wa_same_phone"] != false || j["whatsapp"] != "254733555666" {
 		t.Fatalf("unticked: %s", p.Raw)
 	}
+	// a number typed on its own clears the box; an explicit wa_same_phone=true wins over a number sent with it
+	r.call(r.oper.Access, "PATCH", "/accounts/"+id, map[string]any{"wa_same_phone": true}, nil)
+	p = r.call(r.oper.Access, "PATCH", "/accounts/"+id, map[string]any{"whatsapp": "0733555666"}, nil)
+	if j := p.JSON(t); j["wa_same_phone"] != false || j["whatsapp"] != "254733555666" {
+		t.Fatalf("number alone: %s", p.Raw)
+	}
+	p = r.call(r.oper.Access, "PATCH", "/accounts/"+id, map[string]any{"wa_same_phone": true, "whatsapp": "0744777888"}, nil)
+	if j := p.JSON(t); p.Status != 200 || j["wa_same_phone"] != true || j["whatsapp"] == "254744777888" || j["whatsapp"] != j["phone"] {
+		t.Fatalf("flag with a number: %s", p.Raw)
+	}
 }

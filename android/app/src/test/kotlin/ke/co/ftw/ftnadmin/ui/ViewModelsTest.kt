@@ -15,6 +15,7 @@ import ke.co.ftw.ftnadmin.ui.customers.CustomerDetailViewModel
 import ke.co.ftw.ftnadmin.ui.customers.DetailDialog
 import ke.co.ftw.ftnadmin.ui.customers.macConflictText
 import ke.co.ftw.ftnadmin.ui.newdevices.NewDevicesViewModel
+import ke.co.ftw.ftnadmin.ui.newdevices.rejectAllTargets
 import ke.co.ftw.ftnadmin.ui.newdevices.SheetTab
 import ke.co.ftw.ftnadmin.ui.payments.PaymentDialog
 import ke.co.ftw.ftnadmin.ui.payments.PaymentsViewModel
@@ -197,6 +198,23 @@ class ViewModelsTest {
         vm.reject()
         await(vm.state) { it.rejecting == null && it.message != null }
         assertEquals(1, requests("POST /api/v1/registrations/r1/reject").size)
+    }
+
+    @Test fun rejectAllEmptiesOneRoutersQueueAfterAConfirm() = runTest(main.dispatcher) {
+        routes["GET /api/v1/unregistered"] = ok("""{"items":[]}""")
+        routes["GET /api/v1/packages"] = ok("""{"items":[]}""")
+        routes["GET /api/v1/registrations"] = ok("""{"items":[$pendingReg],"count":1}""")
+        routes["POST /api/v1/registrations/reject-all"] = ok("""{"ok":true,"rejected":1}""")
+        val vm = main.track(NewDevicesViewModel(null, NewDevicesRepository(api), SitesRepository(api), AccountsRepository(api)))
+        await(vm.state) { it.registrations.isNotEmpty() }
+        val t = rejectAllTargets(vm.state.value.registrations).single()
+        assertEquals("Kilimani", t.label)
+        vm.askRejectAll(t)
+        assertTrue(requests("POST /api/v1/registrations/reject-all").isEmpty())
+        vm.rejectAll()
+        await(vm.state) { it.rejectingAll == null && it.message != null }
+        val body = requests("POST /api/v1/registrations/reject-all").single().body.readUtf8()
+        assertTrue(body, body.contains("\"site_id\":\"s1\""))
     }
 
     @Test fun attachConflictNamesTheOwner() = runTest(main.dispatcher) {

@@ -232,8 +232,19 @@ func (s *Server) payWrongRouter(p payPage, a store.Account) string {
 // WireGuard peer connects from. It answers only when exactly one building
 // matches (two buildings behind one NAT address cannot be told apart).
 func (s *Server) siteByAddr(ip string) (store.Site, bool) {
+	hit := s.sitesByAddr(ip)
+	if len(hit) == 1 {
+		return hit[0], true
+	}
+	return store.Site{}, false
+}
+
+// sitesByAddr lists the live routers whose WireGuard peer endpoint has this address: the routers a request
+// from this address may come from. Walled devices leave through their router's masquerade, so this is the
+// router's public WAN address, and every router behind the same public (carrier-grade NAT) address matches.
+func (s *Server) sitesByAddr(ip string) []store.Site {
 	if ip == "" {
-		return store.Site{}, false
+		return nil
 	}
 	var cands []store.Site
 	s.st.View(func(d *store.Data) {
@@ -257,10 +268,7 @@ func (s *Server) siteByAddr(ip string) (store.Site, bool) {
 			hit = append(hit, st)
 		}
 	}
-	if len(hit) == 1 {
-		return hit[0], true
-	}
-	return store.Site{}, false
+	return hit
 }
 
 func (s *Server) payBase(r *http.Request) payPage {

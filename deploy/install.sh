@@ -276,7 +276,18 @@ render_webfig_block() {
   printf '# here: compressing can hold back WebFig'"'"'s long requests.\n'
   printf '# Access log to the journal (journalctl -u caddy): the ticket (?t=) and cookies are removed.\n'
   printf '# X-Ftn-Proto tells the app the browser'"'"'s protocol (HTTP/1.1, HTTP/2.0 or HTTP/3.0) for its own log.\n'
-  printf '%s {\n\tlog {\n\t\tformat filter {\n\t\t\trequest>uri query {\n\t\t\t\tdelete t\n\t\t\t}\n\t\t\trequest>headers>Cookie delete\n\t\t}\n\t}\n\treverse_proxy 127.0.0.1:%s {\n\t\tflush_interval -1\n\t\theader_up X-Ftn-Proto {http.request.proto}\n\t}\n}\n' "$WEBFIG_DOMAIN" "${WEBFIG_PORT:-8082}"
+  # WEBFIG_LOG picks how the access log is written, for Caddy versions that differ in the filter syntax:
+  # plain (the default: filters directly in "format filter"), fields (wrapped in "fields { }", which every
+  # 2.x accepts) or none (no access log at all). install_caddyfile tries them in that order.
+  local logblock
+  case "${WEBFIG_LOG:-plain}" in
+    fields) logblock='\tlog {\n\t\tformat filter {\n\t\t\tfields {\n\t\t\t\trequest>uri query {\n\t\t\t\t\tdelete t\n\t\t\t\t}\n\t\t\t\trequest>headers>Cookie delete\n\t\t\t}\n\t\t}\n\t}\n' ;;
+    none) logblock='' ;;
+    *) logblock='\tlog {\n\t\tformat filter {\n\t\t\trequest>uri query {\n\t\t\t\tdelete t\n\t\t\t}\n\t\t\trequest>headers>Cookie delete\n\t\t}\n\t}\n' ;;
+  esac
+  printf '%s {\n' "$WEBFIG_DOMAIN"
+  printf '%b' "$logblock"
+  printf '\treverse_proxy 127.0.0.1:%s {\n\t\tflush_interval -1\n\t\theader_up X-Ftn-Proto {http.request.proto}\n\t}\n}\n' "${WEBFIG_PORT:-8082}"
 }
 # int2ip_masked ADDR BITS [N]: the network address of ADDR/BITS, plus N.
 int2ip_masked() {
@@ -1129,8 +1140,25 @@ install_caddyfile() {
   tmp=$(mktemp "$dest.new.XXXXXX")
   render_caddyfile >"$tmp"
   if ! out=$(caddy validate --adapter caddyfile --config "$tmp" 2>&1); then
-    rm -f "$tmp"
-    die "the new Caddyfile is not valid; $dest was left untouched. caddy said: $out"
+    # An older Caddy may not know the log filter syntax of the WebFig site. Do not stop the upgrade for a log:
+    # try the "fields { }" form (accepted by every 2.x), then no access log at all (with a warning). The
+    # message shown if nothing helps is the first one, about the file as first rendered.
+    local form ok=0
+    if [ -n "${WEBFIG_DOMAIN:-}" ]; then
+      for form in fields none; do
+        WEBFIG_LOG=$form render_caddyfile >"$tmp"
+        if caddy validate --adapter caddyfile --config "$tmp" >/dev/null 2>&1; then
+          ok=1
+          if [ "$form" = none ]; then warn "this Caddy does not accept the access-log filter for $WEBFIG_DOMAIN: the WebFig site is written without an access log (upgrade Caddy to get it)"
+          else note "this Caddy needs the log filter wrapped in fields { }: using that form for $WEBFIG_DOMAIN"; fi
+          break
+        fi
+      done
+    fi
+    if [ "$ok" != 1 ]; then
+      rm -f "$tmp"
+      die "the new Caddyfile is not valid; $dest was left untouched. caddy said: $out"
+    fi
   fi
   chmod 644 "$tmp"
   if [ "$(id -u)" = 0 ]; then chown root:root "$tmp"; fi

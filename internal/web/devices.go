@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -20,6 +21,8 @@ func (s *Server) deviceRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/devices/move", s.adminDeviceMove)
 	post("/admin/registrations/approve", s.adminRegApprove)
 	post("/admin/registrations/reject", s.adminRegReject)
+	post("/admin/registrations/reject-all", s.adminRegRejectAll)
+	post("/admin/registrations/assign", s.adminRegAssign)
 	get("/admin/sites/devices.json", s.adminRouterDevices)
 }
 
@@ -129,7 +132,8 @@ func (s *Server) adminDevices(w http.ResponseWriter, r *http.Request) {
 			suggested++
 		}
 	}
-	p.Data["Regs"] = s.svc.PendingRegistrations(sc.Has)
+	regs := s.svc.PendingRegistrations(sc.Has)
+	p.Data["Regs"], p.Data["RegGroups"], p.Data["AssignChoices"] = regs, regGroups(regs), s.assignChoices(sc)
 	p.Data["Rows"], p.Data["Pkgs"], p.Data["OnlineOnly"], p.Data["Count"] = rows, pkgs, onlineOnly, len(rows)
 	p.Data["OnlineN"], p.Data["Today"], p.Data["Suggested"] = onlineN, today, suggested
 	s.render(w, "admin_devices", p)
@@ -244,6 +248,89 @@ func (s *Server) adminDeviceMove(w http.ResponseWriter, r *http.Request) {
 	s.back(w, r, s.accountURL(a.ID), "Moved "+a.Tenant+" to this apartment. The router is updating.")
 }
 
+// regGroup is the waiting registrations of one router (SiteID "" = the ones that name no router yet).
+type regGroup struct {
+	SiteID, SiteName string
+	N                int
+}
+
+func regGroups(regs []billing.RegistrationView) []regGroup {
+	var out []regGroup
+	idx := map[string]int{}
+	for _, g := range regs {
+		i, ok := idx[g.SiteID]
+		if !ok {
+			i = len(out)
+			idx[g.SiteID] = i
+			name := g.SiteName
+			if g.SiteID == "" {
+				name = "no router yet"
+			}
+			out = append(out, regGroup{SiteID: g.SiteID, SiteName: name})
+		}
+		out[i].N++
+	}
+	return out
+}
+
+// assignChoice is one router and apartment a registration that names only a building can be given.
+type assignChoice struct{ Value, Label string }
+
+func (s *Server) assignChoices(sc scope) []assignChoice {
+	var out []assignChoice
+	s.st.View(func(d *store.Data) {
+		for _, st := range sc.Sites {
+			for _, id := range d.SiteApartmentIDs(st.ID) {
+				out = append(out, assignChoice{Value: st.ID + "|" + id, Label: st.Name + " / " + d.Apartments[id].Name})
+			}
+		}
+	})
+	return out
+}
+
+// regScopeAllows: the registration's router is one the user may act on; one that names no router yet is for
+// whoever can act on any router.
+func (s *Server) regScopeAllows(r *http.Request, siteID string) bool {
+	if siteID == "" {
+		return len(s.scopeOf(r).Sites) > 0
+	}
+	return s.scopeAllows(r, siteID)
+}
+
+// adminRegRejectAll rejects every waiting registration of one router (site "none": the ones naming no router).
+func (s *Server) adminRegRejectAll(w http.ResponseWriter, r *http.Request) {
+	site := r.PostFormValue("site")
+	if site == "none" {
+		site = billing.UnassignedSite
+	}
+	if !s.regScopeAllows(r, site) {
+		http.NotFound(w, r)
+		return
+	}
+	n, err := s.svc.RejectAllPending(site, s.actorOf(r))
+	if err != nil && n == 0 {
+		s.back(w, r, "/admin/devices", "Nothing was waiting.")
+		return
+	}
+	s.back(w, r, "/admin/devices", fmt.Sprintf("Rejected %d waiting registrations. Their details were erased.", n))
+}
+
+// adminRegAssign gives a registration that named only a building its router and apartment.
+func (s *Server) adminRegAssign(w http.ResponseWriter, r *http.Request) {
+	id := r.PostFormValue("id")
+	reg, ok := s.svc.GetRegistration(id)
+	if !ok || reg.SiteID != "" || !s.regScopeAllows(r, "") {
+		http.NotFound(w, r)
+		return
+	}
+	siteID, aptID, _ := strings.Cut(r.PostFormValue("target"), "|")
+	if !s.scopeAllows(r, siteID) {
+		s.back(w, r, "/admin/devices", "Error: choose one of your routers and apartments")
+		return
+	}
+	s.back(w, r, "/admin/devices", msgOr(s.svc.AssignRegistration(id, siteID, aptID, s.actorOf(r)), "Assigned. Pick the device and approve."))
+}
+
 // adminRegApprove makes the account of a pending registration with the MAC the owner picked (or typed).
 func (s *Server) adminRegApprove(w http.ResponseWriter, r *http.Request) {
 	id := r.PostFormValue("id")
@@ -267,7 +354,7 @@ func (s *Server) adminRegApprove(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminRegReject(w http.ResponseWriter, r *http.Request) {
 	id := r.PostFormValue("id")
 	reg, ok := s.svc.GetRegistration(id)
-	if !ok || !s.scopeAllows(r, reg.SiteID) {
+	if !ok || !s.regScopeAllows(r, reg.SiteID) {
 		http.NotFound(w, r)
 		return
 	}

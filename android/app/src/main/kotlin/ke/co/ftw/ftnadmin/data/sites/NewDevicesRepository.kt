@@ -86,6 +86,17 @@ class NewDevicesRepository(private val api: ApiClient) {
         body = buildJsonObject { put("mac", mac) },
     )
 
+    /**
+     * Rejects every waiting registration of one router ([siteId]), or the ones that name no router yet when [siteId] is
+     * blank; the server erases their details.
+     */
+    suspend fun rejectAllRegistrations(siteId: String) = api.send(
+        "POST", "registrations", "reject-all",
+        body = buildJsonObject {
+            if (siteId.isBlank()) put("unassigned", true) else put("site_id", siteId)
+        },
+    )
+
     /** Declines the registration; the server erases the person's details. */
     suspend fun rejectRegistration(id: String) = api.send("POST", "registrations", id, "reject", body = buildJsonObject {})
 }

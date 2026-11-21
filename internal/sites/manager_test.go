@@ -517,3 +517,39 @@ func TestNetflowSocket(t *testing.T) {
 }
 
 var _ = billing.ErrNoSite
+
+// The WebFig cache needs to know when a router was re-bootstrapped or removed, and which RouterOS it runs.
+func TestRouterResetHookAndROSVersionSeen(t *testing.T) {
+	f := newFixture(t, nil)
+	a := f.create("Block A")
+	var got []string
+	f.m.SetOnRouterReset(func(id string) { got = append(got, id) })
+	tok, _, _ := f.m.MintJoin(a.ID)
+	if _, _, err := f.m.ConsumeJoin(tok, mt, "x", false); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != a.ID {
+		t.Fatalf("after the script was handed out: %v", got)
+	}
+	// the setup checks record the version the router reports; a new version replaces it
+	m := f.startedRouter(a.ID)
+	m.SeedOne("/system/resource", R{"version": "7.25.1 (stable)"})
+	if v := f.m.ROSVersionSeen(a.ID); v != "" {
+		t.Fatalf("nothing was read yet: %q", v)
+	}
+	f.m.Checks(context.Background(), a.ID, true)
+	if v := f.m.ROSVersionSeen(a.ID); v != "7.25.1 (stable)" {
+		t.Fatalf("seen: %q", v)
+	}
+	m.SeedOne("/system/resource", R{"version": "7.26 (stable)"})
+	f.m.Checks(context.Background(), a.ID, true)
+	if v := f.m.ROSVersionSeen(a.ID); v != "7.26 (stable)" {
+		t.Fatalf("after an upgrade: %q", v)
+	}
+	if err := f.m.RemoveSite(a.ID, "Block A"); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[1] != a.ID {
+		t.Fatalf("after removal: %v", got)
+	}
+}

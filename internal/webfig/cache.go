@@ -23,9 +23,13 @@ const (
 	DefaultCacheBytes = 64 << 20
 	CacheTTL          = 24 * time.Hour
 	maxCacheEntry     = 8 << 20
-	// StaticCacheControl is what the browser is told for a static file: private because the files are
-	// behind the WebFig session.
-	StaticCacheControl = "private, max-age=86400"
+	// StaticCacheControl is what the browser is told for a static file: private because the files are behind the
+	// WebFig session, and no-cache (store, but revalidate every time) because WebFig's file names are not known to
+	// be content-hashed: with a max-age, a RouterOS upgrade could leave a browser running the old JavaScript
+	// against the new router for a day. The server-side cache still answers the revalidation without the router
+	// (a 304 when the browser's validator matches, else the stored body), so loads stay fast. If the file names
+	// are ever confirmed to be versioned by content, a long max-age could return for URLs that carry the hash.
+	StaticCacheControl = "private, no-cache"
 )
 
 var staticExt = map[string]bool{
@@ -170,6 +174,29 @@ func acceptsEncoding(header, enc string) bool {
 			}
 		}
 		return true
+	}
+	return false
+}
+
+// notModified: the request's validators say the browser already holds this entry's body.
+func (e *cacheEntry) notModified(r *http.Request) bool {
+	if inm := r.Header.Get("If-None-Match"); inm != "" {
+		if e.etag == "" {
+			return false
+		}
+		want := strings.TrimPrefix(e.etag, "W/")
+		for _, t := range strings.Split(inm, ",") {
+			t = strings.TrimSpace(t)
+			if t == "*" || strings.TrimPrefix(t, "W/") == want {
+				return true
+			}
+		}
+		return false
+	}
+	if ims := r.Header.Get("If-Modified-Since"); ims != "" && e.lastMod != "" {
+		a, err1 := http.ParseTime(ims)
+		b, err2 := http.ParseTime(e.lastMod)
+		return err1 == nil && err2 == nil && !b.After(a)
 	}
 	return false
 }

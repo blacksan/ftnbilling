@@ -4,9 +4,12 @@ import "time"
 
 // Registration statuses.
 const (
-	RegPending  = "pending"
-	RegApproved = "approved"
-	RegRejected = "rejected"
+	RegPending = "pending"
+	// RegApproving is the claim an approval holds while it makes the account; DecidedAt is when it was taken.
+	// A claim older than a few minutes (a crash in between) goes back to pending.
+	RegApproving = "approving"
+	RegApproved  = "approved"
+	RegRejected  = "rejected"
 )
 
 // Registration is a visitor's request, made on the captive page, to become a subscriber. It is pending until the
@@ -25,7 +28,14 @@ type Registration struct {
 	Email       string `json:"email,omitempty"`
 	MAC         string `json:"mac,omitempty"`
 	GuessMAC    string `json:"guess_mac,omitempty"`
-	Status      string `json:"status"`
+	// DeviceName is what the visitor says their phone or laptop is called (the name in its Wi-Fi settings). The
+	// owner matches it against the DHCP host names of the candidate devices. Free text, never trusted.
+	DeviceName string `json:"device_name,omitempty"`
+	// Building is the apartment or building name the visitor typed when the server could not tell which router
+	// they are on (two routers behind one public address). Such a registration has no SiteID until the owner
+	// assigns it; Building is cleared then.
+	Building string `json:"building,omitempty"`
+	Status   string `json:"status"`
 	// ConsentAt is when the visitor ticked the privacy notice (the form cannot be sent without it).
 	ConsentAt time.Time `json:"consent_at,omitempty"`
 	CreatedAt time.Time `json:"created_at"`

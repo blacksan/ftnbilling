@@ -369,7 +369,7 @@ func (s *Server) apiAccountPatch(w http.ResponseWriter, r *http.Request, c *apiC
 		Phone       *string `json:"phone"`
 		Notes       *string `json:"notes"`
 		WhatsApp    *string `json:"whatsapp"`
-		WASamePhone *bool   `json:"wa_same_phone"`
+		WASamePhone *bool   `json:"wa_same_phone"` // true wins over a "whatsapp" sent with it (WhatsApp becomes the phone); a "whatsapp" alone clears it
 	}
 	if !decode(w, r, &req, false) {
 		return
@@ -438,8 +438,13 @@ func (s *Server) apiAccountPatch(w http.ResponseWriter, r *http.Request, c *apiC
 		wa, same := cur.WhatsApp, cur.WASamePhone
 		if req.WhatsApp != nil {
 			wa = *req.WhatsApp
+			if req.WASamePhone == nil {
+				same = false // a number typed on its own means "not the same as the phone"
+			}
 		}
 		if req.WASamePhone != nil {
+			// Like the web form's ticked box, an explicit wa_same_phone=true wins over a number sent with it:
+			// WhatsApp is then set to the phone (a number sent with it is ignored).
 			same = *req.WASamePhone
 		}
 		if err := s.svc.SetWhatsApp(a.ID, wa, same, cur.WAOptOut); err != nil {

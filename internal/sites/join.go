@@ -219,6 +219,7 @@ func (m *Manager) consume(token, rosVersion, from string, noCheck bool) (script 
 		m.log.Warn("could not write the WireGuard peers file", "site", siteID, "err", err)
 	}
 	m.Reload(siteID)
+	m.routerReset(siteID)
 	m.log.Info("set-up script handed out", "site", siteID, "from", from)
 	return script, siteID, nil
 }

@@ -81,3 +81,65 @@ func TestSettingsSupportContactsSaveAndClear(t *testing.T) {
 		t.Error("the page does not render")
 	}
 }
+
+func TestAPIRegistrationsRejectAllAssignAndCandidates(t *testing.T) {
+	r := newAPIRig(t)
+	apt := ""
+	r.st.Update(func(d *store.Data) error {
+		apt = store.NewApartmentID()
+		d.Apartments[apt] = store.Apartment{ID: apt, Name: "Alpha Court"}
+		d.ApartmentSites[store.ApartmentSiteKey(apt, r.A.ID)] = store.ApartmentSite{ApartmentID: apt, SiteID: r.A.ID}
+		return nil
+	})
+	for i, ph := range []string{"0722000111", "0722000222", "0722000333"} {
+		if _, err := r.svc.SubmitRegistration(billing.RegistrationInput{SiteID: r.A.ID, ApartmentID: apt, Unit: "U" + string(rune('1'+i)), Name: "Junk Person", Phone: ph, DeviceName: "Junk's phone", Consent: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	un, err := r.svc.SubmitRegistration(billing.RegistrationInput{Unit: "X1", Name: "Typed Name", Phone: "0733000111", Building: "Alpha Court", Consent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := r.call(r.view.Access, "GET", "/registrations", nil, nil).JSON(t)
+	items := list["items"].([]any)
+	if len(items) != 4 {
+		t.Fatalf("items: %v", list)
+	}
+	var sawDevice, sawUnassigned bool
+	for _, it := range items {
+		m := it.(map[string]any)
+		if m["device_name"] == "Junk's phone" {
+			sawDevice = true
+		}
+		if m["unassigned"] == true && m["building"] == "Alpha Court" {
+			sawUnassigned = true
+		}
+	}
+	if !sawDevice || !sawUnassigned {
+		t.Errorf("device_name/building/unassigned missing: %v", items)
+	}
+	// approving an unassigned one is a validation error; assigning it fixes that
+	if v := r.call(r.oper.Access, "POST", "/registrations/"+un.ID+"/approve", map[string]any{"mac": "00:E0:4C:68:01:02"}, nil); v.Status != 400 {
+		t.Errorf("approve unassigned: %d %s", v.Status, v.Raw)
+	}
+	if v := r.call(r.view.Access, "POST", "/registrations/"+un.ID+"/assign", map[string]any{"site_id": r.A.ID, "apartment_id": apt}, nil); v.Status != 403 {
+		t.Errorf("viewer assign: %d", v.Status)
+	}
+	if v := r.call(r.oper.Access, "POST", "/registrations/"+un.ID+"/assign", map[string]any{"site_id": r.A.ID, "apartment_id": apt}, nil); v.Status != 200 {
+		t.Fatalf("assign: %d %s", v.Status, v.Raw)
+	}
+	// reject all of one router
+	if v := r.call(r.view.Access, "POST", "/registrations/reject-all", map[string]any{"site_id": r.A.ID}, nil); v.Status != 403 {
+		t.Errorf("viewer reject-all: %d", v.Status)
+	}
+	if v := r.call(r.oper.Access, "POST", "/registrations/reject-all", map[string]any{}, nil); v.Status != 400 {
+		t.Errorf("reject-all without a router: %d %s", v.Status, v.Raw)
+	}
+	v := r.call(r.oper.Access, "POST", "/registrations/reject-all", map[string]any{"site_id": r.A.ID}, nil)
+	if j := v.JSON(t); v.Status != 200 || j["rejected"] != float64(4) {
+		t.Fatalf("reject-all: %d %s", v.Status, v.Raw)
+	}
+	if n := r.call(r.owner.Access, "GET", "/registrations", nil, nil).JSON(t)["count"].(float64); n != 0 {
+		t.Errorf("still pending: %v", n)
+	}
+}

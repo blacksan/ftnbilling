@@ -1720,6 +1720,9 @@ func (m *Manager) runChecks(ctx context.Context, site store.Site) Checks {
 	out := Checks{SiteID: site.ID, GeneratedAt: now, Items: items, JoinReport: m.loadJoinReport(site.ID),
 		Router: RouterInfo{Reachable: e.sn.errs["/system/resource"] == nil, Version: res["version"], Board: res["board-name"]}}
 	out.Layout = layout
+	if out.Router.Reachable {
+		m.noteROSVersion(site.ID, out.Router.Version)
+	}
 	out.MgmtWinbox = hasMgmtWinboxRule(e.sn, m.mgmt.String())
 	out.Slow = e.slow
 	out.Summary = summarize(items)

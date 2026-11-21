@@ -155,3 +155,22 @@ func TestValidateReportsBadApartmentGPS(t *testing.T) {
 		t.Errorf("%d GPS problems, want 2: %v", n, Validate(d))
 	}
 }
+
+// A file written before the "WhatsApp is the same as the phone" flag existed gets the flag where the WhatsApp
+// number equals the phone (migration 0013 of the Postgres store, for the JSON file); other rows are untouched.
+func TestJSONBackfillsWhatsAppSameAsPhone(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "old.json")
+	raw := `{"format":9,
+"accounts":{"a1":{"id":"a1","phone":"254712345678","whatsapp":"254712345678"},"a2":{"id":"a2","phone":"254712345678","whatsapp":"254722000111"},"a3":{"id":"a3","phone":"254712345678"}},
+"customers":{"c1":{"id":"c1","name":"X","phone":"254733000111","whatsapp":"254733000111"},"c2":{"id":"c2","name":"Y","phone":"254733000111","whatsapp":"254700000000"}}}`
+	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d, _, err := ReadJSON(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.Accounts["a1"].WASamePhone || d.Accounts["a2"].WASamePhone || d.Accounts["a3"].WASamePhone || !d.Customers["c1"].WASamePhone || d.Customers["c2"].WASamePhone {
+		t.Fatalf("backfill: %+v %+v", d.Accounts, d.Customers)
+	}
+}

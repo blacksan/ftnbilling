@@ -66,8 +66,19 @@ data class NewDevicesUiState(
     val approving: PendingRegistration? = null,
     val approveMac: String = "",
     val rejecting: PendingRegistration? = null,
+    /** "Reject all" waits for a confirm: which router's queue it would empty. */
+    val rejectingAll: RejectAllTarget? = null,
     val decideBusy: Boolean = false,
 )
+
+/** The waiting registrations of one router ([siteId] blank = the ones that name no router yet), for "Reject all". */
+data class RejectAllTarget(val siteId: String, val label: String, val count: Int)
+
+/** The queues the owner can empty at once: one per router (blank site = no router yet), with how many wait. */
+internal fun rejectAllTargets(list: List<PendingRegistration>): List<RejectAllTarget> =
+    list.groupBy { it.siteId }.map { (site, rows) ->
+        RejectAllTarget(site, if (site.isBlank()) "no router yet" else rows.first().siteName.ifBlank { "this router" }, rows.size)
+    }.sortedBy { it.label }
 
 class NewDevicesViewModel(
     private val siteId: String?,
@@ -131,6 +142,25 @@ class NewDevicesViewModel(
     fun askReject(r: PendingRegistration) = _state.update { it.copy(rejecting = r) }
 
     fun cancelReject() = _state.update { it.copy(rejecting = null) }
+
+    fun askRejectAll(t: RejectAllTarget) = _state.update { it.copy(rejectingAll = t) }
+
+    fun cancelRejectAll() = _state.update { it.copy(rejectingAll = null) }
+
+    fun rejectAll() {
+        val t = _state.value.rejectingAll ?: return
+        if (_state.value.decideBusy) return
+        _state.update { it.copy(decideBusy = true) }
+        viewModelScope.launch {
+            apiResult { repo.rejectAllRegistrations(t.siteId) }.fold(
+                {
+                    _state.update { it.copy(rejectingAll = null, decideBusy = false, message = "Rejected the waiting registrations of ${t.label}. The details were erased.") }
+                    fetch()
+                },
+                { e -> _state.update { it.copy(rejectingAll = null, decideBusy = false, message = e.userMessage()) } },
+            )
+        }
+    }
 
     fun approve() {
         val r = _state.value.approving ?: return

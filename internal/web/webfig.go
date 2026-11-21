@@ -50,6 +50,8 @@ func (s *Server) initWebFig() {
 	if s.cfg.WebFigDomain == "" {
 		return
 	}
+	// A re-bootstrapped or removed router: its cached WebFig files are dropped.
+	s.mgr.SetOnRouterReset(func(id string) { s.wf.mgr.PurgeCache(id) })
 	var tunnel netip.Prefix
 	var srvIP netip.Addr
 	if s.wgNet.IsValid() {
@@ -111,8 +113,10 @@ func (s *Server) webfigTarget(id string) (webfig.Target, bool) {
 }
 
 // webfigVersion is what the cached WebFig files of a router belong to: the
-// RouterOS version its bootstrap reported plus when that bootstrap ran, so a
-// re-bootstrap (or an upgrade followed by one) starts the cache afresh.
+// RouterOS version its bootstrap reported, when that bootstrap ran, and the
+// RouterOS version the server last read from the router itself (the setup
+// checks the sweep runs), so a re-bootstrap and a plain upgrade both start
+// the cache afresh.
 func (s *Server) webfigVersion(id string) string {
 	st, ok := s.siteByID(id)
 	if !ok {
@@ -122,7 +126,7 @@ func (s *Server) webfigVersion(id string) string {
 	if jr, ok := s.mgr.JoinReport(id); ok {
 		v = jr.ROS
 	}
-	return v + "@" + strconv.FormatInt(st.Join.UsedAt.Unix(), 10)
+	return v + "@" + strconv.FormatInt(st.Join.UsedAt.Unix(), 10) + "|" + s.mgr.ROSVersionSeen(id)
 }
 
 // WebFigHandler is the handler for WEBFIG_DOMAIN; nil when the feature is off.
