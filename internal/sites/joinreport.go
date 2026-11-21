@@ -187,7 +187,7 @@ func joinReportAudit(r JoinReport) string {
 	if r.OK {
 		return "join report: all sections worked"
 	}
-	return "join report: problems (see the building page)"
+	return "join report: problems (see the router page)"
 }
 
 // JoinReport returns a building's last join report (W5a's checks and the

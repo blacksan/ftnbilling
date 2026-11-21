@@ -32,8 +32,66 @@ const (
 )
 
 type devObs struct {
-	mac, ip, host, source string
-	online                bool
+	mac, ip, host, source, port string
+	online                      bool
+}
+
+// ErrRouterOwnMAC: an account cannot be given a MAC that is one of a router's own interfaces.
+var ErrRouterOwnMAC = errors.New("That MAC belongs to the router itself")
+
+// routerFacts is what one pass learned about a router besides its leases and ARP rows: its own MACs and
+// the bridge host table (which MACs sit behind which port at layer 2).
+type routerFacts struct {
+	own     map[string]bool
+	hosts   []routeros.Row
+	hostsOK bool
+}
+
+// readFacts reads the router's interfaces and bridge hosts once (best effort, sequential, so it stays
+// inside the router's REST read budget) and remembers the router's own MACs for the account checks.
+func (s *Service) readFacts(ctx context.Context, rt routeros.Client, siteID string) routerFacts {
+	f := routerFacts{own: map[string]bool{}}
+	ifs, ierr := rt.RowsProps(ctx, pathInterface, nil, []string{"name", "mac-address"})
+	if ierr == nil {
+		for _, r := range ifs {
+			if m, err := NormalizeMAC(r["mac-address"]); err == nil {
+				f.own[m] = true
+			}
+		}
+	}
+	hosts, herr := rt.RowsProps(ctx, pathBridgeHost, nil, []string{"mac-address", "on-interface", "local", "bridge"})
+	if herr == nil {
+		f.hostsOK = true
+		f.hosts = hosts
+		for _, r := range hosts {
+			if r["local"] == "true" || r["local"] == "yes" {
+				if m, err := NormalizeMAC(r["mac-address"]); err == nil {
+					f.own[m] = true
+				}
+			}
+		}
+	}
+	if ierr == nil || herr == nil {
+		s.ownMu.Lock()
+		if s.ownMACs == nil {
+			s.ownMACs = map[string]map[string]bool{}
+		}
+		s.ownMACs[siteID] = f.own
+		s.ownMu.Unlock()
+	}
+	return f
+}
+
+// isRouterMAC: the MAC is one of the interfaces of a router this server has read.
+func (s *Service) isRouterMAC(mac string) bool {
+	s.ownMu.Lock()
+	defer s.ownMu.Unlock()
+	for _, set := range s.ownMACs {
+		if set[mac] {
+			return true
+		}
+	}
+	return false
 }
 
 // arpOnline: does an /ip/arp row mean the device answered recently?
@@ -51,7 +109,7 @@ func arpOnline(r routeros.Row) bool {
 // pass, and refreshes "last seen" of the flats' own MACs. It writes nothing to
 // the router.
 func (s *Service) collectDevices(site store.Site, pl netplan.Plan, wants []wantAcct, leases, arp []routeros.Row, ps *provState) {
-	s.collectDevicesX(site, pl, true, true, wants, leases, arp, ps)
+	s.collectDevicesX(site, pl, true, true, wants, leases, arp, routerFacts{}, ps)
 }
 
 // collectDevicesX is collectDevices with hasPlan: it
@@ -59,17 +117,17 @@ func (s *Service) collectDevices(site store.Site, pl netplan.Plan, wants []wantA
 //
 // complete is false when one of the two reads failed: the devices not seen this time are then left as they were
 // (a failed ARP read must not flip every device seen only through ARP offline and count a new hit when it returns).
-func (s *Service) collectDevicesX(site store.Site, pl netplan.Plan, hasPlan, complete bool, wants []wantAcct, leases, arp []routeros.Row, ps *provState) {
+func (s *Service) collectDevicesX(site store.Site, pl netplan.Plan, hasPlan, complete bool, wants []wantAcct, leases, arp []routeros.Row, facts routerFacts, ps *provState) {
 	now := s.now()
 	byMAC := map[string]*devObs{}
 	order := []string{}
-	upsert := func(mac, ip, host, source string, online, anyNet bool) {
+	upsert := func(mac, ip, host, source string, online, anyNet bool) *devObs {
 		m, err := NormalizeMAC(mac)
-		if err != nil {
-			return
+		if err != nil || facts.own[m] {
+			return nil // the router's own interfaces are never devices
 		}
 		if ip != "" && hasPlan && !anyNet && !pl.InNetwork(ip) {
-			return
+			return nil
 		}
 		o := byMAC[m]
 		if o == nil {
@@ -90,6 +148,7 @@ func (s *Service) collectDevicesX(site store.Site, pl netplan.Plan, hasPlan, com
 			o.source = "dhcp"
 		}
 		o.online = o.online || online
+		return o
 	}
 	for _, r := range leases {
 		if isOurs(r) {
@@ -103,11 +162,29 @@ func (s *Service) collectDevicesX(site store.Site, pl netplan.Plan, hasPlan, com
 		}
 		upsert(r["mac-address"], r["address"], "", "arp", arpOnline(r), false)
 	}
+	// Layer-2 only: a device on a customer port that has not asked for an address (no lease, no ARP row).
+	// An address from DHCP or ARP above wins; the bridge entry adds the port and keeps it online.
+	for _, r := range facts.hosts {
+		if r["local"] == "true" || r["local"] == "yes" || r["bridge"] != CustomerBridgeName || r["on-interface"] == "" {
+			continue
+		}
+		if o := upsert(r["mac-address"], "", "", "bridge", true, true); o != nil && o.port == "" {
+			o.port = r["on-interface"]
+		}
+	}
 	// Flats that were seen right now.
 	ps.mu.Lock()
 	for _, w := range wants {
-		if o := byMAC[strings.ToUpper(w.a.MAC)]; o != nil && o.online {
+		o := byMAC[strings.ToUpper(w.a.MAC)]
+		if o != nil && o.online {
 			ps.seen[w.a.Code] = now
+		}
+		if facts.hostsOK { // the port is only re-learned from a pass that could read the bridge hosts
+			if o != nil && o.port != "" {
+				ps.ports[w.a.Code] = o.port
+			} else {
+				delete(ps.ports, w.a.Code)
+			}
 		}
 	}
 	ps.mu.Unlock()
@@ -152,9 +229,17 @@ func (s *Service) noteDevices(siteID string, obs []devObs, complete bool) {
 				dev.HostName = o.host
 			}
 			dev.Vendor = Vendor(o.mac)
-			if dev.Source == "" || dev.Source == "dhcp" || dev.Source == "arp" {
-				dev.Source = o.source // portal and dismissed are kept
+			if o.port != "" {
+				dev.Port = o.port
 			}
+			switch {
+			case dev.Source == "" || dev.Source == "bridge":
+				dev.Source = o.source
+			case dev.Source == "dhcp" || dev.Source == "arp":
+				if o.source != "bridge" { // a device that was heard asking for an address keeps saying so
+					dev.Source = o.source
+				}
+			} // portal and dismissed are kept
 			d.Devices[key] = dev
 			changed = true
 		}
@@ -206,6 +291,18 @@ func (s *Service) noteDevices(siteID string, obs []devObs, complete bool) {
 		}
 		return nil
 	})
+}
+
+// AddressNote says why a device has no address in the list: it sits on a port
+// but has not asked for one.
+func (d UnregDevice) AddrNote() string {
+	if d.IP == "" && d.Source == "bridge" {
+		if d.Port != "" {
+			return "On " + d.Port + ", no address yet (it hasn't asked for one)"
+		}
+		return "No address yet (it hasn't asked for one)"
+	}
+	return ""
 }
 
 // SuggestedAccount is the flat a device probably belongs to.
@@ -516,7 +613,8 @@ func (s *Service) refreshDevices(ctx context.Context, site store.Site) error {
 	rt := s.router(site.ID)
 	leases, lerr := rt.Rows(ctx, pathLease, nil)
 	arp, aerr := rt.Rows(ctx, pathARP, nil)
-	if lerr != nil && aerr != nil {
+	facts := s.readFacts(ctx, rt, site.ID)
+	if lerr != nil && aerr != nil && !facts.hostsOK {
 		return lerr
 	}
 	if lerr != nil {
@@ -533,7 +631,7 @@ func (s *Service) refreshDevices(ctx context.Context, site store.Site) error {
 			}
 		}
 	})
-	s.collectDevicesX(site, pl, perr == nil, lerr == nil && aerr == nil, wants, leases, arp, s.prov(site.ID))
+	s.collectDevicesX(site, pl, perr == nil, lerr == nil && aerr == nil && facts.hostsOK, wants, leases, arp, facts, s.prov(site.ID))
 	return nil
 }
 

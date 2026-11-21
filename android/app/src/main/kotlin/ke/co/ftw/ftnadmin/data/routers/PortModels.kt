@@ -50,13 +50,19 @@ data class PortRow(
     val apply: PortApply? = null,
     val flats: Int? = null,
     @SerialName("can_change") val canChange: Boolean = false,
-    /** False for the OLT uplink: it is never switched off from here (move the OLT role or unplug it). */
+    /** False for the OLT uplink: it is never switched off from here (give the OLT role to another port first). */
     @SerialName("can_disable") val canDisable: Boolean = true,
     @SerialName("needs_owner") val needsOwner: Boolean = false,
     @SerialName("role_options") val roleOptions: List<String> = emptyList(),
     @SerialName("disable_warning") val disableWarning: String = "",
     @SerialName("role_warning") val roleWarning: String = "",
     @SerialName("confirm_disable") val confirmDisable: Boolean = false,
+    /** Ports are off until the owner enables them; false = the server keeps this one switched off. */
+    @SerialName("owner_enabled") val ownerEnabled: Boolean = true,
+    /** Fixed line for the port's role, e.g. "Admin — router management and the billing site only". */
+    val note: String = "",
+    /** A hint about the port's state, e.g. "Up with no role — disable it if you don't use it". */
+    val warning: String = "",
 )
 
 @Serializable

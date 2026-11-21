@@ -24,6 +24,7 @@ where they mention a router.
   "notes": "",
   "caretaker": {"name": "Mzee Otieno", "phone": "+254722000111", "phone2": "", "email": "", "notes": "gate", "whatsapp_url": "https://wa.me/254722000111"},
   "landlord":  {"name": "", "phone": "", "phone2": "", "email": "", "notes": "", "whatsapp_url": ""},
+  "lat": -1.2921, "lng": 36.8219, "map_url": "https://www.google.com/maps/search/?api=1&query=-1.2921%2C36.8219",
   "routers": [{"site_id": "s1", "site_name": "Riverside", "accounts": 12, "router_id": "s1", "router_name": "Riverside"}],
   "accounts_total": 12, "accounts_active": 9, "online_now": 7,
   "created_at": "2026-11-19T10:00:00Z"
@@ -42,9 +43,9 @@ The single apartment answer also has `accounts`: the open accounts (account JSON
 | Call | Role | Notes |
 |---|---|---|
 | `GET /apartments` | viewer | `?q=` matches name, address, caretaker or landlord name, and either phone in any form; `?site=` (or `?router=`) only apartments that router serves. Paged: `{items, next_cursor}` |
-| `POST /apartments` | operator | body `name` (required, unique ignoring case), `address`, `notes`, `caretaker{name,phone,phone2,email,notes}`, `landlord{...}`, `router_ids` (links on create). 201 with the apartment. 409 `apartment_name_in_use` |
+| `POST /apartments` | operator | body `name` (required, unique ignoring case), `address`, `notes`, `caretaker{name,phone,phone2,email,notes}`, `landlord{...}`, `lat` and `lng` (the GPS point, decimal degrees: both numbers or both null/left out; -90..90 and -180..180, 400 `validation_failed` with `fields.lat` / `fields.lng` otherwise), `router_ids` (links on create). 201 with the apartment. 409 `apartment_name_in_use` |
 | `GET /apartments/{id}` | viewer | the apartment with its `accounts` |
-| `PATCH /apartments/{id}` | operator | any of the create fields. Fields not sent stay. `"caretaker": {}` clears the section. 200 |
+| `PATCH /apartments/{id}` | operator | any of the create fields. Fields not sent stay. `"caretaker": {}` clears the section. `lat` and `lng` left out keep the GPS point; both `null` clears it. 200 |
 | `DELETE /apartments/{id}` | owner | 204. 409 `apartment_in_use` while any account, open or closed, belongs to it |
 | `POST /apartments/{id}/routers` | operator | body `{"site_id": "..."}` (`router_id` also accepted). Links a router. 200 with the apartment |
 | `DELETE /apartments/{id}/routers/{site_id}` | operator | Unlinks. 409 `router_serves_accounts` while open accounts of this apartment are on that router: move them first (`details` is empty, the message names the router and how many) |
@@ -128,3 +129,10 @@ Every account (open and closed) takes the apartment of its router and keeps its 
 - `POST /unregistered/move` rechecks the customer's MAC inside the update; if it changed meanwhile the answer is 409 `bad_state` ("this customer's device changed while you were moving them").
 - Units are stored with single ASCII spaces (a non-breaking space counts as a space), so "B4" and "b4" + NBSP are the same unit.
 - Migration: removed routers get no apartment; their accounts (mostly closed ones) share one "Archived" apartment that no router serves.
+
+## GPS location (migration 0010, no JSON format bump)
+
+An apartment has an optional GPS point: `lat` and `lng` in every apartment answer (list, get, create, patch), both `null` when unknown, plus `map_url`
+(the Google Maps link that drops a pin there, `null` without a point). 0,0 is a real point. Values are kept to 7 decimals. Admin form: one "GPS location" box
+that takes `-1.2921, 36.8219` or a Google Maps link with `@lat,lng`, `!3d..!4d..` or `q=lat,lng`. Postgres: `apartments.lat` and `apartments.lng`, nullable, with a check
+that both are set or both NULL and in range. JSON file: `lat` and `lng` are omitted when unset, so files of format 9 without them still load unchanged.

@@ -468,6 +468,7 @@ func (m *Manager) readLive(ctx context.Context, site store.Site, rt routeros.Cli
 	lv := RouterLive{RouterID: site.ID, GeneratedAt: m.now().UTC()}
 	sys := &lv.System
 	sys.Board, sys.Version, sys.Arch = res["board-name"], res["version"], res["architecture-name"]
+	m.noteROSVersion(site.ID, sys.Version)
 	sys.CPUCount, sys.CPULoadPct = int(atoi(res["cpu-count"])), int(atoi(res["cpu-load"]))
 	sys.MemTotal = atoi(res["total-memory"])
 	if free := atoi(res["free-memory"]); sys.MemTotal > 0 && free <= sys.MemTotal {

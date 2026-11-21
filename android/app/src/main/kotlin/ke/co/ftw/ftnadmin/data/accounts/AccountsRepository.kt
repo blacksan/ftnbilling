@@ -57,6 +57,15 @@ class AccountsRepository(private val api: ApiClient) {
         },
     )
 
+    /** Saves the WhatsApp number; [samePhone] makes it the phone number (the server keeps the box ticked and follows the phone). */
+    suspend fun setWhatsApp(id: String, whatsapp: String?, samePhone: Boolean): Account = api.patch(
+        "accounts", id,
+        body = buildJsonObject {
+            put("wa_same_phone", samePhone)
+            if (!samePhone) put("whatsapp", whatsapp?.trim().orEmpty())
+        },
+    )
+
     suspend fun suspendAccount(id: String): Account = api.post("accounts", id, "suspend")
 
     suspend fun unsuspendAccount(id: String): Account = api.post("accounts", id, "unsuspend")

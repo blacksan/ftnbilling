@@ -39,3 +39,15 @@ details summary{padding:var(--sp-2) 0;color:var(--brand-ink);cursor:pointer;font
 .ok{background:var(--ok-soft);color:var(--ok);padding:var(--sp-3);border-radius:var(--r1);font-weight:500}
 .card.ok{background:var(--ok-soft);color:var(--ok);border-color:transparent}.card.ok .muted{color:var(--ok)}.card.ok .code{background:var(--surface);color:var(--ink)}
 .m-tight{margin:0 0 var(--sp-1)}.m-sm{margin:var(--sp-2) 0}.m-flat{margin:var(--sp-3) 0 2px}.m-foot{margin-top:var(--sp-6)}
+/* contacts and the registration form */
+.contacts{margin-top:var(--sp-5)}
+.cbtns{display:grid;gap:var(--sp-2)}
+.cbtns .btn{margin:0}
+.btn.alt{background:var(--surface);color:var(--ink);border-color:var(--line-strong)}
+select{width:100%;font:inherit;font-size:var(--fs-16);min-height:48px;padding:0 var(--sp-3);color:var(--ink);background:var(--surface);border:1px solid var(--field);border-radius:var(--r1)}
+.fld{display:block;margin:var(--sp-3) 0 0;font-size:var(--fs-14);color:var(--muted)}
+.fld input,.fld select{margin-top:var(--sp-1);color:var(--ink)}
+.ck{display:flex;gap:var(--sp-2);align-items:flex-start;margin:var(--sp-3) 0;font-size:var(--fs-14)}
+.ck input{width:22px;height:22px;flex:none;accent-color:var(--brand)}
+.hp{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}
+input[type=text]:focus-visible,input[type=tel]:focus-visible,select:focus-visible{outline:2px solid var(--focus);outline-offset:1px}

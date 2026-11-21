@@ -199,7 +199,7 @@ class PaymentsViewModel(
             val r = apiResult { payments.assign(d.payment.key, account.id, pkg, null) }
             _state.update { cur ->
                 r.fold(
-                    { cur.copy(busy = false, dialog = PaymentDialog.None, info = "Assigned to flat ${account.flat}") },
+                    { cur.copy(busy = false, dialog = PaymentDialog.None, info = "Assigned to house ${account.flat}") },
                     { e -> cur.copy(busy = false, dialogError = e.userMessage()) },
                 )
             }

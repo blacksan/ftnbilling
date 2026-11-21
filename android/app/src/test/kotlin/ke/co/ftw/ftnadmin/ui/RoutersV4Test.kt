@@ -175,7 +175,7 @@ class RoutersV4Test {
         assertEquals(2, c.items.size)
         assertEquals(1, c.counts.unregistered)
         assertTrue(c.items[0].isFlat && !c.items[1].isFlat)
-        assertEquals("Flat A1", c.items[0].title)
+        assertEquals("A1", c.items[0].title)
         assertEquals("ont-9", c.items[1].title)
 
         vm.onQuery("aa:bb:cc:dd:ee:09")
@@ -294,7 +294,7 @@ class RoutersV4Test {
         vm.submit()
         await(vm.state) { !it.submitting && it.macOwner != null }
         val text = macConflictText(vm.state.value.macOwner!!)
-        assertTrue(text, text.contains("flat C7") && text.contains("Lavington Court") && text.contains("FTN-2"))
+        assertTrue(text, text.contains("house C7") && text.contains("Lavington Court") && text.contains("FTN-2"))
         assertNull("shown as its own notice", vm.state.value.error)
         assertNull(vm.state.value.added)
         assertEquals("the form stays editable", "AA:BB:CC:DD:EE:09", vm.state.value.macInput)

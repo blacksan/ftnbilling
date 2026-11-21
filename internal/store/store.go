@@ -8,8 +8,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"net/netip"
+	"net/url"
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -94,6 +98,11 @@ type Site struct {
 	// server switched off and keeps off (self-healed by the sweep).
 	CustomerPorts string `json:"customer_ports,omitempty"`
 	DisabledPorts string `json:"disabled_ports,omitempty"`
+	// PortsPolicy "off" means every port except the uplink and the admin LAN stays switched off until the
+	// owner enables it (EnabledPorts is the comma list of owner-enabled ports). Empty = a router that predates
+	// the policy: the first sweep after the upgrade records what is in service and then sets "off".
+	PortsPolicy  string `json:"ports_policy,omitempty"`
+	EnabledPorts string `json:"enabled_ports,omitempty"`
 
 	// Bootstrap script (format 7). WANMode is dhcp (the default, also when
 	// empty), static or pppoe. The static fields are used for static only. The
@@ -186,6 +195,8 @@ type Account struct {
 	// WhatsApp (format 2547XXXXXXXX) and WAOptOut are used by tenant messaging.
 	WhatsApp string `json:"whatsapp,omitempty"`
 	WAOptOut bool   `json:"wa_opt_out,omitempty"`
+	// WASamePhone: the WhatsApp number is the phone number, now and when the phone changes.
+	WASamePhone bool `json:"wa_same_phone,omitempty"`
 
 	PackageID string    `json:"package_id,omitempty"`
 	ExpiresAt time.Time `json:"expires_at,omitempty"`
@@ -266,7 +277,9 @@ type Device struct {
 	SiteID string `json:"site_id"`
 	MAC    string `json:"mac"`
 	IP     string `json:"ip,omitempty"`
-	Source string `json:"source"` // portal, dhcp, arp
+	Source string `json:"source"` // portal, dhcp, arp, bridge (seen on a port, no address yet)
+	// Port is the router port the device sits on, when the bridge host table said so.
+	Port string `json:"port,omitempty"`
 	// Vendor (from the MAC prefix), HostName (DHCP) and Online (lease bound or
 	// ARP complete recently) help the operator pick the right MAC.
 	Vendor    string    `json:"vendor,omitempty"`
@@ -320,6 +333,8 @@ type Customer struct {
 	Email    string `json:"email,omitempty"`
 	Notes    string `json:"notes,omitempty"`
 	WAOptOut bool   `json:"wa_opt_out,omitempty"`
+	// WASamePhone: the WhatsApp number follows the phone number.
+	WASamePhone bool `json:"wa_same_phone,omitempty"`
 	// The national ID is optional and kept encrypted (see billing.Secretbox):
 	// ciphertext, the last four digits, and a keyed hash for exact search.
 	NationalIDEnc   string    `json:"national_id_enc,omitempty"`
@@ -363,7 +378,58 @@ type Apartment struct {
 	Notes     string           `json:"notes,omitempty"`
 	Caretaker ApartmentContact `json:"caretaker"`
 	Landlord  ApartmentContact `json:"landlord"` // landlord or agent
-	CreatedAt time.Time        `json:"created_at"`
+	// Lat and Lng are the building's GPS point in decimal degrees (WGS84). Both
+	// are nil when unknown, and both are set together: 0,0 is a real point, so
+	// zero never means "unset". Validate with ValidGPS; compare with SameApartment
+	// (the pointers make == compare addresses, not values).
+	Lat       *float64  `json:"lat,omitempty"`
+	Lng       *float64  `json:"lng,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// HasGPS reports whether the apartment has a GPS point.
+func (a Apartment) HasGPS() bool { return a.Lat != nil && a.Lng != nil }
+
+// MapURL is the one-click Google Maps link for the apartment's GPS point, or
+// "" when it has none.
+func (a Apartment) MapURL() string {
+	if !a.HasGPS() {
+		return ""
+	}
+	return GoogleMapsURL(*a.Lat, *a.Lng)
+}
+
+// SameApartment compares two apartments by value (GPS pointers by what they point at).
+func SameApartment(a, b Apartment) bool {
+	return reflect.DeepEqual(a, b)
+}
+
+// GoogleMapsURL is the Google Maps "search" link that drops a pin at lat,lng.
+func GoogleMapsURL(lat, lng float64) string {
+	return "https://www.google.com/maps/search/?api=1&query=" + url.QueryEscape(FormatGPS(lat, lng))
+}
+
+// FormatGPS writes a point as "lat,lng" with up to 7 decimals (about 1 cm), no trailing zeros.
+func FormatGPS(lat, lng float64) string {
+	f := func(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
+	return f(math.Round(lat*1e7)/1e7) + "," + f(math.Round(lng*1e7)/1e7)
+}
+
+// ValidGPS checks a GPS point: both set or both nil, finite, lat in [-90,90], lng in [-180,180].
+func ValidGPS(lat, lng *float64) error {
+	if lat == nil && lng == nil {
+		return nil
+	}
+	if lat == nil || lng == nil {
+		return errors.New("give both latitude and longitude, or neither")
+	}
+	if math.IsNaN(*lat) || math.IsInf(*lat, 0) || *lat < -90 || *lat > 90 {
+		return errors.New("latitude must be between -90 and 90")
+	}
+	if math.IsNaN(*lng) || math.IsInf(*lng, 0) || *lng < -180 || *lng > 180 {
+		return errors.New("longitude must be between -180 and 180")
+	}
+	return nil
 }
 
 // ApartmentSite says that a router (site) serves an apartment.
@@ -512,6 +578,9 @@ type Data struct {
 	AdminUsers    map[string]AdminUser    `json:"admin_users"`
 	AdminSessions map[string]AdminSession `json:"admin_sessions"`
 	APIDevices    map[string]APIDevice    `json:"api_devices"`
+
+	// Registrations are the captive page's self-registrations (pending, approved, rejected).
+	Registrations map[string]Registration `json:"registrations"`
 }
 
 func (d *Data) init() {
@@ -539,6 +608,9 @@ func (d *Data) init() {
 	}
 	if d.Tasks == nil {
 		d.Tasks = map[string]Task{}
+	}
+	if d.Registrations == nil {
+		d.Registrations = map[string]Registration{}
 	}
 	if d.ClosedAccounts == nil {
 		d.ClosedAccounts = map[string]Account{}

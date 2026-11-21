@@ -259,3 +259,18 @@ func TestMpesaConfirmIsOffUnlessExplicitlyEnabled(t *testing.T) {
 		t.Errorf("auto without credentials cannot work and is reported off: %v %q", on, why)
 	}
 }
+
+func TestSupportContactDefaultsAndOff(t *testing.T) {
+	c, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "1"}))
+	if err != nil || c.SupportPhone != "0100133133" || c.SupportEmail != "support@ftw.co.ke" || c.SupportWhatsApp != "254100133133" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	c, err = Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "1", "SUPPORT_PHONE": "none", "SUPPORT_EMAIL": "off", "SUPPORT_WHATSAPP": "-"}))
+	if err != nil || c.SupportPhone != "" || c.SupportEmail != "" || c.SupportWhatsApp != "" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	c, _ = Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "1", "SUPPORT_EMAIL": "help@example.com", "SUPPORT_WHATSAPP": "0712345678"}))
+	if c.SupportEmail != "help@example.com" || c.SupportWhatsApp == "" {
+		t.Fatalf("%+v", c)
+	}
+}

@@ -48,6 +48,9 @@ const (
 	pathList   = "/ip/firewall/address-list"
 	pathARP    = "/ip/arp"
 
+	pathInterface  = "/interface"
+	pathBridgeHost = "/interface/bridge/host"
+
 	// walledRate is the queue of a flat that has no package yet.
 	walledRate = "2M/2M"
 
@@ -116,6 +119,7 @@ type AccountRouterState struct {
 	SuspendedOnRouter bool      `json:"suspended_on_router"`
 	LeaseStatus       string    `json:"lease_status"` // bound | waiting | none
 	LastSeen          time.Time `json:"last_seen"`
+	Port              string    `json:"port,omitempty"` // the router port the ONT's MAC was last seen on (bridge host table), when known
 	PendingTask       bool      `json:"pending_task"`
 	LastError         string    `json:"last_error"`
 }
@@ -125,11 +129,11 @@ type AccountRouterState struct {
 // serve its apartment. "" means nothing stands in the way. Call it inside View.
 func provisionBlock(d *store.Data, a store.Account) string {
 	if a.ApartmentID == "" {
-		return "no apartment: choose the building this customer lives in, then it is provisioned"
+		return "no apartment: choose the apartment this customer lives in, then it is provisioned"
 	}
 	apt, ok := d.Apartments[a.ApartmentID]
 	if !ok {
-		return "its apartment no longer exists: choose the building this customer lives in"
+		return "its apartment no longer exists: choose the apartment this customer lives in"
 	}
 	if !d.ApartmentServedBy(a.ApartmentID, a.SiteID) {
 		return fmt.Sprintf("not provisioned: router %s does not serve %s. Link the router to the apartment, or move the customer to a router of %s", d.Sites[a.SiteID].Name, apt.Name, apt.Name)
@@ -155,10 +159,11 @@ type provState struct {
 	status  ProvisionStatus
 	accts   map[string]acctSnap // by account code
 	seen    map[string]time.Time
-	started time.Time       // first pass, the baseline of "not seen for 24 h"
-	foreign map[string]bool // addresses of the router's own static leases, from the last pass
-	sawOn   bool            // ftn-dhcp has been seen enabled by this server
-	run     sync.Mutex      // one pass at a time per building
+	ports   map[string]string // account code -> the customer port its MAC sits on (bridge host table)
+	started time.Time         // first pass, the baseline of "not seen for 24 h"
+	foreign map[string]bool   // addresses of the router's own static leases, from the last pass
+	sawOn   bool              // ftn-dhcp has been seen enabled by this server
+	run     sync.Mutex        // one pass at a time per building
 }
 
 type acctSnap struct {
@@ -173,7 +178,9 @@ type acctSnap struct {
 
 func (s *Service) prov(siteID string) *provState {
 	st := s.state(siteID)
-	st.provOnce.Do(func() { st.prov = &provState{accts: map[string]acctSnap{}, seen: map[string]time.Time{}} })
+	st.provOnce.Do(func() {
+		st.prov = &provState{accts: map[string]acctSnap{}, seen: map[string]time.Time{}, ports: map[string]string{}}
+	})
 	return st.prov
 }
 
@@ -220,6 +227,7 @@ func (s *Service) AccountRouterState(accountID string) AccountRouterState {
 	ps := s.prov(site.ID)
 	ps.mu.Lock()
 	snap, ok := ps.accts[code]
+	st.Port = ps.ports[code]
 	ps.mu.Unlock()
 	if !ok {
 		st.InSync = false // not looked at yet
@@ -371,13 +379,14 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	if err != nil {
 		return run, fmt.Errorf("reading bridges: %w", err)
 	}
+	facts := s.readFacts(ctx, rt, siteID)     // best effort: own MACs and the bridge hosts only feed the device list
 	arp, arpErr := rt.Rows(ctx, pathARP, nil) // best effort: only feeds the device list
 	if arpErr != nil {
 		arp = nil
 	}
 
 	// Device list and swap detection never depend on the writes below.
-	s.collectDevicesX(site, pl, true, arpErr == nil, wants, leases, arp, ps)
+	s.collectDevicesX(site, pl, true, arpErr == nil && facts.hostsOK, wants, leases, arp, facts, ps)
 
 	var ftn routeros.Row
 	for _, r := range servers {
@@ -638,7 +647,7 @@ func planOps(site store.Site, wants []wantAcct, flagged map[string]bool, leases,
 		var mine []routeros.Row
 		for _, r := range ourLeases[a.Code] {
 			if evicted[r[routeros.RowID]] {
-				rm(pathLease, r, a.Code, "lease "+r["address"]+" (address or MAC wanted by another flat)")
+				rm(pathLease, r, a.Code, "lease "+r["address"]+" (address or MAC wanted by another house)")
 				continue
 			}
 			mine = append(mine, r)

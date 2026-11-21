@@ -303,3 +303,17 @@ func TestRouterPageShowsRemoteWinbox(t *testing.T) {
 		}
 	}
 }
+
+// The setup tab warns that only the uplink and the admin port are on after setup, and says where to plug in.
+func TestRouterSetupTabWarnsThatPortsAreOff(t *testing.T) {
+	m, site, _ := uiRig(t)
+	h := m.adminGet(t, "/admin/routers/view?id="+site+"&tab=setup")
+	for _, want := range []string{
+		"After setup, only ether1 (internet) and ether2 (admin) are on. Turn on the OLT and customer ports in the Ports tab, or customers stay offline.",
+		"Be plugged into the admin port (ether2) when you paste the line",
+	} {
+		if !strings.Contains(h, want) {
+			t.Errorf("setup tab lacks %q", want)
+		}
+	}
+}

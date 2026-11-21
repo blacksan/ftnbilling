@@ -319,7 +319,7 @@ func (d *Data) migrateV5toV6(now time.Time) {
 		a.MACConflict = true
 		d.Accounts[id] = a
 		d.AddEvent(Event{Time: now, SiteID: a.SiteID, Kind: "audit", AccountID: a.ID,
-			Msg: "MAC conflict found by migration 0004: flat " + a.Flat + " (" + a.Code + ") has MAC " + a.MAC +
+			Msg: "MAC conflict found by migration 0004: house " + a.Flat + " (" + a.Code + ") has MAC " + a.MAC +
 				", already used or malformed. It will not be provisioned on IPoE until fixed."})
 	}
 	d.migrateEquipmentMACs(now)
@@ -554,7 +554,7 @@ func (d *Data) migrateV8toV9(now time.Time) {
 				a.Unit += " (" + ref + ")"
 				k = a.ApartmentID + "|" + UnitKey(a.Unit)
 				d.AddEvent(Event{Time: now, SiteID: a.SiteID, Kind: "audit", AccountID: a.ID,
-					Msg: "Unit conflict found by migration 0008: flat " + was + " (" + a.Code + ") shares its label with another open account of the same apartment. Its unit is now " + a.Unit + "."})
+					Msg: "House number conflict found by migration 0008: house " + was + " (" + a.Code + ") shares its label with another open account of the same apartment. Its house number is now " + a.Unit + "."})
 			}
 			units[k] = true
 		}
@@ -662,6 +662,32 @@ func (d *Data) migrateV7toV8() {
 			s.CustomerPorts = strings.Join(list, ",")
 			s.BenchPort = ""
 			d.Sites[id] = s
+		}
+	}
+}
+
+// backfillWASame is migration 0013 of the Postgres store for the JSON file: a row saved before the "WhatsApp is
+// the same as the phone" flag existed, whose WhatsApp number equals its phone, gets the flag, so the box shows
+// ticked. The flag has never shipped without this backfill, so running it on every load only ever touches such
+// rows (a row saved since carries the flag it was saved with; an equal number with the box unticked is the same
+// thing as the box ticked).
+func (d *Data) backfillWASame() {
+	for id, a := range d.Accounts {
+		if !a.WASamePhone && a.WhatsApp != "" && a.WhatsApp == a.Phone {
+			a.WASamePhone = true
+			d.Accounts[id] = a
+		}
+	}
+	for id, a := range d.ClosedAccounts {
+		if !a.WASamePhone && a.WhatsApp != "" && a.WhatsApp == a.Phone {
+			a.WASamePhone = true
+			d.ClosedAccounts[id] = a
+		}
+	}
+	for id, c := range d.Customers {
+		if !c.WASamePhone && c.WhatsApp != "" && c.WhatsApp == c.Phone {
+			c.WASamePhone = true
+			d.Customers[id] = c
 		}
 	}
 }

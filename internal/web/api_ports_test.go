@@ -1,6 +1,7 @@
 package web_test
 
 import (
+	"context"
 	"net/url"
 	"strings"
 	"testing"
@@ -101,7 +102,7 @@ func TestAPIPortChangeRules(t *testing.T) {
 	}
 	// the OLT uplink is never switched off from here, with or without the name
 	for _, body := range []map[string]any{{"disabled": true}, {"disabled": true, "confirm_name": "Alpha"}} {
-		if res := patch(r.owner.Access, "sfp-sfpplus1", body); res.Status != 409 || code(res) != "olt_disable_refused" || !strings.Contains(string(res.Raw), "Move the OLT role to another port") {
+		if res := patch(r.owner.Access, "sfp-sfpplus1", body); res.Status != 409 || code(res) != "olt_disable_refused" || !strings.Contains(string(res.Raw), "Give the OLT role to another port first") {
 			t.Fatalf("OLT disable: %d %s", res.Status, res.Raw)
 		}
 	}
@@ -235,5 +236,65 @@ func TestAPIRouterPatchKeepsPortsTabChanges(t *testing.T) {
 	}
 	if j["lan_ports"] != "ether2,ether4" {
 		t.Fatalf("lan_ports: %v", j["lan_ports"])
+	}
+}
+
+// Ports are off until the owner enables them: the list says so, Enable switches the port on at the router and
+// records it, the admin port is marked, and the OLT can be enabled but not disabled.
+func TestAPIPortEnableFlow(t *testing.T) {
+	r, mk, path := portsRig(t)
+	if err := r.st.Update(func(d *store.Data) error {
+		s := d.Sites[r.A.ID]
+		s.PortsPolicy, s.EnabledPorts = "off", ""
+		d.Sites[r.A.ID] = s
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"ether3", "sfp-sfpplus1"} {
+		for _, row := range mk.Table("/interface") {
+			if row["name"] == n {
+				mk.SetRow(context.Background(), "/interface", row[".id"], map[string]string{"disabled": "true"})
+			}
+		}
+	}
+	list := r.call(r.oper.Access, "GET", path, nil, nil)
+	if p := portOf(t, list, "ether3"); p["disabled"] != true || p["owner_enabled"] != false {
+		t.Fatalf("a port nobody enabled: %v", p)
+	}
+	if p := portOf(t, list, "ether2"); p["note"] != "Admin — router management and the billing site only" || p["owner_enabled"] != true || p["disabled"] != false {
+		t.Fatalf("admin port: %v", p)
+	}
+	if p := portOf(t, list, "ether1"); p["locked"] != true {
+		t.Fatalf("uplink: %v", p)
+	}
+	res := r.call(r.oper.Access, "PATCH", path+"/ether3", map[string]any{"disabled": false}, nil)
+	if res.Status != 200 {
+		t.Fatalf("enable: %d %s", res.Status, res.Raw)
+	}
+	if p := res.JSON(t)["port"].(map[string]any); p["disabled"] != false || p["owner_enabled"] != true {
+		t.Fatalf("after enable: %v", p)
+	}
+	for _, row := range mk.Table("/interface") {
+		if row["name"] == "ether3" && row["disabled"] == "yes" || row["name"] == "ether3" && row["disabled"] == "true" {
+			t.Fatalf("not enabled at the router: %v", row)
+		}
+	}
+	var enabled string
+	r.st.View(func(d *store.Data) { enabled = d.Sites[r.A.ID].EnabledPorts })
+	if enabled != "ether3" {
+		t.Fatalf("recorded: %q", enabled)
+	}
+	// the OLT: enable is allowed (owner), disable is refused with the new text
+	if res := r.call(r.owner.Access, "PATCH", path+"/sfp-sfpplus1", map[string]any{"disabled": false}, nil); res.Status != 200 {
+		t.Fatalf("enable the OLT: %d %s", res.Status, res.Raw)
+	}
+	res = r.call(r.owner.Access, "PATCH", path+"/sfp-sfpplus1", map[string]any{"disabled": true, "confirm_name": "Alpha"}, nil)
+	if res.Status != 409 || !strings.Contains(string(res.Raw), "OLT port: can't be switched off here. Give the OLT role to another port first.") {
+		t.Fatalf("disable the OLT: %d %s", res.Status, res.Raw)
+	}
+	// the uplink is never changed
+	if res := r.call(r.owner.Access, "PATCH", path+"/ether1", map[string]any{"disabled": false}, nil); res.Status != 409 {
+		t.Fatalf("uplink: %d %s", res.Status, res.Raw)
 	}
 }

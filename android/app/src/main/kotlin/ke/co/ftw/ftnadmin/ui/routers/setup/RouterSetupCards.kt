@@ -79,9 +79,49 @@ fun SetupStepsCard(ui: RouterSetupUiState, onRetry: () -> Unit, onChecks: () -> 
     }
 }
 
+private const val DEFAULT_WAN = "ether1"
+private const val DEFAULT_ADMIN = "ether2"
+
+private fun adminPorts(lanPorts: String): List<String> =
+    lanPorts.split(',').map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { listOf(DEFAULT_ADMIN) }
+
+/** What a router built by the script has on: only the uplink and the admin port (same words as the web page). */
+fun portsOffNotice(wanInterface: String, lanPorts: String): String =
+    "After setup, only ${wanInterface.trim().ifEmpty { DEFAULT_WAN }} (internet) and ${adminPorts(lanPorts).joinToString(" and ")} (admin) are on. " +
+        "Turn on the OLT and customer ports in the Ports tab, or customers stay offline."
+
+/** Where the operator must be plugged in when the line is pasted. */
+fun pasteAdminHint(lanPorts: String): String =
+    "Be plugged into the admin port (${adminPorts(lanPorts).joinToString(" or ")}) when you paste the line: " +
+        "every other port is switched off while the router builds itself."
+
+/** The ports-off warning and the plug-in hint, shown with every setup line. */
+@Composable
+fun PortsOffNotice(wanInterface: String, lanPorts: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            portsOffNotice(wanInterface, lanPorts),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error,
+        )
+        Text(
+            pasteAdminHint(lanPorts),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 /** The one-line bootstrap command: the only RouterOS command the operator copies. */
 @Composable
-fun BootstrapLineCard(ui: RouterSetupUiState, isOwner: Boolean, onGet: () -> Unit, onHide: () -> Unit) {
+fun BootstrapLineCard(
+    ui: RouterSetupUiState,
+    isOwner: Boolean,
+    onGet: () -> Unit,
+    onHide: () -> Unit,
+    wanInterface: String = "",
+    lanPorts: String = "",
+) {
     SectionCard("Bootstrap line") {
         val line = ui.line
         val cmd = line.command
@@ -98,12 +138,14 @@ fun BootstrapLineCard(ui: RouterSetupUiState, isOwner: Boolean, onGet: () -> Uni
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                PortsOffNotice(wanInterface, lanPorts)
                 line.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                 Button(onClick = onGet, enabled = !line.busy, modifier = Modifier.fillMaxWidth()) {
                     Text(if (line.busy) "Getting line..." else "Get bootstrap line", maxLines = 1)
                 }
             }
             else -> {
+                PortsOffNotice(wanInterface, lanPorts)
                 BootstrapCommandBlock(cmd)
                 TextButton(onClick = onHide) { Text("Hide line") }
             }

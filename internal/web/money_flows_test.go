@@ -130,7 +130,7 @@ func TestAssignLowerPlanAsksBeforeDowngrading(t *testing.T) {
 	// 1. Without a choice: a warning page with both options, and nothing changes.
 	r := a.admin("POST", "/admin/unmatched/assign", form("SML0000001"))
 	html := body(t, r)
-	if r.StatusCode != http.StatusConflict || !strings.Contains(html, "slower than the flat") || !strings.Contains(html, `value="extend"`) || !strings.Contains(html, `value="switch"`) {
+	if r.StatusCode != http.StatusConflict || !strings.Contains(html, "slower than the house") || !strings.Contains(html, `value="extend"`) || !strings.Contains(html, `value="switch"`) {
 		t.Fatalf("no warning: %d %s", r.StatusCode, html)
 	}
 	if cur := a.account(t, "Flat 3B"); cur.PackageID != big || !cur.ExpiresAt.Equal(before.ExpiresAt) {

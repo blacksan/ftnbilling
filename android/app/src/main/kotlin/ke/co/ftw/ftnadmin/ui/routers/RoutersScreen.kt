@@ -127,7 +127,7 @@ private fun RouterRow(s: Site, onClick: () -> Unit) {
                 StatusChip(if (s.online) "Online" else "Offline", if (s.online) Tone.Good else Tone.Bad)
             }
             Text(
-                "${s.accounts.total} flats: ${s.accounts.active} active, ${s.accounts.expired} expired, ${s.accounts.suspended} suspended",
+                "${s.accounts.total} houses: ${s.accounts.active} active, ${s.accounts.expired} expired, ${s.accounts.suspended} suspended",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -211,7 +211,7 @@ fun RouterDetailScreen(
                     item { SiteSummary(s.value) }
                     webfigLaunchUrl(s.value.webfigUrl, user.isOwner)?.let { url -> item { OpenWebFigCard(url) } }
                     item { SetupStepsCard(setupUi, onRetry = setupVm::retry, onChecks = { onChecks(id) }) }
-                    item { BootstrapLineCard(setupUi, user.isOwner, onGet = setupVm::getLine, onHide = setupVm::hideLine) }
+                    item { BootstrapLineCard(setupUi, user.isOwner, onGet = setupVm::getLine, onHide = setupVm::hideLine, wanInterface = s.value.wanInterface, lanPorts = s.value.lanPorts) }
                     item { Button(onClick = { onNewDevices(id) }, modifier = Modifier.fillMaxWidth()) { Text("New devices on this router") } }
                     item { Button(onClick = { onChecks(id) }, modifier = Modifier.fillMaxWidth()) { Text("Setup and checks") } }
                     item { Button(onClick = { onPorts(id, s.value.label) }, modifier = Modifier.fillMaxWidth()) { Text("Ports") } }
@@ -305,7 +305,7 @@ private fun SiteSummary(s: Site) {
             StatusChip(if (s.online) "Online" else "Offline", if (s.online) Tone.Good else Tone.Bad)
         }
         if (!s.online && s.cause.isNotBlank()) Text(s.cause, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        LabeledValue("Flats", "${s.accounts.total} (${s.accounts.active} active, ${s.accounts.expired} expired, ${s.accounts.suspended} suspended)")
+        LabeledValue("Houses", "${s.accounts.total} (${s.accounts.active} active, ${s.accounts.expired} expired, ${s.accounts.suspended} suspended)")
         s.tunnel.handshakeAgeS?.let { LabeledValue("Tunnel handshake", "$it s ago") }
         RemoteWinbox(s)
         s.uptime30dPct?.let { LabeledValue("Uptime, 30 days", String.format(Locale.US, "%.2f%%", it)) }
@@ -360,7 +360,7 @@ private fun OntRow(o: Ont, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Flat ${o.flat}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, modifier = Modifier.weight(1f).padding(end = 8.dp))
+                Text(o.flat, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, modifier = Modifier.weight(1f).padding(end = 8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (o.suspendedOnRouter) StatusChip("Walled", Tone.Bad)
                     StatusChip(

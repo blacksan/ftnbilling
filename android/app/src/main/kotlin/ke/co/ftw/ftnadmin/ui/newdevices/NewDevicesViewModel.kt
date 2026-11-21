@@ -13,6 +13,7 @@ import ke.co.ftw.ftnadmin.data.sites.NewDevicesRepository
 import ke.co.ftw.ftnadmin.data.sites.SitesRepository
 import ke.co.ftw.ftnadmin.domain.Account
 import ke.co.ftw.ftnadmin.domain.NewDevice
+import ke.co.ftw.ftnadmin.domain.PendingRegistration
 import ke.co.ftw.ftnadmin.domain.ServicePackage
 import ke.co.ftw.ftnadmin.ui.common.Loadable
 import ke.co.ftw.ftnadmin.ui.common.apiResult
@@ -59,7 +60,25 @@ data class NewDevicesUiState(
     val sheet: DeviceSheet? = null,
     val packages: List<ServicePackage> = emptyList(),
     val message: String? = null,
+    /** People who registered on the captive page and wait for approval. */
+    val registrations: List<PendingRegistration> = emptyList(),
+    /** The registration being approved (its device picker is open) and the MAC chosen for it. */
+    val approving: PendingRegistration? = null,
+    val approveMac: String = "",
+    val rejecting: PendingRegistration? = null,
+    /** "Reject all" waits for a confirm: which router's queue it would empty. */
+    val rejectingAll: RejectAllTarget? = null,
+    val decideBusy: Boolean = false,
 )
+
+/** The waiting registrations of one router ([siteId] blank = the ones that name no router yet), for "Reject all". */
+data class RejectAllTarget(val siteId: String, val label: String, val count: Int)
+
+/** The queues the owner can empty at once: one per router (blank site = no router yet), with how many wait. */
+internal fun rejectAllTargets(list: List<PendingRegistration>): List<RejectAllTarget> =
+    list.groupBy { it.siteId }.map { (site, rows) ->
+        RejectAllTarget(site, if (site.isBlank()) "no router yet" else rows.first().siteName.ifBlank { "this router" }, rows.size)
+    }.sortedBy { it.label }
 
 class NewDevicesViewModel(
     private val siteId: String?,
@@ -97,6 +116,8 @@ class NewDevicesViewModel(
     }
 
     private suspend fun fetch() {
+        // Best effort: the waiting list must never stop the device list from showing.
+        apiResult { repo.registrations(siteId) }.getOrNull()?.let { l -> _state.update { it.copy(registrations = l) } }
         val r = apiResult { repo.list(siteId) }
         _state.update { cur ->
             r.fold(
@@ -110,6 +131,67 @@ class NewDevicesViewModel(
     }
 
     fun clearMessage() = _state.update { it.copy(message = null) }
+
+    fun askApprove(r: PendingRegistration) =
+        _state.update { it.copy(approving = r, approveMac = r.mac.ifBlank { r.guessMac }) }
+
+    fun setApproveMac(mac: String) = _state.update { it.copy(approveMac = mac) }
+
+    fun cancelApprove() = _state.update { it.copy(approving = null, approveMac = "") }
+
+    fun askReject(r: PendingRegistration) = _state.update { it.copy(rejecting = r) }
+
+    fun cancelReject() = _state.update { it.copy(rejecting = null) }
+
+    fun askRejectAll(t: RejectAllTarget) = _state.update { it.copy(rejectingAll = t) }
+
+    fun cancelRejectAll() = _state.update { it.copy(rejectingAll = null) }
+
+    fun rejectAll() {
+        val t = _state.value.rejectingAll ?: return
+        if (_state.value.decideBusy) return
+        _state.update { it.copy(decideBusy = true) }
+        viewModelScope.launch {
+            apiResult { repo.rejectAllRegistrations(t.siteId) }.fold(
+                {
+                    _state.update { it.copy(rejectingAll = null, decideBusy = false, message = "Rejected the waiting registrations of ${t.label}. The details were erased.") }
+                    fetch()
+                },
+                { e -> _state.update { it.copy(rejectingAll = null, decideBusy = false, message = e.userMessage()) } },
+            )
+        }
+    }
+
+    fun approve() {
+        val r = _state.value.approving ?: return
+        val mac = _state.value.approveMac.trim()
+        if (mac.isEmpty() || _state.value.decideBusy) return
+        _state.update { it.copy(decideBusy = true) }
+        viewModelScope.launch {
+            apiResult { repo.approveRegistration(r.id, mac) }.fold(
+                {
+                    _state.update { it.copy(approving = null, approveMac = "", decideBusy = false, message = "Approved. House ${r.unit} is set up.") }
+                    fetch()
+                },
+                { e -> _state.update { it.copy(decideBusy = false, message = e.userMessage()) } },
+            )
+        }
+    }
+
+    fun reject() {
+        val r = _state.value.rejecting ?: return
+        if (_state.value.decideBusy) return
+        _state.update { it.copy(decideBusy = true) }
+        viewModelScope.launch {
+            apiResult { repo.rejectRegistration(r.id) }.fold(
+                {
+                    _state.update { it.copy(rejecting = null, decideBusy = false, message = "Registration rejected. The details were erased.") }
+                    fetch()
+                },
+                { e -> _state.update { it.copy(decideBusy = false, message = e.userMessage()) } },
+            )
+        }
+    }
 
     fun open(d: NewDevice) {
         val b = d.belongsTo
@@ -190,14 +272,14 @@ class NewDevicesViewModel(
     fun attach() {
         val sh = _state.value.sheet ?: return
         val acc = sh.selected ?: return
-        run(sh, "MAC attached to flat ${acc.flat}") { repo.attach(sh.device.routerKey, sh.device.mac, acc.id) }
+        run(sh, "MAC attached to house ${acc.flat}") { repo.attach(sh.device.routerKey, sh.device.mac, acc.id) }
     }
 
     fun create() {
         val sh = _state.value.sheet ?: return
         val apt = sh.apartmentId ?: return
         if (sh.flat.isBlank()) return
-        run(sh, "Flat ${sh.flat.trim()} created") {
+        run(sh, "${sh.flat.trim()} created") {
             repo.create(sh.device.routerKey, apt, sh.device.mac, sh.flat.trim(), sh.tenant.trim(), sh.phone.trim(), sh.packageId)
         }
     }
@@ -237,8 +319,8 @@ class NewDevicesViewModel(
                                 error = when {
                                     api?.code == ErrorCode.MAC_IN_USE && api.macOwner != null -> null
                                     api?.code == ErrorCode.MAC_OTHER_BUILDING && api.macOtherBuilding != null -> null
-                                    api?.code == ErrorCode.UNIT_IN_USE -> "Unit ${sh.flat.trim()} is already used in this apartment. Use Attach instead."
-                                    api?.code == ErrorCode.FLAT_IN_USE -> "Flat ${sh.flat.trim()} already exists on this router. Use Attach instead."
+                                    api?.code == ErrorCode.UNIT_IN_USE -> "House number ${sh.flat.trim()} is already used in this apartment. Use Attach instead."
+                                    api?.code == ErrorCode.FLAT_IN_USE -> "House number ${sh.flat.trim()} already exists on this router. Use Attach instead."
                                     else -> e.userMessage()
                                 },
                             ),

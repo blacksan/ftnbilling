@@ -259,20 +259,20 @@ var sitesC = (&codec[store.Site]{
 		"join_hash", "join_expires_at", "join_created_at", "join_used_at", "join_used_from", "joined_at", "wan_interface", "wan_list",
 		"olt_interface", "vlan_id", "customer_subnet", "wan_cap_mbps", "olt_cap_mbps", "fup_tb", "bench_port",
 		"pkg_overrides", "address", "lat", "lng", "go_live", "access_mode", "created_at",
-		"wan_mode", "wan_address", "wan_gateway", "wan_dns", "pppoe_user", "pppoe_pass_enc", "lan_ports", "lan_subnet", "customer_ports", "disabled_ports"},
+		"wan_mode", "wan_address", "wan_gateway", "wan_dns", "pppoe_user", "pppoe_pass_enc", "lan_ports", "lan_subnet", "customer_ports", "disabled_ports", "ports_policy", "enabled_ports"},
 	args: func(v store.Site) []any {
 		return []any{v.ID, v.Name, v.Mode, v.Notes, v.SupportPhone, v.Disabled, v.Removed, v.TunnelIP, v.WGPublicKey, v.RESTUser, v.RESTPass, v.RESTPort,
 			v.Join.Hash, nt(v.Join.ExpiresAt), nt(v.Join.CreatedAt), nt(v.Join.UsedAt), v.Join.UsedFrom, nt(v.JoinedAt), v.WANInterface, v.WANList,
 			v.OLTInterface, v.VLANID, v.CustomerSubnet, v.WANCapMbps, v.OLTCapMbps, v.FUPTB, v.BenchPort,
 			overridesArg(v.PkgOverrides), v.Address, v.Lat, v.Lng, nt(v.GoLive), accessMode(v.AccessMode), tm(v.CreatedAt),
-			v.WANMode, v.WANAddress, v.WANGateway, v.WANDNS, v.PPPoEUser, v.PPPoEPassEnc, v.LANPorts, v.LANSubnet, v.CustomerPorts, v.DisabledPorts}
+			v.WANMode, v.WANAddress, v.WANGateway, v.WANDNS, v.PPPoEUser, v.PPPoEPassEnc, v.LANPorts, v.LANSubnet, v.CustomerPorts, v.DisabledPorts, v.PortsPolicy, v.EnabledPorts}
 	},
 	dst: func(v *store.Site) []any {
 		return []any{&v.ID, &v.Name, &v.Mode, &v.Notes, &v.SupportPhone, &v.Disabled, &v.Removed, &v.TunnelIP, &v.WGPublicKey, &v.RESTUser, &v.RESTPass, &v.RESTPort,
 			&v.Join.Hash, t_(&v.Join.ExpiresAt), t_(&v.Join.CreatedAt), t_(&v.Join.UsedAt), &v.Join.UsedFrom, t_(&v.JoinedAt), &v.WANInterface, &v.WANList,
 			&v.OLTInterface, &v.VLANID, &v.CustomerSubnet, &v.WANCapMbps, &v.OLTCapMbps, &v.FUPTB, &v.BenchPort,
 			overridesDst{&v.PkgOverrides}, &v.Address, &v.Lat, &v.Lng, t_(&v.GoLive), &v.AccessMode, t_(&v.CreatedAt),
-			&v.WANMode, &v.WANAddress, &v.WANGateway, &v.WANDNS, &v.PPPoEUser, &v.PPPoEPassEnc, &v.LANPorts, &v.LANSubnet, &v.CustomerPorts, &v.DisabledPorts}
+			&v.WANMode, &v.WANAddress, &v.WANGateway, &v.WANDNS, &v.PPPoEUser, &v.PPPoEPassEnc, &v.LANPorts, &v.LANSubnet, &v.CustomerPorts, &v.DisabledPorts, &v.PortsPolicy, &v.EnabledPorts}
 	},
 }).build()
 
@@ -290,14 +290,14 @@ var packagesC = (&codec[store.Package]{
 var customersC = (&codec[store.Customer]{
 	name: "customers", pk: []string{"id"}, key: func(v store.Customer) string { return v.ID },
 	cols: []string{"id", "name", "phone", "phone2", "whatsapp", "wa_opt_out", "email", "notes", "national_id_enc", "national_id_hmac", "national_id_last4",
-		"anonymized_at", "created_at", "updated_at"},
+		"anonymized_at", "created_at", "updated_at", "wa_same_phone"},
 	args: func(v store.Customer) []any {
 		return []any{v.ID, v.Name, v.Phone, v.Phone2, v.WhatsApp, v.WAOptOut, v.Email, v.Notes, v.NationalIDEnc, v.NationalIDHMAC, v.NationalIDLast4,
-			nt(v.AnonymizedAt), tm(v.CreatedAt), nt(v.UpdatedAt)}
+			nt(v.AnonymizedAt), tm(v.CreatedAt), nt(v.UpdatedAt), v.WASamePhone}
 	},
 	dst: func(v *store.Customer) []any {
 		return []any{&v.ID, &v.Name, &v.Phone, &v.Phone2, &v.WhatsApp, &v.WAOptOut, &v.Email, &v.Notes, &v.NationalIDEnc, &v.NationalIDHMAC, &v.NationalIDLast4,
-			t_(&v.AnonymizedAt), t_(&v.CreatedAt), t_(&v.UpdatedAt)}
+			t_(&v.AnonymizedAt), t_(&v.CreatedAt), t_(&v.UpdatedAt), &v.WASamePhone}
 	},
 }).build()
 
@@ -316,16 +316,16 @@ var accountsC = (&codec[store.Account]{
 	name: "accounts", pk: []string{"id"}, key: func(v store.Account) string { return v.ID },
 	cols: []string{"id", "site_id", "code", "flat", "floor", "mac", "tenant", "phone", "notes", "whatsapp", "wa_opt_out", "customer_id", "package_id",
 		"expires_at", "suspended", "reminded_for", "expired_for", "odb", "splitter_id", "splitter_port", "created_at", "closed_at",
-		"mac_conflict", "ip", "apartment_id", "unit"},
+		"mac_conflict", "ip", "apartment_id", "unit", "wa_same_phone"},
 	args: func(v store.Account) []any {
 		return []any{v.ID, v.SiteID, v.Code, v.Flat, v.Floor, v.MAC, v.Tenant, v.Phone, v.Notes, v.WhatsApp, v.WAOptOut, fk(v.CustomerID), fk(v.PackageID),
 			nt(v.ExpiresAt), v.Suspended, nt(v.RemindedFor), nt(v.ExpiredFor), v.ODB, fk(v.SplitterID), v.SplitterPort, tm(v.CreatedAt), nt(v.ClosedAt),
-			v.MACConflict, v.IP, fk(v.ApartmentID), v.Unit}
+			v.MACConflict, v.IP, fk(v.ApartmentID), v.Unit, v.WASamePhone}
 	},
 	dst: func(v *store.Account) []any {
 		return []any{&v.ID, &v.SiteID, &v.Code, &v.Flat, &v.Floor, &v.MAC, &v.Tenant, &v.Phone, &v.Notes, &v.WhatsApp, &v.WAOptOut, s_(&v.CustomerID), s_(&v.PackageID),
 			t_(&v.ExpiresAt), &v.Suspended, t_(&v.RemindedFor), t_(&v.ExpiredFor), &v.ODB, s_(&v.SplitterID), &v.SplitterPort, t_(&v.CreatedAt), t_(&v.ClosedAt),
-			&v.MACConflict, &v.IP, s_(&v.ApartmentID), &v.Unit}
+			&v.MACConflict, &v.IP, s_(&v.ApartmentID), &v.Unit, &v.WASamePhone}
 	},
 }).build()
 
@@ -344,16 +344,16 @@ var apartmentsC = (&codec[store.Apartment]{
 	name: "apartments", pk: []string{"id"}, key: func(v store.Apartment) string { return v.ID },
 	cols: []string{"id", "name", "address", "notes",
 		"caretaker_name", "caretaker_phone", "caretaker_phone2", "caretaker_email", "caretaker_notes",
-		"landlord_name", "landlord_phone", "landlord_phone2", "landlord_email", "landlord_notes", "created_at"},
+		"landlord_name", "landlord_phone", "landlord_phone2", "landlord_email", "landlord_notes", "created_at", "lat", "lng"},
 	args: func(v store.Apartment) []any {
 		return []any{v.ID, v.Name, v.Address, v.Notes,
 			v.Caretaker.Name, v.Caretaker.Phone, v.Caretaker.Phone2, v.Caretaker.Email, v.Caretaker.Notes,
-			v.Landlord.Name, v.Landlord.Phone, v.Landlord.Phone2, v.Landlord.Email, v.Landlord.Notes, tm(v.CreatedAt)}
+			v.Landlord.Name, v.Landlord.Phone, v.Landlord.Phone2, v.Landlord.Email, v.Landlord.Notes, tm(v.CreatedAt), v.Lat, v.Lng}
 	},
 	dst: func(v *store.Apartment) []any {
 		return []any{&v.ID, &v.Name, &v.Address, &v.Notes,
 			&v.Caretaker.Name, &v.Caretaker.Phone, &v.Caretaker.Phone2, &v.Caretaker.Email, &v.Caretaker.Notes,
-			&v.Landlord.Name, &v.Landlord.Phone, &v.Landlord.Phone2, &v.Landlord.Email, &v.Landlord.Notes, t_(&v.CreatedAt)}
+			&v.Landlord.Name, &v.Landlord.Phone, &v.Landlord.Phone2, &v.Landlord.Email, &v.Landlord.Notes, t_(&v.CreatedAt), &v.Lat, &v.Lng}
 	},
 }).build()
 
@@ -406,12 +406,12 @@ var paymentsC = (&codec[store.Payment]{
 
 var devicesC = (&codec[store.Device]{
 	name: "devices", pk: []string{"site_id", "mac"}, del: "site_id || '|' || mac", key: func(v store.Device) string { return store.DeviceKey(v.SiteID, v.MAC) },
-	cols: []string{"site_id", "mac", "ip", "source", "first_seen", "last_seen", "hits", "vendor", "host_name", "online"},
+	cols: []string{"site_id", "mac", "ip", "source", "first_seen", "last_seen", "hits", "vendor", "host_name", "online", "port"},
 	args: func(v store.Device) []any {
-		return []any{v.SiteID, v.MAC, v.IP, v.Source, nt(v.FirstSeen), nt(v.LastSeen), v.Hits, v.Vendor, v.HostName, v.Online}
+		return []any{v.SiteID, v.MAC, v.IP, v.Source, nt(v.FirstSeen), nt(v.LastSeen), v.Hits, v.Vendor, v.HostName, v.Online, v.Port}
 	},
 	dst: func(v *store.Device) []any {
-		return []any{&v.SiteID, &v.MAC, &v.IP, &v.Source, t_(&v.FirstSeen), t_(&v.LastSeen), &v.Hits, &v.Vendor, &v.HostName, &v.Online}
+		return []any{&v.SiteID, &v.MAC, &v.IP, &v.Source, t_(&v.FirstSeen), t_(&v.LastSeen), &v.Hits, &v.Vendor, &v.HostName, &v.Online, &v.Port}
 	},
 }).build()
 
@@ -423,6 +423,17 @@ var tasksC = (&codec[store.Task]{
 	},
 	dst: func(v *store.Task) []any {
 		return []any{&v.ID, &v.SiteID, &v.AccountID, &v.Code, &v.Rev, &v.Reason, &v.Attempts, t_(&v.NextTry), &v.LastErr, t_(&v.CreatedAt)}
+	},
+}).build()
+
+var registrationsC = (&codec[store.Registration]{
+	name: "registrations", pk: []string{"id"}, key: func(v store.Registration) string { return v.ID },
+	cols: []string{"id", "site_id", "apartment_id", "unit", "name", "phone", "email", "mac", "guess_mac", "status", "consent_at", "created_at", "decided_at", "decided_by", "account_id", "device_name", "building"},
+	args: func(v store.Registration) []any {
+		return []any{v.ID, v.SiteID, v.ApartmentID, v.Unit, v.Name, v.Phone, v.Email, v.MAC, v.GuessMAC, v.Status, nt(v.ConsentAt), tm(v.CreatedAt), nt(v.DecidedAt), v.DecidedBy, v.AccountID, v.DeviceName, v.Building}
+	},
+	dst: func(v *store.Registration) []any {
+		return []any{&v.ID, &v.SiteID, &v.ApartmentID, &v.Unit, &v.Name, &v.Phone, &v.Email, &v.MAC, &v.GuessMAC, &v.Status, t_(&v.ConsentAt), t_(&v.CreatedAt), t_(&v.DecidedAt), &v.DecidedBy, &v.AccountID, &v.DeviceName, &v.Building}
 	},
 }).build()
 

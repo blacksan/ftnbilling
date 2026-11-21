@@ -207,7 +207,7 @@ private fun LazyGridScope.routerCards(
     val down = splitBps(l.wan.downBps)
     card {
         StatCard(
-            "Online flats", l.flats.online.toString(), Cardmod,
+            "Online houses", l.flats.online.toString(), Cardmod,
             unit = "of ${l.flats.total}",
             sub = "${l.flats.active} active, ${l.flats.expired} expired",
             tone = CardTone.Feature, icon = Icons.Default.Person,
@@ -399,7 +399,7 @@ private fun LazyGridScope.fleetCards(
                 StatCard(
                     b.name.ifBlank { b.routerId }, down.first, Modifier.fillMaxWidth(),
                     unit = down.second,
-                    sub = "${formatPct(b.utilPct)}% of uplink, ${b.online} flats online",
+                    sub = "${formatPct(b.utilPct)}% of uplink, ${b.online} houses online",
                     tone = CardTone.Info, icon = Icons.Default.Share,
                     onClick = { onPick(b.routerId) },
                 )
@@ -431,7 +431,7 @@ private fun RouterRow(r: Site, onClick: () -> Unit, onOpen: () -> Unit) {
             Column(Modifier.weight(1f)) {
                 Text(r.label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    "${r.accounts.active} active, ${r.accounts.total} flats" + if (r.openAlerts > 0) ", ${r.openAlerts} alerts" else "",
+                    "${r.accounts.active} active, ${r.accounts.total} houses" + if (r.openAlerts > 0) ", ${r.openAlerts} alerts" else "",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,

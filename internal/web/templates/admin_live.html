@@ -1,18 +1,18 @@
 {{define "admin_live"}}{{template "ahead" .}}{{$L := .Data.L}}
 <div data-live="/admin/live.json">
 <div class="stats">
-{{template "stat" (dict "K" "Flats online" "V" $L.FlatsOnline "Key" "online" "S" "pulling traffic now" "Icon" "live" "Feature" true)}}
-{{template "stat" (dict "K" "Download" "V" (bps $L.Down) "Key" "down" "S" "all flats together" "Icon" "metrics" "Tone" "info")}}
-{{template "stat" (dict "K" "Upload" "V" (bps $L.Up) "Key" "up" "S" "all flats together" "Icon" "metrics")}}
-{{template "stat" (dict "K" "Busiest flat" "V" (cond (ne $L.Busiest "") $L.Busiest "None") "Key" "busiest" "S" "right now" "Icon" "pulse" "Tone" "warn")}}
+{{template "stat" (dict "K" "Houses online" "V" $L.FlatsOnline "Key" "online" "S" "pulling traffic now" "Icon" "live" "Feature" true)}}
+{{template "stat" (dict "K" "Download" "V" (bps $L.Down) "Key" "down" "S" "all houses together" "Icon" "metrics" "Tone" "info")}}
+{{template "stat" (dict "K" "Upload" "V" (bps $L.Up) "Key" "up" "S" "all houses together" "Icon" "metrics")}}
+{{template "stat" (dict "K" "Busiest house" "V" (cond (ne $L.Busiest "") $L.Busiest "None") "Key" "busiest" "S" "right now" "Icon" "pulse" "Tone" "warn")}}
 </div>
 <div class="tabs" role="tablist" aria-label="Who is connected">
 <button type="button" class="tab" role="tab" data-livetab="all" aria-selected="true">Everyone<span class="n">{{len $L.Rows}}</span></button>
-<button type="button" class="tab" role="tab" data-livetab="flats" aria-selected="false">Flats<span class="n">{{$L.FlatsOnline}}</span></button>
+<button type="button" class="tab" role="tab" data-livetab="flats" aria-selected="false">Houses<span class="n">{{$L.FlatsOnline}}</span></button>
 <button type="button" class="tab" role="tab" data-livetab="unregistered" aria-selected="false">Not registered<span class="n">{{$L.Unregistered}}</span></button>
 <span class="muted tabnote" data-live-at>Refreshes every 10 seconds</span></div>
-<div class="tw tall"{{if not $L.Rows}} hidden{{end}}><table class="rs"><thead><tr><th>Flat</th><th>IP</th><th>MAC</th><th class="n">Down</th><th class="n">Up</th><th class="n">Plan</th><th>Router</th></tr></thead><tbody>
+<div class="tw tall"{{if not $L.Rows}} hidden{{end}}><table class="rs"><thead><tr><th>House number</th><th>IP</th><th>MAC</th><th class="n">Down</th><th class="n">Up</th><th class="n">Plan</th><th>Router</th></tr></thead><tbody>
 {{range $L.Rows}}<tr><td class="who"><b><a href="{{.Href}}">{{.Flat}}</a></b><span>{{if .Tenant}}{{.Tenant}}{{else if eq .Kind "unregistered"}}not registered{{end}}</span></td><td data-label="IP" class="mono">{{.IP}}</td><td data-label="MAC" class="mono">{{.MAC}}</td><td class="n" data-label="Down">{{bps .Down}}</td><td class="n" data-label="Up">{{bps .Up}}</td><td class="n" data-label="Plan">{{if .Cap}}{{bps .Cap}}{{end}}</td><td data-label="Router">{{.Router}}</td></tr>{{end}}</tbody></table></div>
-<div data-live-empty{{if $L.Rows}} hidden{{end}}>{{if .Data.Collecting}}{{template "empty" (dict "Title" "Nobody is connected right now." "Text" "When a flat starts pulling traffic it shows here within a minute.")}}{{else}}{{template "empty" (dict "Title" "Waiting for the first reading." "Text" "A router reports its traffic about a minute after it joins. Add a router, or open the Setup tab of one that has not finished.")}}{{end}}</div>
+<div data-live-empty{{if $L.Rows}} hidden{{end}}>{{if .Data.Collecting}}{{template "empty" (dict "Title" "Nobody is connected right now." "Text" "When a house starts pulling traffic it shows here within a minute.")}}{{else}}{{template "empty" (dict "Title" "Waiting for the first reading." "Text" "A router reports its traffic about a minute after it joins. Add a router, or open the Setup tab of one that has not finished.")}}{{end}}</div>
 </div>
 {{template "afoot" .}}{{end}}

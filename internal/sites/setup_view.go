@@ -343,7 +343,7 @@ func (m *Manager) afterJoin(ctx context.Context, siteID string) {
 		return
 	}
 	if _, err := p.EnsureIPs(siteID); err != nil {
-		m.log.Warn("could not give the flats their addresses", "site", siteID, "err", err)
+		m.log.Warn("could not give the houses their addresses", "site", siteID, "err", err)
 	}
 	p.EnqueueSite(siteID, "router set up")
 	rc, cancel := context.WithTimeout(ctx, 90*time.Second)

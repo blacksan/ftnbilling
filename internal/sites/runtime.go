@@ -55,7 +55,7 @@ func (m *Manager) watchJoin(ctx context.Context, rt *Runtime) {
 				d.Sites[id] = s
 				return nil
 			})
-			m.log.Info("building joined: its router answered", "site", id)
+			m.log.Info("router joined: it answered", "site", id)
 			m.autoFixAfterJoin(ctx, id)
 			return
 		}

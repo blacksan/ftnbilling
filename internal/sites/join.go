@@ -189,7 +189,7 @@ func (m *Manager) consume(token, rosVersion, from string, noCheck bool) (script 
 		}
 		in := BootstrapInput{
 			Site: ApplyDefaults(m.cfg, site), PPPoEPass: pppoe, PrivateKey: priv, RESTPass: pass, ServerPub: m.cfg.WGPublicKey,
-			Endpoint: m.cfg.WGEndpoint, WGSubnet: m.pfx, MgmtSubnet: m.mgmt, PublicBase: m.cfg.PublicBaseURL, PublicIP: m.cfg.PublicIP, Generated: now, NoCheck: noCheck,
+			Endpoint: m.cfg.WGEndpoint, WGSubnet: m.pfx, MgmtSubnet: m.mgmt, PublicBase: m.cfg.PublicBaseURL, PublicIP: m.cfg.PublicIP, WebFigDomain: m.cfg.WebFigDomain, Generated: now, NoCheck: noCheck,
 			ROSVersion: rosVersion, Token: token,
 		}
 		if w, ok := m.flowWant(""); ok {
@@ -203,6 +203,9 @@ func (m *Manager) consume(token, rosVersion, from string, noCheck bool) (script 
 		m.renderFail.clear(site.ID)
 		site.Join.UsedAt, site.Join.UsedFrom = now, from
 		site.JoinedAt = time.Time{} // the next successful ping marks it joined again
+		// The script switches every port except the uplink and the admin port off: nothing is enabled until the
+		// owner enables it in the Ports tab. Whatever the old build had recorded no longer applies.
+		site.PortsPolicy, site.EnabledPorts, site.DisabledPorts = PortsPolicyOff, "", ""
 		d.Sites[site.ID] = site
 		delete(d.Settings, JoinReportKey(site.ID)) // the new run reports afresh
 		d.AddEvent(store.Event{Time: now, SiteID: site.ID, Kind: "audit", Msg: "set-up script handed out"})
@@ -216,6 +219,7 @@ func (m *Manager) consume(token, rosVersion, from string, noCheck bool) (script 
 		m.log.Warn("could not write the WireGuard peers file", "site", siteID, "err", err)
 	}
 	m.Reload(siteID)
+	m.routerReset(siteID)
 	m.log.Info("set-up script handed out", "site", siteID, "from", from)
 	return script, siteID, nil
 }

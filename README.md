@@ -1,10 +1,10 @@
 # ispbill
 
-An internet-billing server for ISPs that serve flats over IPoE behind MikroTik
-routers (RouterOS 7). It bills one account per flat, takes M-Pesa and voucher
+An internet-billing server for ISPs that serve houses over IPoE behind MikroTik
+routers (RouterOS 7). It bills one account per house, takes M-Pesa and voucher
 payments on a public payment page, and keeps each router in step with the
 bills over the router's REST API: a fixed DHCP lease and a speed queue per
-flat, and a walled address list for flats that have not paid. Go, vendored
+house, and a walled address list for houses that have not paid. Go, vendored
 dependencies, PostgreSQL (or a JSON file for small installs), one static binary.
 It runs on a VPS; each router joins it over WireGuard. See
 [deploy/README.md](deploy/README.md) for the one-command install and
@@ -16,25 +16,25 @@ It runs on a VPS; each router joins it over WireGuard. See
 
 ## What it does
 
-- **One account per flat.** The admin creates an account: the apartment (building) it is in, the unit (e.g. "Flat 3B"), the ONT's WAN MAC (required, unique across all routers and apartments: one MAC, one open account), optional tenant, phone and notes. The app generates a 6-character code (no 0/O/1/I/L) that never changes and is also the **Paybill account number**. The flat also gets a fixed address from the router's customer subnet.
-- **Every router is IPoE and set up by the server.** The router page gives one line to paste on a new router; the router erases itself and builds the whole layout (WAN, admin LAN, customer network, DHCP, firewall, tunnel, the server's API login). After that the server only changes the flats' leases, queues, address lists and ARP entries. It never writes users, services, the tunnel, routes or the WAN.
-- **Payment is by account number.** An unpaid or expired flat is walled by the router: it can reach only the payment page at `/pay`, where the tenant enters the account number (or the flat label when the visit comes from a known router), picks a package and pays by M-Pesa or enters a voucher. The server un-walls the flat within about a minute. Phone numbers are only the M-Pesa payer; they are not identities.
+- **One account per house.** The admin creates an account: the apartment it is in, the house number (e.g. "3B"), the ONT's WAN MAC (required, unique across all routers and apartments: one MAC, one open account), optional tenant, phone and notes. The app generates a 6-character code (no 0/O/1/I/L) that never changes and is also the **Paybill account number**. The house also gets a fixed address from the router's customer subnet.
+- **Every router is IPoE and set up by the server.** The router page gives one line to paste on a new router; the router erases itself and builds the whole layout (WAN, admin LAN, customer network, DHCP, firewall, tunnel, the server's API login). After that the server only changes the houses' leases, queues, address lists and ARP entries. It never writes users, services, the tunnel, routes or the WAN.
+- **Payment is by account number.** An unpaid or expired house is walled by the router: it can reach only the payment page at `/pay`, where the tenant enters the account number (or the house number when the visit comes from a known router), picks a package and pays by M-Pesa or enters a voucher. The server un-walls the house within about a minute. Phone numbers are only the M-Pesa payer; they are not identities.
 - **Prices are plain KES.** No tax lines or tax wording anywhere.
 - Admin UI at `/admin` (sign-in with an authenticator code): Overview, Subscribers (create, edit, change MAC, suspend, extend), New devices, Payments (ledger plus CSV), Record M-Pesa, Unmatched, Routers, Plans, Vouchers, Usage and quality, Settings.
 - `/healthz` returns `{ok, router_ok, test_mode, mpesa_enabled}`.
 
 ### New devices
 
-Admin, New devices lists MACs the routers have seen that match no account (from the DHCP leases and the ARP table, read only). For each you can **create an account** for that MAC (enter the flat label) or **attach** it to an existing account (an ONT swap: the account's MAC changes and the router's lease follows). Changing a MAC by hand on the account page does the same.
+Admin, New devices lists MACs the routers have seen that match no account (from the DHCP leases and the ARP table, read only). For each you can **create an account** for that MAC (enter the house number) or **attach** it to an existing account (an ONT swap: the account's MAC changes and the router's lease follows). Changing a MAC by hand on the account page does the same.
 
 ### Payments, ledger and reconciliation
 
 - Every payment is a ledger row with a unique key (M-Pesa receipt code, `VOUCHER-x`, `TEST-x`, `ADMIN-x`). Re-delivered callbacks and re-entered codes are ignored, so nothing is credited twice.
 - Paybill payments (C2B) are matched by account code (`BillRefNumber`) and then to the package whose price equals the amount. STK push uses the account code as `AccountReference`. Old order ids are still accepted.
-- Anything that cannot be matched (unknown account, amount that fits no package) goes to Admin -> Unmatched. Resolve it with **Assign** (pick the account, the package is applied), **Refunded** or **Ignored**, each with a note. If the plan is slower than the flat's active one, Assign asks first: **add time at the current plan** (the speed stays, the expiry moves later) or **switch to the slower plan**; nothing is downgraded silently (the API takes `lower_plan: "extend"|"switch"`). A payment is never dropped: a successful STK result whose checkout id this server never stored (the prompt went out but the answer was lost) is credited to the one recent order with the same phone and amount, or else listed here with the phone, amount and receipt. A receipt that first arrived here and then arrives again with an account and package (for example the C2B confirmation first, the STK result after) is applied from this row, once.
+- Anything that cannot be matched (unknown account, amount that fits no package) goes to Admin -> Unmatched. Resolve it with **Assign** (pick the account, the package is applied), **Refunded** or **Ignored**, each with a note. If the plan is slower than the house's active one, Assign asks first: **add time at the current plan** (the speed stays, the expiry moves later) or **switch to the slower plan**; nothing is downgraded silently (the API takes `lower_plan: "extend"|"switch"`). A payment is never dropped: a successful STK result whose checkout id this server never stored (the prompt went out but the answer was lost) is credited to the one recent order with the same phone and amount, or else listed here with the phone, amount and receipt. A receipt that first arrived here and then arrives again with an account and package (for example the C2B confirmation first, the STK result after) is applied from this row, once.
 - **Admin -> Record M-Pesa** is for payments seen on the M-Pesa statement that never reached the app: pick the account, enter the 10-character code (uppercase letters and digits), amount, payer phone and date; the package is preselected from the amount. It applies exactly like an automatic payment, and a code can be recorded once.
-- Router updates (a flat's lease, queue and walled state) are queued per flat, answered by one reconcile pass per router, retried with backoff (5 s doubling to 5 min), kept across restarts and shown on the dashboard. A paused or not yet set up router keeps its tasks without using attempts. If the router is down when someone pays, the payment is safe and the router catches up when it returns.
-- Lifecycle defaults (shown in Settings): the expiry is calendar based; paying while active adds time to the current expiry; an upgrade (same or higher speed) switches the speed immediately and counts from the current expiry (no pro-rata credit); a **downgrade is not allowed while a plan is active** (the payment page greys out slower packages with "Available when your current plan ends on <date>", checkout refuses them, and Paybill or manual payments for a slower package are put in Unmatched with the reason "lower plan while active" for the admin to decide; the admin extend and Record M-Pesa forms have an "apply even if lower speed" box); expired or suspended accounts can buy any package; an expired flat reconnects automatically when it pays; there is no reconnection fee. Reminder hook points are logged as events 3 days before expiry and on expiry (`REMINDER_DAYS`, `REMINDER_ON_EXPIRY`); no SMS is sent, they only create log events for a future sender.
+- Router updates (a house's lease, queue and walled state) are queued per house, answered by one reconcile pass per router, retried with backoff (5 s doubling to 5 min), kept across restarts and shown on the dashboard. A paused or not yet set up router keeps its tasks without using attempts. If the router is down when someone pays, the payment is safe and the router catches up when it returns.
+- Lifecycle defaults (shown in Settings): the expiry is calendar based; paying while active adds time to the current expiry; an upgrade (same or higher speed) switches the speed immediately and counts from the current expiry (no pro-rata credit); a **downgrade is not allowed while a plan is active** (the payment page greys out slower packages with "Available when your current plan ends on <date>", checkout refuses them, and Paybill or manual payments for a slower package are put in Unmatched with the reason "lower plan while active" for the admin to decide; the admin extend and Record M-Pesa forms have an "apply even if lower speed" box); expired or suspended accounts can buy any package; an expired house reconnects automatically when it pays; there is no reconnection fee. Reminder hook points are logged as events 3 days before expiry and on expiry (`REMINDER_DAYS`, `REMINDER_ON_EXPIRY`); no SMS is sent, they only create log events for a future sender.
 
 Default packages (seeded when none exist; edit in `/admin/packages`):
 
@@ -57,13 +57,13 @@ The data file has a format version. A data file from the earlier PIN/subscriber 
 
 Server-rendered, with inline SVG charts, readable on a phone and a laptop. It shows "no data yet" instead of failing when the router cannot be reached. With `ROUTER_MOCK=true` the page has a "Generate demo history" button and the live collector produces synthetic numbers.
 
-What it shows, with a period selector (Today, 7 days, 30 days, This month): tiles (month-to-date WAN use against the fair-use limit with a projection, current WAN speed, peak WAN use, latency and loss, router CPU and temperature, active flats), "Things to look at" flags, WAN and OLT throughput, top 10 flats, a sortable per-flat table (download, upload, share, peak, time at cap, top services), services, latency and packet loss, a busy-hours strip, a ports table, and a "How to read this" box. `/admin/metrics.csv` exports the table; `/admin/metrics/flat?code=K7Q2MX` is the drill-down for one flat.
+What it shows, with a period selector (Today, 7 days, 30 days, This month): tiles (month-to-date WAN use against the fair-use limit with a projection, current WAN speed, peak WAN use, latency and loss, router CPU and temperature, active houses), "Things to look at" flags, WAN and OLT throughput, top 10 houses, a sortable per-house table (download, upload, share, peak, time at cap, top services), services, latency and packet loss, a busy-hours strip, a ports table, and a "How to read this" box. `/admin/metrics.csv` exports the table; `/admin/metrics/house?code=K7Q2MX` is the drill-down for one house.
 
 How the numbers are collected:
 
 | Source | Interval | Notes |
 |---|---|---|
-| Simple queues | 60 s | Per-flat bytes (the difference between readings of each flat's queue counters; a counter reset counts from the new value), package speed and queue state, for "time at cap". |
+| Simple queues | 60 s | Per-house bytes (the difference between readings of each house's queue counters; a counter reset counts from the new value), package speed and queue state, for "time at cap". |
 | Interfaces | 30 s | `WAN_INTERFACE`, `OLT_INTERFACE` and the customer VLAN rx/tx. |
 | Traffic flow (NetFlow v5) | as exported | UDP `NETFLOW_ADDR` (default `:2055`). Services are guessed from the router's DNS cache and then from ports. |
 | Ping | 60 s | `QOE_PING_TARGETS` (8.8.8.8, 1.1.1.1) from the router: latency and loss. |
@@ -71,16 +71,16 @@ How the numbers are collected:
 
 Collection intervals are changeable with `METRICS_FLOW_EVERY`, `METRICS_PORT_EVERY`, `METRICS_PING_EVERY`, `METRICS_DNS_EVERY`, `METRICS_SAVE_EVERY` (Go durations such as `30s`).
 
-Storage: `DATA_DIR/metrics.json`, written atomically every 5 minutes and on shutdown (a crash loses at most 5 minutes; a restart can lose up to a minute of per-flat counters). It is kept in tiers: 5-minute buckets for 48 hours, hourly for 14 days, daily for 400 days, so its size is bounded (a few MB). That is about one small file write per 5 minutes to the USB stick.
+Storage: `DATA_DIR/metrics.json`, written atomically every 5 minutes and on shutdown (a crash loses at most 5 minutes; a restart can lose up to a minute of per-house counters). It is kept in tiers: 5-minute buckets for 48 hours, hourly for 14 days, daily for 400 days, so its size is bounded (a few MB). That is about one small file write per 5 minutes to the USB stick.
 
-QoE flags and their thresholds (named constants in `internal/metrics/report.go`): WAN at or above 85% of capacity for 3 or more hours in the period; a flat spending more than 20% of its online time at 90% or more of its package speed (needs at least 120 minutes online) is an upgrade candidate; average packet loss above 1%; projected month total above `FUP_TB` (amber from 80% used). Month totals count WAN download plus upload for the calendar month (EAT) since collecting began.
+QoE flags and their thresholds (named constants in `internal/metrics/report.go`): WAN at or above 85% of capacity for 3 or more hours in the period; a house spending more than 20% of its online time at 90% or more of its package speed (needs at least 120 minutes online) is an upgrade candidate; average packet loss above 1%; projected month total above `FUP_TB` (amber from 80% used). Month totals count WAN download plus upload for the calendar month (EAT) since collecting began.
 
 **Service classification: accuracy caveats.** The split into YouTube, Netflix and so on is a good guide, not an exact count.
 - NetFlow only has IP addresses and ports. The app maps addresses to names using the router's DNS cache. That only works for clients that use the router for DNS. If an ONT or a phone uses its own resolver, or DNS-over-HTTPS, the name is never seen and the bytes are shown as "HTTPS (other)" or "CDN (other)".
 - The DNS cache expires, and one IP can serve many sites (CDNs), so some bytes land in the wrong or the generic bucket.
 - Fasttracked connections skip traffic-flow entirely. The bootstrap script keeps the customer rules above FastTrack; if you add a FastTrack rule by hand, traffic is missing.
 - Flow records leave the router only at the flow timeouts, so the newest minute is incomplete.
-- Per-flat totals do not use NetFlow, so they are not affected by any of this.
+- Per-house totals do not use NetFlow, so they are not affected by any of this.
 Edit the rules table (`ServiceRules` and `PortRules` in `internal/metrics/netflow.go`) to add services and rebuild.
 
 ## Quick local run (no router)
@@ -90,13 +90,13 @@ Edit the rules table (`ServiceRules` and `PortRules` in `internal/metrics/netflo
 ROUTER_MOCK=true TEST_MODE=true ADMIN_PASS=change-me-please DATA_DIR=/tmp/ispbill \
   LISTEN_ADDR=127.0.0.1:8080 DATA_KEY=$(openssl rand -base64 32) build/ispbill-amd64
 ```
-Open http://127.0.0.1:8080/admin, sign in, add a router (the mock serves every router) and a flat, then open http://127.0.0.1:8080/pay, enter the flat's account number and tap "Test payment" (it completes after about 3 s).
+Open http://127.0.0.1:8080/admin, sign in, add a router (the mock serves every router) and a house, then open http://127.0.0.1:8080/pay, enter the house's account number and tap "Test payment" (it completes after about 3 s).
 
 ## Many routers
 
 One server bills many routers. Account codes are global (they are the Paybill
 account numbers) and so are ONT MACs: one MAC can have only one open account, on
-any router in any building. A unit label (flat) only has to be unique inside its
+any router in any apartment. A house number only has to be unique inside its
 apartment. Packages are shared, and each router can hide a plan or give it a
 different price (Admin, Routers, the router page). Prices must stay unique
 inside a router because Paybill payments are matched by amount. The admin has a
@@ -106,8 +106,8 @@ from its page.
 
 ### Apartments
 
-An apartment is a building that one or more routers serve (and a router may serve
-several apartments). Each account belongs to an apartment and has a unit in it;
+An apartment is a place where customers live that one or more routers serve (and a router may serve
+several apartments). Each account belongs to an apartment and has a house number in it;
 the apartment page holds the caretaker and landlord contacts, its routers and its
 customers. Creating a customer needs the apartment; with one router it is chosen
 for you, with several you pick. A device seen on a router that does not serve its
@@ -120,7 +120,7 @@ Routers join over WireGuard with a one-time line pasted on the router: see
 [deploy/README.md](deploy/README.md) for the server setup (PostgreSQL, Caddy,
 WireGuard, a public admin behind the app's own sign-in, firewall, backups,
 `ftnbilling-doctor`) and for the paste flow. The design target is about 40
-routers and 1500 flats on a 1 vCPU / 2 GB VPS.
+routers and 1500 houses on a 1 vCPU / 2 GB VPS.
 
 Per-router REST traffic is budgeted: at most two reads and one write in flight
 per router, 10 s per call (`ROUTER_READ_TIMEOUT` sets the read limit).
@@ -189,7 +189,7 @@ Each message is created once per event (an expiry, a payment, an outage), howeve
 2. A dedicated phone number registered to the Cloud API. It cannot also be in use in the WhatsApp app or WhatsApp Business app.
 3. A System User with a permanent token that has the `whatsapp_business_messaging` and `whatsapp_business_management` permissions. Put the token in Settings > WhatsApp (access token), and the phone number's ID (not the number) in the phone number ID field.
 4. A payment method on the WABA.
-5. The tenants' consent to receive messages. Collect it when you take the flat's details, and keep a record.
+5. The tenants' consent to receive messages. Collect it when you take the house's details, and keep a record.
 6. Create the six templates below, category **Utility**, language **English (`en`)**, and wait for approval. The wording and the number of parameters must match exactly, or Meta refuses the message (error 132000 or 132001, shown on the Messages page as failed).
 7. The five tenant templates carry the footer **Reply STOP to opt out**.
 8. Put your own number(s) in the admin numbers field of Settings > WhatsApp, save, and press **Send test** there (it sends one of the `ftn_` templates with sample values to one of your numbers). The Alerts page has its own Send test button too.
@@ -198,14 +198,14 @@ Message templates (create these exactly; `{{1}}` and so on are the parameters):
 
 | Name | Body | Parameters |
 |---|---|---|
-| `ftn_expiry_reminder` | Hello, your {{1}} internet plan for {{2}} ends on {{3}}. To stay connected, pay KES {{4}} via {{5}}, account number {{6}}. Thank you. | package, flat + router, expiry, price, pay hint, account code |
-| `ftn_plan_expired` | Hello, the internet plan for {{1}} ended on {{2}}. To reconnect, pay via {{3}}, account number {{4}}. You will be reconnected automatically. | flat + router, expiry, pay hint, code |
-| `ftn_payment_received` | Payment received: KES {{1}}, reference {{2}}. Your {{3}} plan for {{4}} is active until {{5}}. Thank you. | amount, receipt, package, flat + router, expiry |
+| `ftn_expiry_reminder` | Hello, your {{1}} internet plan for {{2}} ends on {{3}}. To stay connected, pay KES {{4}} via {{5}}, account number {{6}}. Thank you. | package, house number + router, expiry, price, pay hint, account code |
+| `ftn_plan_expired` | Hello, the internet plan for {{1}} ended on {{2}}. To reconnect, pay via {{3}}, account number {{4}}. You will be reconnected automatically. | house number + router, expiry, pay hint, code |
+| `ftn_payment_received` | Payment received: KES {{1}}, reference {{2}}. Your {{3}} plan for {{4}} is active until {{5}}. Thank you. | amount, receipt, package, house number + router, expiry |
 | `ftn_outage_notice` | Hello, we are aware of an internet outage at {{1}} since {{2}}. Our team is working on it. We apologise for the inconvenience. | router, start |
 | `ftn_outage_resolved` | Internet service at {{1}} was restored at {{2}}. Thank you for your patience. | router, time |
 | `ftn_admin_alert` | Network alert, {{1}}: {{2}} at {{3}}. Details: {{4}}. Time: {{5}}. End of alert. | PROBLEM/RECOVERED, rule, router, detail, time |
 
-A tenant only gets messages if the account has a WhatsApp number (Accounts, the flat's page; "same as phone" copies the phone number) and has not been opted out. Messages go out between 07:00 and 21:00 EAT for reminders; payment confirmations and outage notices go at once. At most `WA_DAILY_LIMIT` (240) tenant messages are sent per day; admin alerts are not counted. Failed sends retry with growing waits (30 s up to 1 h, 8 tries). A rejected token pauses the channel and shows a banner on the Messages page.
+A tenant only gets messages if the account has a WhatsApp number (Accounts, the house's page; "same as phone" copies the phone number) and has not been opted out. Messages go out between 07:00 and 21:00 EAT for reminders; payment confirmations and outage notices go at once. At most `WA_DAILY_LIMIT` (240) tenant messages are sent per day; admin alerts are not counted. Failed sends retry with growing waits (30 s up to 1 h, 8 tries). A rejected token pauses the channel and shows a banner on the Messages page.
 
 ### Inbound WhatsApp replies (optional)
 
@@ -252,11 +252,11 @@ With PostgreSQL this works while the service runs (it then restarts the service)
 **Daraja go-live checklist.**
 
 1. Sandbox first: Settings > M-Pesa, environment `sandbox`, the sandbox key and secret, shortcode `174379`, the passkey from the Daraja simulator, and the public https address. Press **Test key and secret**.
-2. Press **Register the C2B URLs** and **Send KES 1 prompt** (enter your own number). The prompt uses the reserved account reference `FTNTEST`; the confirmation is recorded in Unmatched with the note "settings test" and never credits a flat. The sandbox C2B shortcode differs from 174379: put it in the C2B shortcode field.
+2. Press **Register the C2B URLs** and **Send KES 1 prompt** (enter your own number). The prompt uses the reserved account reference `FTNTEST`; the confirmation is recorded in Unmatched with the note "settings test" and never credits a house. The sandbox C2B shortcode differs from 174379: put it in the C2B shortcode field.
 3. For production: switch the environment to `production` and enter the live key, secret, Paybill, passkey. **The KES 1 test is real money in production.**
 4. Register the C2B URLs. Daraja refuses a second registration ("URLs are already registered") until the old ones are deleted in the Daraja portal or by Safaricom support. So **do not replace the callback token on a live Paybill without that**; after replacing it, register again.
 5. Callback URLs must be https and must not contain "mpesa", "safaricom", "exe", "exec", "cmd", "sql" or "query" (the token is random hex, so this holds). The app registers the form `PUBLIC_BASE_URL/pay/cb/t/<token>/c2b/confirm` (and `validate`); the STK result URL travels with each push. The older `?t=<token>` form also works.
-6. External validation is off by default on a Paybill: Safaricom enables it on request. Without it, an account number that matches no flat cannot be bounced at validation; it lands in Unmatched. With it, "Payment with an unknown account number" decides: `reject` (default) or `accept`.
+6. External validation is off by default on a Paybill: Safaricom enables it on request. Without it, an account number that matches no house cannot be bounced at validation; it lands in Unmatched. With it, "Payment with an unknown account number" decides: `reject` (default) or `accept`.
 7. The payer's phone number may arrive hashed in a C2B confirmation; the pages show whatever arrives.
 8. Customers type the account number by hand: spaces, dashes and lower case are ignored (`abc-234` finds ABC234).
 
@@ -283,7 +283,7 @@ With PostgreSQL this works while the service runs (it then restarts the service)
 | `SMTP_*`, `ALERT_EMAIL_TO`, `WA_*` | | alerts and tenant messages, see "Monitoring, alerts and WhatsApp" above |
 | `DATA_KEY` | | base64 of 32 random bytes (`openssl rand -base64 32`). Encrypts national IDs and the secrets saved in Settings. The installer makes one; back it up with the database |
 | `NETFLOW_ADDR` | `:2055` | UDP listen address for NetFlow v5; one socket for all routers, told apart by tunnel source address |
-| `CUSTOMER_SUBNET` | `10.5.50.0/24` | flows from here are attributed to flats |
+| `CUSTOMER_SUBNET` | `10.5.50.0/24` | flows from here are attributed to houses |
 | `QOE_PING_TARGETS` | `8.8.8.8,1.1.1.1` | comma separated |
 | `METRICS_FLOW_EVERY`, `METRICS_PORT_EVERY`, `METRICS_PING_EVERY`, `METRICS_DNS_EVERY`, `METRICS_SAVE_EVERY` | `60s`, `30s`, `60s`, `60s`, `15m` | Go durations, at least 1s |
 
@@ -292,25 +292,25 @@ With PostgreSQL this works while the service runs (it then restarts the service)
 ```
 Safaricom fibre/line --> router ether1 (WAN)
                          router sfp-sfpplus1 --10G DAC--> OLT (pure Layer 2)
-                                                           PON --> splitter --> fibre --> ONT per flat
+                                                           PON --> splitter --> fibre --> ONT per house
                                                                                       (ONT in ROUTE mode, WAN = DHCP)
 router br-customers  10.5.50.0/24 : customer VLAN from the OLT [+ optional bench port]
 router wg-ftn        10.99.0.x    : the tunnel to the billing server
 ```
 
-- Billing and account control is on the server; the router holds the flats' leases, queues and the walled list. The OLT only switches frames.
-- OLT side: service VLAN tagged on the OLT uplink; each ONT's WAN port untagged on the ONT and translated to the VLAN on the OLT; ONT-to-ONT isolation enabled so flats cannot see each other (the router also drops flat-to-flat traffic).
-- Each ONT is in **route mode** (NAT and Wi-Fi) with a DHCP WAN. The router therefore sees **one client per flat**: the ONT's WAN MAC. The flat's lease is a static one on `ftn-dhcp`, so it always gets its fixed address; unknown MACs get an address from the walled range (.10 to .59).
-- The account code (6 characters) is the flat's account number and the M-Pesa Paybill account number.
+- Billing and account control is on the server; the router holds the houses' leases, queues and the walled list. The OLT only switches frames.
+- OLT side: service VLAN tagged on the OLT uplink; each ONT's WAN port untagged on the ONT and translated to the VLAN on the OLT; ONT-to-ONT isolation enabled so houses cannot see each other (the router also drops house-to-house traffic).
+- Each ONT is in **route mode** (NAT and Wi-Fi) with a DHCP WAN. The router therefore sees **one client per house**: the ONT's WAN MAC. The house's lease is a static one on `ftn-dhcp`, so it always gets its fixed address; unknown MACs get an address from the walled range (.10 to .59).
+- The account code (6 characters) is the house's account number and the M-Pesa Paybill account number.
 - Because the MAC is the ONT's, replacing an ONT changes the MAC: the admin edits the account's MAC (or attaches the new MAC from New devices) and the lease moves to the new ONT.
 
 ## Setting up a router
 
-See [deploy/README.md](deploy/README.md), "Add a router". In short: Routers, Add router, paste the one line on the router, watch the four steps on the router page turn green. The optional bench port (a spare port on the customer bridge for testing as a flat) is a field of the router form; paste a new line after changing it.
+See [deploy/README.md](deploy/README.md), "Add a router". In short: Routers, Add router, paste the one line on the router, watch the four steps on the router page turn green. The optional bench port (a spare port on the customer bridge for testing as a house) is a field of the router form; paste a new line after changing it.
 
 ## Vouchers
 
-Admin -> Vouchers -> pick package and count (up to 500) -> "Generate and print". You get a printable page of 8-character codes (no 0/O/1/I/L). A tenant enters the code under "Have a voucher?" on the payment page, after naming their account. A voucher made for one router is refused at every other router. A voucher works once and keeps working when its package is later disabled or hidden at the building (disable a package instead of deleting it; a deleted package's vouchers do not redeem). Redeeming it creates a ledger entry with method `voucher`: its KES is the plan's price, but it is not counted as revenue (the cash for it is whatever you took when you sold it; the Voucher tab says so).
+Admin -> Vouchers -> pick package and count (up to 500) -> "Generate and print". You get a printable page of 8-character codes (no 0/O/1/I/L). A tenant enters the code under "Have a voucher?" on the payment page, after naming their account. A voucher made for one router is refused at every other router. A voucher works once and keeps working when its package is later disabled or hidden at the router (disable a package instead of deleting it; a deleted package's vouchers do not redeem). Redeeming it creates a ledger entry with method `voucher`: its KES is the plan's price, but it is not counted as revenue (the cash for it is whatever you took when you sold it; the Voucher tab says so).
 
 ## Switching M-Pesa on later
 
@@ -324,7 +324,7 @@ Admin -> Vouchers -> pick package and count (up to 500) -> "Generate and print".
 
    Each carries the callback token, in the path (`/pay/cb/t/<token>/...`) or as `?t=<token>`. Settings > M-Pesa shows the URLs and reveals the real token after you give the admin password.
 5. Press **Register the C2B URLs** on Settings > M-Pesa (it calls Daraja's C2B Register URL with `ResponseType` Completed). See the go-live checklist under "Settings pages" for what Daraja refuses.
-6. Customers can then also pay the Paybill directly with the flat's account code as the account number. The app extends that account by the package whose price equals the amount. Anything it cannot match lands in Admin -> Unmatched. Keep prices unique.
+6. Customers can then also pay the Paybill directly with the house's account code as the account number. The app extends that account by the package whose price equals the amount. Anything it cannot match lands in Admin -> Unmatched. Keep prices unique.
 
 STK Push uses the account code as AccountReference; Daraja usually also sends a C2B confirmation for it, and the app de-duplicates by receipt number. Until the credentials are set the Daraja code stays disabled; use Admin -> Record M-Pesa for payments you see on the statement.
 
@@ -336,11 +336,11 @@ Everything important is in `ispbill.json` under the data folder; the `metrics/` 
 
 - **Not tested on a real RouterOS device, a real Daraja account or a real OLT.** The REST calls follow the RouterOS 7 documentation; the first real run may need small fixes, especially the bootstrap script on other RouterOS versions and the exact field names RouterOS returns for leases, queues and `/system/health`.
 - JSON file storage: fine for a router, not for thousands of users. All data is held in memory.
-- Each account is locked to one MAC (the ONT WAN) and one fixed address. Flat isolation relies on the OLT configuration, which this project cannot check.
-- Money rules: a portal order that gets no payment is marked **expired** after 15 minutes (not failed: a late payment still completes it, and the waiting page says so). A push whose answer we could not read (timeout, dropped connection) leaves the order pending instead of failed, because the prompt may be on the phone. Revenue is booked on the day Daraja says the customer paid (`TransTime` / `TransactionDate`, East Africa Time), not the day the callback arrived, so a spooled or late callback lands on the right day; with no usable time it uses the arrival time. "Mark paid" records `MANUAL-<order>`. The real confirmation of that order (its STK result, or a Paybill payment that carries the order id) is stored as an ignored duplicate and not credited again. A Paybill payment that carries only the account code is first matched to the flat's single open M-Pesa order for that amount that existed when the customer paid (by Daraja's transaction time; with no time, or when the receipt is already in the ledger, no order is picked). If the payment was made BEFORE a Mark paid of the same amount on that flat in the last 6 hours (or its time is unknown and the Mark paid is under 30 minutes old) it may be the same money: it waits in Unmatched as "possible duplicate of manual payment ...", the owners get an alert, and Assign asks before crediting it. Money paid after the Mark paid is credited at once. A payment is never silently ignored. The Paybill validation URL refuses amounts below the cheapest package (only if Safaricom has enabled external validation for the shortcode).
+- Each account is locked to one MAC (the ONT WAN) and one fixed address. House isolation relies on the OLT configuration, which this project cannot check.
+- Money rules: a portal order that gets no payment is marked **expired** after 15 minutes (not failed: a late payment still completes it, and the waiting page says so). A push whose answer we could not read (timeout, dropped connection) leaves the order pending instead of failed, because the prompt may be on the phone. Revenue is booked on the day Daraja says the customer paid (`TransTime` / `TransactionDate`, East Africa Time), not the day the callback arrived, so a spooled or late callback lands on the right day; with no usable time it uses the arrival time. "Mark paid" records `MANUAL-<order>`. The real confirmation of that order (its STK result, or a Paybill payment that carries the order id) is stored as an ignored duplicate and not credited again. A Paybill payment that carries only the account code is first matched to the house's single open M-Pesa order for that amount that existed when the customer paid (by Daraja's transaction time; with no time, or when the receipt is already in the ledger, no order is picked). If the payment was made BEFORE a Mark paid of the same amount on that house in the last 6 hours (or its time is unknown and the Mark paid is under 30 minutes old) it may be the same money: it waits in Unmatched as "possible duplicate of manual payment ...", the owners get an alert, and Assign asks before crediting it. Money paid after the Mark paid is credited at once. A payment is never silently ignored. The Paybill validation URL refuses amounts below the cheapest package (only if Safaricom has enabled external validation for the shortcode).
 - No refunds on the router side, no pro-rata upgrades, no SMS or receipts (reminders are log events, and WhatsApp messages when WhatsApp is set up).
 - Daraja callbacks are unsigned, so three locks stand in front of them. (1) `MPESA_CALLBACK_TOKEN` is required and sits in the URL path (`/pay/cb/t/<token>/stk`, `/c2b/validate`, `/c2b/confirm`). The old STK form with `?t=<token>` keeps working for 30 days after the first start of this version, with a warning in the log; re-register nothing, new STK pushes already use the path form. (2) Caddy can limit `/pay/cb/*` to Safaricom's callback addresses, but only when you set `CADDY_MPESA_IPS="<ip/cidr> ..."` at install time. It is **off by default**: the list this project once shipped was written from memory, and a wrong list answers 403 to real payments, which are then never credited. Get the current ranges from Safaricom (Daraja support, or your Paybill onboarding) before you set it; the installer keeps a suggested list as a comment, marked unverified. `ftnbilling-doctor` warns "M-Pesa callbacks are not IP-filtered" while it is off. (3) Receipt confirmation, **off by default** (`MPESA_CONFIRM_RECEIPTS=off`): with `MPESA_INITIATOR_NAME` and `MPESA_SECURITY_CREDENTIAL` set (the Daraja API operator and its password encrypted with Safaricom's certificate, base64) and `MPESA_CONFIRM_RECEIPTS=auto` (or `on`), every C2B confirmation and STK success is held until Daraja's Transaction Status API confirms the receipt; one Daraja cannot confirm within 15 minutes is listed under Unmatched payments with the reason. A wrong credential would hold every real payment for 15 minutes, so test it first: Settings -> M-Pesa -> **Test receipt confirmation**, with a real receipt from your M-Pesa statement. It sends one Transaction Status query (it credits nothing) and shows Daraja's answer as received, with a verdict. Switch the mode to auto once it says Daraja confirmed the receipt. The doctor and `settings-check` explain how while it is off. Caddy must be the only reverse proxy in front of the app, because the app trusts `X-Forwarded-For` from loopback.
-- A walled flat (unpaid, suspended, unregistered) still gets DNS answers for every name from the router, which the payment page and the phones' captive-portal probes need. A DNS tunnel (dnstt, iodine) could therefore give slow free internet. RouterOS 7 has no per-client DNS policy, so the server does not try to restrict it; the router checklist shows a warning ("Walled flats can still resolve any name") and the fix is operational: suspend a flat that shows heavy DNS traffic.
+- A walled house (unpaid, suspended, unregistered) still gets DNS answers for every name from the router, which the payment page and the phones' captive-portal probes need. A DNS tunnel (dnstt, iodine) could therefore give slow free internet. RouterOS 7 has no per-client DNS policy, so the server does not try to restrict it; the router checklist shows a warning ("Walled houses can still resolve any name") and the fix is operational: suspend a house that shows heavy DNS traffic.
 - Test payments count in "revenue" while `TEST_MODE=true`.
 - Metrics are estimates: see the NetFlow caveats above. The WAN figures are the router's interface counters, not the ISP's invoice.
 

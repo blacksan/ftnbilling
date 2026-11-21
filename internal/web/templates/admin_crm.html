@@ -1,10 +1,10 @@
 {{define "admin_search"}}{{template "ahead" .}}
-<form method="get" action="/admin/search" class="mb-3 row"><label>Search<input name="q" value="{{.Data.Q}}" size="48" autofocus placeholder="name, phone, flat, account code, MAC, serial, M-Pesa code"></label><button>Search</button></form>
+<form method="get" action="/admin/search" class="mb-3 row"><label>Search<input name="q" value="{{.Data.Q}}" size="48" autofocus placeholder="name, phone, house number, account code, MAC, serial, M-Pesa code"></label><button>Search</button></form>
 {{if .Data.Q}}{{with .Data.R}}{{$d := $.Data}}{{if not .Total}}<div class="card">Nothing found for <b>{{.Query}}</b>. Phone numbers match with or without the leading 0; MACs with or without colons.</div>{{end}}
 {{if .Customers}}<h3>Customers ({{len .Customers}})</h3><div class="tw"><table><tr><th>Name</th><th>Phone</th><th>Email</th></tr>{{range .Customers}}<tr><td><a href="/admin/customers/view?id={{.ID}}"><b>{{.Name}}</b></a></td><td>{{.Phone}}</td><td>{{.Email}}</td></tr>{{end}}</table></div>{{end}}
-{{if .Accounts}}<h3>Accounts ({{len .Accounts}})</h3><div class="tw"><table><tr><th>Flat</th><th>Code</th><th>Tenant</th><th>ONT MAC</th></tr>{{range .Accounts}}<tr><td><a href="/admin/accounts/view?code={{.Code}}"><b>{{.Flat}}</b></a> <span class="muted">{{index $d.SiteOf .SiteID}}</span></td><td><code>{{.Code}}</code></td><td>{{.Tenant}} <span class="muted">{{.Phone}}</span></td><td>{{.MAC}}</td></tr>{{end}}</table></div>{{end}}
+{{if .Accounts}}<h3>Accounts ({{len .Accounts}})</h3><div class="tw"><table><tr><th>House number</th><th>Code</th><th>Tenant</th><th>ONT MAC</th></tr>{{range .Accounts}}<tr><td><a href="/admin/accounts/view?code={{.Code}}"><b>{{.Flat}}</b></a> <span class="muted">{{index $d.SiteOf .SiteID}}</span></td><td><code>{{.Code}}</code></td><td>{{.Tenant}} <span class="muted">{{.Phone}}</span></td><td>{{.MAC}}</td></tr>{{end}}</table></div>{{end}}
 {{if .Equipment}}<h3>Equipment ({{len .Equipment}})</h3><div class="tw"><table><tr><th>Kind</th><th>Serial</th><th>MAC</th><th>Model</th><th>Status</th></tr>{{range .Equipment}}<tr><td>{{.Kind}}</td><td><a href="/admin/equipment/view?id={{.ID}}"><b>{{if .Serial}}{{.Serial}}{{else}}(no serial){{end}}</b></a></td><td>{{.MAC}}</td><td>{{.Model}}</td><td><span class="pill {{.Status}}">{{stat .Status}}</span></td></tr>{{end}}</table></div>{{end}}
-{{if .Payments}}<h3>Payments ({{len .Payments}})</h3><div class="tw"><table><tr><th>Paid (EAT)</th><th>Code</th><th>Method</th><th class="n">KES</th><th>Payer</th><th>Flat</th><th>Status</th></tr>{{range .Payments}}<tr><td>{{eat .PaidAt}}</td><td><a href="/admin/payments?q={{.Key}}">{{.Key}}</a></td><td>{{.Method}}</td><td class="n">{{.AmountKES}}</td><td>{{.Phone}} {{.Name}}</td><td>{{with index $d.AcctOf .AccountID}}<a href="/admin/accounts/view?code={{.Code}}">{{.Flat}}</a>{{end}}</td><td><span class="pill {{.Status}}">{{stat .Status}}</span></td></tr>{{end}}</table></div>{{end}}
+{{if .Payments}}<h3>Payments ({{len .Payments}})</h3><div class="tw"><table><tr><th>Paid (EAT)</th><th>Code</th><th>Method</th><th class="n">KES</th><th>Payer</th><th>House number</th><th>Status</th></tr>{{range .Payments}}<tr><td>{{eat .PaidAt}}</td><td><a href="/admin/payments?q={{.Key}}">{{.Key}}</a></td><td>{{.Method}}</td><td class="n">{{.AmountKES}}</td><td>{{.Phone}} {{.Name}}</td><td>{{with index $d.AcctOf .AccountID}}<a href="/admin/accounts/view?code={{.Code}}">{{.Flat}}</a>{{end}}</td><td><span class="pill {{.Status}}">{{stat .Status}}</span></td></tr>{{end}}</table></div>{{end}}
 {{if .Apartments}}<h3>Apartments ({{len .Apartments}})</h3><div class="tw"><table>{{range .Apartments}}<tr><td><a href="/admin/apartments/view?id={{.ID}}"><b>{{.Name}}</b></a></td><td>{{.Address}}</td><td>{{if .Caretaker.Name}}{{.Caretaker.Name}} {{.Caretaker.Phone}}{{end}}</td></tr>{{end}}</table></div>{{end}}
 {{if .Buildings}}<h3>Routers ({{len .Buildings}})</h3><div class="tw"><table>{{range .Buildings}}<tr><td><a href="/admin/sites/view?id={{.ID}}"><b>{{.Name}}</b></a></td><td>{{.Address}}</td></tr>{{end}}</table></div>{{end}}
 {{end}}{{end}}
@@ -14,12 +14,12 @@
 <h2>{{$C.Name}} {{if .Data.Anon}}<span class="pill ignored">anonymised</span>{{end}}</h2>
 <p><a href="/admin/accounts">&larr; subscribers</a>{{if $C.Phone}} &middot; {{$C.Phone}}{{end}}</p>
 <div class="tiles"><div class="tile">Paid in total<b>{{kes $P.Total}}</b><small>{{len $P.Payments}} payments on record</small></div>
-<div class="tile">Flats now<b>{{range $P.Tenancies}}{{if .MoveOut.IsZero}}{{(acctOf $P.Accounts .AccountID).Flat}} {{end}}{{end}}</b><small>{{len $P.Tenancies}} tenancies in all</small></div>
-<div class="tile">Equipment<b>{{len $P.Equipment}}</b><small>items installed at their flats</small></div></div>
+<div class="tile">Houses now<b>{{range $P.Tenancies}}{{if .MoveOut.IsZero}}{{(acctOf $P.Accounts .AccountID).Flat}} {{end}}{{end}}</b><small>{{len $P.Tenancies}} tenancies in all</small></div>
+<div class="tile">Equipment<b>{{len $P.Equipment}}</b><small>items installed at their houses</small></div></div>
 {{if not .Data.Anon}}<div class="grid2">
 <div class="card"><b>Details</b><form class="mt-2" method="post" action="/admin/customers/save"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$C.ID}}">
 <div class="row"><label>Name<input name="name" value="{{$C.Name}}" required></label><label>Phone<input name="phone" value="{{$C.Phone}}"></label><label>Second phone<input name="phone2" value="{{$C.Phone2}}"></label></div>
-<div class="mt-2 row"><label>WhatsApp<input name="whatsapp" value="{{$C.WhatsApp}}"></label><label class="ck muted"><input type="checkbox" name="wa_same" value="1"> same as phone</label><label class="ck muted"><input type="checkbox" name="wa_optout" value="1"{{if $C.WAOptOut}} checked{{end}}> opted out of WhatsApp</label><label>Email<input name="email" value="{{$C.Email}}"></label></div>
+<div class="mt-2 row"><label>WhatsApp<input name="whatsapp" value="{{$C.WhatsApp}}"></label><label class="ck muted"><input type="checkbox" name="wa_same" value="1"{{if $C.WASamePhone}} checked{{end}}> same as phone</label><label class="ck muted"><input type="checkbox" name="wa_optout" value="1"{{if $C.WAOptOut}} checked{{end}}> opted out of WhatsApp</label><label>Email<input name="email" value="{{$C.Email}}"></label></div>
 <label class="muted">Notes<br><textarea name="notes" rows="2" style="width:100%">{{$C.Notes}}</textarea></label><button>Save details</button></form></div>
 <div class="card"><b>National ID</b>
 {{if not .Data.NatID}}<p class="muted">Not enabled. Set DATA_KEY on the server (openssl rand -base64 32) to store IDs encrypted.</p>
@@ -27,29 +27,29 @@
 {{if .Data.Revealed}}<div class="banner" style="border-color:var(--warn);background:var(--warn-soft)">National ID: <b style="font-size:18px">{{.Data.Revealed}}</b> <span class="muted">shown once; this reveal was logged</span></div>{{end}}
 <form method="post" action="/admin/customers/natid" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$C.ID}}"><label>{{if $C.NationalIDLast4}}Replace (blank removes){{else}}ID number{{end}}<input name="national_id" autocomplete="off"></label><button>Save</button></form>
 {{if $C.NationalIDLast4}}<form class="mt-2" method="post" action="/admin/customers/natid/reveal"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$C.ID}}"><button>Reveal the ID (logged)</button></form>{{end}}{{end}}</div></div>{{end}}
-<h3>Flats</h3>
-<div class="tw"><table><tr><th>Flat</th><th>Router</th><th>From</th><th>To</th><th></th></tr>
+<h3>Houses</h3>
+<div class="tw"><table><tr><th>House number</th><th>Router</th><th>From</th><th>To</th><th></th></tr>
 {{range $P.Tenancies}}{{$a := acctOf $P.Accounts .AccountID}}<tr><td><a href="/admin/accounts/view?code={{$a.Code}}"><b>{{$a.Flat}}</b></a></td><td>{{index $d.Data.SiteOf $a.SiteID}}</td><td>{{day .MoveIn}}</td><td>{{if .MoveOut.IsZero}}<span class="pill active">current</span>{{else}}{{day .MoveOut}}{{end}}</td>
 <td>{{if .MoveOut.IsZero}}<form method="post" action="/admin/customers/moveout" class="row"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="account" value="{{.AccountID}}"><input type="hidden" name="next" value="/admin/customers/view?id={{$C.ID}}"><input type="date" name="move_out" aria-label="move-out date"><button>Move out</button></form>{{end}}</td></tr>
-{{else}}<tr><td colspan="5">Not linked to any flat.</td></tr>{{end}}</table></div>
-{{if and (not .Data.Anon) .Data.Free}}<div class="card"><b>Move into a flat</b><form method="post" action="/admin/customers/link" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$C.ID}}">
-<label>Flat<select name="account">{{range .Data.Free}}<option value="{{.ID}}">{{.Flat}} ({{.Code}}){{if .CustomerID}} - occupied{{end}}</option>{{end}}</select></label><label>Move-in date<input type="date" name="move_in"></label><button>Link</button></form>
-<p class="muted" style="margin:6px 0 0">If the flat has a tenant, their tenancy ends on the move-in date.</p></div>{{end}}
-{{if $P.Equipment}}<h3>Equipment at their flats</h3><div class="tw"><table><tr><th>Kind</th><th>Serial</th><th>MAC</th><th>Flat</th><th>Status</th></tr>{{range $P.Equipment}}<tr><td>{{.Kind}}</td><td><a href="/admin/equipment/view?id={{.ID}}">{{if .Serial}}{{.Serial}}{{else}}(no serial){{end}}</a></td><td>{{.MAC}}</td><td>{{(acctOf $P.Accounts .AccountID).Flat}}</td><td><span class="pill {{.Status}}">{{stat .Status}}</span></td></tr>{{end}}</table></div>{{end}}
+{{else}}<tr><td colspan="5">Not linked to any house.</td></tr>{{end}}</table></div>
+{{if and (not .Data.Anon) .Data.Free}}<div class="card"><b>Move into a house</b><form method="post" action="/admin/customers/link" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$C.ID}}">
+<label>House number<select name="account">{{range .Data.Free}}<option value="{{.ID}}">{{.Flat}} ({{.Code}}){{if .CustomerID}} - occupied{{end}}</option>{{end}}</select></label><label>Move-in date<input type="date" name="move_in"></label><button>Link</button></form>
+<p class="muted" style="margin:6px 0 0">If the house has a tenant, their tenancy ends on the move-in date.</p></div>{{end}}
+{{if $P.Equipment}}<h3>Equipment at their houses</h3><div class="tw"><table><tr><th>Kind</th><th>Serial</th><th>MAC</th><th>House number</th><th>Status</th></tr>{{range $P.Equipment}}<tr><td>{{.Kind}}</td><td><a href="/admin/equipment/view?id={{.ID}}">{{if .Serial}}{{.Serial}}{{else}}(no serial){{end}}</a></td><td>{{.MAC}}</td><td>{{(acctOf $P.Accounts .AccountID).Flat}}</td><td><span class="pill {{.Status}}">{{stat .Status}}</span></td></tr>{{end}}</table></div>{{end}}
 <h3>Payments</h3>
-<div class="tw"><table><tr><th>Paid (EAT)</th><th>Code</th><th>Method</th><th class="n">KES</th><th>Flat</th><th>Status</th></tr>
+<div class="tw"><table><tr><th>Paid (EAT)</th><th>Code</th><th>Method</th><th class="n">KES</th><th>House number</th><th>Status</th></tr>
 {{range $P.Payments}}<tr><td>{{eat .PaidAt}}</td><td>{{.Key}}</td><td>{{.Method}}</td><td class="n">{{.AmountKES}}</td><td>{{(acctOf $P.Accounts .AccountID).Flat}}</td><td><span class="pill {{.Status}}">{{stat .Status}}</span></td></tr>
 {{else}}<tr><td colspan="6">No payments yet.</td></tr>{{end}}</table></div>
 <h3>History</h3>
 {{if not .Data.Anon}}<form method="post" action="/admin/customers/note" class="mb-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$C.ID}}"><label style="flex:1">Add a note<input name="text" style="width:100%" maxlength="1000" required></label><button>Add note</button></form>{{end}}
 <div class="tw"><table>{{range $P.Timeline}}<tr><td>{{eat .Time}}</td><td><span class="pill {{if eq .Kind "payment"}}applied{{else if eq .Kind "audit"}}suspended{{else if eq .Kind "note"}}new{{else}}ignored{{end}}">{{.Kind}}</span></td><td style="white-space:normal">{{.Text}}</td></tr>
 {{else}}<tr><td>Nothing recorded yet.</td></tr>{{end}}</table></div>
-{{if not .Data.Anon}}<div class="card danger"><b class="bad">Anonymise (privacy request)</b><p class="muted" style="margin:4px 0">Removes name, contacts, ID and notes, and vacates their flats. Payments stay in the ledger. Type the customer's name to confirm.</p>
+{{if not .Data.Anon}}<div class="card danger"><b class="bad">Anonymise (privacy request)</b><p class="muted" style="margin:4px 0">Removes name, contacts, ID and notes, and vacates their houses. Payments stay in the ledger. Type the customer's name to confirm.</p>
 <form method="post" action="/admin/customers/anonymize" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$C.ID}}"><input name="confirm" placeholder="{{$C.Name}}" required autocomplete="off"><button>Anonymise</button></form></div>{{end}}
 {{template "afoot" .}}{{end}}
 
 {{define "admin_equipment"}}{{template "ahead" .}}{{$d := .}}
-<form method="get" action="/admin/equipment" class="mb-3 row"><label>Find<input name="q" value="{{.Data.Q}}" placeholder="serial, MAC, model, flat" size="26"></label>
+<form method="get" action="/admin/equipment" class="mb-3 row"><label>Find<input name="q" value="{{.Data.Q}}" placeholder="serial, MAC, model, house number" size="26"></label>
 <label>Kind<select name="kind"><option value="">All</option>{{range .Data.Kinds}}<option value="{{.}}"{{if eq . $d.Data.Kind}} selected{{end}}>{{.}}</option>{{end}}</select></label>
 <label>Status<select name="status"><option value="">All</option>{{range .Data.Statuses}}<option value="{{.}}"{{if eq . $d.Data.Status}} selected{{end}}>{{.}}</option>{{end}}</select></label><button>Filter</button></form>
 <div class="tiles">{{range .Data.Statuses}}<div class="tile{{if eq . "faulty"}} warn{{end}}">{{stat .}}<b>{{index $d.Data.Counts .}}</b></div>{{end}}</div>
@@ -79,15 +79,15 @@
 <label class="muted">Notes<br><textarea name="notes" rows="2" style="width:100%">{{$E.Notes}}</textarea></label><button>Save</button></form></div>
 <div class="card"><b>Install / return</b>
 {{if $E.AccountID}}<form method="post" action="/admin/equipment/return" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
-<label>Take out of service as<select name="status"><option value="returned">returned by the customer</option><option value="in_stock">back in stock</option><option value="faulty">faulty</option><option value="retired">retired</option></select></label><label>Note<input name="note"></label><button>Remove from the flat</button></form>
+<label>Take out of service as<select name="status"><option value="returned">returned by the customer</option><option value="in_stock">back in stock</option><option value="faulty">faulty</option><option value="retired">retired</option></select></label><label>Note<input name="note"></label><button>Remove from the house</button></form>
 {{else}}<form method="post" action="/admin/equipment/assign" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
-<label>Install at flat<select name="account"><option value="">choose a flat</option>{{range .Data.Accts}}<option value="{{.ID}}">{{.Flat}} ({{.Code}}){{if .Tenant}} - {{.Tenant}}{{end}}</option>{{end}}</select></label>
-{{if and (eq $E.Kind "ont") $E.MAC}}<label class="ck muted"><input type="checkbox" name="use_mac" value="1"> use its MAC as the flat's ONT MAC</label>{{end}}<button>Install</button></form>
+<label>Install at house<select name="account"><option value="">choose a house</option>{{range .Data.Accts}}<option value="{{.ID}}">{{.Flat}} ({{.Code}}){{if .Tenant}} - {{.Tenant}}{{end}}</option>{{end}}</select></label>
+{{if and (eq $E.Kind "ont") $E.MAC}}<label class="ck muted"><input type="checkbox" name="use_mac" value="1"> use its MAC as the house's ONT MAC</label>{{end}}<button>Install</button></form>
 <form method="post" action="/admin/equipment/return" class="mt-3 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
 <label>Mark as<select name="status"><option value="in_stock">in stock</option><option value="faulty">faulty</option><option value="returned">returned</option><option value="retired">retired</option></select></label><label>Note<input name="note"></label><button>Update status</button></form>{{end}}</div></div>
 <h3>History</h3>
 <form method="post" action="/admin/equipment/note" class="mb-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><label style="flex:1">Add a note<input name="text" style="width:100%" maxlength="300" required></label><button>Add note</button></form>
-<div class="tw"><table><tr><th>When (EAT)</th><th>What</th><th>Status</th><th>Flat</th><th>Note</th></tr>
+<div class="tw"><table><tr><th>When (EAT)</th><th>What</th><th>Status</th><th>House number</th><th>Note</th></tr>
 {{range .Data.Hist}}<tr><td>{{eat .Ev.Time}}</td><td>{{.Ev.Kind}}</td><td>{{if and .Ev.FromStatus (ne .Ev.FromStatus .Ev.ToStatus)}}{{stat .Ev.FromStatus}} &rarr; {{end}}{{stat .Ev.ToStatus}}</td><td>{{if .A.Code}}<a href="/admin/accounts/view?code={{.A.Code}}">{{.A.Flat}}</a>{{end}}</td><td style="white-space:normal">{{.Ev.Note}}</td></tr>
 {{else}}<tr><td colspan="5">No history yet.</td></tr>{{end}}</table></div>
 {{template "afoot" .}}{{end}}
@@ -97,22 +97,28 @@
 <div class="card"><b>Customer</b>
 {{if .Data.Cust.ID}}<p style="margin:6px 0"><a href="/admin/customers/view?id={{.Data.Cust.ID}}"><b>{{.Data.Cust.Name}}</b></a> <span class="muted">{{.Data.Cust.Phone}}</span></p>
 <form method="post" action="/admin/customers/moveout" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="account" value="{{$A.ID}}"><input type="hidden" name="next" value="{{.Next}}"><input type="date" name="move_out" aria-label="move-out date"><button>Tenant moved out</button></form>
-<p class="muted" style="margin:6px 0 0">Moving out vacates the flat; the customer record and payments stay.</p>{{else}}<p class="muted" style="margin:4px 0">{{if $A.Tenant}}Typed-in tenant: {{$A.Tenant}} {{$A.Phone}}. Link a customer record to keep their history.{{else}}Vacant.{{end}}</p>{{end}}
+<p class="muted" style="margin:6px 0 0">Moving out vacates the house; the customer record and payments stay.</p>{{else}}<p class="muted" style="margin:4px 0">{{if $A.Tenant}}Typed-in tenant: {{$A.Tenant}} {{$A.Phone}}. Link a customer record to keep their history.{{else}}Vacant.{{end}}</p>{{end}}
 <form class="mt-2" method="post" action="/admin/accounts/customer"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <div class="row"><label>{{if .Data.Cust.ID}}Replace with{{else}}Existing customer{{end}}<select name="customer"><option value="">new customer (fill in below)</option>{{range .Data.Custs}}<option value="{{.ID}}">{{.Name}}{{if .Phone}} - {{.Phone}}{{end}}</option>{{end}}</select></label><label>Move-in<input type="date" name="move_in"></label></div>
-<div class="mt-2 row"><label>New name<input name="name" value="{{if not .Data.Cust.ID}}{{$A.Tenant}}{{end}}"></label><label>Phone<input name="phone" value="{{if not .Data.Cust.ID}}{{$A.Phone}}{{end}}"></label><button>Link</button></div></form></div>
+<div class="mt-2 row"><label>New name<input name="name" value="{{if not .Data.Cust.ID}}{{$A.Tenant}}{{end}}"></label><label>Phone<input name="phone" value="{{if not .Data.Cust.ID}}{{$A.Phone}}{{end}}"></label><label>WhatsApp<input name="whatsapp" value="{{if not .Data.Cust.ID}}{{$A.WhatsApp}}{{end}}"></label><label class="ck muted"><input type="checkbox" name="wa_same" value="1"{{if not .Data.Cust.ID}}{{if $A.WASamePhone}} checked{{end}}{{end}}> same as phone</label><button>Link</button></div></form></div>
 <div class="card"><b>Floor and fibre box</b>
 <form method="post" action="/admin/accounts/location" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <label>Floor<input name="floor" value="{{$A.Floor}}" size="6"></label><label>ODB box<input name="odb" value="{{$A.ODB}}" size="10"></label>
 <label>Splitter<select name="splitter"><option value="">none</option>{{range .Data.Splitters}}<option value="{{.ID}}"{{if eq .ID $A.SplitterID}} selected{{end}}>{{if .Serial}}{{.Serial}}{{else}}{{.Model}}{{end}}</option>{{end}}</select></label>
 <label>Port<input name="port" type="number" min="0" max="128" value="{{if $A.SplitterPort}}{{$A.SplitterPort}}{{end}}" style="width:70px"></label><button>Save</button></form></div></div>
-<div class="card"><b>Equipment at this flat</b>
+<div class="card"><b>Devices on this account</b>
+{{with .Data.AcctDev}}<div class="mt-2 tw"><table id="acct-device"><tr><th>MAC</th><th>Vendor</th><th>State</th><th>Last seen</th><th>Port</th></tr>
+<tr><td class="mono" style="font-family:var(--f-mono)">{{.MAC}} <span class="muted">account MAC</span></td><td>{{if .Vendor}}{{.Vendor}}{{else}}<span class="muted">unknown</span>{{end}}</td>
+<td><span class="pill {{if .Online}}online{{else}}offline{{end}}">{{if .Online}}online{{else}}offline{{end}}</span></td>
+<td>{{if .LastSeen.IsZero}}<span class="muted">not seen yet</span>{{else}}{{eats .LastSeen}}{{end}}</td>
+<td>{{if .Port}}{{.Port}}{{else}}<span class="muted">unknown</span>{{end}}</td></tr></table></div>{{else}}<p class="muted" style="margin:4px 0">No MAC address is bound to this account yet.</p>{{end}}
+<p class="muted" style="margin:10px 0 0"><b>Equipment register</b> (installed at this house)</p>
 <div class="mt-2 tw"><table><tr><th>Kind</th><th>Serial</th><th>MAC</th><th>Model</th><th>Status</th><th></th></tr>
 {{range .Data.Equip}}<tr><td>{{.Kind}}</td><td><a href="/admin/equipment/view?id={{.ID}}">{{if .Serial}}{{.Serial}}{{else}}(no serial){{end}}</a></td><td>{{.MAC}}</td><td>{{.Model}}</td><td><span class="pill {{.Status}}">{{stat .Status}}</span></td>
 <td><form method="post" action="/admin/equipment/return" class="row"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><input type="hidden" name="next" value="{{$d.Next}}"><select name="status" aria-label="status"><option value="returned">returned</option><option value="in_stock">in stock</option><option value="faulty">faulty</option><option value="retired">retired</option></select><button>Remove</button></form></td></tr>
 {{else}}<tr><td colspan="6">None recorded.</td></tr>{{end}}</table></div>
 {{if .Data.Stock}}<form method="post" action="/admin/equipment/assign" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="account" value="{{$A.ID}}"><input type="hidden" name="next" value="{{.Next}}">
-<label>Install from stock<select name="id">{{range .Data.Stock}}<option value="{{.ID}}">{{.Kind}} {{.Serial}}{{if .MAC}} {{.MAC}}{{end}}</option>{{end}}</select></label><label class="ck muted"><input type="checkbox" name="use_mac" value="1"> use an ONT's MAC as this flat's ONT MAC</label><button>Install</button></form>{{end}}</div>
+<label>Install from stock<select name="id">{{range .Data.Stock}}<option value="{{.ID}}">{{.Kind}} {{.Serial}}{{if .MAC}} {{.MAC}}{{end}}</option>{{end}}</select></label><label class="ck muted"><input type="checkbox" name="use_mac" value="1"> use an ONT's MAC as this house's ONT MAC</label><button>Install</button></form>{{end}}</div>
 <div class="card"><b>Notes</b><form method="post" action="/admin/accounts/note" class="row" style="margin:6px 0"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}"><label style="flex:1"><input name="text" style="width:100%" maxlength="1000" placeholder="e.g. cable run through the stairwell" required></label><button>Add note</button></form>
 {{range .Data.Notes}}<div class="muted">{{eat .Time}}: <span style="color:var(--ink)">{{.Text}}</span></div>{{end}}</div>
 {{end}}

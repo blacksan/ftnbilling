@@ -15,7 +15,7 @@ const usage = `ispbill: internet billing server
   ispbill admin-reset-password [-generate] [-setup-code] [-reset-totp] [-revoke-sessions] [-user NAME]
                           reset the admin password (to ADMIN_PASS, or random with -generate), issue a setup code for
                           the authenticator app, remove the app, or sign everyone out
-  ispbill wipe-data       [-confirm WIPE]  delete all business data (customers, flats, routers, payments, ...), keep admin
+  ispbill wipe-data       [-confirm WIPE]  delete all business data (customers, houses, routers, payments, ...), keep admin
                           users and settings; without -confirm WIPE only list what would be deleted
   ispbill admin-status    [-json]  show the admin owner and whether the authenticator app is enrolled
   ispbill settings-check  show where each setting comes from; fails on unreadable stored values 

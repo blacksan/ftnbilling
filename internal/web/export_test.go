@@ -1,6 +1,11 @@
 package web
 
-import "time"
+import (
+	"net/http"
+	"time"
+
+	"ispbill/internal/store"
+)
 
 // Hooks for the external tests in this directory.
 
@@ -22,6 +27,27 @@ func SetServerToolTimeout(d time.Duration) func() {
 	old := serverToolTimeout
 	serverToolTimeout = d
 	return func() { serverToolTimeout = old }
+}
+
+// ResetRegLimits forgets recent registration attempts (the limiters are process-wide).
+func ResetRegLimits() {
+	regIPRL, regIPRLOpen, regPreRL, regMACRL = newLimiter(200, 10*time.Minute), newLimiter(4, 10*time.Minute), newLimiter(300, 10*time.Minute), newLimiter(3, time.Hour)
+	regBrowserRL, regPhoneBrowserRL, regPhoneRL = newLimiter(5, time.Hour), newLimiter(3, time.Hour), newLimiter(10, time.Hour)
+	regTokenRL, regTokenRLOpen = newLimiter(100, 10*time.Minute), newLimiter(6, 10*time.Minute)
+	regGetRL, regGetRLOpen = newLimiter(240, time.Minute), newLimiter(20, time.Minute)
+}
+
+// RegBrowserToken is the signed cookie value of a browser token id (what GET /pay/register hands out).
+func RegBrowserToken(id string) string { return regBrowserToken(id) }
+
+// RegHoneypotHits is how many honeypot fills were counted.
+func RegHoneypotHits() int64 { return regHoneypotHits.Load() }
+
+// SetCaptiveMAC makes the captive page "identify" a device (what a future router change would allow); it returns a restore func.
+func SetCaptiveMAC(mac string) func() {
+	old := captiveMACOf
+	captiveMACOf = func(*Server, *http.Request, store.Site) string { return mac }
+	return func() { captiveMACOf = old }
 }
 
 // ResetToolLimiter forgets recent tool runs, so a test can exceed 30 a minute.

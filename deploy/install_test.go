@@ -569,6 +569,77 @@ func TestInstallCaddyfileValidatesBeforeReplacing(t *testing.T) {
 	}
 }
 
+// An older Caddy may refuse the WebFig site's log filter: the installer retries with the fields { } form, then
+// without an access log (with a warning), and stops only when the file is still refused.
+func TestInstallCaddyfileToleratesAnOlderCaddyLogFilter(t *testing.T) {
+	bashOrSkip(t)
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	os.MkdirAll(bin, 0o755)
+	dest := filepath.Join(dir, "etc", "Caddyfile")
+	os.MkdirAll(filepath.Dir(dest), 0o755)
+	// The fake Caddy refuses what a Caddy of the given age refuses: "old" wants fields { }, "oldest" knows no filter.
+	fake := `#!/bin/bash
+f="${@: -1}"
+case "$FAKE_CADDY" in
+  old) if grep -q 'format filter' "$f" && ! grep -q 'fields {' "$f"; then echo 'Error: unrecognized subdirective request>uri' >&2; exit 1; fi ;;
+  oldest) if grep -q 'format filter' "$f"; then echo 'Error: unrecognized subdirective filter' >&2; exit 1; fi ;;
+  never) echo 'Error: adapting config: something else is wrong' >&2; exit 1 ;;
+esac
+exit 0
+`
+	os.WriteFile(filepath.Join(bin, "caddy"), []byte(fake), 0o755)
+	run := func(mode string) (string, error) {
+		script := "set -e\ndie() { echo \"DIE: $*\" >&2; exit 1; }\nnote() { echo \"NOTE: $*\"; }\nwarn() { echo \"WARN: $*\" >&2; }\nWEBFIG_PORT=8082; WEBFIG_DOMAIN=tech.example.co.ke\n" +
+			fnSrc(t, "render_webfig_block") + "\n" + fnSrc(t, "render_caddyfile") + "\n" + fnSrc(t, "install_caddyfile") +
+			"\nDRY=0; CF_SITE=billing.example.co.ke; CF_CB=''; CF_CATCHALL=''; install_caddyfile\n"
+		cmd := exec.Command("bash", "-c", script)
+		cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "CADDYFILE="+dest, "FAKE_CADDY="+mode)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	os.WriteFile(dest, []byte("OLD CADDYFILE\n"), 0o644)
+	// a current Caddy: the plain form, no warning
+	if out, err := run("current"); err != nil || strings.Contains(out, "WARN") || strings.Contains(out, "NOTE") {
+		t.Fatalf("current: %v %s", err, out)
+	}
+	if b, _ := os.ReadFile(dest); !strings.Contains(string(b), "format filter {") || strings.Contains(string(b), "fields {") || !strings.Contains(string(b), "request>headers>Cookie delete") {
+		t.Fatalf("plain form expected:\n%s", b)
+	}
+	// an older Caddy: the fields { } form
+	os.WriteFile(dest, []byte("OLD CADDYFILE\n"), 0o644)
+	out, err := run("old")
+	if err != nil || !strings.Contains(out, "fields { }") {
+		t.Fatalf("old: %v %s", err, out)
+	}
+	if b, _ := os.ReadFile(dest); !strings.Contains(string(b), "fields {") || !strings.Contains(string(b), "delete t") || !strings.Contains(string(b), "request>headers>Cookie delete") {
+		t.Fatalf("fields form expected:\n%s", b)
+	}
+	// the oldest: no access log, a warning, the upgrade goes on
+	os.WriteFile(dest, []byte("OLD CADDYFILE\n"), 0o644)
+	out, err = run("oldest")
+	if err != nil || !strings.Contains(out, "WARN: this Caddy does not accept the access-log filter") {
+		t.Fatalf("oldest: %v %s", err, out)
+	}
+	b, _ := os.ReadFile(dest)
+	if strings.Contains(string(b), "log {") || !strings.Contains(string(b), "tech.example.co.ke {") || !strings.Contains(string(b), "reverse_proxy 127.0.0.1:8082") || !strings.Contains(string(b), "header_up X-Ftn-Proto") {
+		t.Fatalf("no-log form expected, site kept:\n%s", b)
+	}
+	// a Caddy that refuses the file for another reason: the installer stops, with the first message, the old file kept
+	os.Remove(dest + ".bak")
+	os.WriteFile(dest, []byte("OLD CADDYFILE\n"), 0o644)
+	out, err = run("never")
+	if err == nil || !strings.Contains(out, "something else is wrong") || !strings.Contains(out, "untouched") {
+		t.Fatalf("never: %v %s", err, out)
+	}
+	if b, _ := os.ReadFile(dest); string(b) != "OLD CADDYFILE\n" {
+		t.Fatalf("the old Caddyfile was replaced: %s", b)
+	}
+	if m, _ := filepath.Glob(dest + ".*"); len(m) != 0 {
+		t.Fatalf("leftovers: %v", m)
+	}
+}
+
 // With CADDY_BIN set (CI installs the real Caddy), the Caddyfile install.sh renders for a domain, with and without
 // the M-Pesa source filter, must pass `caddy validate`.
 func TestInstallCaddyfileValidatesWithRealCaddy(t *testing.T) {
@@ -577,7 +648,7 @@ func TestInstallCaddyfileValidatesWithRealCaddy(t *testing.T) {
 	if bin == "" {
 		t.Skip("set CADDY_BIN to a caddy binary to validate the rendered Caddyfile")
 	}
-	for name, env := range map[string]string{"domain": "DOMAIN=billing.example.co.ke", "domain+filter": "DOMAIN=billing.example.co.ke CADDY_MPESA_IPS='196.201.214.200 196.201.214.0/24'", "domain+webfig": "DOMAIN=billing.example.co.ke WEBFIG_DOMAIN=tech.example.co.ke", "no domain": "DOMAIN="} {
+	for name, env := range map[string]string{"domain": "DOMAIN=billing.example.co.ke", "domain+filter": "DOMAIN=billing.example.co.ke CADDY_MPESA_IPS='196.201.214.200 196.201.214.0/24'", "domain+webfig": "DOMAIN=billing.example.co.ke WEBFIG_DOMAIN=tech.example.co.ke", "domain+webfig fields": "DOMAIN=billing.example.co.ke WEBFIG_DOMAIN=tech.example.co.ke WEBFIG_LOG=fields", "domain+webfig nolog": "DOMAIN=billing.example.co.ke WEBFIG_DOMAIN=tech.example.co.ke WEBFIG_LOG=none", "no domain": "DOMAIN="} {
 		script := "set -e\ndie() { echo \"$*\" >&2; exit 1; }\nnote() { :; }\nWEBFIG_PORT=8082; WEBFIG_DOMAIN=\n" + fnSrc(t, "render_webfig_block") + "\n" + fnSrc(t, "mpesa_cb_block") + "\n" + fnSrc(t, "render_caddyfile") + "\n" + fnSrc(t, "caddy_vars") + "\n" + env + "\nexport DOMAIN WEBFIG_DOMAIN\ncaddy_vars; render_caddyfile\n"
 		out, err := exec.Command("bash", "-c", script).CombinedOutput()
 		if err != nil {
@@ -677,7 +748,7 @@ func TestInstallCaddyfileWithWebFig(t *testing.T) {
 	if wf := on[strings.Index(on, "tech.ftw.co.ke {"):]; strings.Contains(wf, "encode") {
 		t.Errorf("the WebFig site must not compress (long requests):\n%s", wf)
 	}
-	if site := on[strings.Index(on, "tech.ftw.co.ke {"):]; strings.Contains(site, "header_up") || strings.Contains(site, "trusted_proxies") {
+	if site := on[strings.Index(on, "tech.ftw.co.ke {"):]; strings.Contains(site, "header_up X-Forwarded") || strings.Contains(site, "header_up -X-Forwarded") || strings.Contains(site, "trusted_proxies") {
 		t.Errorf("the WebFig site must not touch X-Forwarded-For handling:\n%s", on)
 	}
 }

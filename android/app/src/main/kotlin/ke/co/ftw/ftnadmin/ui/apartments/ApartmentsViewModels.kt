@@ -9,6 +9,8 @@ import ke.co.ftw.ftnadmin.data.sites.SitesRepository
 import ke.co.ftw.ftnadmin.domain.Apartment
 import ke.co.ftw.ftnadmin.domain.ApartmentContact
 import ke.co.ftw.ftnadmin.domain.ApartmentForm
+import ke.co.ftw.ftnadmin.domain.Gps
+import ke.co.ftw.ftnadmin.domain.GpsPoint
 import ke.co.ftw.ftnadmin.domain.Site
 import ke.co.ftw.ftnadmin.ui.common.Loadable
 import ke.co.ftw.ftnadmin.ui.common.apiResult
@@ -180,6 +182,8 @@ data class ApartmentFormUiState(
     val loading: Boolean = false,
     val isNew: Boolean = true,
     val form: ApartmentForm = ApartmentForm(),
+    /** The GPS box as typed ("-1.2921, 36.8219" or a Google Maps link); read when saving. Blank = no point. */
+    val gpsText: String = "",
     val allRouters: List<Site> = emptyList(),
     /** On create: the routers to link. On edit the routers are linked and unlinked from the apartment page. */
     val routerIds: Set<String> = emptySet(),
@@ -214,7 +218,8 @@ class ApartmentFormViewModel(
                         { a ->
                             cur.copy(
                                 loading = false,
-                                form = ApartmentForm(a.name, a.address, a.notes, a.caretaker, a.landlord),
+                                form = ApartmentForm(a.name, a.address, a.notes, a.caretaker, a.landlord, a.gps),
+                                gpsText = a.gps?.text.orEmpty(),
                             )
                         },
                         { e -> cur.copy(loading = false, error = e.userMessage()) },
@@ -232,6 +237,8 @@ class ApartmentFormViewModel(
 
     fun onNotes(v: String) = edit { it.copy(notes = v) }
 
+    fun onGps(v: String) = _state.update { it.copy(gpsText = v, error = null, fieldErrors = emptyMap()) }
+
     fun onCaretaker(c: ApartmentContact) = edit { it.copy(caretaker = c) }
 
     fun onLandlord(c: ApartmentContact) = edit { it.copy(landlord = c) }
@@ -241,10 +248,20 @@ class ApartmentFormViewModel(
     fun save() {
         val s = _state.value
         if (!s.canSave) return
+        // The GPS box is checked here, before any call: a typo should not cost a round trip.
+        val point: GpsPoint? = when (val g = GpsPoint.parse(s.gpsText)) {
+            Gps.Empty -> null
+            is Gps.Ok -> g.point
+            is Gps.Bad -> {
+                _state.update { it.copy(fieldErrors = mapOf("gps" to g.message), error = "Some fields need fixing.") }
+                return
+            }
+        }
+        val form = s.form.copy(gps = point)
         _state.update { it.copy(saving = true, error = null, fieldErrors = emptyMap()) }
         viewModelScope.launch {
             val r = apiResult {
-                if (id == null) repo.create(s.form, s.routerIds.toList()) else repo.update(id, s.form)
+                if (id == null) repo.create(form, s.routerIds.toList()) else repo.update(id, form)
             }
             _state.update { cur ->
                 r.fold(

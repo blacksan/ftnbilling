@@ -136,7 +136,7 @@ func runDBCommand(cmd string, args []string, getenv func(string) string, out io.
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(out, "\nMAC conflicts: %d open flat(s) share a MAC with another flat (or have a malformed one). They are not provisioned until fixed:\n", counts.MACConflicts)
+			fmt.Fprintf(out, "\nMAC conflicts: %d open house(s) share a MAC with another house (or have a malformed one). They are not provisioned until fixed:\n", counts.MACConflicts)
 			for _, l := range store.Conflicts(d) {
 				fmt.Fprintf(out, "  - %s\n", l)
 			}

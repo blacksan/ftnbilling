@@ -116,7 +116,7 @@ func TestMigrateV5ToV6FlagsDuplicateMACs(t *testing.T) {
 		if problems := Validate(d); len(problems) != 0 {
 			t.Errorf("flagged data must be importable: %v", problems)
 		}
-		if lines := Conflicts(d); len(lines) != 3 || !strings.Contains(strings.Join(lines, "\n"), "used by flat Flat 1 (BBB222) in Block B") {
+		if lines := Conflicts(d); len(lines) != 3 || !strings.Contains(strings.Join(lines, "\n"), "used by house Flat 1 (BBB222) in Block B") {
 			t.Errorf("conflict report: %v", lines)
 		}
 	})
@@ -214,7 +214,7 @@ func TestValidateReportsGlobalDuplicates(t *testing.T) {
 	d.Accounts["a1"] = Account{ID: "a1", SiteID: "s1", Code: "AAA111", Flat: "1", MAC: "AA:BB:CC:DD:EE:01"}
 	d.Accounts["a2"] = Account{ID: "a2", SiteID: "s2", Code: "BBB222", Flat: "1", MAC: "AA:BB:CC:DD:EE:01"}
 	problems := Validate(d)
-	if len(problems) != 1 || !strings.Contains(problems[0], "more than one open flat") {
+	if len(problems) != 1 || !strings.Contains(problems[0], "more than one open house") {
 		t.Fatalf("%v", problems)
 	}
 	a := d.Accounts["a2"]

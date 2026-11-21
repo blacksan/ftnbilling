@@ -15,7 +15,7 @@ import (
 
 // ErrNoFreeIP means a building's static range (.60 to the last host of its
 // customer subnet) is full.
-var ErrNoFreeIP = errors.New("no free address left in this building's static range")
+var ErrNoFreeIP = errors.New("no free address left in this router's static range")
 
 // defaultCustomerSubnet is the subnet a building without its own setting uses
 // (the same default as sites.ApplyDefaults).
@@ -198,7 +198,7 @@ func (s *Service) AdoptLeases(ctx context.Context, siteID string) (AdoptResult, 
 				continue
 			}
 			if o, taken := owner[ip]; taken && o != a.ID {
-				res.Skipped = append(res.Skipped, fmt.Sprintf("%s: %s is already the address of another flat", a.Flat, ip))
+				res.Skipped = append(res.Skipped, fmt.Sprintf("%s: %s is already the address of another house", a.Flat, ip))
 				continue
 			}
 			if a.IP != "" {
@@ -212,7 +212,7 @@ func (s *Service) AdoptLeases(ctx context.Context, siteID string) (AdoptResult, 
 		}
 		if changed {
 			d.AddEvent(store.Event{Time: s.now(), SiteID: siteID, Kind: "audit",
-				Msg: fmt.Sprintf("Leases adopted from the router: %d flat(s) keep their current address", len(res.Adopted))})
+				Msg: fmt.Sprintf("Leases adopted from the router: %d house(s) keep their current address", len(res.Adopted))})
 			return nil
 		}
 		return store.ErrNoChange

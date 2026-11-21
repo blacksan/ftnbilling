@@ -4,8 +4,8 @@
 {{if $o.TestMode}}<div class="banner" role="alert"><b>TEST_MODE is on.</b> Test payments grant free access.</div>{{end}}
 <div class="stats">
 {{template "stat" (dict "K" "Money in today" "V" (kes $o.Today) "S" (printf "Yesterday %s" (kes $o.Yesterday)) "Icon" "cash" "Feature" true "Spark" $o.Spark "Href" "/admin/payments")}}
-{{template "stat" (dict "K" "Active flats" "V" $o.Active "Of" (printf "of %d" $o.TotalAccts) "S" (printf "%d end within 7 days" $o.Expiring7) "Icon" "accounts" "Tone" "ok" "Href" "/admin/accounts?tab=active")}}
-{{template "stat" (dict "K" "Online now" "V" $o.Online "S" "flats pulling traffic" "Icon" "live" "Href" "/admin/live")}}
+{{template "stat" (dict "K" "Active houses" "V" $o.Active "Of" (printf "of %d" $o.TotalAccts) "S" (printf "%d end within 7 days" $o.Expiring7) "Icon" "accounts" "Tone" "ok" "Href" "/admin/accounts?tab=active")}}
+{{template "stat" (dict "K" "Online now" "V" $o.Online "S" "houses pulling traffic" "Icon" "live" "Href" "/admin/live")}}
 {{template "stat" (dict "K" "Routers online" "V" $o.RoutersOnline "Of" (printf "of %d" $o.RoutersTotal) "S" (printf "%d need a look" (sub $o.RoutersTotal $o.RoutersOnline)) "Icon" "sites" "Tone" "info" "Href" "/admin/routers")}}
 {{template "stat" (dict "K" "Unmatched" "V" $o.Unmatched "S" "payments to assign" "Icon" "unmatched" "Tone" (cond (gt $o.Unmatched 0) "warn" "") "Href" "/admin/unmatched")}}
 </div>
@@ -15,8 +15,8 @@
 {{if $o.Feed}}<ul class="feed">{{range $o.Feed}}<li><time>{{.Time}}</time><span>{{if .Href}}<a href="{{.Href}}">{{.Text}}</a>{{else}}{{.Text}}{{end}}</span></li>{{end}}</ul>
 {{else}}<p class="muted">Quiet so far. Payments and plan changes show here as they happen.</p>{{end}}</section>
 <section class="panel" aria-labelledby="h-renew"><div class="panel-h"><h2 id="h-renew">Renewals in 48 hours</h2><a href="/admin/accounts?tab=active">Subscribers</a></div>
-{{if $o.Renewals}}<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr><th>Flat</th><th>Plan</th><th>Router</th><th>Ends</th><th class="n">Left</th></tr></thead><tbody>
-{{range $o.Renewals}}<tr><td class="who" data-label="Flat"><b><a href="/admin/accounts/view?code={{.Code}}">{{.Flat}}</a></b><span>{{.Tenant}}</span></td><td data-label="Plan">{{.Package}}</td><td data-label="Router">{{.Router}}</td><td data-label="Ends">{{.Expires}}</td><td class="n" data-label="Left">{{.Left}}</td></tr>{{end}}</tbody></table></div>
+{{if $o.Renewals}}<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr><th>House number</th><th>Plan</th><th>Router</th><th>Ends</th><th class="n">Left</th></tr></thead><tbody>
+{{range $o.Renewals}}<tr><td class="who" data-label="House number"><b><a href="/admin/accounts/view?code={{.Code}}">{{.Flat}}</a></b><span>{{.Tenant}}</span></td><td data-label="Plan">{{.Package}}</td><td data-label="Router">{{.Router}}</td><td data-label="Ends">{{.Expires}}</td><td class="n" data-label="Left">{{.Left}}</td></tr>{{end}}</tbody></table></div>
 {{else}}<p class="muted nil">Nobody's plan ends in the next two days.</p>{{end}}</section>
 <section class="panel" aria-labelledby="h-exp"><div class="panel-h"><h2 id="h-exp">Plans ending, next 14 days</h2></div>{{$o.Expiries}}</section>
 </div>
@@ -33,8 +33,8 @@
 <dl class="kv"><dt>Active, not seen for 7 days</dt><dd>{{$o.AtRisk}}</dd><dt>Plans ending in 7 days</dt><dd>{{$o.Expiring7}}</dd><dt>Gone for over 30 days</dt><dd>{{$o.Churned}}</dd></dl></section>
 </div></div>
 {{if $o.Tasks}}<section class="panel" aria-labelledby="h-tasks"><div class="panel-h"><h2 id="h-tasks">Pending router actions</h2></div>
-<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>Flat code</th><th>What</th><th class="n">Tries</th><th>Next try</th><th>Last error</th></tr></thead><tbody>
-{{$d := .}}{{range $o.Tasks}}<tr>{{if $d.Data.ShowSite}}<td data-label="Router">{{index $d.Data.SiteNames .SiteID}}</td>{{end}}<td data-label="Flat code"><code>{{.Code}}</code></td><td data-label="What">{{.Reason}}</td><td class="n" data-label="Tries">{{.Attempts}}</td><td data-label="Next try">{{eat .NextTry}}</td><td class="bad" data-label="Error">{{.LastErr}}</td></tr>{{end}}</tbody></table></div>
+<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>Account code</th><th>What</th><th class="n">Tries</th><th>Next try</th><th>Last error</th></tr></thead><tbody>
+{{$d := .}}{{range $o.Tasks}}<tr>{{if $d.Data.ShowSite}}<td data-label="Router">{{index $d.Data.SiteNames .SiteID}}</td>{{end}}<td data-label="Account code"><code>{{.Code}}</code></td><td data-label="What">{{.Reason}}</td><td class="n" data-label="Tries">{{.Attempts}}</td><td data-label="Next try">{{eat .NextTry}}</td><td class="bad" data-label="Error">{{.LastErr}}</td></tr>{{end}}</tbody></table></div>
 <p class="muted" style="margin:10px 0 0">These retry on their own, from 5 seconds up to 5 minutes, and survive a restart.</p></section>{{end}}
 {{template "afoot" .}}{{end}}
 
@@ -49,7 +49,7 @@
 <nav class="tabs" aria-label="Filter subscribers">
 {{range $t := (seq "all|All" "active|Active" "expired|Expired" "suspended|Suspended" "new|New" "conflict|MAC conflict")}}{{$k := index (split $t "|") 0}}{{$l := index (split $t "|") 1}}<a class="tab" href="/admin/accounts?tab={{$k}}{{if $d.Data.Q}}&amp;q={{$d.Data.Q}}{{end}}"{{if eq $k $d.Data.Tab}} aria-current="page"{{end}}>{{$l}}<span class="n">{{index $c $k}}</span></a>{{end}}
 </nav>
-<form class="searchbar" method="get" action="/admin/accounts" role="search"><input type="hidden" name="tab" value="{{.Data.Tab}}"><input name="q" type="search" value="{{.Data.Q}}" placeholder="Flat, name, code, phone or MAC" aria-label="Search subscribers"><button class="ghost" type="submit">Search</button></form>
+<form class="searchbar" method="get" action="/admin/accounts" role="search"><input type="hidden" name="tab" value="{{.Data.Tab}}"><input name="q" type="search" value="{{.Data.Q}}" placeholder="House number, name, code, phone or MAC" aria-label="Search subscribers"><button class="ghost" type="submit">Search</button></form>
 {{if .Data.Rows}}<div class="tw tall"><table class="rs"><thead><tr><th>Customer</th><th>Contact</th><th>Plan</th><th>Expires</th><th>Last seen</th>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>On router</th><th>Status</th></tr></thead><tbody>
 {{range .Data.Rows}}<tr><td class="who"><b><a href="/admin/accounts/view?code={{.A.Code}}">{{.A.Flat}}</a></b><span>{{if .A.Tenant}}{{.A.Tenant}} &middot; {{end}}<code>{{.A.Code}}</code></span></td>
 <td data-label="Contact" class="mono">{{if .A.Phone}}{{.A.Phone}}{{else}}<span class="muted">none</span>{{end}}</td><td data-label="Plan">{{if .Pkg.Name}}{{.Pkg.Name}}{{else}}<span class="muted">no plan</span>{{end}}</td>
@@ -74,16 +74,16 @@
 {{if eq $tab "overview"}}
 <div class="grid c2">
 <section class="panel"><h2>Details</h2><form method="post" action="/admin/accounts/update" class="mt-3 stack-col"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
-<div class="two"><label class="field">Flat label<input name="flat" value="{{$A.Flat}}" required></label><label class="field">Tenant<input name="tenant" value="{{$A.Tenant}}"></label></div>
+<div class="two"><label class="field">House number<input name="flat" value="{{$A.Flat}}" required></label><label class="field">Tenant<input name="tenant" value="{{$A.Tenant}}"></label></div>
 <div class="two"><label class="field">Phone<input name="phone" value="{{$A.Phone}}"></label><label class="field">WhatsApp<input name="whatsapp" value="{{$A.WhatsApp}}" placeholder="0712345678"></label></div>
-<label class="ck"><input type="checkbox" name="wa_same" value="1"> WhatsApp is the same as the phone</label>
+<label class="ck"><input type="checkbox" name="wa_same" value="1"{{if $A.WASamePhone}} checked{{end}}> WhatsApp is the same as the phone</label>
 <label class="ck"><input type="checkbox" name="wa_optout" value="1"{{if $A.WAOptOut}} checked{{end}}> Tenant opted out of WhatsApp messages</label>
 <label class="field">Notes<textarea name="notes" rows="2">{{$A.Notes}}</textarea></label><div><button>Save details</button></div></form></section>
 <div class="stack-col">
 <section class="panel"><h2>Replace the ONT</h2><p class="muted" style="margin:6px 0 10px">Updates the router and ends the session on the old ONT.</p>
 <form method="post" action="/admin/accounts/mac" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <label class="field" style="flex:1;min-width:200px">New ONT WAN MAC<input name="mac" placeholder="AA:BB:CC:DD:EE:FF" required style="font-family:var(--f-mono)"></label><button>Change MAC</button></form>
-<p class="muted" style="margin:10px 0 0">The New devices page lists what the router sees: <a href="/admin/devices">pick a MAC there</a> and attach it to this flat.</p></section>
+<p class="muted" style="margin:10px 0 0">The New devices page lists what the router sees: <a href="/admin/devices">pick a MAC there</a> and attach it to this house.</p></section>
 <section class="panel"><h2>Actions</h2><div class="mt-3 row">
 <form method="post" action="/admin/accounts/suspend"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}"><input type="hidden" name="suspend" value="{{if $A.Suspended}}0{{else}}1{{end}}"><button class="ghost">{{if $A.Suspended}}Unsuspend{{else}}Suspend{{end}}</button></form>
 </div>
@@ -96,38 +96,38 @@
 <form method="post" action="/admin/accounts/package" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <label class="field">New plan<select name="package">{{$cur := $A.PackageID}}{{range .Data.Pkgs}}<option value="{{.ID}}"{{if eq .ID $cur}} selected{{end}}>{{.Name}} ({{.SpeedMbps}} Mbps)</option>{{end}}</select></label>
 <label class="field">Time<select name="mode"><option value="keep">keep current expiry</option><option value="fresh">start fresh from now</option></select></label><button>Change plan</button></form>
-<form class="mt-3" method="post" action="/admin/accounts/endplan" data-confirm="End the current plan now? The flat goes offline."><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}"><button class="ghost">End plan now</button> <span class="muted">expires it at once (record any refund in Payments)</span></form></section>
-<section class="panel"><h2>Apartment and unit</h2>
-<p style="margin:6px 0 10px">{{if $A.ApartmentID}}<a href="/admin/apartments/view?id={{$A.ApartmentID}}">{{.Data.AptName}}</a>, unit <b>{{$A.Unit}}</b>, router {{.Data.AcctSite}}{{else}}<span class="bad">No apartment yet.</span>{{end}}</p>
+<form class="mt-3" method="post" action="/admin/accounts/endplan" data-confirm="End the current plan now? The house goes offline."><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}"><button class="ghost">End plan now</button> <span class="muted">expires it at once (record any refund in Payments)</span></form></section>
+<section class="panel"><h2>Apartment and house number</h2>
+<p style="margin:6px 0 10px">{{if $A.ApartmentID}}<a href="/admin/apartments/view?id={{$A.ApartmentID}}">{{.Data.AptName}}</a>, house number <b>{{$A.Unit}}</b>, router {{.Data.AcctSite}}{{else}}<span class="bad">No apartment yet.</span>{{end}}</p>
 {{if .Data.Problem}}<p class="flash bad" role="status">{{.Data.Problem}}</p>{{end}}
 {{if .CanWrite}}<p class="muted" style="margin:0 0 10px">When the customer moves house: pick the new apartment. The lease and queue leave the old router and are written on the new one, and the account history says so.</p>
 <form method="post" action="/admin/accounts/apartment" class="stack-col" data-confirm="Move this customer? The old router loses their lease and queue."><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
-<div class="two"><label class="field">Apartment<select name="apartment_id" required data-apt-select>{{$cur := $A.ApartmentID}}{{range .Data.AptOpts}}<option value="{{.ID}}" data-routers="{{range $i, $r := .Routers}}{{if $i}},{{end}}{{$r}}{{end}}"{{if eq .ID $cur}} selected{{end}}>{{.Name}}</option>{{end}}</select></label>
-<label class="field">Unit<input name="unit" value="{{$A.Unit}}" required autocomplete="off"></label></div>
+<div class="two"><label class="field">Apartment<select name="apartment_id" required data-apt-select>{{$cur := $A.ApartmentID}}{{range .Data.AptOpts}}<option value="{{.ID}}" data-routers="{{range $i, $r := .Routers}}{{if $i}},{{end}}{{$r}}{{end}}" data-address="{{.Address}}" data-subs="{{.Subscribers}}" data-router-names="{{range $i, $r := .RouterNames}}{{if $i}}, {{end}}{{$r}}{{end}}"{{if eq .ID $cur}} selected{{end}}>{{.Name}}</option>{{end}}</select></label>
+<label class="field">House number<input name="unit" value="{{$A.Unit}}" required autocomplete="off"></label></div>
 <label class="field" data-router-field>Router<select name="site" data-router-select-move><option value="">Automatic (the apartment's only router)</option>{{range .Sites}}<option value="{{.ID}}"{{if eq .ID $A.SiteID}} selected{{end}}>{{.Name}}</option>{{end}}</select></label>
-<div><button>Save apartment and unit</button></div></form>{{end}}</section>
-{{if .Data.MoveTo}}<section class="panel"><h2>Move to another router</h2><p class="muted" style="margin:6px 0 10px">Removes the flat from this router and creates it on the new one. Its ONT must be on that router's network. Type the account code <b>{{$A.Code}}</b> to confirm.</p>
+<div><button>Save apartment and house number</button></div></form>{{end}}</section>
+{{if .Data.MoveTo}}<section class="panel"><h2>Move to another router</h2><p class="muted" style="margin:6px 0 10px">Removes the house from this router and creates it on the new one. Its ONT must be on that router's network. Type the account code <b>{{$A.Code}}</b> to confirm.</p>
 <form method="post" action="/admin/accounts/move" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <label class="field">New router<select name="to">{{range .Data.MoveTo}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label><label class="field">Account code<input name="confirm" placeholder="type code" size="8" required autocomplete="off" style="text-transform:uppercase"></label><button class="ghost">Move</button></form></section>{{end}}
 </div>
 {{template "acct_cards" .}}
-<section class="panel danger"><h2 class="bad">Delete account</h2><p class="muted" style="margin:6px 0 10px">Removes the flat and its router entries. Payments stay in the ledger. Type the account code <b>{{$A.Code}}</b> to confirm.</p>
+<section class="panel danger"><h2 class="bad">Delete account</h2><p class="muted" style="margin:6px 0 10px">Removes the house and its router entries. Payments stay in the ledger. Type the account code <b>{{$A.Code}}</b> to confirm.</p>
 <form method="post" action="/admin/accounts/delete" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}"><input name="confirm" placeholder="type code" size="8" required autocomplete="off" style="text-transform:uppercase" aria-label="Account code"><button>Delete account</button></form></section>
 {{else if eq $tab "payments"}}
 {{if .Data.Payments}}<div class="tw"><table class="rs"><thead><tr><th>Paid</th><th>Code</th><th>Method</th><th class="n">KES</th><th>Plan</th><th>Status</th><th>Note</th></tr></thead><tbody>
 {{range .Data.Payments}}<tr><td data-label="Paid">{{eat .PaidAt}}</td><td data-label="Code" class="mono">{{.Key}}</td><td data-label="Method">{{.Method}}</td><td class="n" data-label="KES">{{.AmountKES}}</td><td data-label="Plan">{{(pkgOf $d.Data.PkgMap .PackageID).Name}}</td><td data-label="Status"><span class="pill {{.Status}}">{{.Status}}</span></td><td data-label="Note">{{.Note}}</td></tr>{{end}}</tbody></table></div>
-{{else}}{{template "empty" (dict "Title" "No payments yet" "Text" "When this flat pays by M-Pesa, voucher or cash, it shows here." "Acts" (acts (printf "Record a payment|/admin/payments/record?account=%s" $A.Code)))}}{{end}}
-<p><a href="/admin/payments/record?account={{$A.Code}}">Record an M-Pesa payment for this flat</a></p>
+{{else}}{{template "empty" (dict "Title" "No payments yet" "Text" "When this house pays by M-Pesa, voucher or cash, it shows here." "Acts" (acts (printf "Record a payment|/admin/payments/record?account=%s" $A.Code)))}}{{end}}
+<p><a href="/admin/payments/record?account={{$A.Code}}">Record an M-Pesa payment for this house</a></p>
 {{else if eq $tab "usage"}}
 {{with .Data.Usage}}<div class="stats">
 {{template "stat" (dict "K" "Downloaded" "V" (printf "%.1f GB" .DownGB) "S" "this month" "Icon" "metrics" "Tone" "info")}}
 {{template "stat" (dict "K" "Uploaded" "V" (printf "%.1f GB" .UpGB) "S" "this month" "Icon" "metrics")}}
 {{template "stat" (dict "K" "Peak speed" "V" (printf "%.0f Mbps" .PeakMbps) "S" (printf "plan %.0f Mbps" .CapMbps) "Icon" "pulse")}}
-</div>{{else}}<div class="panel"><p class="muted nil">No usage has been recorded for this flat this month yet.</p></div>{{end}}
+</div>{{else}}<div class="panel"><p class="muted nil">No usage has been recorded for this house this month yet.</p></div>{{end}}
 <p><a class="btn ghost" href="/admin/metrics/flat?code={{$A.Code}}">Open the full usage page</a></p>
 {{else}}
 {{if .Data.Events}}<section class="panel"><ul class="feed">{{range .Data.Events}}<li><time>{{eat .Time}}</time><span>{{.Msg}}</span></li>{{end}}</ul></section>
-{{else}}{{template "empty" (dict "Title" "No events yet" "Text" "Reminders, plan changes and router actions for this flat are listed here.")}}{{end}}
+{{else}}{{template "empty" (dict "Title" "No events yet" "Text" "Reminders, plan changes and router actions for this house are listed here.")}}{{end}}
 {{end}}
 {{template "afoot" .}}{{end}}
 
@@ -138,16 +138,35 @@
 {{template "stat" (dict "K" "Suggested swaps" "V" .Data.Suggested "S" "look like a changed ONT" "Icon" "accounts" "Tone" "warn")}}
 </div>
 {{if .Data.HostErr}}<div class="banner" role="alert">Could not read the router: {{.Data.HostErr}}</div>{{end}}
+{{if .Data.Regs}}<section class="panel" id="registrations"><h2>Waiting for approval <span class="n">{{len .Data.Regs}}</span></h2>
+<p class="muted">These people registered on the payment page. Pick the device they are using, then approve. Their device stays offline until you do. Devices are listed with the one first seen closest to the request first; one is ticked only when it is the only device first seen within 10 minutes of the request.</p>
+{{if $.Data.RegGroups}}{{if .CanWrite}}<div class="row">{{range $.Data.RegGroups}}<form method="post" action="/admin/registrations/reject-all" data-confirm="Reject all {{.N}} waiting registrations of {{.SiteName}}? Their details are erased."><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{if .SiteID}}{{.SiteID}}{{else}}none{{end}}"><button class="ghost sm">Reject all {{.N}} for {{.SiteName}}</button></form>{{end}}</div>{{end}}{{end}}
+<div class="tw"><table class="rs"><thead><tr><th>Who</th><th>Where</th><th>When</th><th>Device and decision</th></tr></thead><tbody>
+{{range $g := .Data.Regs}}<tr><td class="who"><b>{{$g.Name}}</b><span class="muted">{{$g.Phone}}{{if $g.Email}} &middot; {{$g.Email}}{{end}}</span>{{if $g.DeviceName}}<span class="muted">Device name given: {{$g.DeviceName}}</span>{{end}}</td>
+<td data-label="Where">{{if $g.Unassigned}}<i>{{$g.Building}}</i>, house number {{$g.Unit}}<br><span class="muted">no router yet</span>{{else}}{{$g.ApartmentName}}, house number {{$g.Unit}}{{if $d.Data.ShowSite}}<br><span class="muted">{{$g.SiteName}}</span>{{end}}{{end}}</td>
+<td data-label="When">{{eats $g.CreatedAt}}</td>
+<td>{{if $d.CanWrite}}{{if $g.Unassigned}}<form method="post" action="/admin/registrations/assign" class="stack-col"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$g.ID}}">
+<p class="muted" style="margin:0">The visitor's address matches more than one router, so they typed the apartment name. Choose the router and apartment.</p>
+<label class="field">Router and apartment<select name="target"><option value="">Choose</option>{{range $d.Data.AssignChoices}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select></label>
+<div class="row"><button class="sm">Assign</button></div></form>
+{{else}}<form method="post" action="/admin/registrations/approve" class="stack-col"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$g.ID}}">
+<fieldset class="field" style="border:0;padding:0;margin:0"><legend>Device</legend>
+{{range $g.Candidates}}<label class="ck" style="display:block"><input type="radio" name="mac" value="{{.MAC}}"{{if .Likely}} checked{{end}}> <span class="mono" style="font-family:var(--f-mono)">{{.MAC}}</span> &middot; {{if .Vendor}}{{.Vendor}}{{else}}unknown{{end}}{{if .HostName}} &middot; <b>{{.HostName}}</b>{{end}}{{if .Port}} &middot; port {{.Port}}{{end}}{{if .Online}} &middot; online{{end}}<br><span class="muted">first seen {{eats .FirstSeen}} &middot; last seen {{eats .LastSeen}}{{if .NameMatch}} &middot; <b>matches the name given</b>{{end}}{{if .Likely}} &middot; likely{{end}}</span></label>
+{{else}}<p class="muted" style="margin:0">No device seen yet.</p>{{end}}</fieldset>
+<label class="field">or type a MAC<input name="mac_typed" placeholder="AA:BB:CC:DD:EE:FF" style="font-family:var(--f-mono)" autocomplete="off"></label>
+{{if $g.GuessMAC}}<p class="muted" style="margin:0">Likely: the only device first seen within 10 minutes of the request. Check it before approving.</p>{{end}}
+<div class="row"><button class="sm">Approve</button></div></form>{{end}}
+<form method="post" action="/admin/registrations/reject" class="mt-2" data-confirm="Reject this registration? The details are erased."><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$g.ID}}"><button class="ghost sm">Reject</button></form>{{else}}<span class="muted">Only an owner or operator can decide.</span>{{end}}</td></tr>{{end}}</tbody></table></div></section>{{end}}
 <nav class="tabs" aria-label="Which devices"><a class="tab" href="/admin/devices?online=1"{{if .Data.OnlineOnly}} aria-current="page"{{end}}>Online</a><a class="tab" href="/admin/devices"{{if not .Data.OnlineOnly}} aria-current="page"{{end}}>All<span class="n">{{.Data.Count}}</span></a></nav>
 {{if .Data.Rows}}<div class="tw tall"><table class="rs"><thead><tr><th>MAC</th><th>Vendor and host</th><th>IP</th>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>Source</th><th>Last seen</th><th>Actions</th></tr></thead><tbody>
 {{range $i, $r := .Data.Rows}}<tr>
 <td class="who"><b class="mono" style="font-family:var(--f-mono);font-size:13px">{{$r.MAC}}</b><span><span class="pill {{if $r.Online}}online{{else}}offline{{end}}">{{if $r.Online}}online{{else}}offline{{end}}</span></span></td>
 <td data-label="Vendor">{{if $r.Vendor}}{{$r.Vendor}}{{else}}<span class="muted">unknown</span>{{end}}{{if $r.HostName}}<br><span class="muted">{{$r.HostName}}</span>{{end}}</td>
-<td data-label="IP" class="mono">{{$r.IP}}</td>{{if $d.Data.ShowSite}}<td data-label="Router">{{$r.SiteName}}</td>{{end}}
+<td data-label="IP" class="mono">{{if $r.IP}}{{$r.IP}}{{else if $r.AddrNote}}<span class="muted" style="font-family:inherit">{{$r.AddrNote}}</span>{{end}}</td>{{if $d.Data.ShowSite}}<td data-label="Router">{{$r.SiteName}}</td>{{end}}
 <td data-label="Source">{{$r.Source}} <span class="muted">{{$r.Hits}}x</span></td>
 
 <td data-label="Last seen">{{eats $r.LastSeen}}</td>
-<td{{if $r.BelongsTo}} class="act-wrap"{{end}}>{{if $r.BelongsTo}}{{$b := $r.BelongsTo}}<p class="belongs"><b>Belongs to {{$b.Customer}} ({{$b.Apartment}}, unit {{$b.Unit}})</b></p>
+<td{{if $r.BelongsTo}} class="act-wrap"{{end}}>{{if $r.BelongsTo}}{{$b := $r.BelongsTo}}<p class="belongs"><b>Belongs to {{$b.Customer}} ({{$b.Apartment}}, house number {{$b.Unit}})</b></p>
 <div class="row" style="gap:6px"><button type="button" class="sm" disabled title="This MAC belongs to a customer of another apartment">Create customer</button><button type="button" class="ghost sm" disabled title="This MAC belongs to a customer of another apartment">Attach</button>
 {{if $d.CanWrite}}<details style="position:relative"><summary class="btn sm" style="display:inline-flex">Move customer here</summary><div class="card" style="position:absolute;right:0;z-index:5;min-width:300px">
 <form method="post" action="/admin/devices/move" class="stack-col"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$r.SiteID}}"><input type="hidden" name="mac" value="{{$r.MAC}}">
@@ -158,10 +177,10 @@
 {{if $r.Suggested}}<form class="mb-2" method="post" action="/admin/devices/attach"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$r.SiteID}}"><input type="hidden" name="mac" value="{{$r.MAC}}"><input type="hidden" name="acct" value="{{$r.Suggested.Code}}">
 <p class="bad" style="margin:0 0 6px">Possible ONT swap: {{$r.Suggested.Flat}}</p><p class="muted" style="margin:0 0 6px">{{$r.Suggested.Reason}}</p><button class="sm">Replace MAC of {{$r.Suggested.Flat}}</button></form>{{end}}
 <form class="row" method="post" action="/admin/devices/attach"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$r.SiteID}}"><input type="hidden" name="mac" value="{{$r.MAC}}">
-<input name="acct" list="pk{{$i}}" placeholder="search flat or code" required size="16" autocomplete="off" aria-label="Flat to attach to"><datalist id="pk{{$i}}">{{range $r.Pick}}<option value="{{.Code}}">{{.Flat}}{{if .Stale}} (MAC not seen lately){{end}}</option>{{end}}</datalist><button class="sm">Attach</button></form></div></details>
+<input name="acct" list="pk{{$i}}" placeholder="search house number or code" required size="16" autocomplete="off" aria-label="House number to attach to"><datalist id="pk{{$i}}">{{range $r.Pick}}<option value="{{.Code}}">{{.Flat}}{{if .Stale}} (MAC not seen lately){{end}}</option>{{end}}</datalist><button class="sm">Attach</button></form></div></details>
 <form class="i" method="post" action="/admin/devices/dismiss"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{$r.SiteID}}"><input type="hidden" name="mac" value="{{$r.MAC}}"><button class="ghost sm">Dismiss</button></form></div>{{end}}</td></tr>{{end}}</tbody></table></div>
-<p class="muted">Attach gives a device to an existing flat (an ONT swap). Dismiss hides a device that is not a customer; it comes back if it opens the portal.</p>
-{{else}}{{template "empty" (dict "Title" "Nothing new on the network." "Text" "Every device the routers can see already belongs to a flat. New ONTs show up here the moment they connect.")}}{{end}}
+<p class="muted">Attach gives a device to an existing house (an ONT swap). Dismiss hides a device that is not a customer; it comes back if it opens the portal.</p>
+{{else}}{{template "empty" (dict "Title" "Nothing new on the network." "Text" "Every device the routers can see already belongs to a house. New ONTs show up here the moment they connect.")}}{{end}}
 {{template "afoot" .}}{{end}}
 
 {{define "admin_payments"}}{{template "ahead" .}}{{$F := .Data.F}}{{$c := .Data.PCnt}}{{$d := .}}
@@ -170,7 +189,7 @@
 {{template "stat" (dict "K" "Last 7 days" "V" (kes .Data.PWeek) "S" "money received" "Icon" "cash")}}
 {{template "stat" (dict "K" "This month" "V" (kes .Data.PMonth) "S" "money received" "Icon" "cash" "Tone" "info")}}
 {{template "stat" (dict "K" "M-Pesa share" "V" (printf "%d%%" .Data.PShare) "S" "of this month" "Icon" "payments" "Tone" "ok")}}
-{{template "stat" (dict "K" "Unmatched" "V" (index $c "unmatched") "S" "need a flat" "Icon" "unmatched" "Tone" (cond (gt (index $c "unmatched") 0) "warn" "") "Href" "/admin/unmatched")}}
+{{template "stat" (dict "K" "Unmatched" "V" (index $c "unmatched") "S" "need a house" "Icon" "unmatched" "Tone" (cond (gt (index $c "unmatched") 0) "warn" "") "Href" "/admin/unmatched")}}
 </div>
 <nav class="tabs" aria-label="Payment filter">
 <a class="tab" href="/admin/payments"{{if eq .Data.PTab "all"}} aria-current="page"{{end}}>All<span class="n">{{index $c "all"}}</span></a>
@@ -185,7 +204,7 @@
 <label class="field">From<input type="date" name="from" value="{{$F.From}}"></label><label class="field">To<input type="date" name="to" value="{{$F.To}}"></label>
 <label class="field">Method<select name="method"><option value="">All</option>{{range .Data.Methods}}<option{{if eq . $F.Method}} selected{{end}}>{{.}}</option>{{end}}</select></label>
 <label class="field">Status<select name="status"><option value="">All</option>{{range seq "applied" "unmatched" "refunded" "ignored"}}<option{{if eq . $F.Status}} selected{{end}}>{{.}}</option>{{end}}</select></label>
-<label class="field">Search<input name="q" value="{{$F.Q}}" placeholder="code, phone, name, flat" size="22"></label><button>Filter</button> <a class="btn ghost" href="/admin/payments">Clear</a></form></details>
+<label class="field">Search<input name="q" value="{{$F.Q}}" placeholder="code, phone, name, house number" size="22"></label><button>Filter</button> <a class="btn ghost" href="/admin/payments">Clear</a></form></details>
 <p class="muted">Showing {{.Data.Tot.Count}} payment{{if ne .Data.Tot.Count 1}}s{{end}}{{if gt .Data.Total .Data.Limit}}, the first {{.Data.Limit}} (the CSV has all){{end}}. Money received in this view: <b>{{kes .Data.Tot.Revenue}}</b>. Vouchers and free grants are not money.{{range .Data.Tot.MethodSeq}} {{.}} {{kes (index $.Data.Tot.ByMethod .)}}.{{end}}</p>
 {{if .Data.Rows}}<div class="tw tall"><table class="rs"><thead><tr><th>Subscriber</th><th>Receipt</th><th>Method</th><th>Status</th><th class="n">Amount</th><th>Paid at</th>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>Note</th></tr></thead><tbody>
 {{range .Data.Rows}}<tr><td class="who">{{if .A.Code}}<b><a href="/admin/accounts/view?code={{.A.Code}}">{{.A.Flat}}</a></b><span>{{.P.Phone}} {{.P.Name}}</span>{{else}}<b>{{.P.BillRef}}</b><span>{{.P.Phone}} {{.P.Name}}</span>{{end}}</td>
@@ -196,9 +215,9 @@
 
 {{define "admin_record"}}{{template "ahead" .}}
 <form method="post" action="/admin/payments/record" class="panel" style="max-width:820px"><input type="hidden" name="_csrf" value="{{.CSRF}}">
-<p class="muted" style="margin:0 0 14px">For money that reached the Paybill or Till and shows on the M-Pesa statement. It applies the plan to the flat exactly like an automatic payment, adding time from the current expiry. Each transaction code can be recorded once.</p>
+<p class="muted" style="margin:0 0 14px">For money that reached the Paybill or Till and shows on the M-Pesa statement. It applies the plan to the house exactly like an automatic payment, adding time from the current expiry. Each transaction code can be recorded once.</p>
 <div class="row">
-<label class="field">Subscriber<select name="account" required><option value="">Choose a flat</option>{{$c := .Data.Code}}{{range .Data.Accounts}}<option value="{{.Code}}"{{if eq .Code $c}} selected{{end}}>{{.Flat}} ({{.Code}})</option>{{end}}</select></label>
+<label class="field">Subscriber<select name="account" required><option value="">Choose a house</option>{{$c := .Data.Code}}{{range .Data.Accounts}}<option value="{{.Code}}"{{if eq .Code $c}} selected{{end}}>{{.Flat}} ({{.Code}})</option>{{end}}</select></label>
 <label class="field">M-Pesa transaction code<input name="trans" value="{{.Data.Trans}}" placeholder="SGL7K2M9XA" pattern="[A-Za-z0-9]{10}" maxlength="10" style="text-transform:uppercase;font-family:var(--f-mono)" required></label>
 <label class="field">Amount (KES)<input name="amount" id="amt" data-autopkg="pkg" type="number" min="1" value="{{if .Data.Amount}}{{.Data.Amount}}{{end}}" required style="width:130px"></label>
 <label class="field">Payer phone<input name="phone" value="{{.Data.Phone}}" placeholder="0712345678"></label>
@@ -215,28 +234,28 @@
 {{if .Data.Open}}<div class="tw"><table class="rs"><thead><tr>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>Paid</th><th>Receipt</th><th class="n">KES</th><th>Payer</th><th>Typed account</th><th>Why</th><th>Decide</th></tr></thead><tbody>
 {{range .Data.Open}}<tr>{{if $d.Data.ShowSite}}<td data-label="Router">{{index $d.Data.SiteNames .P.SiteID}}</td>{{end}}<td data-label="Paid">{{eat .P.PaidAt}}</td><td data-label="Receipt" class="mono">{{.P.Key}}</td><td class="n" data-label="KES">{{.P.AmountKES}}</td><td data-label="Payer">{{.P.Phone}} {{.P.Name}}</td><td data-label="Typed">{{.P.BillRef}}</td><td data-label="Why" class="nw">{{.P.Note}}</td>
 <td style="min-width:300px;padding:10px 14px"><form class="row" method="post" action="/admin/unmatched/assign"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="key" value="{{.P.Key}}">{{$pa := .P.AccountID}}{{$amt := .P.AmountKES}}
-<select name="account" aria-label="Flat">{{range $d.Data.Accounts}}<option value="{{.ID}}"{{if eq .ID $pa}} selected{{end}}>{{.Flat}} ({{.Code}})</option>{{end}}</select>
+<select name="account" aria-label="House number">{{range $d.Data.Accounts}}<option value="{{.ID}}"{{if eq .ID $pa}} selected{{end}}>{{.Flat}} ({{.Code}})</option>{{end}}</select>
 <select name="package" aria-label="Plan">{{range $d.Data.Pkgs}}<option value="{{.ID}}"{{if eq .PriceKES $amt}} selected{{end}}>{{.Name}} ({{kes .PriceKES}})</option>{{end}}</select>
 <input name="note" placeholder="note" aria-label="Note"><button class="sm">Assign</button></form>
 <form class="mt-2 row" method="post" action="/admin/unmatched/resolve"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="key" value="{{.P.Key}}"><input name="note" placeholder="note for your records" aria-label="Note">
 <button class="ghost sm" name="status" value="refunded">Mark refunded</button><button class="ghost sm" name="status" value="ignored">Ignore</button></form></td></tr>{{end}}</tbody></table></div>
-{{else}}{{template "empty" (dict "Title" "Nothing waiting." "Text" "Every payment found its flat. Money that cannot be matched lands here for you to decide.")}}{{end}}
+{{else}}{{template "empty" (dict "Title" "Nothing waiting." "Text" "Every payment found its house. Money that cannot be matched lands here for you to decide.")}}{{end}}
 {{if .Data.Done}}<h3>Decided</h3><div class="tw"><table class="rs"><thead><tr><th>Paid</th><th>Receipt</th><th class="n">KES</th><th>Payer</th><th>Status</th><th>Note</th></tr></thead><tbody>
 {{range .Data.Done}}<tr><td data-label="Paid">{{eat .P.PaidAt}}</td><td data-label="Receipt" class="mono">{{.P.Key}}</td><td class="n" data-label="KES">{{.P.AmountKES}}</td><td data-label="Payer">{{.P.Phone}} {{.P.Name}}</td><td data-label="Status"><span class="pill {{.P.Status}}">{{.P.Status}}</span></td><td data-label="Note">{{.P.Note}}</td></tr>{{end}}</tbody></table></div>{{end}}
 {{template "afoot" .}}{{end}}
 
 {{define "admin_assign_lower"}}{{template "ahead" .}}{{$d := .}}
-<div class="card" style="max-width:70ch"><h3>This plan is slower than the flat's current one</h3>
+<div class="card" style="max-width:70ch"><h3>This plan is slower than the house's current one</h3>
 <p>{{.Data.Flat}} is active on <b>{{.Data.Cur.Name}}</b> until {{eat .Data.Expires}}. The payment is for <b>{{.Data.Want.Name}}</b> ({{.Data.Want.SpeedMbps}} Mbps against {{.Data.Cur.SpeedMbps}} Mbps). Choose how to apply it:</p>
-<ul><li><b>Add time at the current plan</b>: the flat keeps {{.Data.Cur.Name}} and its expiry moves later by {{.Data.Want.Name}}'s duration. Nothing gets slower.</li>
-<li><b>Switch to the slower plan</b>: the flat drops to {{.Data.Want.Name}} now, with the remaining time and the new time at that speed.</li></ul>
+<ul><li><b>Add time at the current plan</b>: the house keeps {{.Data.Cur.Name}} and its expiry moves later by {{.Data.Want.Name}}'s duration. Nothing gets slower.</li>
+<li><b>Switch to the slower plan</b>: the house drops to {{.Data.Want.Name}} now, with the remaining time and the new time at that speed.</li></ul>
 <form method="post" action="/admin/unmatched/assign"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="key" value="{{.Data.Key}}"><input type="hidden" name="account" value="{{.Data.Account}}"><input type="hidden" name="package" value="{{.Data.Package}}"><input type="hidden" name="note" value="{{.Data.Note}}"><input type="hidden" name="dup" value="{{.Data.Dup}}">
 <button class="sm" name="lower" value="extend">Add time at the current plan</button> <button class="ghost sm" name="lower" value="switch">Switch to the slower plan</button> <a class="btn ghost sm" href="/admin/unmatched">Cancel</a></form></div>
 {{template "afoot" .}}{{end}}
 
 {{define "admin_assign_dup"}}{{template "ahead" .}}{{$d := .}}
 <div class="card" style="max-width:70ch"><h3>This may be money you already credited</h3>
-<p>This flat has a payment marked paid by hand (<span class="mono">{{.Data.Manual}}</span>) for the same amount in the last 6 hours. If this payment is the real confirmation of that one, crediting it again would give the flat a second period for one payment.</p>
+<p>This house has a payment marked paid by hand (<span class="mono">{{.Data.Manual}}</span>) for the same amount in the last 6 hours. If this payment is the real confirmation of that one, crediting it again would give the house a second period for one payment.</p>
 <form method="post" action="/admin/unmatched/resolve"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="key" value="{{.Data.Key}}"><input type="hidden" name="status" value="ignored"><input type="hidden" name="note" value="{{.Data.DupNote}} ({{.Data.Manual}}); not credited twice">
 <button class="sm">It is the same money: mark it ignored</button></form>
 <form method="post" action="/admin/unmatched/assign" style="margin-top:8px"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="key" value="{{.Data.Key}}"><input type="hidden" name="account" value="{{.Data.Account}}"><input type="hidden" name="package" value="{{.Data.Package}}"><input type="hidden" name="note" value="{{.Data.Note}}"><input type="hidden" name="lower" value="{{.Data.Lower}}"><input type="hidden" name="dup" value="1">
@@ -245,8 +264,8 @@
 
 {{define "admin_orders"}}{{template "ahead" .}}{{$d := .}}
 <p class="muted" style="max-width:70ch">Checkouts started from the payment page. A pending or failed order can be marked paid by hand if you saw the money; it is then recorded as MANUAL-&lt;order&gt;; when the real M-Pesa confirmation of that money arrives it is listed as an ignored duplicate of it and is not credited a second time. Prefer Record payment so the real transaction code is kept. A pending order that gets no payment is marked expired after 15 minutes; a late payment still completes it.</p>
-{{if .Data.Orders}}<div class="tw tall"><table class="rs"><thead><tr>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>Time</th><th>Order</th><th>Flat</th><th>Payer</th><th>Plan</th><th class="n">KES</th><th>Method</th><th>Status</th><th>Receipt</th><th></th></tr></thead><tbody>
-{{range .Data.Orders}}<tr>{{if $d.Data.ShowSite}}<td data-label="Router">{{index $d.Data.SiteNames .SiteID}}</td>{{end}}<td data-label="Time">{{eat .CreatedAt}}</td><td data-label="Order" class="mono">{{.ID}}</td><td data-label="Flat">{{(acctOf $d.Data.AcctMap .AccountID).Flat}}</td><td data-label="Payer">{{.Phone}}</td><td data-label="Plan">{{(pkgOf $d.Data.PkgMap .PackageID).Name}}</td><td class="n" data-label="KES">{{.AmountKES}}</td><td data-label="Method">{{.Method}}</td><td data-label="Status"><span class="pill {{.Status}}">{{.Status}}</span>{{if .Reason}} <span class="muted">{{.Reason}}</span>{{end}}</td><td data-label="Receipt" class="mono">{{.Receipt}}</td>
+{{if .Data.Orders}}<div class="tw tall"><table class="rs"><thead><tr>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>Time</th><th>Order</th><th>House number</th><th>Payer</th><th>Plan</th><th class="n">KES</th><th>Method</th><th>Status</th><th>Receipt</th><th></th></tr></thead><tbody>
+{{range .Data.Orders}}<tr>{{if $d.Data.ShowSite}}<td data-label="Router">{{index $d.Data.SiteNames .SiteID}}</td>{{end}}<td data-label="Time">{{eat .CreatedAt}}</td><td data-label="Order" class="mono">{{.ID}}</td><td data-label="House number">{{(acctOf $d.Data.AcctMap .AccountID).Flat}}</td><td data-label="Payer">{{.Phone}}</td><td data-label="Plan">{{(pkgOf $d.Data.PkgMap .PackageID).Name}}</td><td class="n" data-label="KES">{{.AmountKES}}</td><td data-label="Method">{{.Method}}</td><td data-label="Status"><span class="pill {{.Status}}">{{.Status}}</span>{{if .Reason}} <span class="muted">{{.Reason}}</span>{{end}}</td><td data-label="Receipt" class="mono">{{.Receipt}}</td>
 <td>{{if ne .Status "paid"}}<form class="i" method="post" action="/admin/orders/markpaid"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><button class="ghost sm">Mark paid</button></form>{{end}}</td></tr>{{end}}</tbody></table></div>
 {{else}}{{template "empty" (dict "Title" "No orders yet" "Text" "When a tenant starts a checkout on the portal, it shows here with its status.")}}{{end}}
 {{template "afoot" .}}{{end}}
@@ -259,7 +278,7 @@
 {{template "stat" (dict "K" "Subscribers" "V" .Data.PSubs "S" "on a plan now" "Icon" "accounts" "Tone" "info")}}
 </div>
 <nav class="tabs" aria-label="Plan filter">{{range $t := (seq "all|All" "quick|Quick passes" "monthly|Monthly" "disabled|Disabled")}}{{$k := index (split $t "|") 0}}{{$l := index (split $t "|") 1}}<a class="tab" href="/admin/packages?tab={{$k}}"{{if eq $k $d.Data.Tab}} aria-current="page"{{end}}>{{$l}}<span class="n">{{index $d.Data.Cnt $k}}</span></a>{{end}}</nav>
-<p class="muted" style="max-width:76ch">Changing a speed updates the flats' queues on the routers. Disabled plans are hidden from the payment page; flats that have one keep it. Keep prices unique: Paybill payments are matched to a plan by amount. A plan can be deleted only when no flat has time left on it and no unused voucher exists; otherwise tick Disabled.</p>
+<p class="muted" style="max-width:76ch">Changing a speed updates the houses' queues on the routers. Disabled plans are hidden from the payment page; houses that have one keep it. Keep prices unique: Paybill payments are matched to a plan by amount. A plan can be deleted only when no house has time left on it and no unused voucher exists; otherwise tick Disabled.</p>
 <div class="tw"><table><thead><tr><th>Name</th><th class="n">Minutes</th><th class="n">Mbps</th><th class="n">Price KES</th><th class="n">Subscribers</th><th>Disabled</th><th></th></tr></thead><tbody>
 {{range .Data.Pkgs}}{{$f := printf "f%s" .ID}}<tr>
 <td><input form="{{$f}}" name="name" value="{{.Name}}" aria-label="Name"></td><td class="n"><input form="{{$f}}" name="duration" type="number" min="1" value="{{.DurationMin}}" style="width:96px" aria-label="Minutes"></td>
@@ -296,7 +315,7 @@
 <section class="panel"><h2>Payments</h2><table class="mt-2">
 <tr><td>M-Pesa Daraja</td><td>{{if .Data.Mpesa}}enabled{{else}}disabled (credentials not set){{end}} <a href="/admin/settings/mpesa">M-Pesa settings</a></td></tr><tr><td>WhatsApp</td><td>{{if .Data.WAOn}}set up{{else}}not set up{{end}} <a href="/admin/settings/whatsapp">WhatsApp settings</a></td></tr><tr><td>Email</td><td>{{if .Data.EmailOn}}set up{{else}}not set up{{end}} <a href="/admin/settings/email">Email settings</a></td></tr>
 <tr><td>Test payments</td><td>{{if .Data.Cfg.TestMode}}<span class="bad">ON (free access!)</span>{{else}}off{{end}}</td></tr>
-<tr><td>Paybill account number</td><td>the flat's account code</td></tr>
+<tr><td>Paybill account number</td><td>the house's account code</td></tr>
 <tr><td>Callback URLs</td><td>see <a href="/admin/settings/mpesa">M-Pesa settings</a></td></tr>
 <tr><td>Support phone shown</td><td>{{if .Data.Support}}{{.Data.Support}}{{else}}not set (SUPPORT_PHONE){{end}}</td></tr></table></section>
 <section class="panel"><h2>Database and backups</h2><table class="mt-2">

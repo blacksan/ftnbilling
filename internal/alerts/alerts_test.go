@@ -539,3 +539,22 @@ func TestAnnounceSendsOnceAndIsNotAnAlert(t *testing.T) {
 		t.Fatalf("%v", r.out.texts(notify.ChanEmail))
 	}
 }
+
+// An OLT port that is switched off by the ports-off policy (the owner has not enabled it) is not an outage.
+func TestOLTDownIsQuietWhileThePolicyKeepsThePortOff(t *testing.T) {
+	r := newRig(t, 1)
+	r.in.sites[0].PortsPolicy, r.in.sites[0].EnabledPorts = "off", "ether3"
+	r.run(5*time.Minute, func() { r.olt("s0", false) })
+	if _, ok := r.e.Firing(RuleOLTDown, "s0"); ok {
+		t.Fatal("olt_down fired for a port that is off by policy")
+	}
+	if !oltOffByPolicy(r.in.sites[0], "sfp1") || OLTOffMsg != "OLT port off — enable it in the Ports tab" {
+		t.Fatal("the off-by-policy text or test is wrong")
+	}
+	// the owner enables the OLT port: a down port alerts again
+	r.in.sites[0].EnabledPorts = "ether3,sfp1"
+	r.run(5*time.Minute, func() { r.olt("s0", false) })
+	if _, ok := r.e.Firing(RuleOLTDown, "s0"); !ok {
+		t.Fatal("olt_down must fire once the OLT port is enabled and down")
+	}
+}

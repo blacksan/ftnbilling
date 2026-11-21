@@ -94,6 +94,8 @@ type adminPage struct {
 	OpenAlerts, FailedMsgs     int    // sidebar badges
 	FlashBad                   bool
 	UnregCount, UnmatchedCount int
+	PendingRegs                int // self-registrations waiting for the owner
+	NavDevices                 int // the badge of "New devices": online unknown devices plus waiting registrations
 	Data                       map[string]any
 
 	// Shell and hero (see nav.go): what the sidebar, breadcrumb and page
@@ -134,6 +136,8 @@ func (s *Server) page(r *http.Request, active string) adminPage {
 		p.FailedMsgs = s.ops.Box.Counts()["failed"]
 	}
 	p.UnregCount = s.svc.UnregisteredOnline(sc.Has) // online, unregistered devices only
+	p.PendingRegs = s.svc.PendingRegistrationCount(sc.Has)
+	p.NavDevices = p.UnregCount + p.PendingRegs
 	p.CanWrite = p.Role == store.RoleOwner || p.Role == store.RoleOperator
 	p.Initial = initialOf(p.User)
 	if p.CanWrite {
@@ -350,7 +354,9 @@ func (s *Server) createCustomer(ctx context.Context, in customerForm) (store.Acc
 			_ = s.svc.UpdateAccount(a.ID, a.Flat, a.Tenant, a.Phone, in.Notes)
 		}
 		if in.WhatsApp != "" || in.WASame {
-			_ = s.svc.SetWhatsApp(a.ID, in.WhatsApp, in.WASame, false)
+			if werr := s.svc.SetWhatsApp(a.ID, in.WhatsApp, in.WASame, false); werr != nil && err == nil {
+				err = werr // not silent: a WhatsApp number that was refused must be said
+			}
 		}
 		a, _ = s.svc.GetAccount(a.ID)
 	}
@@ -469,7 +475,7 @@ func (s *Server) adminAccount(w http.ResponseWriter, r *http.Request) {
 		tab = "overview"
 	}
 	p.Data["Tab"] = tab
-	p.Detail, p.H1a, p.H1b, p.Lead = a.Flat, "Flat", a.Flat+".", ""
+	p.Detail, p.H1a, p.H1b, p.Lead = a.Flat, "", a.Flat+".", ""
 	p.Label, p.Href, p.Group = "Subscribers", "/admin/accounts", "Customers"
 	var evs []store.Event
 	s.st.View(func(d *store.Data) {
@@ -570,7 +576,7 @@ func (s *Server) adminAccountPackage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminAccountEndPlan(w http.ResponseWriter, r *http.Request) {
 	id := r.PostFormValue("id")
-	s.back(w, r, s.accountURL(id), msgOr(s.svc.EndPlan(r.Context(), id), "Plan ended. The flat is offline until it buys again."))
+	s.back(w, r, s.accountURL(id), msgOr(s.svc.EndPlan(r.Context(), id), "Plan ended. The house is offline until it buys again."))
 }
 
 func (s *Server) adminAccountDelete(w http.ResponseWriter, r *http.Request) {
@@ -772,7 +778,7 @@ func (s *Server) adminRecordPost(w http.ResponseWriter, r *http.Request) {
 		PackageID: r.PostFormValue("package"), Force: r.PostFormValue("force") == "1", PaidAt: paid, Note: r.PostFormValue("note"),
 	})
 	if errors.Is(err, billing.ErrLowerPlan) {
-		s.back(w, r, "/admin/unmatched", "This flat is active on a faster plan, so the payment was put in the Unmatched list instead of lowering the speed. Assign it there, or record it again with \"apply even if lower speed\" ticked.")
+		s.back(w, r, "/admin/unmatched", "This house is active on a faster plan, so the payment was put in the Unmatched list instead of lowering the speed. Assign it there, or record it again with \"apply even if lower speed\" ticked.")
 		return
 	}
 	if err != nil {
@@ -997,15 +1003,24 @@ func (s *Server) adminDeletePackage(w http.ResponseWriter, r *http.Request) {
 // can pick the router by itself when there is only one.
 type aptOpt struct {
 	ID, Name string
+	Address  string
 	Routers  []string
-	Only     string // the one router, when there is exactly one
+	// RouterNames are the serving routers' names, shown in the picker pop-up.
+	RouterNames []string
+	// Subscribers counts the accounts living in the apartment.
+	Subscribers int
+	Only        string // the one router, when there is exactly one
 }
 
 func (s *Server) apartmentOptions() []aptOpt {
 	var out []aptOpt
 	s.st.View(func(d *store.Data) {
 		for _, a := range d.ApartmentList() {
-			o := aptOpt{ID: a.ID, Name: a.Name, Routers: d.ApartmentSiteIDs(a.ID)}
+			o := aptOpt{ID: a.ID, Name: a.Name, Address: a.Address, Routers: d.ApartmentSiteIDs(a.ID)}
+			for _, id := range o.Routers {
+				o.RouterNames = append(o.RouterNames, d.Sites[id].Name)
+			}
+			o.Subscribers = len(d.OpenAccountsOfApartment(a.ID))
 			if len(o.Routers) == 1 {
 				o.Only = o.Routers[0]
 			}

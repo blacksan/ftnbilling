@@ -15,6 +15,9 @@ import (
 
 // Fixture fills a store with one row of everything, every field set, through
 // one Update. It returns the time used.
+// fp points at a copy of v (apartment GPS is *float64: nil means unknown).
+func fp(v float64) *float64 { return &v }
+
 func Fixture(t testing.TB, s *store.Store) time.Time {
 	t.Helper()
 	at := time.Date(2026, 3, 4, 5, 6, 7, 123456000, time.UTC)
@@ -24,20 +27,20 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 			Join:         store.JoinToken{Hash: "h", ExpiresAt: at, CreatedAt: at, UsedAt: at, UsedFrom: "1.2.3.4"},
 			JoinedAt:     at,
 			WANInterface: "ether1", WANList: "WAN", OLTInterface: "sfp1", VLANID: 20, CustomerSubnet: "10.20.0.0/24",
-			WANCapMbps: 100.5, OLTCapMbps: 1000, FUPTB: 2.5, CustomerPorts: "ether5,ether4", DisabledPorts: "ether6",
+			WANCapMbps: 100.5, OLTCapMbps: 1000, FUPTB: 2.5, CustomerPorts: "ether5,ether4", DisabledPorts: "ether6", PortsPolicy: "off", EnabledPorts: "ether5,ether4",
 			PkgOverrides: map[string]store.PkgOverride{"p1": {Hidden: true, PriceKES: 70}},
 			Address:      "Kilimani Rd", Lat: -1.2921, Lng: 36.8219, GoLive: at, AccessMode: store.AccessIPoE, CreatedAt: at}
 		d.Sites["s222222"] = store.Site{ID: "s222222", Name: "Env", Mode: store.SiteModeEnv, CreatedAt: at}
 		d.Packages["p1"] = store.Package{ID: "p1", Name: "1 Day", Slug: "1-day", DurationMin: 1440, SpeedMbps: 10, PriceKES: 50, Sort: 1}
 		d.Packages["p2"] = store.Package{ID: "p2", Name: "Old", Slug: "old", DurationMin: 60, SpeedMbps: 5, PriceKES: 10, Disabled: true, Deleted: true, Sort: 2}
-		d.Customers["c1"] = store.Customer{ID: "c1", Name: "Alice", Phone: "254711000001", Phone2: "254711000002", WhatsApp: "254711000003", WAOptOut: true,
+		d.Customers["c1"] = store.Customer{ID: "c1", Name: "Alice", Phone: "254711000001", Phone2: "254711000002", WhatsApp: "254711000003", WAOptOut: true, WASamePhone: true,
 			Email: "a@example.com", Notes: "vip", NationalIDEnc: "enc", NationalIDHMAC: "hmac", NationalIDLast4: "1234", AnonymizedAt: at, CreatedAt: at, UpdatedAt: at}
 		d.Equipment["e1"] = store.Equipment{ID: "e1", Kind: store.KindONT, Serial: "SN1", MAC: "AA:BB:CC:DD:EE:01", Model: "F601", Firmware: "1.0",
 			Status: store.EqInstalled, SiteID: "s111111", AccountID: "a1", Notes: "n", InstalledAt: at, CreatedAt: at, UpdatedAt: at}
 		d.Equipment["e2"] = store.Equipment{ID: "e2", Kind: store.KindSplitter, Status: store.EqInStock, CreatedAt: at}
 		d.Equipment["e3"] = store.Equipment{ID: "e3", Kind: store.KindRouter, Serial: "sn1", Status: store.EqInstalled, SiteID: "s111111", CreatedAt: at}
 		d.Accounts["a1"] = store.Account{ID: "a1", SiteID: "s111111", Code: "ABC234", Flat: "Flat 1", Floor: "2", MAC: "AA:BB:CC:DD:EE:01", Tenant: "Alice",
-			Phone: "254711000001", Notes: "n", WhatsApp: "254711000003", WAOptOut: true, PackageID: "p1", ExpiresAt: at, Suspended: true,
+			Phone: "254711000001", Notes: "n", WhatsApp: "254711000003", WAOptOut: true, WASamePhone: true, PackageID: "p1", ExpiresAt: at, Suspended: true,
 			RemindedFor: at, ExpiredFor: at, CustomerID: "c1", ODB: "ODB-1", SplitterID: "e2", SplitterPort: 4, IP: "10.20.0.60", CreatedAt: at,
 			ApartmentID: "ap1", Unit: "Flat 1"}
 		// Flagged by a migration: same MAC as a1, kept, not provisioned.
@@ -48,8 +51,10 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 		d.Apartments["ap1"] = store.Apartment{ID: "ap1", Name: "MG One Central", Address: "Kilimani Rd", Notes: "gate code on the wall",
 			Caretaker: store.ApartmentContact{Name: "Joe", Phone: "+254722000000", Phone2: "+254722000001", Email: "j@example.com", Notes: "n"},
 			Landlord:  store.ApartmentContact{Name: "Mama Wanjiru", Phone: "+254733000000", Phone2: "+254733000001", Email: "w@example.com", Notes: "agent"},
-			CreatedAt: at}
-		d.Apartments["ap2"] = store.Apartment{ID: "ap2", Name: "Second", CreatedAt: at}
+			Lat:       fp(-1.2921), Lng: fp(36.8219), CreatedAt: at}
+		// 0,0 is a real point, not "unset": it must survive a round trip as a point.
+		d.Apartments["ap2"] = store.Apartment{ID: "ap2", Name: "Second", Lat: fp(0), Lng: fp(0), CreatedAt: at}
+		d.Apartments["ap3"] = store.Apartment{ID: "ap3", Name: "No GPS", CreatedAt: at}
 		d.ApartmentSites[store.ApartmentSiteKey("ap1", "s111111")] = store.ApartmentSite{ApartmentID: "ap1", SiteID: "s111111", CreatedAt: at}
 		d.ApartmentSites[store.ApartmentSiteKey("ap1", "s222222")] = store.ApartmentSite{ApartmentID: "ap1", SiteID: "s222222", CreatedAt: at}
 		d.Orders["o1"] = store.Order{ID: "o1", SiteID: "s111111", AccountID: "a1", PackageID: "p1", Phone: "254711000001", Method: "mpesa", AmountKES: 50,
@@ -65,6 +70,9 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 			LastErr: "e", CreatedAt: at}
 		d.EquipmentEvents["ee1"] = store.EquipmentEvent{ID: "ee1", EquipmentID: "e1", Kind: store.EqEvAssigned, FromStatus: "in_stock", ToStatus: "installed",
 			SiteID: "s111111", AccountID: "a1", CustomerID: "c1", Note: "n", Time: at}
+		d.Registrations["r1"] = store.Registration{ID: "r1", SiteID: "s111111", ApartmentID: "", Unit: "B4", Name: "Wanjiru", Phone: "254712345678", Email: "w@example.com",
+			GuessMAC: "AA:BB:CC:DD:EE:09", DeviceName: "Wanjiru's iPhone", Status: store.RegPending, ConsentAt: at, CreatedAt: at}
+		d.Registrations["r2"] = store.Registration{ID: "r2", Unit: "C2", Name: "Otieno", Phone: "254722000111", Building: "Riverside Court", Status: store.RegPending, ConsentAt: at, CreatedAt: at}
 		d.Notes["n1"] = store.Note{ID: "n1", CustomerID: "c1", AccountID: "a1", SiteID: "s111111", EquipmentID: "e1", Text: "hello", Time: at}
 		d.Settings["wa.token"] = store.Setting{Key: "wa.token", Value: "c2VhbGVk", Enc: true, UpdatedAt: at}
 		d.Settings["wa.lang"] = store.Setting{Key: "wa.lang", Value: "sw", UpdatedAt: at}
@@ -539,7 +547,7 @@ func Run(t *testing.T) {
 			t.Fatal(err)
 		}
 		s := h.Reopen().Snapshot()
-		if len(s.Devices) != 0 || len(s.Tasks) != 0 || len(s.Vouchers) != 1 || len(s.ApartmentSites) != 1 || len(s.Apartments) != 1 || len(s.Notes) != 0 {
+		if len(s.Devices) != 0 || len(s.Tasks) != 0 || len(s.Vouchers) != 1 || len(s.ApartmentSites) != 1 || len(s.Apartments) != 2 || len(s.Notes) != 0 {
 			t.Fatalf("deletes not persisted: %d %d %d %d %d %d", len(s.Devices), len(s.Tasks), len(s.Vouchers), len(s.ApartmentSites), len(s.Apartments), len(s.Notes))
 		}
 	})

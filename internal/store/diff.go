@@ -233,6 +233,19 @@ func cloneSite(s Site) Site {
 	return s
 }
 
+// cloneApartment gives the copy its own Lat/Lng values, so a snapshot never shares them.
+func cloneApartment(a Apartment) Apartment {
+	if a.Lat != nil {
+		v := *a.Lat
+		a.Lat = &v
+	}
+	if a.Lng != nil {
+		v := *a.Lng
+		a.Lng = &v
+	}
+	return a
+}
+
 func cloneAdminUser(u AdminUser) AdminUser {
 	if u.RecoveryCodes != nil {
 		u.RecoveryCodes = append([]string(nil), u.RecoveryCodes...)
@@ -254,7 +267,7 @@ var tables = []table{
 	tbl[Tenancy]{func(d *Data) *map[string]Tenancy { return &d.Tenancies }, func(c *ChangeSet) *Delta[Tenancy] { return &c.Tenancies },
 		eqc[Tenancy], Tenancy.norm, func(v Tenancy) string { return v.ID }, nil},
 	tbl[Apartment]{func(d *Data) *map[string]Apartment { return &d.Apartments }, func(c *ChangeSet) *Delta[Apartment] { return &c.Apartments },
-		eqc[Apartment], Apartment.norm, func(v Apartment) string { return v.ID }, nil},
+		eqDeep[Apartment], Apartment.norm, func(v Apartment) string { return v.ID }, cloneApartment},
 	tbl[ApartmentSite]{func(d *Data) *map[string]ApartmentSite { return &d.ApartmentSites }, func(c *ChangeSet) *Delta[ApartmentSite] { return &c.ApartmentSites },
 		eqc[ApartmentSite], ApartmentSite.norm, func(v ApartmentSite) string { return ApartmentSiteKey(v.ApartmentID, v.SiteID) }, nil},
 	tbl[Order]{func(d *Data) *map[string]Order { return &d.Orders }, func(c *ChangeSet) *Delta[Order] { return &c.Orders },
@@ -277,6 +290,8 @@ var tables = []table{
 		eqDeep[AdminUser], AdminUser.norm, func(v AdminUser) string { return v.ID }, cloneAdminUser},
 	tbl[AdminSession]{func(d *Data) *map[string]AdminSession { return &d.AdminSessions }, func(c *ChangeSet) *Delta[AdminSession] { return &c.AdminSessions },
 		eqc[AdminSession], AdminSession.norm, func(v AdminSession) string { return v.ID }, nil},
+	tbl[Registration]{func(d *Data) *map[string]Registration { return &d.Registrations }, func(c *ChangeSet) *Delta[Registration] { return &c.Registrations },
+		eqc[Registration], Registration.norm, func(v Registration) string { return v.ID }, nil},
 	tbl[APIDevice]{func(d *Data) *map[string]APIDevice { return &d.APIDevices }, func(c *ChangeSet) *Delta[APIDevice] { return &c.APIDevices },
 		eqDeep[APIDevice], APIDevice.norm, func(v APIDevice) string { return v.ID }, cloneAPIDevice},
 }
@@ -460,7 +475,7 @@ func cloneData(d *Data) Data {
 		Payments: cloneMap(d.Payments, nil), Devices: cloneMap(d.Devices, nil), Tasks: cloneMap(d.Tasks, nil),
 		Customers: cloneMap(d.Customers, nil), Tenancies: cloneMap(d.Tenancies, nil), Apartments: cloneMap(d.Apartments, nil), ApartmentSites: cloneMap(d.ApartmentSites, nil),
 		Equipment: cloneMap(d.Equipment, nil), EquipmentEvents: cloneMap(d.EquipmentEvents, nil), Notes: cloneMap(d.Notes, nil), Settings: cloneMap(d.Settings, nil),
-		AdminUsers: cloneMap(d.AdminUsers, cloneAdminUser), AdminSessions: cloneMap(d.AdminSessions, nil), APIDevices: cloneMap(d.APIDevices, cloneAPIDevice),
+		AdminUsers: cloneMap(d.AdminUsers, cloneAdminUser), AdminSessions: cloneMap(d.AdminSessions, nil), APIDevices: cloneMap(d.APIDevices, cloneAPIDevice), Registrations: cloneMap(d.Registrations, nil),
 		Events: append([]Event(nil), d.Events...),
 	}
 }

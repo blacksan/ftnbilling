@@ -2,4 +2,8 @@
 {{define "top"}}<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>{{.Brand}}</title><link rel="icon" type="image/svg+xml" href="/favicon.svg">{{template "portalcss"}}{{end}}
 {{define "head"}}{{template "top" .}}</head><body><main>{{end}}
 {{define "foot"}}<p class="muted center m-foot"><a href="/admin/login" rel="nofollow">Admin login</a></p></main></body></html>{{end}}
+{{define "contacts"}}{{if or .Phone .Email .WAHref}}<section class="contacts" aria-label="Contact support"><h2>Need help?</h2><div class="cbtns">
+{{if .Phone}}<a class="btn alt" href="{{.PhoneHref}}">Call {{.Phone}}</a>{{end}}
+{{if .WAHref}}<a class="btn" href="{{.WAHref}}" rel="noopener noreferrer" target="_blank">WhatsApp us</a>{{end}}
+{{if .Email}}<a class="btn alt" href="mailto:{{.Email}}">Email {{.Email}}</a>{{end}}</div></section>{{end}}{{end}}
 {{define "brandbar"}}<div class="brandbar"><img src="/brand/logo-white-text.svg" alt="{{.}}"></div>{{end}}

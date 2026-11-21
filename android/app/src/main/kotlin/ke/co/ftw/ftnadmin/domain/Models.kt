@@ -29,8 +29,31 @@ data class RouterState(
     @SerialName("suspended_on_router") val suspendedOnRouter: Boolean = false,
     @SerialName("lease_status") val leaseStatus: String = "none",
     @SerialName("last_seen") val lastSeen: String? = null,
+    /** The router port the ONT's MAC sits on (bridge host table); blank when the router has not said. */
+    val port: String = "",
     @SerialName("pending_task") val pendingTask: Boolean = false,
     @SerialName("last_error") val lastError: String = "",
+)
+
+/** The account's bound MAC with its maker, state and port (the "Devices on this account" card). */
+@Serializable
+data class AccountDevice(
+    val mac: String = "",
+    val vendor: String = "",
+    val online: Boolean = false,
+    @SerialName("last_seen") val lastSeen: String? = null,
+    val port: String = "",
+)
+
+/** One item of the equipment register installed at the account's house. */
+@Serializable
+data class EquipmentItem(
+    val id: String = "",
+    val kind: String = "",
+    val serial: String = "",
+    val mac: String = "",
+    val model: String = "",
+    val status: String = "",
 )
 
 @Serializable
@@ -73,6 +96,8 @@ data class Account(
     val tenant: String = "",
     val phone: String = "",
     val whatsapp: String = "",
+    /** The WhatsApp number is the phone number and follows it (the "same as the phone" box). */
+    @SerialName("wa_same_phone") val waSamePhone: Boolean = false,
     val state: String = "new",
     val suspended: Boolean = false,
     @SerialName("package") val pkg: PackageRef? = null,
@@ -81,6 +106,11 @@ data class Account(
     @SerialName("customer_id") val customerId: String = "",
     @SerialName("created_at") val createdAt: String = "",
     val customer: Customer? = null,
+    /** Detail only: the bound MAC with maker, online state and port. */
+    val device: AccountDevice? = null,
+    /** Detail only: the equipment register items installed at the house. */
+    val equipment: List<EquipmentItem> = emptyList(),
+    @SerialName("mac_vendor") val macVendor: String = "",
     val payments: List<Payment> = emptyList(),
     val events: List<AccountEvent> = emptyList(),
     val usage: Usage? = null,
@@ -341,6 +371,50 @@ data class SuggestedAccount(
     val flat: String = "",
 )
 
+/** A device the walled-off captive page could offer to the owner as "this is probably their phone". */
+@Serializable
+data class RegistrationCandidate(
+    val mac: String = "",
+    val vendor: String = "",
+    @SerialName("host_name") val hostName: String = "",
+    val online: Boolean = false,
+    val ip: String = "",
+    val port: String = "",
+    /** ISO-8601 UTC. The server sorts the candidates by how close first-seen is to the registration. */
+    @SerialName("first_seen") val firstSeen: String? = null,
+    @SerialName("last_seen") val lastSeen: String? = null,
+    /** The DHCP host name looks like the device name the visitor gave. */
+    @SerialName("name_match") val nameMatch: Boolean = false,
+    /** The only device first seen within 10 minutes of the registration (the one preselected). */
+    val likely: Boolean = false,
+)
+
+/**
+ * Someone who filled in the self-registration form on the captive page. Nothing is set up until the owner approves it
+ * with the device's MAC. [mac] is blank because the server cannot see the visitor's MAC; [guessMac] is only a hint.
+ */
+@Serializable
+data class PendingRegistration(
+    val id: String = "",
+    @SerialName("site_id") val siteId: String = "",
+    @SerialName("site_name") val siteName: String = "",
+    @SerialName("apartment_id") val apartmentId: String = "",
+    @SerialName("apartment_name") val apartmentName: String = "",
+    val unit: String = "",
+    val name: String = "",
+    val phone: String = "",
+    val email: String = "",
+    val mac: String = "",
+    @SerialName("guess_mac") val guessMac: String = "",
+    @SerialName("created_at") val createdAt: String? = null,
+    val candidates: List<RegistrationCandidate> = emptyList(),
+    /** What the visitor says their phone or laptop is called (free text, shown next to the candidates). */
+    @SerialName("device_name") val deviceName: String = "",
+    /** The apartment name typed when the server could not tell the router; [unassigned] rows have no router yet. */
+    val building: String = "",
+    val unassigned: Boolean = false,
+)
+
 /** A MAC that is connected to a router's network but not configured on any account. */
 @Serializable
 data class NewDevice(
@@ -353,6 +427,10 @@ data class NewDevice(
     @SerialName("host_name") val hostName: String = "",
     val ip: String = "",
     val source: String = "",
+    /** The router port the device sits on (from the bridge host table), when known. */
+    val port: String = "",
+    /** "On ether5, no address yet (it hasn't asked for one)" for a device seen only at layer 2; else blank. */
+    @SerialName("address_note") val addressNote: String = "",
     val online: Boolean = false,
     @SerialName("first_seen") val firstSeen: String? = null,
     @SerialName("last_seen") val lastSeen: String? = null,

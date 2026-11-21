@@ -512,7 +512,7 @@ func (s *Service) RecordManual(ctx context.Context, in ManualInput) (store.Payme
 	}
 	note := in.Note
 	if pk, ok := s.packageByID(acct.SiteID, in.PackageID); ok && pk.PriceKES != in.AmountKES {
-		note = joinNote(note, fmt.Sprintf("amount KES %d differs from package price KES %d at this building", in.AmountKES, pk.PriceKES))
+		note = joinNote(note, fmt.Sprintf("amount KES %d differs from package price KES %d at this router", in.AmountKES, pk.PriceKES))
 	}
 	p, created, err := s.Credit(ctx, CreditInput{
 		Key: code, Method: "mpesa-manual", AccountID: in.AccountID, PackageID: in.PackageID,

@@ -23,8 +23,8 @@ var (
 	ErrDuplicateEquipmentMAC = store.ErrDuplicateEquipmentMAC
 	ErrDuplicateKey          = errors.New("that transaction code is already recorded")
 	ErrBadState              = errors.New("that payment is not waiting for a decision")
-	ErrVoucherSite           = errors.New("this voucher is for another building")
-	ErrNoSite                = errors.New("choose a building")
+	ErrVoucherSite           = errors.New("this voucher is for another router")
+	ErrNoSite                = errors.New("choose a router")
 )
 
 // DuplicateMACError says which open account already owns a MAC. It matches
@@ -55,7 +55,7 @@ func (e *DuplicateMACError) Error() string {
 		where = e.ApartmentName
 	}
 	if e.OtherBuilding {
-		return fmt.Sprintf("that MAC address already belongs to %s in another building (%s, unit %s, code %s): move the customer here first, or use another device", e.who(), where, e.Flat, e.Code)
+		return fmt.Sprintf("that MAC address already belongs to %s in another apartment (%s, house number %s, code %s): move the customer here first, or use another device", e.who(), where, e.Flat, e.Code)
 	}
 	return fmt.Sprintf("%s (%s in %s, code %s)", ErrDuplicateMAC.Error(), e.Flat, where, e.Code)
 }
@@ -95,7 +95,7 @@ func accountCustomerName(d *store.Data, a store.Account) string {
 }
 
 // ErrMACOtherBuilding matches (errors.Is) a DuplicateMACError whose owner is in another apartment.
-var ErrMACOtherBuilding = errors.New("that MAC address belongs to a customer in another building")
+var ErrMACOtherBuilding = errors.New("that MAC address belongs to a customer in another apartment")
 
 // Is lets errors.Is(err, ErrMACOtherBuilding) tell the cross-building case.
 func (e *DuplicateMACError) Is(target error) bool {
@@ -128,6 +128,9 @@ type Service struct {
 	now     func() time.Time
 	policy  Policy
 	box     *Secretbox // national-ID encryption; nil = feature off
+
+	ownMu   sync.Mutex
+	ownMACs map[string]map[string]bool // siteID -> the router's own MACs, from its last read
 
 	sites sync.Map                                                 // siteID -> *siteState
 	hook  func()                                                   // called after a payment was applied (tenant messages)
@@ -255,7 +258,19 @@ func (s *Service) SetWhatsApp(id, raw string, samePhone, optOut bool) error {
 		if err != nil {
 			return err
 		}
-		if !d.SetWhatsApp(id, wa, optOut) { // also updates the linked customer
+		changed := d.SetWhatsApp(id, wa, optOut) // also updates the linked customer
+		// The box itself is stored too, so it stays ticked and the number follows the phone.
+		if a, ok := d.Accounts[id]; ok && a.WASamePhone != samePhone {
+			a.WASamePhone = samePhone
+			d.Accounts[id] = a
+			changed = true
+		}
+		if c, ok := d.Customers[a.CustomerID]; ok && c.WASamePhone != samePhone {
+			c.WASamePhone = samePhone
+			d.Customers[c.ID] = c
+			changed = true
+		}
+		if !changed {
 			return store.ErrNoChange
 		}
 		return nil
@@ -270,11 +285,14 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 		unit = cleanText(in.Flat, 40)
 	}
 	if unit == "" {
-		return store.Account{}, errors.New("the unit (flat or door number) is required, e.g. B4")
+		return store.Account{}, errors.New("the house number is required, e.g. B4")
 	}
 	mac, err := NormalizeMAC(in.MAC)
 	if err != nil {
 		return store.Account{}, err
+	}
+	if s.isRouterMAC(mac) {
+		return store.Account{}, ErrRouterOwnMAC
 	}
 	phone, err := normPhone(in.Phone)
 	if err != nil {
@@ -299,7 +317,7 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 		a = store.Account{
 			ID: RandomID(), SiteID: siteID, ApartmentID: aptID, Code: s.uniqueCode(d), Flat: unit, Unit: unit, MAC: mac,
 			Tenant: cleanText(in.Tenant, 60), Phone: phone, Notes: cleanText(in.Notes, 300), WhatsApp: wa,
-			CreatedAt: s.now(),
+			WASamePhone: in.WASamePhone, CreatedAt: s.now(),
 		}
 		// A flat gets its fixed address now, and the router a task.
 		pl, err := s.PlanFor(d.Sites[siteID])
@@ -327,7 +345,7 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 // caller that does something irreversible first (a move) can refuse the whole request up front.
 func (s *Service) ValidateAccountEdit(flat, phone string) error {
 	if cleanText(flat, 40) == "" {
-		return errors.New("the unit (flat or door number) is required")
+		return errors.New("the house number is required")
 	}
 	_, err := normPhone(phone)
 	return err
@@ -336,7 +354,7 @@ func (s *Service) ValidateAccountEdit(flat, phone string) error {
 func (s *Service) UpdateAccount(id, flat, tenant, phone, notes string) error {
 	unit := cleanText(flat, 40)
 	if unit == "" {
-		return errors.New("the unit (flat or door number) is required")
+		return errors.New("the house number is required")
 	}
 	ph, err := normPhone(phone)
 	if err != nil {
@@ -353,6 +371,13 @@ func (s *Service) UpdateAccount(id, flat, tenant, phone, notes string) error {
 			}
 		}
 		a.Flat, a.Unit, a.Tenant, a.Phone, a.Notes = unit, unit, cleanText(tenant, 60), ph, cleanText(notes, 300)
+		if a.WASamePhone { // the WhatsApp number follows the phone
+			a.WhatsApp = ph
+			if c, ok := d.Customers[a.CustomerID]; ok && c.WASamePhone && c.WhatsApp != ph {
+				c.WhatsApp = ph
+				d.Customers[c.ID] = c
+			}
+		}
 		d.Accounts[id] = a
 		return nil
 	})
@@ -364,6 +389,9 @@ func (s *Service) ChangeMAC(ctx context.Context, id, rawMAC string) error {
 	mac, err := NormalizeMAC(rawMAC)
 	if err != nil {
 		return err
+	}
+	if s.isRouterMAC(mac) {
+		return ErrRouterOwnMAC
 	}
 	err = s.st.Update(func(d *store.Data) error {
 		a, ok := d.Accounts[id]
@@ -382,7 +410,7 @@ func (s *Service) ChangeMAC(ctx context.Context, id, rawMAC string) error {
 		// free (checked above) and was refused otherwise.
 		msg := fmt.Sprintf("%s: ONT MAC changed %s -> %s", a.Flat, a.MAC, mac)
 		if strings.EqualFold(a.MAC, mac) {
-			msg = fmt.Sprintf("%s: ONT MAC %s checked, no other flat uses it", a.Flat, mac)
+			msg = fmt.Sprintf("%s: ONT MAC %s checked, no other house uses it", a.Flat, mac)
 		}
 		d.AddEvent(store.Event{Time: s.now(), SiteID: a.SiteID, Kind: "info", AccountID: id, Msg: msg})
 		a.MAC, a.MACConflict = mac, false

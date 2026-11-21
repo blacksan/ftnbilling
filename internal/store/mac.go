@@ -74,13 +74,13 @@ var (
 	// ErrDuplicateToken: an access or refresh token hash is already in use.
 	ErrDuplicateToken = errors.New("that token is already in use")
 	// ErrBadAccessMode: a building's access mode is not ipoe.
-	ErrBadAccessMode = errors.New("the building access mode must be ipoe")
+	ErrBadAccessMode = errors.New("the router access mode must be ipoe")
 )
 
 // Apartment rules (format 8).
 var (
 	// ErrDuplicateUnit: two open accounts of one apartment would have the same unit.
-	ErrDuplicateUnit = errors.New("another open account in this apartment already has that unit")
+	ErrDuplicateUnit = errors.New("another open account in this apartment already has that house number")
 	// ErrDuplicateApartment: two apartments would have the same name (any letter case).
 	ErrDuplicateApartment = errors.New("an apartment with that name already exists")
 	// ErrBadApartmentLink: an apartment router link points at an apartment or router that does not exist.

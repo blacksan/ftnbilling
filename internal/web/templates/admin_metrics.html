@@ -13,7 +13,7 @@
 <div class="tile {{if gt $R.PeakUtilPct 85.0}}warn{{end}}">Peak WAN utilisation<b>{{if $R.WAN.T}}{{f1 $R.PeakUtilPct}}%{{else}}no data yet{{end}}</b><small>highest 30 s average in this period</small></div>
 <div class="tile {{if gt $R.AvgLossPct 1.0}}warn{{end}}">Latency and loss<b>{{if $R.HasPing}}{{f1 $R.AvgLatencyMs}} ms{{else}}no data yet{{end}}</b><small>{{if $R.HasPing}}average loss {{f1 $R.AvgLossPct}}%{{else}}ping to {{range .Data.Cfg.PingTargets}}{{.}} {{end}}{{end}}</small></div>
 <div class="tile">Router<b>{{if $R.HasSys}}CPU {{$R.CPU}}%{{else}}no data yet{{end}}</b><small>{{if $R.HasTemp}}temperature {{f1 $R.TempC}} &deg;C{{else if $R.HasSys}}no temperature sensor reported{{end}}</small></div>
-<div class="tile good">Active flats now<b>{{$R.ActiveFlats}} <small style="display:inline">of {{$R.TotalFlats}}</small></b><small>flats with a live session</small></div>
+<div class="tile good">Active houses now<b>{{$R.ActiveFlats}} <small style="display:inline">of {{$R.TotalFlats}}</small></b><small>houses with a live session</small></div>
 </div>
 
 <h3>Things to look at</h3>
@@ -25,18 +25,18 @@
 <div class="card"><b>OLT uplink ({{.Data.Cfg.OLT}})</b><div class="muted">Traffic between the router and the router. Link size {{f0 .Data.Cfg.OLTCapMbps}} Mbps.</div>{{.Data.OLTChart}}</div>
 </div>
 
-<h3>Flats</h3>
-<div class="grid2"><div class="card"><b>Top 10 flats by download</b><div class="muted">Click a flat for its detail.</div>{{.Data.TopChart}}</div>
+<h3>Houses</h3>
+<div class="grid2"><div class="card"><b>Top 10 houses by download</b><div class="muted">Click a house for its detail.</div>{{.Data.TopChart}}</div>
 <div class="card"><b>Services</b><div class="muted">Where the bytes go (download plus upload).{{if $R.NFOn}} {{if $R.NF.LastAt.IsZero}}No traffic-flow data received yet.{{else}}Last flow packet {{eat $R.NF.LastAt}}.{{end}}{{end}}</div>{{.Data.SvcChart}}</div></div>
 <div class="mt-3 tw"><table><tr>
-<th><a href="?period={{$P}}&sort=flat">Flat</a></th><th>Code</th><th>Package</th>
+<th><a href="?period={{$P}}&sort=flat">House number</a></th><th>Code</th><th>Package</th>
 <th class="n"><a href="?period={{$P}}&sort=down">Download GB</a></th><th class="n"><a href="?period={{$P}}&sort=up">Upload GB</a></th><th class="n"><a href="?period={{$P}}&sort=share">Share</a></th>
 <th class="n"><a href="?period={{$P}}&sort=peak">Peak Mbps</a></th><th class="n"><a href="?period={{$P}}&sort=cap">Time at cap</a></th><th class="n"><a href="?period={{$P}}&sort=current">Now Mbps</a></th><th>Top services</th></tr>
 {{range $R.Flats}}<tr><td><a href="/admin/metrics/flat?code={{.Code}}&period={{$P}}"><b>{{.Flat}}</b></a></td><td><code>{{.Code}}</code></td><td>{{.Package}}</td>
 <td class="n">{{f1 .DownGB}}</td><td class="n">{{f1 .UpGB}}</td><td class="n">{{f1 .SharePct}}%</td><td class="n">{{f1 .PeakMbps}}</td>
 <td class="n">{{if gt .CapPct 20.0}}<b class="bad">{{f0 .CapPct}}%</b>{{else}}{{f0 .CapPct}}%{{end}}</td><td class="n">{{if ge .CurrentMbps 0.0}}{{f1 .CurrentMbps}}{{else}}-{{end}}</td>
 <td class="muted">{{range $i, $t := .Top}}{{if $i}}, {{end}}{{$t.Name}} {{f0 $t.SharePct}}%{{end}}</td></tr>
-{{else}}<tr><td colspan="10">No flats yet.</td></tr>{{end}}</table></div>
+{{else}}<tr><td colspan="10">No houses yet.</td></tr>{{end}}</table></div>
 <p class="muted"><a href="/admin/metrics.csv?period={{$P}}&sort={{.Data.Sort}}">Download this table as CSV</a></p>
 
 <h3>Quality</h3>
@@ -51,21 +51,21 @@
 
 <h3>How to read this</h3>
 <div class="card muted">
-<p><b>Download</b> is traffic to the flat, <b>upload</b> is from it. Per-flat bytes come from the router's per-flat queue counters once a minute; a restart of this app can lose up to a minute. <b>Time at cap</b> is the share of the flat's online time in which its download averaged 90% or more of its package speed. Flats above {{f0 (index .Data.C "CapShare")}}% (after at least {{index .Data.C "MinOnline"}} minutes online) are upgrade candidates.</p>
+<p><b>Download</b> is traffic to the house, <b>upload</b> is from it. Per-house bytes come from the router's per-house queue counters once a minute; a restart of this app can lose up to a minute. <b>Time at cap</b> is the share of the house's online time in which its download averaged 90% or more of its package speed. Houses above {{f0 (index .Data.C "CapShare")}}% (after at least {{index .Data.C "MinOnline"}} minutes online) are upgrade candidates.</p>
 <p><b>Services</b> come from the router's traffic-flow export and are guessed from DNS names, then from ports. They are a good guide, not an exact count: devices that use their own encrypted DNS (DNS-over-HTTPS) show up as "HTTPS (other)", and the router must not fast-track customer traffic or it is invisible to traffic-flow.</p>
 <p><b>Fair-use limit</b> counts WAN download plus upload for the calendar month (EAT) since this app began collecting; it turns amber above {{f0 (index .Data.C "FUPWarn")}}%. The projection assumes the average pace so far continues.</p>
-<p>Flag thresholds: WAN above {{f0 (index .Data.C "WANUtil")}}% for {{index .Data.C "WANHours"}} or more hours in 7 days; flats above {{f0 (index .Data.C "CapShare")}}% of time at cap; loss above {{f0 (index .Data.C "Loss")}}%.</p></div>
+<p>Flag thresholds: WAN above {{f0 (index .Data.C "WANUtil")}}% for {{index .Data.C "WANHours"}} or more hours in 7 days; houses above {{f0 (index .Data.C "CapShare")}}% of time at cap; loss above {{f0 (index .Data.C "Loss")}}%.</p></div>
 {{template "afoot" .}}{{end}}
 
 {{define "admin_metrics_flat"}}{{template "ahead" .}}{{$R := .Data.Row}}{{$P := .Data.Period}}
 <h2>{{$R.Flat}} <small class="muted">Account {{$R.Code}}</small></h2>
-<p><a href="/admin/metrics?period={{$P}}">&larr; all flats</a> &middot; <a href="/admin/accounts/view?code={{$R.Code}}">account</a></p>
+<p><a href="/admin/metrics?period={{$P}}">&larr; all houses</a> &middot; <a href="/admin/accounts/view?code={{$R.Code}}">account</a></p>
 <p><span class="seg">{{range .Data.Periods}}<a href="/admin/metrics/flat?code={{$R.Code}}&period={{.}}"{{if eq (printf "%s" .) $P}} class="on"{{end}}>{{.Label}}</a>{{end}}</span></p>
-<div class="tiles"><div class="tile">Download<b>{{f1 $R.DownGB}} GB</b><small>{{f1 $R.SharePct}}% of all flats</small></div>
+<div class="tiles"><div class="tile">Download<b>{{f1 $R.DownGB}} GB</b><small>{{f1 $R.SharePct}}% of all houses</small></div>
 <div class="tile">Upload<b>{{f1 $R.UpGB}} GB</b></div>
 <div class="tile">Peak speed<b>{{f1 $R.PeakMbps}} Mbps</b><small>package {{$R.Package}}{{if $R.CapMbps}}, {{f0 $R.CapMbps}} Mbps{{end}}</small></div>
 <div class="tile {{if gt $R.CapPct 20.0}}warn{{end}}">Time at cap<b>{{f0 $R.CapPct}}%</b><small>of {{f1 (hours $R.OnlineMin)}} h online</small></div>
 <div class="tile">Now<b>{{if ge $R.CurrentMbps 0.0}}{{f1 $R.CurrentMbps}} Mbps{{else}}offline{{end}}</b></div></div>
 <div class="card"><b>Usage over time</b><div class="muted">Average speed per bucket. Dashed line = package speed.</div>{{.Data.Chart}}</div>
-<div class="card"><b>Services</b><div class="muted">Share of this flat's bytes.</div>{{.Data.SvcChart}}</div>
+<div class="card"><b>Services</b><div class="muted">Share of this house's bytes.</div>{{.Data.SvcChart}}</div>
 {{template "afoot" .}}{{end}}

@@ -20,9 +20,6 @@ import (
 	"ispbill/internal/store"
 )
 
-// defaultSupport is shown when neither the building nor the server config has a support phone.
-const defaultSupport = "0100133133"
-
 // Payment prompts cost the payer a PIN screen, so they are limited per
 // address and per account (the limiters live here: server.go is not ours).
 var (
@@ -181,6 +178,7 @@ func (s *Server) payRoutes(mux *http.ServeMux) {
 // visitor already named by its code.
 type payPage struct {
 	Brand, Support, SiteName, Site string
+	Contacts                       supportContacts
 	Error                          string
 	Detected                       bool   // the building was recognised from the visitor's address
 	Code                           string // shown only when the visitor typed the code
@@ -234,8 +232,19 @@ func (s *Server) payWrongRouter(p payPage, a store.Account) string {
 // WireGuard peer connects from. It answers only when exactly one building
 // matches (two buildings behind one NAT address cannot be told apart).
 func (s *Server) siteByAddr(ip string) (store.Site, bool) {
+	hit := s.sitesByAddr(ip)
+	if len(hit) == 1 {
+		return hit[0], true
+	}
+	return store.Site{}, false
+}
+
+// sitesByAddr lists the live routers whose WireGuard peer endpoint has this address: the routers a request
+// from this address may come from. Walled devices leave through their router's masquerade, so this is the
+// router's public WAN address, and every router behind the same public (carrier-grade NAT) address matches.
+func (s *Server) sitesByAddr(ip string) []store.Site {
 	if ip == "" {
-		return store.Site{}, false
+		return nil
 	}
 	var cands []store.Site
 	s.st.View(func(d *store.Data) {
@@ -259,25 +268,20 @@ func (s *Server) siteByAddr(ip string) (store.Site, bool) {
 			hit = append(hit, st)
 		}
 	}
-	if len(hit) == 1 {
-		return hit[0], true
-	}
-	return store.Site{}, false
+	return hit
 }
 
 func (s *Server) payBase(r *http.Request) payPage {
-	p := payPage{Brand: s.cfg.BrandName, Support: s.cfg.SupportPhone,
+	p := payPage{Brand: s.cfg.BrandName,
 		Mpesa: s.providers["mpesa"] != nil && s.providers["mpesa"].Enabled(),
 		Test:  s.providers["test"] != nil && s.providers["test"].Enabled()}
+	siteID := ""
 	if st, ok := s.siteByAddr(realIP(r)); ok {
 		p.Site, p.SiteName, p.Detected = st.ID, st.Name, true
-		if st.SupportPhone != "" {
-			p.Support = st.SupportPhone
-		}
+		siteID = st.ID
 	}
-	if p.Support == "" {
-		p.Support = defaultSupport
-	}
+	p.Contacts = s.contacts(siteID)
+	p.Support = p.Contacts.Words()
 	return p
 }
 
@@ -330,7 +334,7 @@ func (s *Server) payFind(w http.ResponseWriter, r *http.Request) {
 		for _, x := range amb {
 			p.Choices = append(p.Choices, payChoice{ID: x.ApartmentID, Name: s.apartmentName(x.ApartmentID)})
 		}
-		s.payFail(w, r, http.StatusConflict, p, "More than one flat on this network has that number. Choose your apartment, or enter your account number.")
+		s.payFail(w, r, http.StatusConflict, p, "More than one house on this network has that number. Choose your apartment, or enter your account number.")
 		return
 	}
 	if !ok {
@@ -355,15 +359,14 @@ func (s *Server) payChoose(w http.ResponseWriter, r *http.Request, p payPage, a 
 	p.Site, p.Found, p.Flat, p.Error, p.ByCode = a.SiteID, true, a.Flat, errMsg, byCode
 	p.Tok = payToken(a.ID, s.svc.Now(), byCode)
 	p.CSRF = s.payCSRF(w, r)
+	p.Contacts = s.contacts(a.SiteID)
+	p.Support = p.Contacts.Words()
 	if byCode {
 		p.Code, p.ExpiresAt, p.State = a.Code, a.ExpiresAt, billing.AccountState(a, s.svc.Now())
 	}
 	s.st.View(func(d *store.Data) {
 		st := d.Sites[a.SiteID]
 		p.SiteName = st.Name
-		if st.SupportPhone != "" {
-			p.Support = st.SupportPhone
-		}
 		p.Groups = packageGroups(d.EffectivePackages(a.SiteID))
 	})
 	if a.Suspended {

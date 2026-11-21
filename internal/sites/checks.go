@@ -60,6 +60,7 @@ const (
 	CheckDHCP         = "dhcp.ftn"
 	CheckWAN          = "wan.internet"
 	CheckBootFile     = "bootstrap.file"
+	CheckAdminNet     = "admin.no_internet"
 	checksCacheFor    = 60 * time.Second
 	checksBudget      = 45 * time.Second // the whole pass, all reads together
 	recheckMax        = 6                // ... this many times in a row
@@ -86,6 +87,9 @@ var tableProps = map[string]string{
 func tableQuery(path string) map[string]string {
 	if p, ok := tableProps[path]; ok {
 		return map[string]string{".proplist": p}
+	}
+	if path == "/ip/firewall/address-list" { // the lists of flats can be long; the checks read the admin allow list only
+		return map[string]string{"list": AdminAllowList}
 	}
 	return nil
 }
@@ -244,7 +248,7 @@ var checkSingles = []string{"/system/resource", "/system/device-mode", "/ip/dns"
 var checkTables = []string{
 	"/ip/address", "/interface", "/interface/bridge", "/interface/bridge/port", "/interface/bridge/host", "/interface/vlan",
 	"/interface/list/member", "/ip/dhcp-server", "/ip/dhcp-client", "/ip/traffic-flow/target", "/ip/service",
-	"/user/group", "/file", "/ip/firewall/filter", "/ip/firewall/nat", "/ip/route",
+	"/user/group", "/file", "/ip/firewall/filter", "/ip/firewall/nat", "/ip/firewall/address-list", "/ip/route",
 	// read-only, for router.script_hooks
 	"/ppp/profile", "/tool/netwatch",
 }
@@ -504,6 +508,7 @@ var needs = map[string][]string{
 	CheckDHCP:        {"/ip/dhcp-server"},
 	CheckWAN:         {"/ip/route"},
 	CheckBootFile:    {"/file"},
+	CheckAdminNet:    {"/ip/firewall/filter", "/ip/firewall/address-list", "/interface/bridge"},
 }
 
 type checkDef struct {
@@ -524,8 +529,9 @@ var checkDefs = []checkDef{
 	{CheckHooks, "router", "Scripts that run by themselves on the router", false, "", evalHooks},
 	{CheckCustomerIf, "network", "Customer network is on one interface", true, "", evalCustomerIf},
 	{CheckDHCP, "network", "Customer DHCP server is on", true, "", evalDHCP},
-	{CheckWalled, "network", "Unpaid and unregistered flats are walled", true, "", evalWalled},
-	{CheckWalledDNS, "network", "Walled flats can still resolve any name", false, "", evalWalledDNS},
+	{CheckWalled, "network", "Unpaid and unregistered houses are walled", true, "", evalWalled},
+	{CheckAdminNet, "network", "Admin port reaches the router and the billing site only", false, "", evalAdminNet},
+	{CheckWalledDNS, "network", "Walled houses can still resolve any name", false, "", evalWalledDNS},
 	{CheckWAN, "network", "Router has a way to the internet", false, "", evalWAN},
 	{CheckOLT, "network", "Fibre (OLT) port is not stuck in the bridge", true, "", evalOLT},
 	{CheckBench, "network", "Customer port (extra)", false, "", evalBench},
@@ -1199,17 +1205,17 @@ func evalCustDNS(e *evalCtx, it *CheckItem) {
 // ---- customer interface -------------------------------------------------------------
 
 func evalCustomerIf(e *evalCtx, it *CheckItem) {
-	manual := CheckFix{Kind: FixManual, Label: "Fix the building's fields", Role: store.RoleOperator}
+	manual := CheckFix{Kind: FixManual, Label: "Fix the router's fields", Role: store.RoleOperator}
 	if e.planErr != nil {
 		it.Status = StatusFail
-		it.Detail = "The building's customer network is not valid: " + e.planErr.Error()
+		it.Detail = "The router's customer network is not valid: " + e.planErr.Error()
 		it.Fix = manual
 		return
 	}
 	c := e.cust
 	if !c.found {
 		it.Status = StatusFail
-		it.Detail = fmt.Sprintf("No interface on the router carries %s, the gateway address of this building's customer network. Check the building's customer subnet.", e.plan.GatewayIP)
+		it.Detail = fmt.Sprintf("No interface on the router carries %s, the gateway address of this router's customer network. Check the router's customer subnet.", e.plan.GatewayIP)
 		it.Fix = manual
 		return
 	}
@@ -1331,7 +1337,7 @@ func assessOLT(sn *snapshot, site store.Site) portAssess {
 	// OLT port is reported in words by the server's own pass (custport.go), not "fixed" here.
 	a.conflict = len(a.rows) > 0 && site.VLANID > 0
 	if a.conflict && len(a.vlans) == 0 {
-		a.unknown = append(a.unknown, "the building has a VLAN id but no VLAN interface exists on the port yet")
+		a.unknown = append(a.unknown, "the router has a VLAN id but no VLAN interface exists on the port yet")
 	}
 	if len(a.strands) > 0 {
 		a.hard = append(a.hard, "the VLAN interface "+strings.Join(a.strands, ", ")+" is not a bridge port, so removing the port would cut customers off")
@@ -1342,7 +1348,7 @@ func assessOLT(sn *snapshot, site store.Site) portAssess {
 func evalOLT(e *evalCtx, it *CheckItem) {
 	if e.site.OLTInterface == "" {
 		it.Status = StatusInfo
-		it.Detail = "No fibre (OLT) interface is set for this building."
+		it.Detail = "No fibre (OLT) interface is set for this router."
 		return
 	}
 	a := assessOLT(e.sn, e.site)
@@ -1565,7 +1571,7 @@ func evalIPv6(e *evalCtx, it *CheckItem) {
 		return
 	}
 	it.Status = StatusInfo
-	it.Detail = "IPv6 is on. The flats' IPv6 forwarding is dropped, so flats keep IPv4 only."
+	it.Detail = "IPv6 is on. The houses' IPv6 forwarding is dropped, so houses keep IPv4 only."
 }
 
 func evalPublicIP(e *evalCtx, it *CheckItem) {
@@ -1714,6 +1720,9 @@ func (m *Manager) runChecks(ctx context.Context, site store.Site) Checks {
 	out := Checks{SiteID: site.ID, GeneratedAt: now, Items: items, JoinReport: m.loadJoinReport(site.ID),
 		Router: RouterInfo{Reachable: e.sn.errs["/system/resource"] == nil, Version: res["version"], Board: res["board-name"]}}
 	out.Layout = layout
+	if out.Router.Reachable {
+		m.noteROSVersion(site.ID, out.Router.Version)
+	}
 	out.MgmtWinbox = hasMgmtWinboxRule(e.sn, m.mgmt.String())
 	out.Slow = e.slow
 	out.Summary = summarize(items)

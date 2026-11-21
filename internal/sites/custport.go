@@ -348,6 +348,10 @@ func (m *Manager) ensureCustomerPort(ctx context.Context, siteID string, force b
 
 var cpTables = []string{"/interface/bridge/port", "/interface", "/interface/vlan", "/interface/list/member", "/ip/address", "/ip/dhcp-server", "/ip/dhcp-client"}
 
+// cpUplinkTables are the extra read-only tables that tell which interfaces carry the uplink. When one cannot be
+// read the pass goes on, but no port is switched off (see uplinkIfaces).
+var cpUplinkTables = []string{"/interface/pppoe-client", "/ip/route"}
+
 // cpPass reads the router and writes what the ports need. Order: what is no
 // longer wanted leaves only when nothing it was replaced by is blocked; the
 // new admin LAN members go in before any old one comes out; then the OLT
@@ -361,12 +365,13 @@ func (m *Manager) cpPass(ctx context.Context, siteID string, eff store.Site) cpR
 	if !billing.HasV5Layout(bridges) {
 		return cpResult{state: PortRebuild, msg: rebuildNeededMsg}
 	}
-	sn := readSnapshot(ctx, rt, nil, cpTables)
+	sn := readSnapshot(ctx, rt, nil, append(append([]string(nil), cpTables...), cpUplinkTables...))
 	for _, p := range cpTables {
 		if err := sn.errs[p]; err != nil {
 			return cpResult{state: PortError, msg: unreachableMsg(err), failed: true}
 		}
 	}
+	eff = m.startPortsPolicy(siteID, eff, sn)
 	w := m.newFixWriter(rt, eff)
 	plan := planCustomerPorts(sn, eff)
 	for iface := range plan.stale {
@@ -384,6 +389,7 @@ func (m *Manager) cpPass(ctx context.Context, siteID string, eff store.Site) cpR
 	for _, r := range plan.disable {
 		w.offPorts[r["name"]] = true
 	}
+	w.uplink = plan.uplink
 	w.vlanName, w.oltPort = plan.vlanName, eff.OLTInterface
 	var res cpResult
 	fail := func(err error) cpResult {
@@ -567,9 +573,11 @@ type customerPlan struct {
 	staleLAN      map[string]bool
 	staleLANRows  []routeros.Row
 	oltBridgeRows []routeros.Row
-	moveRows      []routeros.Row // server rows of ports that change role between br-customers and br-lan
-	leftoverVLANs []routeros.Row // customer VLAN interfaces the server made that are no longer wanted
-	disable       []routeros.Row // /interface rows the server keeps switched off and that are on
+	moveRows      []routeros.Row  // server rows of ports that change role between br-customers and br-lan
+	leftoverVLANs []routeros.Row  // customer VLAN interfaces the server made that are no longer wanted
+	disable       []routeros.Row  // /interface rows the server keeps switched off and that are on
+	uplink        map[string]bool // every interface that carries the uplink (never switched off); nil when it could not be worked out
+	uplinkErr     error           // the router read was incomplete: no port is switched off
 }
 
 func serverMade(c string) bool { return c == CustPortComment || c == oldBenchComment }
@@ -733,18 +741,135 @@ func planCustomerPorts(sn *snapshot, site store.Site) customerPlan {
 			}
 		}
 	}
+	// Ports the server keeps switched off. A router on the default-off policy keeps every physical port off that
+	// the owner has not enabled, except the uplink (and any WAN interface) and the admin LAN ports, which the
+	// server never switches off. An older router (policy not started yet) only keeps off what the owner switched
+	// off in the Ports tab, and never the OLT uplink.
 	off := SplitPorts(site.DisabledPorts)
+	managed := portsManaged(site)
+	enabled := SplitPorts(site.EnabledPorts)
+	wans := wanIfaces(sn, site)
+	p.uplink, p.uplinkErr = uplinkIfaces(sn, site)
 	for _, r := range sn.tbl("/interface") {
-		// only customer and unused ports are kept off: an admin LAN port or the OLT uplink that someone
-		// switched on again at the router stays on
-		if containsStr(p.lanPorts, r["name"]) || r["name"] == site.OLTInterface {
+		name := r["name"]
+		if containsStr(p.lanPorts, name) || name == site.WANInterface || wans[name] || p.uplink[name] || !physicalType(r["type"]) || rowDisabled(r) {
 			continue
 		}
-		if containsStr(off, r["name"]) && !rowDisabled(r) && r["name"] != site.WANInterface && physicalType(r["type"]) && !wanIfaces(sn, site)[r["name"]] {
+		if p.uplinkErr != nil { // not sure which port carries the uplink: change no ports
+			break
+		}
+		wantOff := containsStr(off, name) && name != site.OLTInterface
+		if managed {
+			wantOff = !containsStr(enabled, name)
+		}
+		if wantOff {
 			p.disable = append(p.disable, r)
 		}
 	}
 	return p
+}
+
+// uplinkIfaces is every interface that may carry the uplink, worked out from what the router says (not from
+// the stored WAN name alone, which the owner can edit): the stored WAN port, every member of the WAN list, the
+// parent of any PPPoE client, any interface with a DHCP client, any interface that holds an address other than
+// the server's own bridges and customer VLANs, the interface of the default route, and then the parent of any
+// VLAN and the member ports of any bridge among those. The sweep never switches one of them off. When one of
+// the tables could not be read the answer is an error: the caller changes no ports.
+func uplinkIfaces(sn *snapshot, site store.Site) (map[string]bool, error) {
+	need := []string{"/interface", "/interface/list/member", "/interface/pppoe-client", "/ip/dhcp-client", "/ip/address", "/ip/route", "/interface/vlan", "/interface/bridge/port"}
+	for _, t := range need {
+		if err := sn.errs[t]; err != nil {
+			return nil, fmt.Errorf("%s could not be read: %w", t, err)
+		}
+	}
+	if len(sn.tbl("/interface")) == 0 {
+		return nil, errors.New("the interface list is empty")
+	}
+	out := map[string]bool{}
+	add := func(n string) {
+		if n = strings.TrimSpace(n); n != "" {
+			out[n] = true
+		}
+	}
+	add(site.WANInterface)
+	for n := range wanIfaces(sn, site) {
+		add(n)
+	}
+	for _, r := range sn.tbl("/interface/pppoe-client") {
+		add(r["interface"])
+	}
+	for _, r := range sn.tbl("/ip/dhcp-client") {
+		add(r["interface"])
+	}
+	own := map[string]bool{LANBridge: true, CustomerBridge: true}
+	for _, r := range sn.tbl("/interface/vlan") {
+		if r["comment"] == CustVLANComment {
+			own[r["name"]] = true
+		}
+	}
+	for _, r := range sn.tbl("/interface") {
+		if t := strings.ToLower(r["type"]); t == "wg" || t == "wireguard" || t == "loopback" {
+			own[r["name"]] = true
+		}
+	}
+	for _, r := range sn.tbl("/ip/address") {
+		n := r["interface"]
+		if n == "" {
+			continue
+		}
+		if r["comment"] == "ftn: WAN address" || (!own[n] && !rowDisabled(r)) {
+			add(n)
+		}
+	}
+	names := map[string]bool{}
+	for _, r := range sn.tbl("/interface") {
+		names[r["name"]] = true
+	}
+	for _, r := range sn.tbl("/ip/route") {
+		if r["dst-address"] != "0.0.0.0/0" || rowDisabled(r) {
+			continue
+		}
+		for _, g := range []string{r["gateway"], r["immediate-gw"]} {
+			if i := strings.LastIndex(g, "%"); i >= 0 {
+				g = g[i+1:]
+			}
+			if names[g] {
+				add(g)
+			}
+		}
+		if i := strings.LastIndex(r["gateway-status"], " via "); i >= 0 {
+			add(strings.Fields(r["gateway-status"][i+5:] + " ")[0])
+		}
+	}
+	// a VLAN on the uplink and a bridge that holds it: their parents and members carry it too
+	for changed := true; changed; {
+		changed = false
+		mark := func(n string) {
+			if n != "" && !out[n] {
+				out[n] = true
+				changed = true
+			}
+		}
+		for _, r := range sn.tbl("/interface/vlan") {
+			if out[r["name"]] {
+				mark(r["interface"])
+			}
+		}
+		for _, r := range sn.tbl("/interface/bridge/port") {
+			if out[r["bridge"]] {
+				mark(r["interface"])
+			}
+			if out[r["interface"]] && r["bridge"] != LANBridge && r["bridge"] != CustomerBridge {
+				mark(r["bridge"])
+			}
+		}
+		for _, r := range sn.tbl("/interface/pppoe-client") {
+			if out[r["name"]] {
+				mark(r["interface"])
+			}
+		}
+	}
+	return out, nil
 }
 
 // ifaceUsable: the interface is enabled and has a link, in the snapshot.
@@ -885,4 +1010,75 @@ func (m *Manager) PortChoices(ctx context.Context, siteID string) []string {
 		}
 	}
 	return append(phys, other...)
+}
+
+// startPortsPolicy starts the default-off policy on a router that predates it (Site.PortsPolicy empty), from the
+// snapshot of the first sweep after the upgrade. Nothing that is in service goes down: every port that is on at
+// the router and has a role (OLT, customer port) or a link is recorded as enabled by the owner. A port the owner
+// had switched off stays off. Only ports that are on, have no role and no link are switched off by the sweep
+// that follows. When the router could not be read nothing is recorded and nothing is switched off: the policy
+// starts with the first complete read. The record is made before any port is written.
+func (m *Manager) startPortsPolicy(siteID string, eff store.Site, sn *snapshot) store.Site {
+	if eff.PortsPolicy != "" {
+		return eff
+	}
+	if _, err := sn.failed("/interface"); err != nil || len(sn.tbl("/interface")) == 0 {
+		return eff
+	}
+	wans := wanIfaces(sn, eff)
+	off := SplitPorts(eff.DisabledPorts)
+	enabled := SplitPorts(eff.EnabledPorts)
+	var kept []string
+	for _, r := range sn.tbl("/interface") {
+		name := r["name"]
+		if !physicalType(r["type"]) || name == "" || name == eff.WANInterface || wans[name] || rowDisabled(r) || containsStr(off, name) || containsStr(enabled, name) {
+			continue
+		}
+		switch role := roleOf(eff, name); {
+		case role == PortRoleLAN:
+		case role == PortRoleOLT, role == PortRoleCustomer, yes(r["running"]):
+			enabled = append(enabled, name)
+			kept = append(kept, name)
+		}
+	}
+	// The ports the router is configured to use are always recorded, even when their row is missing or
+	// disabled in this one read (renamed, not listed yet after a reboot, switched off by hand at that moment):
+	// the OLT port, the customer ports and the members of br-lan. Erring toward service.
+	add := func(name string) {
+		if name == "" || name == eff.WANInterface || wans[name] || containsStr(off, name) || containsStr(enabled, name) {
+			return
+		}
+		enabled = append(enabled, name)
+		kept = append(kept, name)
+	}
+	add(eff.OLTInterface)
+	for _, p := range SplitPorts(eff.CustomerPorts) {
+		add(p)
+	}
+	for _, r := range sn.tbl("/interface/bridge/port") {
+		if r["bridge"] == LANBridge && roleOf(eff, r["interface"]) != PortRoleLAN { // the configured admin ports are never switched off
+			add(r["interface"])
+		}
+	}
+	err := m.st.Update(func(d *store.Data) error {
+		s, ok := d.Sites[siteID]
+		if !ok || s.Removed || s.PortsPolicy != "" {
+			return store.ErrNoChange
+		}
+		s.PortsPolicy, s.EnabledPorts = PortsPolicyOff, strings.Join(enabled, ",")
+		d.Sites[siteID] = s
+		msg := "ports are off unless the owner enables them; kept in service: "
+		if len(kept) == 0 {
+			msg += "none"
+		} else {
+			msg += strings.Join(kept, ", ")
+		}
+		d.AddEvent(store.Event{Time: m.now(), SiteID: siteID, Kind: "audit", Actor: ActorSystem, Msg: msg})
+		return nil
+	})
+	if err != nil {
+		return eff // not recorded: not applied either
+	}
+	eff.PortsPolicy, eff.EnabledPorts = PortsPolicyOff, strings.Join(enabled, ",")
+	return eff
 }

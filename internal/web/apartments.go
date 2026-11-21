@@ -103,12 +103,16 @@ func (s *Server) adminApartmentForm(w http.ResponseWriter, r *http.Request) {
 		}
 		p.H1a, p.H1b, p.Lead = "Edit", "apartment.", det.Name
 	} else {
-		p.H1a, p.H1b, p.Lead = "New", "apartment.", "An apartment block. Link the routers that serve it; add the caretaker and landlord if you have them."
+		p.H1a, p.H1b, p.Lead = "New", "apartment.", "Name and address of the place your customers live in. Link the routers that serve it; add the caretaker and landlord if you have them."
 	}
 	if v := r.URL.Query().Get("name"); v != "" && id == "" { // kept after a form error
 		cur.Name = v
 	}
 	p.Data["Cur"], p.Data["Linked"], p.Data["IsNew"] = cur, linked, id == ""
+	p.Data["GPS"] = ""
+	if cur.HasGPS() {
+		p.Data["GPS"] = store.FormatGPS(*cur.Lat, *cur.Lng)
+	}
 	p.Data["AllRouters"] = p.Sites
 	s.render(w, "admin_apartment_form", p)
 }
@@ -122,12 +126,18 @@ func (s *Server) adminApartmentSave(w http.ResponseWriter, r *http.Request) {
 	id := r.PostFormValue("id")
 	in := billing.ApartmentInput{Name: r.PostFormValue("name"), Address: r.PostFormValue("address"), Notes: r.PostFormValue("notes"),
 		Caretaker: contactForm(r, "caretaker"), Landlord: contactForm(r, "landlord")}
+	var gpsErr error
+	in.Lat, in.Lng, gpsErr = store.ParseGPS(r.PostFormValue("gps"))
 	fail := func(err error) {
 		to := "/admin/apartments/new"
 		if id != "" {
 			to = "/admin/apartments/edit?id=" + url.QueryEscape(id)
 		}
 		s.back(w, r, to, "Error: "+err.Error())
+	}
+	if gpsErr != nil {
+		fail(gpsErr)
+		return
 	}
 	if id == "" {
 		a, err := s.svc.CreateApartment(in, r.PostForm["router"])
@@ -182,7 +192,7 @@ func (s *Server) adminAccountApartment(w http.ResponseWriter, r *http.Request) {
 		ApartmentID: r.PostFormValue("apartment_id"), SiteID: r.PostFormValue("site"), Unit: r.PostFormValue("unit")})
 	var ue *billing.UnitTakenError
 	if errors.As(err, &ue) {
-		err = errors.New("that unit is already taken in this apartment")
+		err = errors.New("that house number is already taken in this apartment")
 	}
 	s.back(w, r, s.accountURL(id), msgOr(err, "Moved. The router change is applied within a minute and is in the account history."))
 }

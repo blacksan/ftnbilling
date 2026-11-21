@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -28,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -42,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
@@ -51,6 +55,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ke.co.ftw.ftnadmin.core.network.UserInfo
 import ke.co.ftw.ftnadmin.domain.NewDevice
+import ke.co.ftw.ftnadmin.domain.PendingRegistration
 import ke.co.ftw.ftnadmin.ui.common.AccountPicker
 import ke.co.ftw.ftnadmin.ui.common.AppTopBar
 import ke.co.ftw.ftnadmin.ui.common.CenteredLoading
@@ -91,7 +96,7 @@ fun NewDevicesScreen(siteId: String?, user: UserInfo, onBack: () -> Unit, onOpen
             Loadable.Loading -> CenteredLoading(Modifier.padding(inner))
             is Loadable.Failed -> ErrorState(d.message, vm::retry, Modifier.padding(inner))
             is Loadable.Ready -> PullToRefreshBox(ui.refreshing, vm::refresh, Modifier.padding(inner).fillMaxSize()) {
-                if (d.value.isEmpty()) {
+                if (d.value.isEmpty() && ui.registrations.isEmpty()) {
                     // Scrollable so pull-to-refresh still works on an empty list.
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                         EmptyState("No unconfigured devices. Everything connected has an account.\nPull down to check the routers again.")
@@ -102,6 +107,34 @@ fun NewDevicesScreen(siteId: String?, user: UserInfo, onBack: () -> Unit, onOpen
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
+                        if (ui.registrations.isNotEmpty()) {
+                            item(key = "regs-title") {
+                                Text(
+                                    "Waiting for approval",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                            if (user.canWrite) {
+                                item(key = "regs-rejectall") {
+                                    ChipRow(horizontalPadding = 0.dp) {
+                                        rejectAllTargets(ui.registrations).forEach { t ->
+                                            OutlinedButton(onClick = { vm.askRejectAll(t) }) { Text("Reject all ${t.count} for ${t.label}", maxLines = 1) }
+                                        }
+                                    }
+                                }
+                            }
+                            items(ui.registrations, key = { "reg-" + it.id }) { r ->
+                                RegistrationRow(r, canDecide = user.canWrite, onApprove = { vm.askApprove(r) }, onReject = { vm.askReject(r) })
+                            }
+                            item(key = "devices-title") {
+                                Text(
+                                    "Devices not on an account",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                        }
                         items(d.value, key = { it.routerKey + it.mac }) { dev -> DeviceRow(dev, onClick = { if (user.canWrite) vm.open(dev) }) }
                     }
                 }
@@ -110,6 +143,124 @@ fun NewDevicesScreen(siteId: String?, user: UserInfo, onBack: () -> Unit, onOpen
     }
 
     ui.sheet?.let { sheet -> DeviceSheetContent(sheet, ui.packages, vm, onOpenAccount) }
+    ui.approving?.let { r -> ApproveDialog(r, ui.approveMac, ui.decideBusy, vm) }
+    ui.rejectingAll?.let { t ->
+        AlertDialog(
+            onDismissRequest = vm::cancelRejectAll,
+            title = { Text("Reject all ${t.count} for ${t.label}?") },
+            text = { Text("Every waiting registration there is declined and the people's details are erased. Their devices stay offline. They can register again.") },
+            confirmButton = { TextButton(onClick = vm::rejectAll, enabled = !ui.decideBusy) { Text("Reject all") } },
+            dismissButton = { TextButton(onClick = vm::cancelRejectAll) { Text("Cancel") } },
+        )
+    }
+    ui.rejecting?.let { r ->
+        AlertDialog(
+            onDismissRequest = vm::cancelReject,
+            title = { Text("Reject ${r.name}?") },
+            text = { Text("Their details are erased. The device stays offline. They can register again.") },
+            confirmButton = { TextButton(onClick = vm::reject, enabled = !ui.decideBusy) { Text("Reject") } },
+            dismissButton = { TextButton(onClick = vm::cancelReject) { Text("Cancel") } },
+        )
+    }
+}
+
+/** One person who registered on the captive page. Approve asks which device is theirs. */
+@Composable
+private fun RegistrationRow(r: PendingRegistration, canDecide: Boolean, onApprove: () -> Unit, onReject: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(r.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+            Text(
+                if (r.unassigned) listOf(r.building, "house ${r.unit}", "no router yet").filter { it.isNotBlank() }.joinToString("  |  ")
+                else listOf(r.apartmentName, "house ${r.unit}", r.siteName).filter { it.isNotBlank() }.joinToString("  |  "),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            Text(
+                listOf(r.phone, r.email).filter { it.isNotBlank() }.joinToString("  |  "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            if (r.deviceName.isNotBlank()) {
+                Text("Device name given: ${r.deviceName}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
+            }
+            if (r.unassigned) {
+                Text(
+                    "Their address matches more than one router. Assign a router and apartment on the web admin (New devices) before approving.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+            }
+            if (canDecide) {
+                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onApprove, enabled = !r.unassigned) { Text("Approve", maxLines = 1) }
+                    OutlinedButton(onClick = onReject) { Text("Reject", maxLines = 1) }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The server cannot see the visitor's MAC, so the owner names the device: one of the router's unconfigured devices
+ * (the likely one is preselected) or a MAC typed in.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ApproveDialog(r: PendingRegistration, mac: String, busy: Boolean, vm: NewDevicesViewModel) {
+    AlertDialog(
+        onDismissRequest = vm::cancelApprove,
+        title = { Text("Approve ${r.name}?") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("House ${r.unit} gets an account on the device you pick. It comes online on the next router check.", style = MaterialTheme.typography.bodyMedium)
+                if (r.deviceName.isNotBlank()) {
+                    Text("Device name given: ${r.deviceName}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                }
+                if (r.candidates.isEmpty()) {
+                    Text("No unknown device has been seen on this router yet. Type the MAC below.", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    Text(
+                        "Devices on this router, first seen closest to the request first. One is ticked only when it is the only device first seen within 10 minutes of the request.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Column(Modifier.selectableGroup()) {
+                        r.candidates.forEach { c ->
+                            val picked = mac.equals(c.mac, ignoreCase = true)
+                            Row(
+                                Modifier.fillMaxWidth().selectable(selected = picked, onClick = { vm.setApproveMac(c.mac) }, role = Role.RadioButton).padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.Top,
+                            ) {
+                                RadioButton(selected = picked, onClick = null, modifier = Modifier.padding(top = 2.dp, end = 8.dp))
+                                Column {
+                                    Text(
+                                        listOf(c.hostName.ifBlank { "no host name" }, c.vendor.ifBlank { "unknown vendor" }, c.port.takeIf { it.isNotBlank() }?.let { "port $it" }).filterNotNull().joinToString("  |  "),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = if (c.nameMatch) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (c.nameMatch) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    Text(
+                                        listOf(c.mac, "first seen ${formatAge(c.firstSeen)}", "last seen ${formatAge(c.lastSeen)}", if (c.online) "online" else null)
+                                            .filterNotNull().joinToString("  |  "),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    val notes = listOfNotNull(if (c.nameMatch) "matches the name given" else null, if (c.likely) "likely" else null)
+                                    if (notes.isNotEmpty()) {
+                                        Text(notes.joinToString(", "), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                OutlinedTextField(mac, vm::setApproveMac, label = { Text("Device MAC") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = { TextButton(onClick = vm::approve, enabled = mac.isNotBlank() && !busy) { Text(if (busy) "Approving..." else "Approve") } },
+        dismissButton = { TextButton(onClick = vm::cancelApprove) { Text("Cancel") } },
+    )
 }
 
 @Composable
@@ -123,12 +274,12 @@ private fun DeviceRow(d: NewDevice, onClick: () -> Unit) {
             Column(Modifier.weight(1f).padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(d.mac, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                 Text(
-                    listOf(d.vendor.ifBlank { "Unknown vendor" }, d.hostName, d.ip).filter { it.isNotBlank() }.joinToString("  |  "),
+                    listOf(d.vendor.ifBlank { "Unknown vendor" }, d.hostName, d.ip.ifBlank { d.addressNote }).filter { it.isNotBlank() }.joinToString("  |  "),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                    listOf(d.routerLabel, if (d.online) "online" else "seen ${formatAge(d.lastSeen)}", d.suggestedAccount?.let { "looks like flat ${it.flat}" }).filterNotNull().filter { it.isNotBlank() }.joinToString("  |  "),
+                    listOf(d.routerLabel, if (d.online) "online" else "seen ${formatAge(d.lastSeen)}", d.suggestedAccount?.let { "looks like house ${it.flat}" }).filterNotNull().filter { it.isNotBlank() }.joinToString("  |  "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -162,7 +313,7 @@ private fun DeviceSheetContent(
         ) {
             Text(d.mac, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
             Text(
-                listOf(d.vendor, d.hostName, d.ip, d.routerLabel).filter { it.isNotBlank() }.joinToString("  |  "),
+                listOf(d.vendor, d.hostName, d.ip.ifBlank { d.addressNote }, d.routerLabel).filter { it.isNotBlank() }.joinToString("  |  "),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -183,7 +334,7 @@ private fun DeviceSheetContent(
                         suggested = d.suggestedAccount?.let { ke.co.ftw.ftnadmin.domain.Account(id = it.id, code = it.code, flat = it.flat, siteId = d.routerKey) },
                     )
                     Button(onClick = vm::attach, enabled = sheet.selected != null && !sheet.busy, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (sheet.busy) "Attaching..." else "Attach to flat ${sheet.selected?.flat.orEmpty()}".trim())
+                        Text(if (sheet.busy) "Attaching..." else "Attach to house ${sheet.selected?.flat.orEmpty()}".trim())
                     }
                 }
                 SheetTab.Create -> {
@@ -200,7 +351,7 @@ private fun DeviceSheetContent(
                             FilterChip(sheet.apartmentId == a.id, { vm.setApartment(a.id) }, label = { ChipLabel(a.name) })
                         }
                     }
-                    OutlinedTextField(sheet.flat, vm::setFlat, label = { Text("Unit (flat)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(sheet.flat, vm::setFlat, label = { Text("House number") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(sheet.tenant, vm::setTenant, label = { Text("Tenant (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(
                         sheet.phone, vm::setPhone, label = { Text("Phone (optional)") }, singleLine = true,

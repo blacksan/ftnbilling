@@ -44,6 +44,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import ke.co.ftw.ftnadmin.core.network.MacOwner
 import ke.co.ftw.ftnadmin.core.network.UserInfo
 import ke.co.ftw.ftnadmin.domain.Account
+import ke.co.ftw.ftnadmin.ui.common.ApartmentField
+import ke.co.ftw.ftnadmin.ui.common.ApartmentPickerSheet
 import ke.co.ftw.ftnadmin.ui.common.AppTopBar
 import ke.co.ftw.ftnadmin.ui.common.CenteredLoading
 import ke.co.ftw.ftnadmin.ui.common.ErrorState
@@ -74,7 +76,7 @@ fun CustomerDetailScreen(id: String, user: UserInfo, onBack: () -> Unit, onOpenO
             vm.clearInfo()
         }
     }
-    val title = (ui.account as? Loadable.Ready)?.value?.let { "Flat ${it.flat}" } ?: "Customer"
+    val title = (ui.account as? Loadable.Ready)?.value?.let { it.flat } ?: "Customer"
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -156,7 +158,7 @@ fun CustomerDetailScreen(id: String, user: UserInfo, onBack: () -> Unit, onOpenO
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SummaryCard(a: Account) {
-    SectionCard("Flat ${a.unitLabel}${if (a.floor.isNotBlank()) ", floor ${a.floor}" else ""}") {
+    SectionCard("${a.unitLabel}${if (a.floor.isNotBlank()) ", floor ${a.floor}" else ""}") {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             StatusChip(accountStateLabel(a), accountTone(a))
             if (a.macConflict) StatusChip("Not provisioned", Tone.Bad)
@@ -165,10 +167,11 @@ private fun SummaryCard(a: Account) {
             Text(a.problem, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
         }
         LabeledValue("Apartment", a.apartment?.name.orEmpty())
-        LabeledValue("Unit", a.unitLabel)
+        LabeledValue("House number", a.unitLabel)
         LabeledValue("Router", a.routerLabel)
         LabeledValue("Tenant", a.tenant)
         LabeledValue("Phone", a.phone)
+        LabeledValue("WhatsApp", if (a.waSamePhone) "Same as the phone" else a.whatsapp)
         LabeledValue("Account code", a.code)
         LabeledValue("Package", a.pkg?.let { "${it.name} (${it.speedMbps} Mbps)" }.orEmpty())
         LabeledValue("Expires", formatExpiry(a.expiresAt))
@@ -178,12 +181,18 @@ private fun SummaryCard(a: Account) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DeviceCard(a: Account) {
-    SectionCard("ONT and router") {
-        LabeledValue("MAC", a.mac)
+    SectionCard("Devices on this account") {
+        LabeledValue("Account MAC", a.mac)
+        LabeledValue("Vendor", (a.device?.vendor ?: a.macVendor).ifBlank { "Unknown" })
+        a.device?.let { d ->
+            LabeledValue("State", if (d.online) "Online" else "Offline")
+            LabeledValue("Last seen", formatAge(d.lastSeen))
+            LabeledValue("Port", d.port.ifBlank { "Unknown" })
+        }
         LabeledValue("IP", a.ip)
         a.router?.let { r ->
             LabeledValue("Lease", r.leaseStatus)
-            LabeledValue("Last seen", formatAge(r.lastSeen))
+            if (a.device == null) LabeledValue("Last seen", formatAge(r.lastSeen))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 StatusChip(if (r.inSync) "In sync" else "Out of sync", if (r.inSync) Tone.Good else Tone.Warn)
                 if (r.pendingTask) StatusChip("Update queued", Tone.Neutral)
@@ -193,10 +202,19 @@ private fun DeviceCard(a: Account) {
         }
         if (a.macConflict) {
             Text(
-                "This MAC is also on another account, so the router is not configured for this flat. Edit the MAC to fix it.",
+                "This MAC is also on another account, so the router is not configured for this house. Edit the MAC to fix it.",
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall,
             )
+        }
+        if (a.equipment.isNotEmpty()) {
+            Text("Equipment register", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            a.equipment.forEach { e ->
+                LabeledValue(
+                    e.kind.replaceFirstChar { it.uppercase() },
+                    listOf(e.model, e.serial, e.mac, e.status).filter { it.isNotBlank() }.joinToString("  |  "),
+                )
+            }
         }
     }
 }
@@ -228,7 +246,7 @@ private fun DetailDialogs(ui: DetailUiState, vm: CustomerDetailViewModel, onOpen
         DetailDialog.Move -> MoveDialog(account, ui, vm)
         is DetailDialog.ConfirmSuspend -> AlertDialog(
             onDismissRequest = vm::dismiss,
-            title = { Text(if (d.suspend) "Suspend Flat ${account.flat}?" else "Unsuspend Flat ${account.flat}?") },
+            title = { Text(if (d.suspend) "Suspend ${account.flat}?" else "Unsuspend ${account.flat}?") },
             text = {
                 Text(
                     if (d.suspend) "Internet is cut off until you unsuspend. The router is updated within seconds."
@@ -293,7 +311,7 @@ private fun PackageDialog(
 private fun MacDialog(account: Account, ui: DetailUiState, vm: CustomerDetailViewModel, onOpenOther: (String) -> Unit) {
     AlertDialog(
         onDismissRequest = vm::dismiss,
-        title = { Text("Edit MAC for Flat ${account.flat}") },
+        title = { Text("Edit MAC for ${account.flat}") },
         text = {
             androidx.compose.foundation.layout.Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
@@ -334,7 +352,7 @@ fun MacConflictNotice(owner: MacOwner, onOpen: ((String) -> Unit)? = null) {
             Text("MAC already in use", style = MaterialTheme.typography.titleSmall)
             Text(macConflictText(owner), style = MaterialTheme.typography.bodyMedium)
             if (onOpen != null && owner.accountId.isNotBlank()) {
-                TextButton(onClick = { onOpen(owner.accountId) }) { Text("Open Flat ${owner.flat}") }
+                TextButton(onClick = { onOpen(owner.accountId) }) { Text("Open ${owner.flat}") }
             }
         }
     }
@@ -342,7 +360,7 @@ fun MacConflictNotice(owner: MacOwner, onOpen: ((String) -> Unit)? = null) {
 
 fun macConflictText(o: MacOwner): String {
     val where = buildString {
-        append("flat ").append(o.flat.ifBlank { "?" })
+        append("house ").append(o.flat.ifBlank { "?" })
         if (o.code.isNotBlank()) append(" (").append(o.code).append(")")
         if (o.siteName.isNotBlank()) append(" on router ").append(o.siteName)
     }
@@ -357,13 +375,14 @@ private fun MoveDialog(account: Account, ui: DetailUiState, vm: CustomerDetailVi
     var aptId by remember { mutableStateOf(account.apartment?.id.orEmpty()) }
     var unit by remember { mutableStateOf(account.unitLabel) }
     var routerId by remember { mutableStateOf<String?>(null) }
+    var picking by remember { mutableStateOf(false) }
     val list = (ui.apartments as? Loadable.Ready)?.value.orEmpty()
     val chosen = list.firstOrNull { it.id == aptId }
     // One router: the server picks it. Several: the operator chooses.
     val needsRouter = (chosen?.routers?.size ?: 0) > 1
     AlertDialog(
         onDismissRequest = vm::dismiss,
-        title = { Text("Move Flat ${account.unitLabel}") },
+        title = { Text("Move ${account.unitLabel}") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
@@ -374,20 +393,23 @@ private fun MoveDialog(account: Account, ui: DetailUiState, vm: CustomerDetailVi
                 when (val l = ui.apartments) {
                     Loadable.Loading -> LoadingSpinner()
                     is Loadable.Failed -> Text(l.message, color = MaterialTheme.colorScheme.error)
-                    is Loadable.Ready -> FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        l.value.forEach { a ->
-                            FilterChip(
-                                selected = a.id == aptId,
-                                onClick = {
+                    is Loadable.Ready -> {
+                        ApartmentField(selected = chosen, onClick = { picking = true })
+                        if (picking) {
+                            ApartmentPickerSheet(
+                                apartments = l.value,
+                                selectedId = aptId,
+                                onSelect = { a ->
+                                    if (a.id != aptId) routerId = null
                                     aptId = a.id
-                                    routerId = null
+                                    picking = false
                                 },
-                                label = { ChipLabel(a.name) },
+                                onDismiss = { picking = false },
                             )
                         }
                     }
                 }
-                OutlinedTextField(unit, { unit = it }, label = { Text("Unit") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(unit, { unit = it }, label = { Text("House number") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 if (needsRouter) {
                     Text("Router", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

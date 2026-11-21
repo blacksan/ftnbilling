@@ -163,7 +163,7 @@ func TestWireClientsInterfacesAndOverviewTabs(t *testing.T) {
 		return r.adminGet(t, p)
 	}
 	all := view("clients", "")
-	for _, want := range []string{"data-clients-q", "20M/20M", "2 flats"} {
+	for _, want := range []string{"data-clients-q", "20M/20M", "2 houses"} {
 		if !strings.Contains(all, want) {
 			t.Errorf("clients tab lacks %q", want)
 		}
@@ -191,7 +191,7 @@ func TestWireClientsInterfacesAndOverviewTabs(t *testing.T) {
 		}
 	}
 	ov := view("overview", "")
-	for _, want := range []string{"RouterOS 7.25.1", "7%", "Flats online", `id="rt-live"`} {
+	for _, want := range []string{"RouterOS 7.25.1", "7%", "Houses online", `id="rt-live"`} {
 		if !strings.Contains(ov, want) {
 			t.Errorf("overview tab lacks %q", want)
 		}

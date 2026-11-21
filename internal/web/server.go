@@ -121,7 +121,14 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 		},
 		"hours":  func(min float64) float64 { return min / 60 },
 		"walink": func(p string) template.URL { return template.URL(billing.WhatsAppLink(p)) },
-		"seq":    func(p ...string) []string { return p },
+		// gps writes an apartment's point as "-1.2921,36.8219" ("" when it has none).
+		"gps": func(a store.Apartment) string {
+			if !a.HasGPS() {
+				return ""
+			}
+			return store.FormatGPS(*a.Lat, *a.Lng)
+		},
+		"seq": func(p ...string) []string { return p },
 		"dict": func(kv ...any) map[string]any {
 			m := map[string]any{}
 			for i := 0; i+1 < len(kv); i += 2 {

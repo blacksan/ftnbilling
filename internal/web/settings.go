@@ -43,6 +43,9 @@ func (s *Server) settingsRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/settings/email", s.settingsSaveEmail)
 	post("/admin/settings/email/test", s.settingsEmailTest)
 
+	get("/admin/settings/support", s.settingsSupport)
+	post("/admin/settings/support", s.settingsSaveSupport)
+
 	get("/admin/settings/equipment", s.settingsEquipment)
 	get("/admin/settings/equipment/find", s.settingsEquipmentFind)
 
@@ -83,6 +86,7 @@ func (s *Server) settingsTabs(active string) []settingsTab {
 		{"whatsapp", "WhatsApp", "/admin/settings/whatsapp"},
 		{"mpesa", "M-Pesa", "/admin/settings/mpesa"},
 		{"email", "Email", "/admin/settings/email"},
+		{"support", "Support contacts", "/admin/settings/support"},
 		{"equipment", "Equipment", "/admin/settings/equipment"},
 		{"tools", "Tools", "/admin/tools"},
 	}
@@ -116,9 +120,9 @@ var waTemplates = []struct {
 	Params []string
 }{
 	{"ftn_admin_alert", []string{"TEST", "Test alert", "Test router", "this is a test from Settings", "now"}},
-	{"ftn_expiry_reminder", []string{"1 Month", "Flat 1, Test router", "Fri 1 Jan, 10:00", "1500", "M-Pesa Paybill 000000", "ABC234"}},
-	{"ftn_plan_expired", []string{"Flat 1, Test router", "Fri 1 Jan, 10:00", "M-Pesa Paybill 000000", "ABC234"}},
-	{"ftn_payment_received", []string{"1500", "TEST123456", "1 Month", "Flat 1, Test router", "Fri 1 Jan, 10:00"}},
+	{"ftn_expiry_reminder", []string{"1 Month", "House 1, Test router", "Fri 1 Jan, 10:00", "1500", "M-Pesa Paybill 000000", "ABC234"}},
+	{"ftn_plan_expired", []string{"House 1, Test router", "Fri 1 Jan, 10:00", "M-Pesa Paybill 000000", "ABC234"}},
+	{"ftn_payment_received", []string{"1500", "TEST123456", "1 Month", "House 1, Test router", "Fri 1 Jan, 10:00"}},
 	{"ftn_outage_notice", []string{"Test router", "Fri 1 Jan, 10:00"}},
 	{"ftn_outage_resolved", []string{"Test router", "Fri 1 Jan, 11:00"}},
 }
@@ -212,6 +216,15 @@ func (s *Server) settingsMpesa(w http.ResponseWriter, r *http.Request) {
 }
 
 type revealKey struct{}
+
+// ---- Support contacts ---------------------------------------------------------------------
+
+func (s *Server) settingsSupport(w http.ResponseWriter, r *http.Request) {
+	p := s.sectionPage(r, "set-support", settings.SecSupport)
+	live := s.live()
+	p.Data["Phone"], p.Data["Email"], p.Data["WhatsApp"] = live.SupportPhone, live.SupportEmail, live.SupportWhatsApp
+	s.render(w, "admin_settings_support", p)
+}
 
 // ---- Email -----------------------------------------------------------------------------------
 

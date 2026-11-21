@@ -82,7 +82,7 @@ class BenchViewModel(
             val r = apiResult { repo.testFlat(siteId, mac, pkg) }
             _state.update { cur ->
                 r.fold(
-                    { a -> cur.copy(busy = false, testAccount = a, message = "Test flat ready: ${a.flat.ifBlank { a.code }}.") },
+                    { a -> cur.copy(busy = false, testAccount = a, message = "Test house ready: ${a.flat.ifBlank { a.code }}.") },
                     { e -> cur.copy(busy = false, message = e.userMessage()) },
                 )
             }

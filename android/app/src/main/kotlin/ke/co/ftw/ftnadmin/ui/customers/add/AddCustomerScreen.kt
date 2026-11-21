@@ -33,6 +33,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -45,6 +48,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import ke.co.ftw.ftnadmin.data.routers.Client
 import ke.co.ftw.ftnadmin.domain.ServicePackage
+import ke.co.ftw.ftnadmin.ui.common.ApartmentField
+import ke.co.ftw.ftnadmin.ui.common.ApartmentPickerSheet
 import ke.co.ftw.ftnadmin.ui.common.AppTopBar
 import ke.co.ftw.ftnadmin.ui.common.ChipLabel
 import ke.co.ftw.ftnadmin.ui.common.ChipRow
@@ -126,6 +131,7 @@ private fun StepCard(number: Int, title: String, content: @Composable () -> Unit
 
 @Composable
 private fun Form(ui: AddCustomerUiState, vm: AddCustomerViewModel) {
+    var picking by rememberSaveable { mutableStateOf(false) }
     StepCard(1, "Customer") {
         OutlinedTextField(ui.tenant, vm::onTenant, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(
@@ -134,22 +140,29 @@ private fun Form(ui: AddCustomerUiState, vm: AddCustomerViewModel) {
             modifier = Modifier.fillMaxWidth(),
         )
     }
-    StepCard(2, "Apartment and unit") {
+    StepCard(2, "Apartment and house number") {
         when (val a = ui.apartments) {
             Loadable.Loading -> LoadingSpinner()
             is Loadable.Failed -> Text(a.message, color = MaterialTheme.colorScheme.error)
             is Loadable.Ready -> if (a.value.isEmpty()) {
                 Text("No apartments yet. Create one on the Apartments page first.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
-                ChipRow(horizontalPadding = 0.dp) {
-                    a.value.forEach { apt ->
-                        FilterChip(selected = apt.id == ui.apartmentId, onClick = { vm.onApartment(apt.id) }, label = { ChipLabel(apt.name) })
-                    }
+                ApartmentField(selected = ui.apartment, onClick = { picking = true })
+                if (picking) {
+                    ApartmentPickerSheet(
+                        apartments = a.value,
+                        selectedId = ui.apartmentId,
+                        onSelect = { apt ->
+                            vm.onApartment(apt.id)
+                            picking = false
+                        },
+                        onDismiss = { picking = false },
+                    )
                 }
             }
         }
         OutlinedTextField(
-            ui.unit, vm::onUnit, label = { Text("Unit (flat), for example B4") }, singleLine = true,
+            ui.unit, vm::onUnit, label = { Text("House number, for example B4") }, singleLine = true,
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
             modifier = Modifier.fillMaxWidth(),
         )
@@ -350,7 +363,7 @@ private fun ResultCard(a: AddedCustomer, onOpen: () -> Unit, onAnother: () -> Un
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Customer created", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold)
             LabeledValue("Apartment", a.account.apartment?.name.orEmpty())
-            LabeledValue("Unit", a.account.unitLabel)
+            LabeledValue("House number", a.account.unitLabel)
             if (a.account.tenant.isNotBlank()) LabeledValue("Name", a.account.tenant)
             LabeledValue("Code", a.account.code)
             LabeledValue("Router", a.account.routerLabel)

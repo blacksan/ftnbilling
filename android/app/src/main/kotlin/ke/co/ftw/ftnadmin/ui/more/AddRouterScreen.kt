@@ -32,6 +32,7 @@ import ke.co.ftw.ftnadmin.ui.common.LocalContainer
 import ke.co.ftw.ftnadmin.ui.common.SectionCard
 import ke.co.ftw.ftnadmin.ui.common.vmFactory
 import ke.co.ftw.ftnadmin.ui.routers.setup.BootstrapCommandBlock
+import ke.co.ftw.ftnadmin.ui.routers.setup.PortsOffNotice
 
 @Composable
 fun AddRouterScreen(onBack: () -> Unit, onOpenRouter: (String) -> Unit) {
@@ -66,6 +67,7 @@ fun AddRouterScreen(onBack: () -> Unit, onOpenRouter: (String) -> Unit) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    PortsOffNotice(ui.form.wanInterface, ui.form.lanPorts)
                     BootstrapCommandBlock(created.join)
                 }
                 val id = created.router.key

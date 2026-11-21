@@ -100,7 +100,7 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 		case !exists:
 			addEqEvent(d, e, store.EqEvReceived, "", e.Status, "added to the register", now)
 		case oldSite != e.SiteID:
-			addEqEvent(d, e, store.EqEvMoved, e.Status, e.Status, "building changed", now)
+			addEqEvent(d, e, store.EqEvMoved, e.Status, e.Status, "router changed", now)
 		default:
 			addEqEvent(d, e, store.EqEvEdited, e.Status, e.Status, "details edited", now)
 		}
@@ -124,7 +124,7 @@ func (s *Service) changeMACLocked(d *store.Data, id, mac string) error {
 	}
 	msg := fmt.Sprintf("%s: ONT MAC changed %s -> %s", a.Flat, a.MAC, mac)
 	if strings.EqualFold(a.MAC, mac) {
-		msg = fmt.Sprintf("%s: ONT MAC %s checked, no other flat uses it", a.Flat, mac)
+		msg = fmt.Sprintf("%s: ONT MAC %s checked, no other house uses it", a.Flat, mac)
 	}
 	d.AddEvent(store.Event{Time: s.now(), SiteID: a.SiteID, Kind: "info", AccountID: id, Msg: msg})
 	a.MAC, a.MACConflict = mac, false // back under the uniqueness rule
@@ -156,7 +156,7 @@ func (s *Service) AssignEquipment(ctx context.Context, id, accountID, siteID str
 				return ErrNotFound
 			}
 			if e.Kind == store.KindSplitter {
-				return errors.New("a splitter belongs to a building: set it as the flat's splitter in the location card")
+				return errors.New("a splitter is shared by several houses: set it as the house's splitter in the location card")
 			}
 			e.AccountID, e.SiteID = a.ID, a.SiteID
 			if useAsMAC && e.Kind == store.KindONT && e.MAC != "" {
@@ -171,7 +171,7 @@ func (s *Service) AssignEquipment(ctx context.Context, id, accountID, siteID str
 			}
 			e.AccountID, e.SiteID = "", siteID
 		default:
-			return errors.New("choose a flat or a building")
+			return errors.New("choose a house or a router")
 		}
 		e.Status, e.InstalledAt, e.UpdatedAt = store.EqInstalled, now, now
 		d.Equipment[id] = e

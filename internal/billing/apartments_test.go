@@ -354,7 +354,7 @@ func TestMoveCustomerHereReprovisionsAndRecordsHistory(t *testing.T) {
 	evs, _ := e.st.Events(ctx, store.EventQuery{AccountID: f1.ID})
 	found := false
 	for _, ev := range evs {
-		if strings.Contains(ev.Msg, "moved from Block A unit Flat 1 on Block A to Block B unit Flat 1 on Block B") {
+		if strings.Contains(ev.Msg, "moved from Block A house number Flat 1 on Block A to Block B house number Flat 1 on Block B") {
 			found = true
 		}
 	}
@@ -453,5 +453,43 @@ func TestMoveRefusedWhenTheDeviceChangedMeanwhile(t *testing.T) {
 	}
 	if _, err := e.svc.MoveToApartment(context.Background(), MoveInput{AccountID: f1.ID, ApartmentID: store.MigratedApartmentID(b), SiteID: b, ExpectMAC: strings.ToLower(macA)}); err != nil {
 		t.Fatalf("the same MAC (any case) moves: %v", err)
+	}
+}
+
+func TestApartmentGPSIsValidatedStoredAndKept(t *testing.T) {
+	e := newEnv(t)
+	p := func(v float64) *float64 { return &v }
+	a, err := e.svc.CreateApartment(ApartmentInput{Name: "Pinned", Lat: p(-1.29210004), Lng: p(36.8219)}, nil)
+	if err != nil || !a.HasGPS() || *a.Lat != -1.2921 || *a.Lng != 36.8219 {
+		t.Fatalf("create with GPS: %v %+v", err, a)
+	}
+	// Half a point, or a point off the globe, is a field error and nothing is written.
+	for _, in := range []ApartmentInput{
+		{Name: "Half", Lat: p(1)}, {Name: "Half2", Lng: p(1)},
+		{Name: "North", Lat: p(90.5), Lng: p(0)}, {Name: "East", Lat: p(0), Lng: p(181)},
+	} {
+		var fe *FieldError
+		if _, err := e.svc.CreateApartment(in, nil); !errors.As(err, &fe) || fe.Field != "gps" {
+			t.Errorf("%+v: %v", in, err)
+		}
+	}
+	if snap := e.st.Snapshot(); func() bool { _, ok := snap.ApartmentByName("Half"); return ok }() {
+		t.Error("a refused apartment was stored")
+	}
+	// The same point again is no change; 0,0 is a change from no point; both nil clears it.
+	if err := e.svc.UpdateApartment(a.ID, ApartmentInput{Name: "Pinned", Lat: p(-1.2921), Lng: p(36.8219)}); err != nil && !errors.Is(err, store.ErrNoChange) {
+		t.Errorf("same point: %v", err)
+	}
+	if err := e.svc.UpdateApartment(a.ID, ApartmentInput{Name: "Pinned", Lat: p(0), Lng: p(0)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.st.Snapshot().Apartments[a.ID]; !got.HasGPS() || *got.Lat != 0 {
+		t.Errorf("0,0 not kept: %+v", got)
+	}
+	if err := e.svc.UpdateApartment(a.ID, ApartmentInput{Name: "Pinned"}); err != nil {
+		t.Fatal(err)
+	}
+	if e.st.Snapshot().Apartments[a.ID].HasGPS() {
+		t.Error("the point was not cleared")
 	}
 }

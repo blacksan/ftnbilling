@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -18,6 +19,10 @@ func (s *Server) deviceRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/devices/attach", s.adminDeviceAttach)
 	post("/admin/devices/dismiss", s.adminDeviceDismiss)
 	post("/admin/devices/move", s.adminDeviceMove)
+	post("/admin/registrations/approve", s.adminRegApprove)
+	post("/admin/registrations/reject", s.adminRegReject)
+	post("/admin/registrations/reject-all", s.adminRegRejectAll)
+	post("/admin/registrations/assign", s.adminRegAssign)
 	get("/admin/sites/devices.json", s.adminRouterDevices)
 }
 
@@ -127,6 +132,8 @@ func (s *Server) adminDevices(w http.ResponseWriter, r *http.Request) {
 			suggested++
 		}
 	}
+	regs := s.svc.PendingRegistrations(sc.Has)
+	p.Data["Regs"], p.Data["RegGroups"], p.Data["AssignChoices"] = regs, regGroups(regs), s.assignChoices(sc)
 	p.Data["Rows"], p.Data["Pkgs"], p.Data["OnlineOnly"], p.Data["Count"] = rows, pkgs, onlineOnly, len(rows)
 	p.Data["OnlineN"], p.Data["Today"], p.Data["Suggested"] = onlineN, today, suggested
 	s.render(w, "admin_devices", p)
@@ -203,14 +210,14 @@ func (s *Server) adminDeviceAttach(w http.ResponseWriter, r *http.Request) {
 	site := s.siteFor(r)
 	a, ok, amb := s.resolveFlat(site, r.PostFormValue("acct"), r.PostFormValue("apartment_id"))
 	if len(amb) > 0 {
-		s.back(w, r, "/admin/devices", "Error: more than one flat of this router has that number ("+s.ambiguousText(amb)+"). Type the account code instead")
+		s.back(w, r, "/admin/devices", "Error: more than one house of this router has that number ("+s.ambiguousText(amb)+"). Type the account code instead")
 		return
 	}
 	if id := r.PostFormValue("account"); !ok && id != "" { // account id, as older forms sent it
 		a, ok = s.svc.GetAccount(id)
 	}
 	if !ok {
-		s.back(w, r, "/admin/devices", "Error: choose a flat of this router (type its name or code)")
+		s.back(w, r, "/admin/devices", "Error: choose a house of this router (type its name or code)")
 		return
 	}
 	if _, err := s.svc.AttachDevice(r.Context(), site, r.PostFormValue("mac"), a.ID); err != nil {
@@ -241,11 +248,141 @@ func (s *Server) adminDeviceMove(w http.ResponseWriter, r *http.Request) {
 	s.back(w, r, s.accountURL(a.ID), "Moved "+a.Tenant+" to this apartment. The router is updating.")
 }
 
+// regGroup is the waiting registrations of one router (SiteID "" = the ones that name no router yet).
+type regGroup struct {
+	SiteID, SiteName string
+	N                int
+}
+
+func regGroups(regs []billing.RegistrationView) []regGroup {
+	var out []regGroup
+	idx := map[string]int{}
+	for _, g := range regs {
+		i, ok := idx[g.SiteID]
+		if !ok {
+			i = len(out)
+			idx[g.SiteID] = i
+			name := g.SiteName
+			if g.SiteID == "" {
+				name = "no router yet"
+			}
+			out = append(out, regGroup{SiteID: g.SiteID, SiteName: name})
+		}
+		out[i].N++
+	}
+	return out
+}
+
+// assignChoice is one router and apartment a registration that names only a building can be given.
+type assignChoice struct{ Value, Label string }
+
+func (s *Server) assignChoices(sc scope) []assignChoice {
+	var out []assignChoice
+	s.st.View(func(d *store.Data) {
+		for _, st := range sc.Sites {
+			for _, id := range d.SiteApartmentIDs(st.ID) {
+				out = append(out, assignChoice{Value: st.ID + "|" + id, Label: st.Name + " / " + d.Apartments[id].Name})
+			}
+		}
+	})
+	return out
+}
+
+// regScopeAllows: the registration's router is one the user may act on; one that names no router yet is for
+// whoever can act on any router.
+func (s *Server) regScopeAllows(r *http.Request, siteID string) bool {
+	if siteID == "" {
+		return len(s.scopeOf(r).Sites) > 0
+	}
+	return s.scopeAllows(r, siteID)
+}
+
+// adminRegRejectAll rejects every waiting registration of one router (site "none": the ones naming no router).
+func (s *Server) adminRegRejectAll(w http.ResponseWriter, r *http.Request) {
+	site := r.PostFormValue("site")
+	if site == "none" {
+		site = billing.UnassignedSite
+	}
+	if !s.regScopeAllows(r, site) {
+		http.NotFound(w, r)
+		return
+	}
+	n, err := s.svc.RejectAllPending(site, s.actorOf(r))
+	if err != nil && n == 0 {
+		s.back(w, r, "/admin/devices", "Nothing was waiting.")
+		return
+	}
+	s.back(w, r, "/admin/devices", fmt.Sprintf("Rejected %d waiting registrations. Their details were erased.", n))
+}
+
+// adminRegAssign gives a registration that named only a building its router and apartment.
+func (s *Server) adminRegAssign(w http.ResponseWriter, r *http.Request) {
+	id := r.PostFormValue("id")
+	reg, ok := s.svc.GetRegistration(id)
+	if !ok || reg.SiteID != "" || !s.regScopeAllows(r, "") {
+		http.NotFound(w, r)
+		return
+	}
+	siteID, aptID, _ := strings.Cut(r.PostFormValue("target"), "|")
+	if !s.scopeAllows(r, siteID) {
+		s.back(w, r, "/admin/devices", "Error: choose one of your routers and apartments")
+		return
+	}
+	s.back(w, r, "/admin/devices", msgOr(s.svc.AssignRegistration(id, siteID, aptID, s.actorOf(r)), "Assigned. Pick the device and approve."))
+}
+
+// adminRegApprove makes the account of a pending registration with the MAC the owner picked (or typed).
+func (s *Server) adminRegApprove(w http.ResponseWriter, r *http.Request) {
+	id := r.PostFormValue("id")
+	reg, ok := s.svc.GetRegistration(id)
+	if !ok || !s.scopeAllows(r, reg.SiteID) {
+		http.NotFound(w, r)
+		return
+	}
+	mac := strings.TrimSpace(r.PostFormValue("mac_typed"))
+	if mac == "" {
+		mac = r.PostFormValue("mac")
+	}
+	a, err := s.svc.ApproveRegistration(r.Context(), id, mac, s.actorOf(r))
+	if err != nil {
+		s.back(w, r, "/admin/devices", "Error: "+err.Error())
+		return
+	}
+	s.back(w, r, s.accountURL(a.ID), "Approved. The account is made; the device leaves the wall when the router's next pass has run.")
+}
+
+func (s *Server) adminRegReject(w http.ResponseWriter, r *http.Request) {
+	id := r.PostFormValue("id")
+	reg, ok := s.svc.GetRegistration(id)
+	if !ok || !s.regScopeAllows(r, reg.SiteID) {
+		http.NotFound(w, r)
+		return
+	}
+	s.back(w, r, "/admin/devices", msgOr(s.svc.RejectRegistration(id, s.actorOf(r)), "Rejected. The details were erased."))
+}
+
+// scopeAllows: the router is one of the live routers (the web admin has one role set for all of them).
+func (s *Server) scopeAllows(r *http.Request, siteID string) bool {
+	for _, st := range s.scopeOf(r).Sites {
+		if st.ID == siteID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) actorOf(r *http.Request) string {
+	if u, ok := userOf(r); ok {
+		return u.Username
+	}
+	return ""
+}
+
 // ambiguousText lists "apartment, unit (code)" for the accounts a typed label matched.
 func (s *Server) ambiguousText(list []store.Account) string {
 	var parts []string
 	for _, a := range list {
-		parts = append(parts, s.apartmentName(a.ApartmentID)+", unit "+a.Unit+" ("+a.Code+")")
+		parts = append(parts, s.apartmentName(a.ApartmentID)+", house number "+a.Unit+" ("+a.Code+")")
 	}
 	return strings.Join(parts, "; ")
 }

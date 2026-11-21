@@ -9,7 +9,7 @@ import (
 
 // ErrDuplicateIP means a change would give one static IP to more than one
 // open account in the same building.
-var ErrDuplicateIP = errors.New("that IP address is already assigned to another account in this building")
+var ErrDuplicateIP = errors.New("that IP address is already assigned to another account in this router")
 
 // checkAccountInvariants runs inside Update, after the change set is known and
 // before it is committed. For every open, non-conflict account the change
@@ -20,7 +20,7 @@ var ErrDuplicateIP = errors.New("that IP address is already assigned to another 
 func checkAccountInvariants(d *Data, cs *ChangeSet) error {
 	for _, a := range cs.Accounts.Upsert {
 		if a.MAC != "" && !a.MACConflict && !macShape.MatchString(a.MAC) {
-			return fmt.Errorf("%w: %q on flat %s", ErrBadMAC, a.MAC, a.Flat)
+			return fmt.Errorf("%w: %q on house %s", ErrBadMAC, a.MAC, a.Flat)
 		}
 	}
 	if err := checkUnitInvariant(d, cs); err != nil {
@@ -188,7 +188,7 @@ func checkUnitInvariant(d *Data, cs *ChangeSet) error {
 	}
 	sort.Strings(keys)
 	k := keys[0]
-	return fmt.Errorf("%w (unit %q is on accounts %s)", ErrDuplicateUnit, d.Accounts[by[k][0]].Unit, strings.Join(by[k], " and "))
+	return fmt.Errorf("%w (house number %q is on accounts %s)", ErrDuplicateUnit, d.Accounts[by[k][0]].Unit, strings.Join(by[k], " and "))
 }
 
 // checkApartmentInvariants covers the apartment tables for the JSON backend

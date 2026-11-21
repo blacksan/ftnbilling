@@ -41,7 +41,7 @@ private fun CardsSample() {
         Surface {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 StatCard("Throughput", "123.4", Modifier.fillMaxWidth(), unit = "Mbps", sub = "Up 22.1 Mbps", tone = CardTone.Brand, spark = listOf(1.0, 3.0, 2.0, 5.0, 4.0))
-                StatCard("Online flats", "27", Modifier.fillMaxWidth(), unit = "of 40", tone = CardTone.Feature)
+                StatCard("Online houses", "27", Modifier.fillMaxWidth(), unit = "of 40", tone = CardTone.Feature)
             }
         }
     }

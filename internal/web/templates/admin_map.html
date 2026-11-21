@@ -5,7 +5,7 @@
 {{template "stat" (dict "K" "With a location" "V" .Data.Geo "S" "open in your phone's maps" "Icon" "map" "Tone" "info")}}
 </div>
 {{if .Data.Rows}}<section class="panel" aria-label="Network drawing"><div class="topo-wrap">{{.Data.Svg}}</div></section>
-<div class="tw"><table class="rs"><thead><tr><th>Router</th><th>State</th><th class="n">Flats</th><th class="n">Online</th><th>Location</th></tr></thead><tbody>
-{{range .Data.Rows}}<tr><td class="who"><b><a href="/admin/routers/view?id={{.S.ID}}">{{.S.Name}}</a></b><span>{{.S.Address}}</span></td><td data-label="State"><span class="pill {{.State}}">{{.State}}</span></td><td class="n" data-label="Flats">{{.Accounts}}</td><td class="n" data-label="Online">{{.Online}}</td><td data-label="Location">{{if .HasGeo}}<a href="{{.GeoLink}}">Open in maps</a>{{else}}<span class="muted">not set</span>{{end}}</td></tr>{{end}}</tbody></table></div>
-{{else}}{{template "empty" (dict "Title" "No routers to draw yet." "Text" "Add a router and it appears here, with its OLT and flats." "Acts" (acts "Add router|#modal:addrouter"))}}{{end}}
+<div class="tw"><table class="rs"><thead><tr><th>Router</th><th>State</th><th class="n">Houses</th><th class="n">Online</th><th>Location</th></tr></thead><tbody>
+{{range .Data.Rows}}<tr><td class="who"><b><a href="/admin/routers/view?id={{.S.ID}}">{{.S.Name}}</a></b><span>{{.S.Address}}</span></td><td data-label="State"><span class="pill {{.State}}">{{.State}}</span></td><td class="n" data-label="Houses">{{.Accounts}}</td><td class="n" data-label="Online">{{.Online}}</td><td data-label="Location">{{if .HasGeo}}<a href="{{.GeoLink}}">Open in maps</a>{{else}}<span class="muted">not set</span>{{end}}</td></tr>{{end}}</tbody></table></div>
+{{else}}{{template "empty" (dict "Title" "No routers to draw yet." "Text" "Add a router and it appears here, with its OLT and houses." "Acts" (acts "Add router|#modal:addrouter"))}}{{end}}
 {{template "afoot" .}}{{end}}

@@ -466,3 +466,34 @@ body.vprint{background:#fff;color:#000;padding:16px;font:14px var(--f-sans)}
 .tw td.act-wrap{white-space:normal;max-width:380px;padding-top:var(--sp-2);padding-bottom:var(--sp-2)}.act-wrap .row{flex-wrap:wrap}
 .panel>h2+.tw,.panel>h2+table,.panel>h2+.chartbox{margin-top:var(--sp-3)}
 .clegend{display:flex;flex-wrap:wrap;gap:var(--sp-1) var(--sp-4);list-style:none;margin:var(--sp-2) 0 0;padding:0;font-size:var(--fs-13);color:var(--ink-2)}.clegend li{display:inline-flex;align-items:center;gap:var(--sp-2)}.clegend svg{flex:0 0 auto}
+
+/* Apartment location: "View on map" link (list, detail). Teal tokens only. */
+.maplink{display:inline-flex;align-items:center;gap:6px;margin-top:2px;font-size:var(--fs-13);font-weight:500;color:var(--brand-ink)}
+.maplink svg,.locrow svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.locrow{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-3);margin:0 0 var(--sp-3)}
+
+/* ---- apartment picker pop-up (apt-picker.js) ---------------------------- */
+.aptpick{position:relative}
+.aptpick-native,.field>select.aptpick-native{position:absolute;left:0;bottom:0;width:1px;height:1px;min-height:0;opacity:0;pointer-events:none;margin:0;padding:0;border:0}
+.field>.aptpick-btn{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;margin-top:6px;min-height:var(--ctl-h);padding:6px var(--sp-3);text-align:left;font:inherit;font-size:var(--fs-14);color:var(--ink);background:var(--surface);border:1px solid var(--field);border-radius:var(--r1);cursor:pointer;position:relative;padding-right:34px}
+.aptpick-btn::after{content:"";position:absolute;right:12px;top:50%;width:7px;height:7px;margin-top:-6px;border:solid var(--ink-2);border-width:0 2px 2px 0;transform:rotate(45deg)}
+.aptpick-btn:hover{border-color:var(--brand)}
+.aptpick-err{display:block;margin-top:4px;font-size:var(--fs-13,13px);color:var(--bad,#b3261e)}
+.aptpick-err[hidden]{display:none}
+.aptpick-btn[aria-invalid=true]{border-color:var(--bad,#b3261e)}
+.aptpick-btn:focus-visible{outline:2px solid var(--focus);outline-offset:1px;border-color:var(--focus)}
+.aptpick-btn.empty .aptpick-name{color:var(--muted);font-weight:400}
+.aptpick-name{font-weight:500}
+.aptpick-sub{font-size:var(--fs-12);color:var(--muted);font-weight:400}
+dialog.aptpick-dlg{width:min(520px,calc(100vw - 24px))}
+.aptpick-q{display:block;width:100%;margin-bottom:var(--sp-3)}
+.aptpick-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:min(52vh,420px);overflow:auto}
+.aptpick-list li[hidden]{display:none}
+.aptrow{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;padding:10px var(--sp-3);text-align:left;font:inherit;font-size:var(--fs-14);color:var(--ink);background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r1);cursor:pointer;white-space:normal}
+.aptrow:hover{border-color:var(--brand);background:var(--brand-soft)}
+.aptrow:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+.aptrow.on{border-color:var(--brand);background:var(--brand-soft);box-shadow:inset 3px 0 0 var(--brand)}
+.aptrow b{font-weight:600}
+.aptrow-addr{color:var(--ink-2);font-size:var(--fs-13)}
+.aptrow-meta{color:var(--muted);font-size:var(--fs-12)}
+.aptpick-empty{margin:var(--sp-3) 0 0}

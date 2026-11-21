@@ -97,7 +97,7 @@ fun CustomersScreen(user: UserInfo, onAlerts: () -> Unit, onOpen: (String) -> Un
             OutlinedTextField(
                 value = ui.query,
                 onValueChange = vm::onQuery,
-                placeholder = { Text("Search flat, name, phone, MAC or code") },
+                placeholder = { Text("Search house number, name, phone, MAC or code") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
                     if (ui.query.isNotEmpty()) {
@@ -153,7 +153,7 @@ fun AccountRow(a: Account, onClick: () -> Unit) {
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Flat ${a.unitLabel}", style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(end = 8.dp))
+                Text(a.unitLabel, style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(end = 8.dp))
                 StatusChip(accountStateLabel(a), accountTone(a))
             }
             val who = listOf(a.tenant, a.phone).filter { it.isNotBlank() }.joinToString(" - ")

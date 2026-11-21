@@ -24,6 +24,8 @@ import (
 //	/interface                   disabled=yes|no on non-WAN physical ports (ether, sfp, combo, wlan), nothing else
 //	/interface/vlan              the customer VLAN interface ("ftn: customer VLAN"): added, or moved to the OLT port
 //	/ip/firewall/filter, /nat    the customer DNS accepts, and the walled-garden rules
+//	/ip/firewall/filter          also the three "ftn: admin ... no internet" rules, and /ip/firewall/address-list
+//	                             the rows of the admin allow list (list ftn-admin-allow, comment "ftn: admin allow ...")
 //	/ip/dhcp-server              enabling ftn-dhcp
 //	/file                        removing ftn-setup.rsc and ftn-reset.rsc
 //
@@ -88,6 +90,7 @@ type fixWriter struct {
 	lanPorts  map[string]bool // ports the server may put in br-lan (comment "ftn: LAN port")
 	staleLAN  map[string]bool // ports whose server-made br-lan membership may be removed
 	lanSafe   bool            // a wanted admin LAN port is a member of br-lan: old members may leave
+	uplink    map[string]bool // interfaces that carry the uplink (read from the router): never switched
 	offPorts  map[string]bool // physical ports the server may switch off or on (/interface disabled)
 	wan       string          // the WAN interface: never written
 	oldVLANs  map[string]bool // the server's own old customer VLAN interfaces it may remove once the new one is in place
@@ -95,8 +98,11 @@ type fixWriter struct {
 	oltPort   string          // the interface that VLAN sits on
 	custIface string          // the customer interface, for the DNS accept rules
 	walled    map[string]bool // comments of the walled-garden rules a fix may write (set by fixWalled)
-	serverIP  string          // the server's tunnel address: the only traffic-flow target a fix may touch
-	applied   []string
+	// adminRules: comments of the admin-port rules (adminfw.go) a fix may write; adminList: the admin allow list's entries too
+	adminRules map[string]bool
+	adminList  bool
+	serverIP   string // the server's tunnel address: the only traffic-flow target a fix may touch
+	applied    []string
 	// stop, when set, is asked before every write: the server's own passes stop at once when the owner pauses
 	// the automatic fixes while a pass is running (between and inside fixes).
 	stop func() bool
@@ -147,10 +153,10 @@ func (w *fixWriter) allowedRow(path string, row routeros.Row) error {
 		case (w.custPorts[iface] || w.stale[iface]) && row["bridge"] == CustomerBridge:
 		case (w.lanPorts[iface] || w.staleLAN[iface]) && row["bridge"] == LANBridge:
 		default:
-			return forbid("bridge port " + iface + " (bridge " + row["bridge"] + ") is not a customer port of this building")
+			return forbid("bridge port " + iface + " (bridge " + row["bridge"] + ") is not a customer port of this router")
 		}
 	case "/interface":
-		if !physicalType(row["type"]) || row["name"] == "" || row["name"] == w.wan || !w.offPorts[row["name"]] {
+		if !physicalType(row["type"]) || row["name"] == "" || row["name"] == w.wan || w.uplink[row["name"]] || !w.offPorts[row["name"]] {
 			return forbid("an interface that is not a non-WAN physical port the server may switch")
 		}
 	case "/interface/vlan":
@@ -166,8 +172,15 @@ func (w *fixWriter) allowedRow(path string, row routeros.Row) error {
 			return forbid("a DHCP server the server did not make")
 		}
 	case "/ip/firewall/filter", "/ip/firewall/nat":
+		if path == "/ip/firewall/filter" && w.adminRules[row["comment"]] {
+			break
+		}
 		if !w.walled[row["comment"]] && !strings.HasPrefix(row["comment"], "ftn: ipoe") {
 			return forbid("a firewall rule that is not part of the walled garden")
+		}
+	case "/ip/firewall/address-list":
+		if !w.adminList || row["list"] != AdminAllowList || !strings.HasPrefix(row["comment"], adminAllowPrefix) {
+			return forbid("an address list row that is not part of the admin allow list")
 		}
 	case "/file":
 		if row["name"] != SetupFile && row["name"] != ResetFile {
@@ -187,19 +200,19 @@ func (w *fixWriter) addRow(ctx context.Context, path string, body map[string]str
 	case "/interface/bridge/port":
 		if body["bridge"] == LANBridge {
 			if !w.lanPorts[body["interface"]] || body["interface"] == "" || len(body) != 3 || body["comment"] != LANPortComment {
-				return forbid("a bridge port row that is not " + LANPortComment + " in " + LANBridge + " for an admin LAN port of this building")
+				return forbid("a bridge port row that is not " + LANPortComment + " in " + LANBridge + " for an admin LAN port of this router")
 			}
 			break
 		}
 		if !w.custPorts[body["interface"]] || body["interface"] == "" {
-			return forbid("bridge port " + body["interface"] + " is not a customer port of this building")
+			return forbid("bridge port " + body["interface"] + " is not a customer port of this router")
 		}
 		if len(body) != 4 || body["bridge"] != CustomerBridge || body["horizon"] != "1" || body["comment"] != CustPortComment {
 			return forbid("a bridge port row that is not " + CustPortComment + " in " + CustomerBridge + " with horizon=1")
 		}
 	case "/interface/vlan":
 		if w.vlanName == "" || body["name"] != w.vlanName || body["interface"] != w.oltPort || body["comment"] != CustVLANComment || len(body) != 4 {
-			return forbid("a VLAN interface that is not the building's customer VLAN on its OLT port")
+			return forbid("a VLAN interface that is not the router's customer VLAN on its OLT port")
 		}
 	case "/ip/traffic-flow/target":
 		if w.serverIP == "" || body["dst-address"] != w.serverIP {
@@ -208,7 +221,27 @@ func (w *fixWriter) addRow(ctx context.Context, path string, body map[string]str
 		if _, ok := body["comment"]; ok {
 			return forbid("traffic-flow targets take no comment")
 		}
+	case "/ip/firewall/address-list":
+		if !w.adminList || body["list"] != AdminAllowList || !strings.HasPrefix(body["comment"], adminAllowPrefix) || body["address"] == "" {
+			return forbid("an address list row that is not part of the admin allow list")
+		}
+		for k := range body {
+			if k != "list" && k != "address" && k != "comment" {
+				return forbid("address list property " + k)
+			}
+		}
 	case "/ip/firewall/filter", "/ip/firewall/nat":
+		if path == "/ip/firewall/filter" && w.adminRules[body["comment"]] {
+			if body["chain"] != "forward" {
+				return forbid("an admin port rule outside the forward chain")
+			}
+			for k := range body {
+				if !ruleProp(k) {
+					return forbid("firewall rule property " + k)
+				}
+			}
+			break
+		}
 		if w.walled[body["comment"]] {
 			for k := range body {
 				if !ruleProp(k) {
@@ -246,6 +279,14 @@ func (w *fixWriter) addRowID(ctx context.Context, path string, body map[string]s
 	if w.stop != nil && w.stop() {
 		return "", ErrAutoFixesPaused
 	}
+	if path == "/ip/firewall/filter" && w.adminRules[body["comment"]] && body["chain"] == "forward" {
+		for k := range body {
+			if !ruleProp(k) {
+				return "", forbid("firewall rule property " + k)
+			}
+		}
+		return w.rt.AddRow(ctx, path, body)
+	}
 	if !w.walled[body["comment"]] || (path != "/ip/firewall/filter" && path != "/ip/firewall/nat") {
 		return "", forbid("a rule that is not part of the walled garden")
 	}
@@ -261,7 +302,7 @@ func (w *fixWriter) addRowID(ctx context.Context, path string, body map[string]s
 func ruleProp(k string) bool {
 	switch k {
 	case "chain", "action", "protocol", "dst-port", "dst-address", "src-address", "src-address-list", "in-interface", "out-interface",
-		"in-interface-list", "out-interface-list", "connection-state", "reject-with", "to-addresses", "to-ports", "comment", "place-before":
+		"in-interface-list", "out-interface-list", "dst-address-list", "connection-state", "reject-with", "to-addresses", "to-ports", "comment", "place-before":
 		return true
 	}
 	return false
@@ -283,7 +324,7 @@ func (w *fixWriter) setRow(ctx context.Context, path string, row routeros.Row, d
 	case "/interface/bridge/port":
 		if row["bridge"] == LANBridge {
 			if !w.lanPorts[row["interface"]] {
-				return forbid("only an admin LAN port of this building may be changed in " + LANBridge)
+				return forbid("only an admin LAN port of this router may be changed in " + LANBridge)
 			}
 			for k, v := range diff {
 				if !(k == "comment" && v == LANPortComment) && !(k == "disabled" && v == "no") {
@@ -314,8 +355,14 @@ func (w *fixWriter) setRow(ctx context.Context, path string, row routeros.Row, d
 		}
 	case "/ip/firewall/filter", "/ip/firewall/nat":
 		for k := range diff {
-			if !ruleProp(k) {
+			if !ruleProp(k) && !(k == "disabled" && diff[k] == "no") {
 				return forbid("firewall rule property " + k)
+			}
+		}
+	case "/ip/firewall/address-list":
+		for k, v := range diff {
+			if !(k == "address" && v != "") && !(k == "disabled" && v == "no") {
+				return forbid("an admin allow row may only get its address or be enabled")
 			}
 		}
 	}
@@ -332,7 +379,7 @@ func (w *fixWriter) removeRow(ctx context.Context, path string, row routeros.Row
 		if !w.oldVLANs[row["name"]] || row["comment"] != CustVLANComment {
 			return forbid("only the server's own old customer VLAN may be removed")
 		}
-	case "/interface/bridge/port", "/ip/traffic-flow/target", "/ip/firewall/filter", "/ip/firewall/nat", "/file":
+	case "/interface/bridge/port", "/ip/traffic-flow/target", "/ip/firewall/filter", "/ip/firewall/nat", "/ip/firewall/address-list", "/file":
 		if err := w.allowedRow(path, row); err != nil {
 			return err
 		}
@@ -374,6 +421,7 @@ var fixers = map[string]fixFunc{
 	CheckWalled:      fixWalled,
 	CheckDHCP:        fixDHCP,
 	CheckBootFile:    fixBootFile,
+	CheckAdminNet:    fixAdminNet,
 }
 
 // freshRead re-reads what a fix depends on and fails (router unreachable)

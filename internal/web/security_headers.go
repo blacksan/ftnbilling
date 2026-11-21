@@ -25,7 +25,12 @@ func (s *Server) securityHeaders(h http.Header, r *http.Request) {
 	h.Set("Cache-Control", "no-store")
 	h.Set("Referrer-Policy", "same-origin")
 	h.Set("Cross-Origin-Opener-Policy", "same-origin")
-	h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+	// Geolocation is off everywhere except the apartment form, whose "Use this device's location" button needs it.
+	geo := "()"
+	if p := r.URL.Path; p == "/admin/apartments/new" || p == "/admin/apartments/edit" {
+		geo = "(self)"
+	}
+	h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation="+geo+", payment=()")
 	if s.secureCookies() {
 		// Browsers ignore this over plain http; Caddy terminates TLS in front.
 		h.Set("Strict-Transport-Security", "max-age=31536000")

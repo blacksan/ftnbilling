@@ -15,6 +15,7 @@ import ke.co.ftw.ftnadmin.ui.customers.CustomerDetailViewModel
 import ke.co.ftw.ftnadmin.ui.customers.DetailDialog
 import ke.co.ftw.ftnadmin.ui.customers.macConflictText
 import ke.co.ftw.ftnadmin.ui.newdevices.NewDevicesViewModel
+import ke.co.ftw.ftnadmin.ui.newdevices.rejectAllTargets
 import ke.co.ftw.ftnadmin.ui.newdevices.SheetTab
 import ke.co.ftw.ftnadmin.ui.payments.PaymentDialog
 import ke.co.ftw.ftnadmin.ui.payments.PaymentsViewModel
@@ -43,6 +44,11 @@ class ViewModelsTest {
     private lateinit var api: ApiClient
     private val routes = mutableMapOf<String, MockResponse>()
     private val seen = mutableListOf<String>()
+    private val recorded = mutableListOf<Pair<String, RecordedRequest>>()
+
+    /** The requests the fake server received for "METHOD /path", in order. */
+    private fun requests(key: String): List<RecordedRequest> =
+        synchronized(recorded) { recorded.filter { it.first == key }.map { it.second } }
 
     @Before fun setUp() {
         server = MockWebServer()
@@ -50,6 +56,7 @@ class ViewModelsTest {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 val key = "${request.method} ${request.requestUrl!!.encodedPath}"
                 synchronized(seen) { seen += key }
+                synchronized(recorded) { recorded += key to request }
                 return routes[key] ?: MockResponse().setResponseCode(404).setBody("""{"error":{"code":"not_found","message":"nope"}}""")
             }
         }
@@ -103,7 +110,7 @@ class ViewModelsTest {
         val s = vm.state.value
         assertEquals(DetailDialog.EditMac, s.dialog)
         val text = macConflictText(s.macOwner!!)
-        assertTrue(text, text.contains("flat C7"))
+        assertTrue(text, text.contains("house C7"))
         assertTrue(text, text.contains("Lavington Court"))
         assertTrue(text, text.contains("FTN-2"))
         assertNull("conflict is shown as its own notice, not a generic error", s.error)
@@ -163,6 +170,57 @@ class ViewModelsTest {
         await(vm.state) { it.devices is Loadable.Ready }
         val macs = (vm.state.value.devices as Loadable.Ready<List<NewDevice>>).value.map { it.mac.takeLast(2) }
         assertEquals(listOf("03", "02", "01"), macs)
+    }
+
+    private val pendingReg = """{"id":"r1","site_id":"s1","site_name":"Kilimani","apartment_id":"ap1","apartment_name":"Hilltop","unit":"B7","name":"Njeri Mwangi","phone":"254722111222","guess_mac":"00:E0:4C:68:01:02","candidates":[{"mac":"00:E0:4C:68:01:02","vendor":"Realtek","online":true}]}"""
+
+    @Test fun selfRegistrationsListPreselectTheGuessAndApproveWithTheMac() = runTest(main.dispatcher) {
+        routes["GET /api/v1/unregistered"] = ok("""{"items":[]}""")
+        routes["GET /api/v1/packages"] = ok("""{"items":[]}""")
+        routes["GET /api/v1/registrations"] = ok("""{"items":[$pendingReg],"count":1}""")
+        routes["POST /api/v1/registrations/r1/approve"] = ok("""{"id":"a1"}""")
+        val vm = main.track(NewDevicesViewModel(null, NewDevicesRepository(api), SitesRepository(api), AccountsRepository(api)))
+        await(vm.state) { it.devices is Loadable.Ready && it.registrations.isNotEmpty() }
+        val r = vm.state.value.registrations.single()
+        assertEquals("Njeri Mwangi", r.name)
+        vm.askApprove(r)
+        assertEquals("the likely device is preselected", "00:E0:4C:68:01:02", vm.state.value.approveMac)
+        assertTrue(requests("POST /api/v1/registrations/r1/approve").isEmpty())
+        vm.approve()
+        await(vm.state) { it.approving == null && it.message != null }
+        val body = requests("POST /api/v1/registrations/r1/approve").single().body.readUtf8()
+        assertTrue(body, body.contains("\"mac\":\"00:E0:4C:68:01:02\""))
+    }
+
+    @Test fun selfRegistrationCanBeRejectedAfterAConfirm() = runTest(main.dispatcher) {
+        routes["GET /api/v1/unregistered"] = ok("""{"items":[]}""")
+        routes["GET /api/v1/packages"] = ok("""{"items":[]}""")
+        routes["GET /api/v1/registrations"] = ok("""{"items":[$pendingReg],"count":1}""")
+        routes["POST /api/v1/registrations/r1/reject"] = ok("""{}""")
+        val vm = main.track(NewDevicesViewModel(null, NewDevicesRepository(api), SitesRepository(api), AccountsRepository(api)))
+        await(vm.state) { it.registrations.isNotEmpty() }
+        vm.askReject(vm.state.value.registrations.single())
+        assertTrue(requests("POST /api/v1/registrations/r1/reject").isEmpty())
+        vm.reject()
+        await(vm.state) { it.rejecting == null && it.message != null }
+        assertEquals(1, requests("POST /api/v1/registrations/r1/reject").size)
+    }
+
+    @Test fun rejectAllEmptiesOneRoutersQueueAfterAConfirm() = runTest(main.dispatcher) {
+        routes["GET /api/v1/unregistered"] = ok("""{"items":[]}""")
+        routes["GET /api/v1/packages"] = ok("""{"items":[]}""")
+        routes["GET /api/v1/registrations"] = ok("""{"items":[$pendingReg],"count":1}""")
+        routes["POST /api/v1/registrations/reject-all"] = ok("""{"ok":true,"rejected":1}""")
+        val vm = main.track(NewDevicesViewModel(null, NewDevicesRepository(api), SitesRepository(api), AccountsRepository(api)))
+        await(vm.state) { it.registrations.isNotEmpty() }
+        val t = rejectAllTargets(vm.state.value.registrations).single()
+        assertEquals("Kilimani", t.label)
+        vm.askRejectAll(t)
+        assertTrue(requests("POST /api/v1/registrations/reject-all").isEmpty())
+        vm.rejectAll()
+        await(vm.state) { it.rejectingAll == null && it.message != null }
+        val body = requests("POST /api/v1/registrations/reject-all").single().body.readUtf8()
+        assertTrue(body, body.contains("\"site_id\":\"s1\""))
     }
 
     @Test fun attachConflictNamesTheOwner() = runTest(main.dispatcher) {

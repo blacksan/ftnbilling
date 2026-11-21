@@ -1064,3 +1064,55 @@ func TestAPIHeadersAndLogRedaction(t *testing.T) {
 }
 
 func nilCtx() context.Context { return context.Background() }
+
+// The account detail carries the bound MAC with its maker and the equipment register items; PATCH takes the
+// WhatsApp number and the "same as the phone" flag, and the flag comes back.
+func TestAPIAccountDetailDevicesAndWhatsApp(t *testing.T) {
+	r := newAPIRig(t)
+	x := r.call(r.oper.Access, "POST", "/accounts", map[string]any{"apartment_id": aptOf(t, r.st, r.A.ID), "site_id": r.A.ID, "flat": "A-201", "mac": "00:E0:4C:68:01:02", "tenant": "Wanjiku", "phone": "0712345678"}, nil)
+	if x.Status != 201 {
+		t.Fatalf("create: %d %s", x.Status, x.Raw)
+	}
+	acct := x.JSON(t)
+	id := str(acct, "id")
+	if acct["mac_vendor"] != "Realtek" {
+		t.Errorf("mac_vendor %v", acct["mac_vendor"])
+	}
+	d := r.call(r.view.Access, "GET", "/accounts/"+id, nil, nil).JSON(t)
+	dev, ok := d["device"].(map[string]any)
+	if !ok || dev["mac"] != "00:E0:4C:68:01:02" || dev["vendor"] != "Realtek" || dev["online"] != false || dev["port"] != "" {
+		t.Fatalf("device: %v", d["device"])
+	}
+	if eq, ok := d["equipment"].([]any); !ok || len(eq) != 0 {
+		t.Fatalf("equipment: %v", d["equipment"])
+	}
+	if _, has := d["router"].(map[string]any)["port"]; !has {
+		t.Error("router.port missing")
+	}
+	p := r.call(r.oper.Access, "PATCH", "/accounts/"+id, map[string]any{"wa_same_phone": true}, nil)
+	if j := p.JSON(t); p.Status != 200 || j["wa_same_phone"] != true || j["whatsapp"] != "254712345678" {
+		t.Fatalf("patch same: %d %s", p.Status, p.Raw)
+	}
+	d = r.call(r.view.Access, "GET", "/accounts/"+id, nil, nil).JSON(t)
+	if d["wa_same_phone"] != true || d["whatsapp"] != d["phone"] {
+		t.Fatalf("after reload: %v %v", d["wa_same_phone"], d["whatsapp"])
+	}
+	p = r.call(r.oper.Access, "PATCH", "/accounts/"+id, map[string]any{"phone": "0722000111"}, nil)
+	if j := p.JSON(t); j["whatsapp"] != "254722000111" || j["wa_same_phone"] != true {
+		t.Fatalf("WhatsApp did not follow the phone: %s", p.Raw)
+	}
+	p = r.call(r.oper.Access, "PATCH", "/accounts/"+id, map[string]any{"wa_same_phone": false, "whatsapp": "0733555666"}, nil)
+	if j := p.JSON(t); j["wa_same_phone"] != false || j["whatsapp"] != "254733555666" {
+		t.Fatalf("unticked: %s", p.Raw)
+	}
+	// a number typed on its own clears the box; an explicit wa_same_phone=true wins over a number sent with it
+	r.call(r.oper.Access, "PATCH", "/accounts/"+id, map[string]any{"wa_same_phone": true}, nil)
+	p = r.call(r.oper.Access, "PATCH", "/accounts/"+id, map[string]any{"whatsapp": "0733555666"}, nil)
+	if j := p.JSON(t); j["wa_same_phone"] != false || j["whatsapp"] != "254733555666" {
+		t.Fatalf("number alone: %s", p.Raw)
+	}
+	p = r.call(r.oper.Access, "PATCH", "/accounts/"+id, map[string]any{"wa_same_phone": true, "whatsapp": "0744777888"}, nil)
+	if j := p.JSON(t); p.Status != 200 || j["wa_same_phone"] != true || j["whatsapp"] == "254744777888" || j["whatsapp"] != j["phone"] {
+		t.Fatalf("flag with a number: %s", p.Raw)
+	}
+}

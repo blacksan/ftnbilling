@@ -567,7 +567,7 @@ func (c *Collector) flags(r *Report, now time.Time) {
 	r.Flags = append(r.Flags, f)
 
 	// 2. Flats at their cap.
-	f = Flag{Title: "Flats at their speed cap", Rule: fmt.Sprintf("more than %.0f%% of online time at 90%% or more of the package speed, with at least %d min online", QoECapSharePct, QoEMinOnlineMin)}
+	f = Flag{Title: "Houses at their speed cap", Rule: fmt.Sprintf("more than %.0f%% of online time at 90%% or more of the package speed, with at least %d min online", QoECapSharePct, QoEMinOnlineMin)}
 	var names []string
 	for _, row := range r.Flats {
 		if row.OnlineMin >= QoEMinOnlineMin && row.CapPct > QoECapSharePct {
@@ -576,12 +576,12 @@ func (c *Collector) flags(r *Report, now time.Time) {
 	}
 	switch {
 	case !r.HasTraffic:
-		f.Level, f.Text = "nodata", "No flat traffic recorded for this period yet."
+		f.Level, f.Text = "nodata", "No house traffic recorded for this period yet."
 	case len(names) > 0:
 		sort.Strings(names)
 		f.Level, f.Text = "warn", "Upgrade candidates, they keep hitting their cap: "+strings.Join(names, ", ")+"."
 	default:
-		f.Level, f.Text = "ok", "No flat is spending much time at its cap."
+		f.Level, f.Text = "ok", "No house is spending much time at its cap."
 	}
 	r.Flags = append(r.Flags, f)
 

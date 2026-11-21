@@ -27,6 +27,9 @@ func TestBootstrapKeepsWebFigForTheAdminLANAndTheServerOnly(t *testing.T) {
 			t.Fatal(err)
 		}
 		src := string(b)
+		if !strings.Contains(src, ":do { /ip/service set www max-sessions=40 } on-error=") {
+			t.Errorf("%s: www max-sessions must be set on its own, guarded line", f)
+		}
 		w := www.FindStringSubmatch(src)
 		ss := wwwSSL.FindStringSubmatch(src)
 		rr := rest.FindStringSubmatch(src)

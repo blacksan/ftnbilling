@@ -50,6 +50,8 @@ func (s *Server) initWebFig() {
 	if s.cfg.WebFigDomain == "" {
 		return
 	}
+	// A re-bootstrapped or removed router: its cached WebFig files are dropped.
+	s.mgr.SetOnRouterReset(func(id string) { s.wf.mgr.PurgeCache(id) })
 	var tunnel netip.Prefix
 	var srvIP netip.Addr
 	if s.wgNet.IsValid() {
@@ -59,10 +61,12 @@ func (s *Server) initWebFig() {
 	s.wf.mgr = webfig.New(webfig.Options{
 		Domain: s.cfg.WebFigDomain, Secure: true, Tunnel: tunnel, ServerIP: srvIP,
 		Resolve:   s.webfigTarget,
+		Version:   s.webfigVersion,
 		AdminLive: func(id string) bool { return s.authn.SessionLive(id) },
 		UserOK:    func(id string) bool { u, ok := s.userByID(id); return ok && !u.Disabled && u.Role == store.RoleOwner },
 		ClientIP:  realIP,
 		Now:       s.wfNow,
+		Log:       s.log,
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if s.wf.dial != nil {
 				return s.wf.dial(ctx, network, addr)
@@ -106,6 +110,23 @@ func (s *Server) webfigTarget(id string) (webfig.Target, bool) {
 		port = sites.DefaultREST
 	}
 	return webfig.Target{IP: st.TunnelIP, Port: port, Name: st.Name}, true
+}
+
+// webfigVersion is what the cached WebFig files of a router belong to: the
+// RouterOS version its bootstrap reported, when that bootstrap ran, and the
+// RouterOS version the server last read from the router itself (the setup
+// checks the sweep runs), so a re-bootstrap and a plain upgrade both start
+// the cache afresh.
+func (s *Server) webfigVersion(id string) string {
+	st, ok := s.siteByID(id)
+	if !ok {
+		return ""
+	}
+	v := ""
+	if jr, ok := s.mgr.JoinReport(id); ok {
+		v = jr.ROS
+	}
+	return v + "@" + strconv.FormatInt(st.Join.UsedAt.Unix(), 10) + "|" + s.mgr.ROSVersionSeen(id)
 }
 
 // WebFigHandler is the handler for WEBFIG_DOMAIN; nil when the feature is off.

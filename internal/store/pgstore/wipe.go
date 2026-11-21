@@ -32,6 +32,7 @@ var WipeTables = []string{
 	"vouchers",         // voucher codes
 	"payments",         // the ledger (M-Pesa receipts, cash, refunds)
 	"devices",          // unregistered MACs / devices seen by the routers
+	"registrations",    // captive-page self-registrations (names and phone numbers)
 	"tasks",            // router task and retry queue
 	"equipment_events", // equipment history
 	"notes",            // CRM notes
@@ -68,6 +69,7 @@ var wipeCounts = []struct{ kind, sql string }{
 	{store.WipeVouchers, "SELECT count(*) FROM vouchers"},
 	{store.WipePayments, "SELECT count(*) FROM payments"},
 	{store.WipeDevices, "SELECT count(*) FROM devices"},
+	{store.WipeRegistrations, "SELECT count(*) FROM registrations"},
 	{store.WipeTasks, "SELECT count(*) FROM tasks"},
 	{store.WipeEvents, "SELECT count(*) FROM events"},
 	{store.WipeNotes, "SELECT count(*) FROM notes"},

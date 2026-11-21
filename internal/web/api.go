@@ -433,10 +433,12 @@ func (s *Server) billingErr(w http.ResponseWriter, err error, mac string) {
 	case strings.Contains(err.Error(), "still has") && strings.Contains(err.Error(), "account(s)"):
 		apiErr(w, http.StatusConflict, codeApartmentInUse, err.Error(), nil)
 	case errors.As(err, &dup):
-		apiErr(w, http.StatusConflict, codeMACInUse, "That MAC address is already used by flat "+dup.Flat+" ("+dup.Code+") in "+dup.SiteName+".",
+		apiErr(w, http.StatusConflict, codeMACInUse, "That MAC address is already used by house "+dup.Flat+" ("+dup.Code+") in "+dup.SiteName+".",
 			map[string]any{"mac": mac, "account": macOwnerDetails{dup.AccountID, dup.Code, dup.Flat, dup.SiteID, dup.SiteName}})
 	case errors.Is(err, store.ErrDuplicateMAC):
 		apiErr(w, http.StatusConflict, codeMACInUse, "That MAC address is already used by another account.", map[string]any{"mac": mac})
+	case errors.Is(err, billing.ErrRouterOwnMAC):
+		validationErr(w, map[string]string{"mac": billing.ErrRouterOwnMAC.Error()})
 	case errors.Is(err, billing.ErrBadMAC):
 		validationErr(w, map[string]string{"mac": "must be 12 hex digits, like AA:BB:CC:DD:EE:FF"})
 	case errors.Is(err, billing.ErrNotFound):
@@ -463,8 +465,8 @@ func (s *Server) billingErr(w http.ResponseWriter, err error, mac string) {
 		apiErr(w, http.StatusConflict, codeFlatInUse, err.Error(), nil)
 	case strings.Contains(err.Error(), "choose a package"):
 		validationErr(w, map[string]string{"package_id": "choose a package"})
-	case strings.Contains(err.Error(), "flat label is required"), strings.Contains(err.Error(), "the unit (flat or door number) is required"):
-		validationErr(w, map[string]string{"unit": "a unit is required, e.g. B4"})
+	case strings.Contains(err.Error(), "house number is required"), strings.Contains(err.Error(), "the house number is required"):
+		validationErr(w, map[string]string{"unit": "a house number is required, e.g. B4"})
 	default:
 		s.log.Warn("api: unexpected error", "err", err)
 		apiErr(w, http.StatusBadRequest, codeBadRequest, err.Error(), nil)
@@ -517,6 +519,7 @@ func (s *Server) apiRoutes(mux *http.ServeMux) {
 	h("GET /api/v1/payments", viewer, s.apiPayments)
 	h("GET /api/v1/alerts", viewer, s.apiAlerts)
 	h("GET /api/v1/unregistered", viewer, s.apiUnregistered)
+	s.registrationRoutes(h)
 	h("GET /api/v1/search", viewer, s.apiSearch)
 	h("GET /api/v1/audit", owner, s.apiAudit)
 

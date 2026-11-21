@@ -22,4 +22,5 @@ else if(r.status==="failed"||r.status==="expired"){location.reload()}else{setTim
 x.onerror=function(){setTimeout(p,3000)};x.send()}setTimeout(p,1500)})();
 </script>
 {{end}}
+{{template "contacts" .Contacts}}
 {{template "foot"}}{{end}}

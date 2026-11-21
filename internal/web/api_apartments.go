@@ -1,7 +1,9 @@
 package web
 
 import (
+	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -50,13 +52,21 @@ type apiApartment struct {
 	Total     int            `json:"accounts_total"`
 	Active    int            `json:"accounts_active"`
 	Online    int            `json:"online_now"`
-	CreatedAt string         `json:"created_at"`
+	// Lat and Lng are the building's GPS point, both null when unknown. MapURL is
+	// the one-click Google Maps link for it (null when there is no point).
+	Lat       *float64 `json:"lat"`
+	Lng       *float64 `json:"lng"`
+	MapURL    *string  `json:"map_url"`
+	CreatedAt string   `json:"created_at"`
 }
 
 func (s *Server) apartmentJSON(sum billing.ApartmentSummary, perRouter map[string]int) apiApartment {
 	out := apiApartment{ID: sum.ID, Name: sum.Name, Address: sum.Address, Notes: sum.Notes,
 		Caretaker: contactJSON(sum.Caretaker), Landlord: contactJSON(sum.Landlord), Routers: []apiRouterRef{},
-		Total: sum.Total, Active: sum.Active, Online: sum.Online, CreatedAt: sum.CreatedAt.UTC().Format(time.RFC3339)}
+		Total: sum.Total, Active: sum.Active, Online: sum.Online, Lat: sum.Lat, Lng: sum.Lng, CreatedAt: sum.CreatedAt.UTC().Format(time.RFC3339)}
+	if u := sum.MapURL(); u != "" {
+		out.MapURL = &u
+	}
 	for _, st := range sum.Routers {
 		out.Routers = append(out.Routers, apiRouterRef{st.ID, st.Name, perRouter[st.ID]})
 	}
@@ -74,8 +84,54 @@ type apartmentBody struct {
 	Landlord *struct {
 		Name, Phone, Phone2, Email, Notes string
 	} `json:"landlord"`
-	RouterIDs []string `json:"router_ids"`
-	SiteIDs   []string `json:"site_ids"`
+	// Lat and Lng are raw so that absent (leave alone on PATCH) and null (clear) differ.
+	Lat       json.RawMessage `json:"lat"`
+	Lng       json.RawMessage `json:"lng"`
+	RouterIDs []string        `json:"router_ids"`
+	SiteIDs   []string        `json:"site_ids"`
+}
+
+// gps reads lat and lng from the body. set is false when neither key was sent.
+// null on both means "no point" (nil, nil, set). One without the other, a
+// non-number or a value out of range is a validation error on that field.
+func (b apartmentBody) gps() (lat, lng *float64, set bool, bad map[string]string) {
+	if b.Lat == nil && b.Lng == nil {
+		return nil, nil, false, nil
+	}
+	bad = map[string]string{}
+	one := func(raw json.RawMessage, key string) (*float64, bool) {
+		if raw == nil {
+			bad[key] = "give lat and lng together"
+			return nil, false
+		}
+		if string(raw) == "null" {
+			return nil, true
+		}
+		var f float64
+		if err := json.Unmarshal(raw, &f); err != nil {
+			bad[key] = "must be a number or null"
+			return nil, false
+		}
+		return &f, true
+	}
+	lat, ok1 := one(b.Lat, "lat")
+	lng, ok2 := one(b.Lng, "lng")
+	if ok1 && ok2 {
+		if (lat == nil) != (lng == nil) {
+			bad["lat"], bad["lng"] = "give lat and lng together, or null for both", "give lat and lng together, or null for both"
+		} else if lat != nil {
+			if math.IsNaN(*lat) || *lat < -90 || *lat > 90 {
+				bad["lat"] = "latitude must be between -90 and 90"
+			}
+			if math.IsNaN(*lng) || *lng < -180 || *lng > 180 {
+				bad["lng"] = "longitude must be between -180 and 180"
+			}
+		}
+	}
+	if len(bad) > 0 {
+		return nil, nil, true, bad
+	}
+	return lat, lng, true, nil
 }
 
 func contactIn(c *struct{ Name, Phone, Phone2, Email, Notes string }, cur store.ApartmentContact) billing.ContactInput {
@@ -168,6 +224,12 @@ func (s *Server) apiApartmentCreate(w http.ResponseWriter, r *http.Request, c *a
 	if req.Notes != nil {
 		in.Notes = *req.Notes
 	}
+	lat, lng, _, bad := req.gps()
+	if bad != nil {
+		validationErr(w, bad)
+		return
+	}
+	in.Lat, in.Lng = lat, lng
 	ids := append(append([]string(nil), req.RouterIDs...), req.SiteIDs...)
 	for _, id := range ids {
 		if !s.siteExists(id) {
@@ -203,7 +265,14 @@ func (s *Server) apiApartmentPatch(w http.ResponseWriter, r *http.Request, c *ap
 	}
 	cur := d.Apartment
 	in := billing.ApartmentInput{Name: cur.Name, Address: cur.Address, Notes: cur.Notes,
-		Caretaker: contactIn(req.Caretaker, cur.Caretaker), Landlord: contactIn(req.Landlord, cur.Landlord)}
+		Caretaker: contactIn(req.Caretaker, cur.Caretaker), Landlord: contactIn(req.Landlord, cur.Landlord), Lat: cur.Lat, Lng: cur.Lng}
+	// Like the other fields, lat and lng left out keep their value; both null clears the point.
+	if lat, lng, set, bad := req.gps(); bad != nil {
+		validationErr(w, bad)
+		return
+	} else if set {
+		in.Lat, in.Lng = lat, lng
+	}
 	if req.Name != nil {
 		in.Name = *req.Name
 	}
@@ -335,7 +404,7 @@ func apiGone(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 // apiMACOtherBuilding answers the cross-building refusal.
 func apiMACOtherBuilding(w http.ResponseWriter, dup *billing.DuplicateMACError, mac string) {
 	apiErr(w, http.StatusConflict, codeMACOtherBuilding,
-		"That MAC address belongs to "+dup.CustomerOrCustomer()+" in another apartment ("+dup.ApartmentName+", unit "+dup.Flat+"). Move the customer to this apartment first, or use another device.",
+		"That MAC address belongs to "+dup.CustomerOrCustomer()+" in another apartment ("+dup.ApartmentName+", house number "+dup.Flat+"). Move the customer to this apartment first, or use another device.",
 		map[string]any{"mac": mac, "belongs_to": map[string]any{
 			"account_id": dup.AccountID, "code": dup.Code, "customer": dup.CustomerName,
 			"apartment": map[string]any{"id": dup.ApartmentID, "name": dup.ApartmentName}, "unit": dup.Flat,

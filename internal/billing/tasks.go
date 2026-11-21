@@ -163,6 +163,7 @@ func (s *Service) RunSiteTasks(ctx context.Context, siteID string) int {
 // reminder events), then, per building and in parallel, reconciles the router
 // and runs the task queue.
 func (s *Service) Sweep(ctx context.Context) {
+	s.MaintainRegistrations() // stale approvals back to pending; old and orphaned registrations deleted
 	now := s.now()
 	_ = s.st.Update(func(d *store.Data) error {
 		changed := false

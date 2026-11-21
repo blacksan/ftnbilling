@@ -521,7 +521,7 @@ func (s *Server) apiBenchTestFlat(w http.ResponseWriter, r *http.Request, c *api
 		}
 		id = a.ID
 	}
-	c.audit(s, "router "+st.Name+" bench test flat")
+	c.audit(s, "router "+st.Name+" bench test house")
 	s.respondAccount(w, http.StatusOK, id)
 }
 

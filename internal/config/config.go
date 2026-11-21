@@ -26,7 +26,11 @@ type Config struct {
 	AdminUser         string
 	AdminPass         string
 	PublicBaseURL     string
-	SupportPhone      string
+	// SupportPhone, SupportEmail and SupportWhatsApp are the contacts shown on every captive (walled) page.
+	// An empty one is not shown. SUPPORT_* = off, none or - means empty (blank means the built-in default).
+	SupportPhone    string
+	SupportEmail    string
+	SupportWhatsApp string // international digits, like 254100133133
 
 	// WebFigDomain (WEBFIG_DOMAIN) turns on remote WebFig access: the host name
 	// served by a second listener (WebFigListen, loopback only) that the
@@ -121,6 +125,22 @@ type Config struct {
 	SMTPImplicit                           bool   // TLS from the first byte (port 465 always is)
 }
 
+// The contacts shown on the captive pages when nothing else is set.
+const (
+	DefaultSupportPhone    = "0100133133"
+	DefaultSupportEmail    = "support@ftw.co.ke"
+	DefaultSupportWhatsApp = "254100133133"
+)
+
+// supportValue lets the environment say "no such contact" with off, none or -.
+func supportValue(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "off", "none", "-":
+		return ""
+	}
+	return strings.TrimSpace(v)
+}
+
 // EmailConfigured and WhatsAppConfigured tell which
 // notification channels have their secrets in the environment.
 func (c Config) EmailConfigured() bool    { return c.SMTPHost != "" && c.SMTPFrom != "" }
@@ -143,7 +163,9 @@ func Load(getenv func(string) string) (Config, error) {
 		AdminUser:          get("ADMIN_USER", "admin"),
 		AdminPass:          getenv("ADMIN_PASS"),
 		PublicBaseURL:      strings.TrimRight(get("PUBLIC_BASE_URL", ""), "/"),
-		SupportPhone:       get("SUPPORT_PHONE", ""),
+		SupportPhone:       supportValue(get("SUPPORT_PHONE", DefaultSupportPhone)),
+		SupportEmail:       supportValue(get("SUPPORT_EMAIL", DefaultSupportEmail)),
+		SupportWhatsApp:    supportValue(get("SUPPORT_WHATSAPP", DefaultSupportWhatsApp)),
 		PublicIP:           get("PUBLIC_IP", ""),
 		MpesaEnv:           strings.ToLower(get("MPESA_ENV", "sandbox")),
 		MpesaKey:           get("MPESA_CONSUMER_KEY", ""),

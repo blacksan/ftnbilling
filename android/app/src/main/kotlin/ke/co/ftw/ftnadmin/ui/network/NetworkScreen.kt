@@ -133,7 +133,7 @@ private fun ClientsPane(
     OutlinedTextField(
         value = ui.query,
         onValueChange = vm::onQuery,
-        placeholder = { Text("Search name, flat, IP, MAC or vendor", maxLines = 1) },
+        placeholder = { Text("Search name, house number, IP, MAC or vendor", maxLines = 1) },
         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
         trailingIcon = {
             if (ui.query.isNotEmpty()) {
