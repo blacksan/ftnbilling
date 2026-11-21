@@ -44,6 +44,11 @@ class ViewModelsTest {
     private lateinit var api: ApiClient
     private val routes = mutableMapOf<String, MockResponse>()
     private val seen = mutableListOf<String>()
+    private val recorded = mutableListOf<Pair<String, RecordedRequest>>()
+
+    /** The requests the fake server received for "METHOD /path", in order. */
+    private fun requests(key: String): List<RecordedRequest> =
+        synchronized(recorded) { recorded.filter { it.first == key }.map { it.second } }
 
     @Before fun setUp() {
         server = MockWebServer()
@@ -51,6 +56,7 @@ class ViewModelsTest {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 val key = "${request.method} ${request.requestUrl!!.encodedPath}"
                 synchronized(seen) { seen += key }
+                synchronized(recorded) { recorded += key to request }
                 return routes[key] ?: MockResponse().setResponseCode(404).setBody("""{"error":{"code":"not_found","message":"nope"}}""")
             }
         }
