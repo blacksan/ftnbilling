@@ -823,3 +823,68 @@ func TestInstallMpesaCallbackFilter(t *testing.T) {
 		t.Errorf("bad value accepted: %v %s", err, stderr)
 	}
 }
+
+// M7: the new program writes a second AllowedIPs entry (the ONU management /24) for every new router, and an older
+// wg-sync skips such a peer whole. An upgrade must therefore refresh the sync script before the new binary is put
+// in place (the service is restarted later, in start_and_check).
+func TestInstallRefreshesWGSyncBeforeTheBinary(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("no bash")
+	}
+	dir := t.TempDir()
+	bundle := filepath.Join(dir, "bundle")
+	assets := filepath.Join(bundle, "deploy")
+	sbin, opt := filepath.Join(dir, "sbin"), filepath.Join(dir, "opt")
+	for _, d := range []string{assets, sbin, opt, filepath.Join(bundle, "tools")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := func(p, s string) {
+		if err := os.WriteFile(p, []byte(s), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w(filepath.Join(bundle, "ftnbilling"), "NEW BINARY")
+	w(filepath.Join(bundle, "VERSION"), "v-test\n")
+	w(filepath.Join(bundle, "SHA256SUMS"), "")
+	for _, f := range []string{"wg-sync", "backup", "admin-reset", "wipe", "doctor", "mgmt"} {
+		w(filepath.Join(assets, "ftnbilling-"+f), "NEW "+f)
+	}
+	for _, f := range []string{"backup.service", "backup.timer", "dump.service", "dump.timer", "drill.service", "drill.timer"} {
+		w(filepath.Join(assets, "ftnbilling-"+f), "unit")
+	}
+	w(filepath.Join(sbin, "ftnbilling-wg-sync"), "OLD wg-sync")
+	w(filepath.Join(opt, "ftnbilling"), "OLD BINARY")
+	log := filepath.Join(dir, "log")
+	script := `set -e
+DRY=0; APP=ftnbilling; GOARCH=amd64; REPO=x; SELF_DIR="$1/tools"; SBIN="$2"; OPT="$3"; BIN="$3/ftnbilling"; LOG="$4"
+step() { :; }; note() { :; }; die() { echo "die: $*" >&2; exit 1; }
+sha256sum() { return 0; }
+install() { echo "install $*" >>"$LOG"; command install "$@"; }
+mv() { echo "mv $*" >>"$LOG"; command mv "$@"; }
+eval "$(awk '/^acquire_program\(\)/,/^}/' install.sh)"
+acquire_program
+`
+	cmd := exec.Command("bash", "-c", script, "bash", bundle, sbin, opt, log)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	lg, _ := os.ReadFile(log)
+	sync, bin := strings.Index(string(lg), "ftnbilling-wg-sync"), strings.Index(string(lg), "ftnbilling.new")
+	if sync < 0 || bin < 0 || sync > bin {
+		t.Fatalf("the sync script must be refreshed before the binary:\n%s", lg)
+	}
+	if b, _ := os.ReadFile(filepath.Join(sbin, "ftnbilling-wg-sync")); string(b) != "NEW wg-sync" {
+		t.Fatalf("wg-sync was not refreshed: %q", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(opt, "ftnbilling")); string(b) != "NEW BINARY" {
+		t.Fatalf("the binary was not installed: %q", b)
+	}
+	// and the service is only restarted after both: acquire_program comes before start_and_check in main
+	src, _ := os.ReadFile("install.sh")
+	m := string(src[strings.Index(string(src), "\nmain() {"):])
+	if strings.Index(m, "acquire_program") > strings.Index(m, "start_and_check") {
+		t.Fatal("the program is acquired after the service restart")
+	}
+}

@@ -544,7 +544,12 @@ acquire_program() {
     [ -f "$ASSETS/$f" ] || die "$ASSETS/$f is missing: incomplete bundle or source tree"
   done
   [ -f "$BIN_SRC" ] || die "program binary not found at $BIN_SRC"
-  if [ "$DRY" = 1 ]; then note "[dry-run] would install $BIN_SRC as $BIN"; return 0; fi
+  if [ "$DRY" = 1 ]; then note "[dry-run] would refresh $SBIN/$APP-wg-sync, then install $BIN_SRC as $BIN"; return 0; fi
+  # The new program writes the second AllowedIPs entry (the ONU management /24) for every new router. An older
+  # wg-sync skips such a peer whole, which would drop that router's tunnel: so the sync script is refreshed first.
+  install -d "$SBIN"
+  install -m 0755 "$ASSETS/$APP-wg-sync" "$SBIN/$APP-wg-sync.new"
+  mv -f "$SBIN/$APP-wg-sync.new" "$SBIN/$APP-wg-sync"
   install -m 0755 "$BIN_SRC" "$BIN.new"
   mv -f "$BIN.new" "$BIN"
   note "installed $BIN ($PROG_VERSION)"
