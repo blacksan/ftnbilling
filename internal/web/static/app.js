@@ -320,6 +320,8 @@
     var sel = $("[data-router-select]", form); if (sel && sel.value !== siteId && Array.prototype.some.call(sel.options, function (op) { return op.value === siteId; })) sel.value = siteId;
   }
   $$("[data-apt-select]").forEach(function (a) { a.addEventListener("change", function () { aptRouters(a.form); }); });
+  /* Account page: the apartment card narrows its router list to the saved apartment already chosen. */
+  $$("form[data-apt-move]").forEach(function (f) { aptRouters(f); });
   var ac = $("#addcustomer");
   if (ac) ac.addEventListener("ftn:open", function () { var f = $("form", ac); if (f && !f._devs) devsFor(f); });
 

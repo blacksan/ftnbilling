@@ -74,8 +74,7 @@
 {{if eq $tab "overview"}}
 <div class="grid c2">
 <section class="panel"><h2>Details</h2><form method="post" action="/admin/accounts/update" class="mt-3 stack-col"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
-<div class="two"><label class="field">House number<input name="flat" value="{{$A.Flat}}" required></label><label class="field">Tenant<input name="tenant" value="{{$A.Tenant}}"></label></div>
-<div class="two"><label class="field">Phone<input name="phone" value="{{$A.Phone}}"></label><label class="field">WhatsApp<input name="whatsapp" value="{{$A.WhatsApp}}" placeholder="0712345678"></label></div>
+<div class="two"><label class="field">Tenant<input name="tenant" value="{{$A.Tenant}}"></label><label class="field">Phone<input name="phone" value="{{$A.Phone}}"></label><label class="field">WhatsApp<input name="whatsapp" value="{{$A.WhatsApp}}" placeholder="0712345678"></label></div>
 <label class="ck"><input type="checkbox" name="wa_same" value="1"{{if $A.WASamePhone}} checked{{end}}> WhatsApp is the same as the phone</label>
 <label class="ck"><input type="checkbox" name="wa_optout" value="1"{{if $A.WAOptOut}} checked{{end}}> Tenant opted out of WhatsApp messages</label>
 <label class="field">Notes<textarea name="notes" rows="2">{{$A.Notes}}</textarea></label><div><button>Save details</button></div></form></section>
@@ -100,11 +99,11 @@
 <section class="panel"><h2>Apartment and house number</h2>
 <p style="margin:6px 0 10px">{{if $A.ApartmentID}}<a href="/admin/apartments/view?id={{$A.ApartmentID}}">{{.Data.AptName}}</a>, house number <b>{{$A.Unit}}</b>, router {{.Data.AcctSite}}{{else}}<span class="bad">No apartment yet.</span>{{end}}</p>
 {{if .Data.Problem}}<p class="flash bad" role="status">{{.Data.Problem}}</p>{{end}}
-{{if .CanWrite}}<p class="muted" style="margin:0 0 10px">When the customer moves house: pick the new apartment. The lease and queue leave the old router and are written on the new one, and the account history says so.</p>
-<form method="post" action="/admin/accounts/apartment" class="stack-col" data-confirm="Move this customer? The old router loses their lease and queue."><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
+{{if .CanWrite}}<p class="muted" style="margin:0 0 10px">This is the one place to change the apartment and house number. Search and pick a saved apartment (add new ones under Apartments). When the customer moves house, pick the new apartment. The lease and queue leave the old router and are written on the new one, and the account history says so.</p>
+<form method="post" action="/admin/accounts/apartment" class="stack-col" data-apt-move data-confirm="Move this customer? The old router loses their lease and queue."><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <div class="two"><label class="field">Apartment<select name="apartment_id" required data-apt-select>{{$cur := $A.ApartmentID}}{{range .Data.AptOpts}}<option value="{{.ID}}" data-routers="{{range $i, $r := .Routers}}{{if $i}},{{end}}{{$r}}{{end}}" data-address="{{.Address}}" data-subs="{{.Subscribers}}" data-router-names="{{range $i, $r := .RouterNames}}{{if $i}}, {{end}}{{$r}}{{end}}"{{if eq .ID $cur}} selected{{end}}>{{.Name}}</option>{{end}}</select></label>
 <label class="field">House number<input name="unit" value="{{$A.Unit}}" required autocomplete="off"></label></div>
-<label class="field" data-router-field>Router<select name="site" data-router-select-move><option value="">Automatic (the apartment's only router)</option>{{range .Sites}}<option value="{{.ID}}"{{if eq .ID $A.SiteID}} selected{{end}}>{{.Name}}</option>{{end}}</select></label>
+<label class="field" data-router-field>Router<select name="site" data-router-select><option value="">Automatic (the apartment's only router)</option>{{range .Sites}}<option value="{{.ID}}"{{if eq .ID $A.SiteID}} selected{{end}}>{{.Name}}</option>{{end}}</select><span class="hint" data-router-hint>Only routers that serve the chosen apartment are offered.</span></label>
 <div><button>Save apartment and house number</button></div></form>{{end}}</section>
 {{if .Data.MoveTo}}<section class="panel"><h2>Move to another router</h2><p class="muted" style="margin:6px 0 10px">Removes the house from this router and creates it on the new one. Its ONT must be on that router's network. Type the account code <b>{{$A.Code}}</b> to confirm.</p>
 <form method="post" action="/admin/accounts/move" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
