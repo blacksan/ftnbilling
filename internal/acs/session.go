@@ -184,7 +184,7 @@ func (s *Service) handleInform(w http.ResponseWriter, r *http.Request, site stor
 				cur.HWVersion = v
 			}
 		}
-		applyReported(&cur, in.Params)
+		applyReported(&cur, in.Params, homeWiFi(d, cur))
 		// A task that was running when the session died goes back in the queue (three tries).
 		for _, t := range d.ONUTasksOf(cur.ID) {
 			if t.Status == store.TaskRunning && now.Sub(t.StartedAt) > 2*time.Minute {
@@ -197,7 +197,7 @@ func (s *Service) handleInform(w http.ResponseWriter, r *http.Request, site stor
 			}
 		}
 		d.ONUs[cur.ID] = cur
-		autoLink(d, cur.ID)
+		autoLink(d, cur.ID, now)
 		o = d.ONUs[cur.ID]
 		return nil
 	})
@@ -263,7 +263,7 @@ func (s *Service) capNote(site store.Site) {
 
 // applyReported takes the Wi-Fi names an Inform carries (a value change, or a boot) into the device row and
 // says whether the saved choice still matches. Values of secret parameters are never looked at.
-func applyReported(o *store.ONU, params []ParamValue) {
+func applyReported(o *store.ONU, params []ParamValue, want store.WiFiDesired) {
 	if len(o.WiFi) == 0 {
 		return
 	}
@@ -279,24 +279,32 @@ func applyReported(o *store.ONU, params []ParamValue) {
 		}
 	}
 	if changed {
-		o.Desired.Changed = ssidDiffers(*o)
+		o.State.WiFiChanged = ssidDiffers(*o, want)
 	}
 }
 
 // ssidDiffers: the device reports another name than the saved choice.
-func ssidDiffers(o store.ONU) bool {
-	if !o.Desired.Set {
+func ssidDiffers(o store.ONU, want store.WiFiDesired) bool {
+	if !want.Set {
 		return false
 	}
-	if w, ok := primary(o.WiFi, "2.4"); ok && w.SSID != "" && w.SSID != o.Desired.SSID {
+	if w, ok := primary(o.WiFi, "2.4"); ok && w.SSID != "" && w.SSID != want.SSID {
 		return true
 	}
-	want5 := o.Desired.SSID5
-	if o.Desired.Same {
-		want5 = o.Desired.SSID
+	want5 := want.SSID5
+	if want.Same {
+		want5 = want.SSID
 	}
 	if w, ok := primary(o.WiFi, "5"); ok && w.SSID != "" && w.SSID != want5 {
 		return true
 	}
 	return false
+}
+
+// homeWiFi is the Wi-Fi choice of the house the ONU is linked to (zero when it is not linked).
+func homeWiFi(d *store.Data, o store.ONU) store.WiFiDesired {
+	if o.AccountID == "" {
+		return store.WiFiDesired{}
+	}
+	return d.Accounts[o.AccountID].HomeWiFi
 }

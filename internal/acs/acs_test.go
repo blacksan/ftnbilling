@@ -396,8 +396,8 @@ func TestValueChangeMarksDesiredChanged(t *testing.T) {
 	if err := c.session("4 VALUE CHANGE"); err != nil {
 		t.Fatal(err)
 	}
-	if o := f.onuBySerial(c.Serial); !o.Desired.Changed {
-		t.Fatalf("desired not marked changed: %+v", o.Desired)
+	if o := f.onuBySerial(c.Serial); !o.State.WiFiChanged {
+		t.Fatalf("desired not marked changed: %+v", o.State)
 	}
 }
 
@@ -520,6 +520,8 @@ func TestInventorySwapMovesLink(t *testing.T) {
 	}
 	if o := f.onuBySerial("OLDBOX"); o.AccountID != "" {
 		t.Fatalf("old box still linked: %+v", o)
+	} else if !o.State.Returned || f.lastTask(o.ID).Kind != store.TaskFactoryReset {
+		t.Fatalf("old box not marked returned with a factory reset queued: %+v %+v", o.State, f.lastTask(o.ID))
 	}
 }
 
@@ -544,5 +546,52 @@ func TestQueueWiFiJoinsOnlyPending(t *testing.T) {
 	d.ONUTasks[r.ID] = r
 	if b := queue(d, o, store.TaskReboot, "x", now); b.ID != r.ID {
 		t.Fatal("a running reboot is joined")
+	}
+}
+
+// A box that left a house gets a factory reset at its next check-in and never receives any house's Wi-Fi, not even
+// when it comes back from the reset with a 0 BOOTSTRAP while the house keeps its choice.
+func TestReturnedBoxGetsResetNeverWiFi(t *testing.T) {
+	f := newFixture(t)
+	c := newZTE(t, f, "SNRET", "10.6.3.20")
+	setupLinked(t, c)
+	if _, err := f.svc.SetWiFi("owner", "", "a1", WiFiInput{SSID: "OldTenant", Pass: "oldtenantpass", Same: true}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "applied", func() bool {
+		return f.lastTask(f.onuBySerial(c.Serial).ID).Status != store.TaskPending && f.lastTask(f.onuBySerial(c.Serial).ID).Status != store.TaskRunning
+	})
+	if err := f.svc.UnlinkONU("owner", "", f.onuBySerial(c.Serial).ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.SetWiFi("owner", "", "a1", WiFiInput{SSID: "x", Pass: "xxxxxxxx"}); err == nil {
+		t.Fatal("a Wi-Fi change was queued for a house with no ONU")
+	}
+	before := len(c.allSets())
+	_ = before
+	if err := c.session("2 PERIODIC"); err != nil {
+		t.Fatal(err)
+	}
+	if c.count("FactoryReset") != 1 {
+		t.Fatalf("factory reset not sent: %v", c.rpcs)
+	}
+	// it restarts from factory settings and reports a bootstrap: nothing is written to it
+	c.mu.Lock()
+	n := len(c.sets)
+	c.mu.Unlock()
+	if err := c.session("0 BOOTSTRAP"); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	for _, set := range c.sets[n:] {
+		for k, v := range set {
+			if v == "OldTenant" || v == "oldtenantpass" {
+				t.Fatalf("the old house's Wi-Fi reached the returned box: %s", k)
+			}
+		}
+	}
+	c.mu.Unlock()
+	if o := f.onuBySerial(c.Serial); o.AccountID != "" {
+		t.Fatalf("relinked by itself: %+v", o)
 	}
 }

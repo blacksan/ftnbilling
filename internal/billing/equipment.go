@@ -220,6 +220,15 @@ func returnLocked(d *store.Data, key string, e store.Equipment, status, note str
 		kind = store.EqEvUnassigned
 	}
 	addEqEvent(d, e, kind, from, status, note, now) // before the account link is cleared
+	if e.Kind == store.KindONT && e.AccountID != "" && from == store.EqInstalled {
+		// The box leaves its house: its ONU row is unlinked now and a factory reset waits for its next check-in, so the
+		// old tenant's Wi-Fi name and password do not go to whoever gets the box next.
+		for _, o := range d.ONUsOfSerial(e.Serial, e.GPONSerial) {
+			if o.AccountID == e.AccountID {
+				d.ReleaseONU(o.ID, now, "system")
+			}
+		}
+	}
 	e.AccountID, e.Status, e.UpdatedAt = "", status, now
 	if status != store.EqInstalled {
 		e.SiteID = ""

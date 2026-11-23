@@ -41,6 +41,7 @@ func (x Equipment) norm() Equipment {
 func (x Account) norm() Account {
 	x.ExpiresAt, x.RemindedFor, x.ExpiredFor = nt(x.ExpiresAt), nt(x.RemindedFor), nt(x.ExpiredFor)
 	x.CreatedAt, x.ClosedAt = nt(x.CreatedAt), nt(x.ClosedAt)
+	x.HomeWiFi.UpdatedAt = nt(x.HomeWiFi.UpdatedAt)
 	if x.Unit == "" {
 		x.Unit = x.Flat
 	}

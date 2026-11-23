@@ -69,7 +69,7 @@ func hasTask(s *Service, onuID, kind string) bool {
 func (s *Service) restoreWiFi(onuID string) {
 	_ = s.st.Update(func(d *store.Data) error {
 		o, ok := d.ONUs[onuID]
-		if !ok || o.AccountID == "" || !o.Desired.Set {
+		if !ok || o.AccountID == "" || !d.Accounts[o.AccountID].HomeWiFi.Set {
 			return store.ErrNoChange
 		}
 		t := queue(d, o, store.TaskWiFi, "system", s.now())
@@ -182,11 +182,9 @@ func (s *Service) discover(ctx context.Context, ss *session, onuID string) error
 		}
 		cur.WiFi, cur.MACs = wifi, cm
 		cur.Profile.Root, cur.Profile.Vendor, cur.Profile.Discovered = cur.Root, prof.Name, true
-		if cur.Desired.Set {
-			cur.Desired.Changed = ssidDiffers(cur)
-		}
+		cur.State.WiFiChanged = ssidDiffers(cur, homeWiFi(d, cur))
 		d.ONUs[onuID] = cur
-		autoLink(d, onuID)
+		autoLink(d, onuID, s.now())
 		return nil
 	})
 	if uerr != nil && !errors.Is(uerr, store.ErrNoChange) {
@@ -517,17 +515,19 @@ func (s *Service) doWiFi(ctx context.Context, ss *session, onuID string, t store
 	if !ok {
 		return "the ONU is gone", nil
 	}
-	if !o.Desired.Set {
-		return "no Wi-Fi name and password are saved for this ONU", nil
+	var want store.WiFiDesired
+	s.st.View(func(d *store.Data) { want = homeWiFi(d, o) })
+	if !want.Set {
+		return "no Wi-Fi name and password are saved for this house", nil
 	}
-	pass, err := s.openPass(o.Desired.PassEnc)
+	pass, err := s.openPass(want.PassEnc)
 	if err != nil {
 		return "the saved Wi-Fi password cannot be opened", nil
 	}
-	pass5, ssid5 := pass, o.Desired.SSID
-	if !o.Desired.Same {
-		ssid5 = o.Desired.SSID5
-		if pass5, err = s.openPass(o.Desired.Pass5Enc); err != nil {
+	pass5, ssid5 := pass, want.SSID
+	if !want.Same {
+		ssid5 = want.SSID5
+		if pass5, err = s.openPass(want.Pass5Enc); err != nil {
 			return "the saved 5 GHz Wi-Fi password cannot be opened", nil
 		}
 	}
@@ -540,16 +540,13 @@ func (s *Service) doWiFi(ctx context.Context, ss *session, onuID string, t store
 		}
 	}
 	prof := pickProfile(o.Root, o.Manufacturer, o.OUI, o.ProductClass)
-	idx := o.Profile.PassIdx
-	if idx < 0 || idx >= len(prof.Pass) {
-		idx = 0
-	}
+	idx := 0
 	type target struct {
 		band, ssid, pass string
 	}
 	var faults []string
 	attempted := 0
-	for _, tg := range []target{{"2.4", o.Desired.SSID, pass}, {"5", ssid5, pass5}} {
+	for _, tg := range []target{{"2.4", want.SSID, pass}, {"5", ssid5, pass5}} {
 		w, ok := primary(o.WiFi, tg.band)
 		if !ok {
 			continue
@@ -608,14 +605,13 @@ func (s *Service) doWiFi(ctx context.Context, ss *session, onuID string, t store
 	if len(faults) > 0 {
 		return strings.Join(faults, "; "), nil
 	}
-	s.rememberPass(onuID, prof.Name, idx)
 	_ = s.refreshSSIDs(ctx, ss, onuID)
 	_ = s.st.Update(func(d *store.Data) error {
 		cur, ok := d.ONUs[onuID]
-		if !ok || !cur.Desired.Changed {
+		if !ok || !cur.State.WiFiChanged {
 			return store.ErrNoChange
 		}
-		cur.Desired.Changed = ssidDiffers(cur)
+		cur.State.WiFiChanged = ssidDiffers(cur, homeWiFi(d, cur))
 		d.ONUs[onuID] = cur
 		return nil
 	})
@@ -625,18 +621,6 @@ func (s *Service) doWiFi(ctx context.Context, ss *session, onuID string, t store
 // passRefused: the device named the passphrase parameter of the current candidate as refused.
 func passRefused(p Profile, w store.ONUWiFi, idx int, skip map[string]bool) bool {
 	return idx < len(p.Pass) && skip[apPath(w)+p.Pass[idx]]
-}
-
-func (s *Service) rememberPass(onuID, vendor string, idx int) {
-	_ = s.st.Update(func(d *store.Data) error {
-		cur, ok := d.ONUs[onuID]
-		if !ok || (cur.Profile.PassIdx == idx && cur.Profile.Vendor == vendor) {
-			return store.ErrNoChange
-		}
-		cur.Profile.PassIdx, cur.Profile.Vendor = idx, vendor
-		d.ONUs[onuID] = cur
-		return nil
-	})
 }
 
 // refreshSSIDs reads the Wi-Fi names the ONU has now.
@@ -666,7 +650,7 @@ func (s *Service) refreshSSIDs(ctx context.Context, ss *session, onuID string) e
 					cur.WiFi[i].SSID, cur.WiFi[i].Enabled = ssid, en
 				}
 			}
-			cur.Desired.Changed = ssidDiffers(cur)
+			cur.State.WiFiChanged = ssidDiffers(cur, homeWiFi(d, cur))
 			d.ONUs[onuID] = cur
 			return nil
 		})

@@ -215,6 +215,9 @@ type Account struct {
 	// WAOptOut above stay authoritative for messaging and are copied from
 	// the customer when it is saved or linked.
 	CustomerID string `json:"customer_id,omitempty"`
+	// HomeWiFi is the Wi-Fi name and (sealed) password the owner chose for this house. It is applied to whichever
+	// ONU is linked to the house, and is never carried by a box.
+	HomeWiFi WiFiDesired `json:"home_wifi,omitzero"`
 	// Location inside the building.
 	Floor        string `json:"floor,omitempty"`
 	ODB          string `json:"odb,omitempty"`

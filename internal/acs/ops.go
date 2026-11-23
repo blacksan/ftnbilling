@@ -42,38 +42,15 @@ func (in WiFiInput) check() error {
 	return nil
 }
 
-func newTaskID() string { return "t" + randHex(4) }
-func newONUID() string  { return "o" + randHex(4) }
+func newONUID() string { return "o" + randHex(4) }
 
 func (s *Service) audit(d *store.Data, o store.ONU, by, ip, msg string) {
 	d.AddEvent(store.Event{Time: s.now(), SiteID: o.SiteID, Kind: "audit", AccountID: o.AccountID, Msg: msg, Actor: by, IP: ip})
 }
 
-// queue adds a task to the ONU unless an active one of the same kind exists (then that one is returned). A Wi-Fi
-// change joins only a pending one: a running one may already have sent the previous name and password.
+// queue adds a task to the ONU unless an active one of the same kind exists (then that one is returned).
 func queue(d *store.Data, o store.ONU, kind, by string, now time.Time) store.ONUTask {
-	for _, t := range d.ONUTasksOf(o.ID) {
-		if t.Kind == kind && t.Active() && (kind != store.TaskWiFi || t.Status == store.TaskPending) {
-			return t
-		}
-	}
-	t := store.ONUTask{ID: newTaskID(), ONUID: o.ID, SiteID: o.SiteID, AccountID: o.AccountID, Kind: kind, Status: store.TaskPending, By: by, CreatedAt: now}
-	d.ONUTasks[t.ID] = t
-	pruneTasks(d, o.ID)
-	return t
-}
-
-// pruneTasks keeps the newest 30 finished tasks of a device.
-func pruneTasks(d *store.Data, onuID string) {
-	var done []store.ONUTask
-	for _, t := range d.ONUTasksOf(onuID) {
-		if !t.Active() {
-			done = append(done, t)
-		}
-	}
-	for i := 30; i < len(done); i++ {
-		delete(d.ONUTasks, done[i].ID)
-	}
+	return d.QueueONUTask(o, kind, by, now)
 }
 
 // SetWiFi saves the desired Wi-Fi configuration of the ONU linked to a house (the passphrases sealed), queues the
@@ -99,12 +76,16 @@ func (s *Service) SetWiFi(by, ip, accountID string, in WiFiInput) (store.ONUTask
 		if !ok {
 			return ErrNoONU
 		}
-		now := s.now()
-		o.Desired = store.WiFiDesired{Set: true, Same: in.Same, SSID: in.SSID, PassEnc: enc, UpdatedAt: now, UpdatedBy: by}
-		if !in.Same {
-			o.Desired.SSID5, o.Desired.Pass5Enc = in.SSID5, enc5
+		a, ok := d.Accounts[accountID]
+		if !ok {
+			return ErrNoAccount
 		}
-		d.ONUs[o.ID] = o
+		now := s.now()
+		a.HomeWiFi = store.WiFiDesired{Set: true, Same: in.Same, SSID: in.SSID, PassEnc: enc, UpdatedAt: now, UpdatedBy: by}
+		if !in.Same {
+			a.HomeWiFi.SSID5, a.HomeWiFi.Pass5Enc = in.SSID5, enc5
+		}
+		d.Accounts[a.ID] = a
 		t = queue(d, o, store.TaskWiFi, by, now)
 		msg := "Wi-Fi name and password changed (2.4 and 5 GHz: " + in.SSID + ")"
 		if !in.Same {
@@ -202,14 +183,16 @@ func (s *Service) LinkONU(by, ip, onuID, accountID string) error {
 			return ErrSite
 		}
 		o.AccountID, o.Link = accountID, store.LinkManual
+		o.State.Returned = false
 		d.ONUs[o.ID] = o
 		s.audit(d, o, by, ip, "ONU "+o.Serial+" linked to "+a.Code)
 		return nil
 	})
 }
 
-// UnlinkONU removes the link of an ONU. Its saved Wi-Fi configuration stays with the ONU row until it is linked
-// again; it is not restored to another house's ONU.
+// UnlinkONU takes an ONU off its house at once. The Wi-Fi choice belongs to the house and stays with it; the box is
+// marked returned, never receives any house's Wi-Fi until it is linked again, and a factory reset is queued for its
+// next check-in (the owner can cancel it from the ONU list).
 func (s *Service) UnlinkONU(by, ip, onuID string) error {
 	return s.st.Update(func(d *store.Data) error {
 		o, ok := d.ONUs[onuID]
@@ -220,17 +203,15 @@ func (s *Service) UnlinkONU(by, ip, onuID string) error {
 			return store.ErrNoChange
 		}
 		code := d.Accounts[o.AccountID].Code
-		s.audit(d, o, by, ip, "ONU "+o.Serial+" unlinked from "+code)
-		o.AccountID, o.Link = "", ""
-		o.Desired = store.WiFiDesired{} // the owner's Wi-Fi choice belongs to the house, not to the box
-		d.ONUs[o.ID] = o
+		s.audit(d, o, by, ip, "ONU "+o.Serial+" unlinked from "+code+"; a factory reset is queued for its next check-in")
+		d.ReleaseONU(o.ID, s.now(), by)
 		return nil
 	})
 }
 
 // autoLink links ONUs to houses whose MAC is one of the ONU's WAN MACs on the same router (and clears links to
 // houses that no longer exist). It changes d in place and says whether it did.
-func autoLink(d *store.Data, onuID string) bool {
+func autoLink(d *store.Data, onuID string, now time.Time) bool {
 	o, ok := d.ONUs[onuID]
 	if !ok {
 		return false
@@ -238,7 +219,7 @@ func autoLink(d *store.Data, onuID string) bool {
 	changed := false
 	if o.AccountID != "" {
 		if _, ok := d.Accounts[o.AccountID]; !ok {
-			o.AccountID, o.Link, o.Desired = "", "", store.WiFiDesired{}
+			o.AccountID, o.Link = "", ""
 			d.ONUs[o.ID], changed = o, true
 		}
 	}
@@ -250,14 +231,12 @@ func autoLink(d *store.Data, onuID string) bool {
 					if other.Link == store.LinkManual {
 						return changed // the owner's own link stays
 					}
-					o.Desired = other.Desired // the replacement box inherits the house's Wi-Fi choice
-					other.AccountID, other.Link, other.Desired = "", "", store.WiFiDesired{}
-					d.ONUs[other.ID] = other
+					// The replaced box leaves the house now: unlinked, marked returned, factory reset queued.
+					d.ReleaseONU(other.ID, now, "system")
 				}
-				if o.AccountID != "" { // was linked elsewhere (an old automatic link): the register wins
-					o.Desired = store.WiFiDesired{}
-				}
+				o = d.ONUs[o.ID]
 				o.AccountID, o.Link = a.ID, store.LinkInventory
+				o.State.Returned = false
 				d.ONUs[o.ID] = o
 				return true
 			} else if ok && o.AccountID == a.ID {
@@ -272,6 +251,13 @@ func autoLink(d *store.Data, onuID string) bool {
 	}
 	if o.AccountID != "" {
 		return changed
+	}
+	// A box that left a house is never linked by its MAC again (the owner links it, or the register installs it).
+	if o.State.Returned {
+		return changed
+	}
+	if inv, ok := d.ONTBySerial(o.Serial); ok && inv.Status != store.EqInstalled {
+		return changed // the register says this box is in stock, faulty or returned: not at any house
 	}
 	// 2. No register entry for the serial: the WAN MAC is the house MAC (existing houses).
 	for _, a := range d.Accounts {
@@ -290,11 +276,11 @@ func autoLink(d *store.Data, onuID string) bool {
 					if other.Link == store.LinkManual || containsMAC(other.MACs, am) {
 						return changed
 					}
-					o.Desired = other.Desired
-					other.AccountID, other.Link, other.Desired = "", "", store.WiFiDesired{}
-					d.ONUs[other.ID] = other
+					d.ReleaseONU(other.ID, now, "system")
 				}
+				o = d.ONUs[o.ID]
 				o.AccountID, o.Link = a.ID, store.LinkAuto
+				o.State.Returned = false
 				d.ONUs[o.ID] = o
 				return true
 			}
@@ -317,7 +303,7 @@ func (s *Service) AutoLinkSite(siteID string) {
 	_ = s.st.Update(func(d *store.Data) error {
 		n := 0
 		for _, o := range d.ONUList(siteID) {
-			if o.AccountID == "" && autoLink(d, o.ID) {
+			if o.AccountID == "" && autoLink(d, o.ID, s.now()) {
 				n++
 			}
 		}

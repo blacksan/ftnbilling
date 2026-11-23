@@ -91,9 +91,9 @@ func TestONUWiFiFromAccountPage(t *testing.T) {
 	}
 	// the password is stored encrypted
 	a.st.View(func(d *store.Data) {
-		o := d.ONUs["onu1"]
-		if o.Desired.PassEnc == "" || strings.Contains(o.Desired.PassEnc, "supersecret99") {
-			t.Fatalf("not encrypted: %q", o.Desired.PassEnc)
+		w := d.Accounts[acct.ID].HomeWiFi
+		if w.PassEnc == "" || strings.Contains(w.PassEnc, "supersecret99") {
+			t.Fatalf("not encrypted: %q", w.PassEnc)
 		}
 	})
 	if l := a.adminPost(t, "/admin/accounts/onu/reboot", url.Values{"id": {acct.ID}}); !strings.Contains(l, "reboot queued") {

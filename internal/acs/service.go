@@ -327,8 +327,8 @@ func (s *Service) view(d *store.Data, o store.ONU) ONUView {
 	for _, w := range o.WiFi {
 		v.WiFi = append(v.WiFi, WiFiView{Band: w.Band, SSID: w.SSID, Enabled: w.Enabled})
 	}
-	ds := o.Desired
-	v.Desired = DesiredView{Set: ds.Set, Same: ds.Same, SSID: ds.SSID, SSID5: ds.SSID5, HasPass: ds.PassEnc != "", UpdatedAt: ds.UpdatedAt, UpdatedBy: ds.UpdatedBy, Changed: ds.Changed}
+	ds := homeWiFi(d, o)
+	v.Desired = DesiredView{Set: ds.Set, Same: ds.Same, SSID: ds.SSID, SSID5: ds.SSID5, HasPass: ds.PassEnc != "", UpdatedAt: ds.UpdatedAt, UpdatedBy: ds.UpdatedBy, Changed: o.State.WiFiChanged && ds.Set}
 	if ts := d.ONUTasksOf(o.ID); len(ts) > 0 {
 		tv := taskView(ts[0])
 		v.LastTask = &tv

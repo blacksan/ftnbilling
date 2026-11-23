@@ -317,16 +317,16 @@ var accountsC = (&codec[store.Account]{
 	name: "accounts", pk: []string{"id"}, key: func(v store.Account) string { return v.ID },
 	cols: []string{"id", "site_id", "code", "flat", "floor", "mac", "tenant", "phone", "notes", "whatsapp", "wa_opt_out", "customer_id", "package_id",
 		"expires_at", "suspended", "reminded_for", "expired_for", "odb", "splitter_id", "splitter_port", "created_at", "closed_at",
-		"mac_conflict", "ip", "apartment_id", "unit", "wa_same_phone"},
+		"mac_conflict", "ip", "apartment_id", "unit", "wa_same_phone", "home_wifi"},
 	args: func(v store.Account) []any {
 		return []any{v.ID, v.SiteID, v.Code, v.Flat, v.Floor, v.MAC, v.Tenant, v.Phone, v.Notes, v.WhatsApp, v.WAOptOut, fk(v.CustomerID), fk(v.PackageID),
 			nt(v.ExpiresAt), v.Suspended, nt(v.RemindedFor), nt(v.ExpiredFor), v.ODB, fk(v.SplitterID), v.SplitterPort, tm(v.CreatedAt), nt(v.ClosedAt),
-			v.MACConflict, v.IP, fk(v.ApartmentID), v.Unit, v.WASamePhone}
+			v.MACConflict, v.IP, fk(v.ApartmentID), v.Unit, v.WASamePhone, jsonArg(v.HomeWiFi, "{}")}
 	},
 	dst: func(v *store.Account) []any {
 		return []any{&v.ID, &v.SiteID, &v.Code, &v.Flat, &v.Floor, &v.MAC, &v.Tenant, &v.Phone, &v.Notes, &v.WhatsApp, &v.WAOptOut, s_(&v.CustomerID), s_(&v.PackageID),
 			t_(&v.ExpiresAt), &v.Suspended, t_(&v.RemindedFor), t_(&v.ExpiredFor), &v.ODB, s_(&v.SplitterID), &v.SplitterPort, t_(&v.CreatedAt), t_(&v.ClosedAt),
-			&v.MACConflict, &v.IP, s_(&v.ApartmentID), &v.Unit, &v.WASamePhone}
+			&v.MACConflict, &v.IP, s_(&v.ApartmentID), &v.Unit, &v.WASamePhone, jsonScan[store.WiFiDesired]{&v.HomeWiFi}}
 	},
 }).build()
 
@@ -478,27 +478,30 @@ func (d jsonScan[T]) Scan(v any) error {
 var onusC = (&codec[store.ONU]{
 	name: "onus", pk: []string{"id"}, key: func(v store.ONU) string { return v.ID },
 	cols: []string{"id", "serial", "oui", "manufacturer", "product_class", "sw_version", "hw_version", "root", "site_id", "mgmt_ip", "conn_req_url",
-		"cr_user_enc", "cr_pass_enc", "cr_applied", "first_seen", "last_inform", "last_events", "macs", "wifi", "profile", "account_id", "link", "desired"},
+		"cr_user_enc", "cr_pass_enc", "cr_applied", "first_seen", "last_inform", "last_events", "macs", "wifi", "profile", "account_id", "link", "sec", "state"},
 	args: func(v store.ONU) []any {
 		return []any{v.ID, v.Serial, v.OUI, v.Manufacturer, v.ProductClass, v.SWVersion, v.HWVersion, v.Root, v.SiteID, v.MgmtIP, v.ConnReqURL,
 			v.ConnReqUserEnc, v.ConnReqPassEnc, v.CRApplied, nt(v.FirstSeen), nt(v.LastInform), v.LastEvents, jsonArg(v.MACs, "[]"), jsonArg(v.WiFi, "[]"),
-			jsonArg(v.Profile, "{}"), v.AccountID, v.Link, jsonArg(v.Desired, "{}")}
+			jsonArg(v.Profile, "{}"), v.AccountID, v.Link, jsonArg(v.Sec, "{}"), jsonArg(v.State, "{}")}
 	},
 	dst: func(v *store.ONU) []any {
 		return []any{&v.ID, &v.Serial, &v.OUI, &v.Manufacturer, &v.ProductClass, &v.SWVersion, &v.HWVersion, &v.Root, &v.SiteID, &v.MgmtIP, &v.ConnReqURL,
 			&v.ConnReqUserEnc, &v.ConnReqPassEnc, &v.CRApplied, t_(&v.FirstSeen), t_(&v.LastInform), &v.LastEvents, jsonScan[[]string]{&v.MACs}, jsonScan[[]store.ONUWiFi]{&v.WiFi},
-			jsonScan[store.ONUProfile]{&v.Profile}, &v.AccountID, &v.Link, jsonScan[store.WiFiDesired]{&v.Desired}}
+			jsonScan[store.ONUProfile]{&v.Profile}, &v.AccountID, &v.Link, jsonScan[store.ONUSec]{&v.Sec}, jsonScan[store.ONUState]{&v.State}}
 	},
 }).build()
 
 var onuTasksC = (&codec[store.ONUTask]{
 	name: "onu_tasks", pk: []string{"id"}, key: func(v store.ONUTask) string { return v.ID },
-	cols: []string{"id", "onu_id", "site_id", "account_id", "kind", "status", "fault", "by", "attempts", "created_at", "started_at", "finished_at"},
+	cols: []string{"id", "onu_id", "site_id", "account_id", "kind", "status", "fault", "by", "attempts", "created_at", "started_at", "finished_at",
+		"after_reboot", "pass_leaf", "confirmed_at", "confirmed_by"},
 	args: func(v store.ONUTask) []any {
-		return []any{v.ID, v.ONUID, v.SiteID, v.AccountID, v.Kind, v.Status, v.Fault, v.By, v.Attempts, tm(v.CreatedAt), nt(v.StartedAt), nt(v.FinishedAt)}
+		return []any{v.ID, v.ONUID, v.SiteID, v.AccountID, v.Kind, v.Status, v.Fault, v.By, v.Attempts, tm(v.CreatedAt), nt(v.StartedAt), nt(v.FinishedAt),
+			v.AfterReboot, v.PassLeaf, nt(v.ConfirmedAt), v.ConfirmedBy}
 	},
 	dst: func(v *store.ONUTask) []any {
-		return []any{&v.ID, &v.ONUID, &v.SiteID, &v.AccountID, &v.Kind, &v.Status, &v.Fault, &v.By, &v.Attempts, t_(&v.CreatedAt), t_(&v.StartedAt), t_(&v.FinishedAt)}
+		return []any{&v.ID, &v.ONUID, &v.SiteID, &v.AccountID, &v.Kind, &v.Status, &v.Fault, &v.By, &v.Attempts, t_(&v.CreatedAt), t_(&v.StartedAt), t_(&v.FinishedAt),
+			&v.AfterReboot, &v.PassLeaf, t_(&v.ConfirmedAt), &v.ConfirmedBy}
 	},
 }).build()
 

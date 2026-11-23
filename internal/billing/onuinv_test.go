@@ -104,3 +104,49 @@ func TestONUGPONSerialOfRetiredItemStaysTaken(t *testing.T) {
 		t.Fatalf("the GPON serial of a retired item was taken again: %v", err)
 	}
 }
+
+// A swap takes the old box off the house at once: its ONU row is unlinked and marked returned, a factory reset waits
+// for its next check-in, the house keeps its Wi-Fi choice, and the register says returned unless the owner said otherwise.
+func TestSwapONUUnlinksTheOldBox(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	o1, _ := e.svc.SaveEquipment(EquipmentInput{Kind: "ont", Serial: "zte001", MAC: macA})
+	o2, _ := e.svc.SaveEquipment(EquipmentInput{Kind: "ont", Serial: "zte002", MAC: macB})
+	a, err := e.svc.CreateAccount(AccountInput{ApartmentID: store.MigratedApartmentID(e.site), SiteID: e.site, Flat: "F1", EquipmentID: o1.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.st.Update(func(d *store.Data) error {
+		d.ONUs["onuold"] = store.ONU{ID: "onuold", Serial: "zte001", SiteID: e.site, AccountID: a.ID, Link: store.LinkInventory}
+		ac := d.Accounts[a.ID]
+		ac.HomeWiFi = store.WiFiDesired{Set: true, Same: true, SSID: "Home", PassEnc: "c2VhbGVk"}
+		d.Accounts[a.ID] = ac
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.SwapONU(ctx, a.ID, o2.ID, "", "swapped"); err != nil {
+		t.Fatal(err)
+	}
+	e.svc.st.View(func(d *store.Data) {
+		if d.Equipment[o1.ID].Status != store.EqReturned {
+			t.Fatalf("old item status %q", d.Equipment[o1.ID].Status)
+		}
+		old := d.ONUs["onuold"]
+		if old.AccountID != "" || !old.State.Returned {
+			t.Fatalf("old ONU still linked: %+v", old)
+		}
+		var reset bool
+		for _, tk := range d.ONUTasksOf("onuold") {
+			if tk.Kind == store.TaskFactoryReset && tk.Status == store.TaskPending {
+				reset = true
+			}
+		}
+		if !reset {
+			t.Fatal("no factory reset queued for the returned box")
+		}
+		if !d.Accounts[a.ID].HomeWiFi.Set {
+			t.Fatal("the house lost its Wi-Fi choice")
+		}
+	})
+}

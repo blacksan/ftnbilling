@@ -144,6 +144,7 @@ func decodeJSON(raw []byte, path string) (*Data, int, error) {
 		d.migrateV8toV9(timeNow())
 	}
 	d.backfillWASame()
+	d.moveLegacyDesired()
 	d.LegacyContacts = nil
 	d.Format = FormatVersion
 	return d, probe.Format, nil

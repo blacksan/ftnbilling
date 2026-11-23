@@ -77,11 +77,17 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 			Root: store.RootTR098, SiteID: "s111111", MgmtIP: "10.6.1.20", ConnReqURL: "http://10.6.1.20:7547/", ConnReqUserEnc: "c2VhbGVk", ConnReqPassEnc: "c2VhbGVk",
 			CRApplied: true, FirstSeen: at, LastInform: at, LastEvents: "2 PERIODIC", MACs: []string{"AA:BB:CC:DD:EE:09"},
 			WiFi:    []store.ONUWiFi{{Path: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.", Band: "2.4", SSID: "Home", Enabled: true, Channel: 6}},
-			Profile: store.ONUProfile{Root: store.RootTR098, PassIdx: 1, Vendor: "tr098", Discovered: true}, AccountID: "a1", Link: store.LinkAuto,
-			Desired: store.WiFiDesired{Set: true, Same: true, SSID: "Home", PassEnc: "c2VhbGVk", UpdatedAt: at, UpdatedBy: "brian"}}
+			Profile: store.ONUProfile{Root: store.RootTR098, PassLeaf: "PreSharedKey.1.KeyPassphrase", Vendor: "tr098", Discovered: true}, AccountID: "a1", Link: store.LinkAuto,
+			Sec: store.ONUSec{ACSUser: "ftn-o1", ACSPassEnc: "c2VhbGVk", ACSCred: store.CredDevice, ACSTries: 1, MgmtMAC: "AA:BB:CC:00:00:01", FlapCount: 2, FlapSince: at,
+				AdminPassEnc: "c2VhbGVk", AdminPass: store.AdminUnverified,
+				Quarantine: store.ONUQuarantine{Active: true, Since: at, LastAt: at, Count: 2, Reason: "r", SiteID: "s111111", IP: "10.6.1.99", MAC: "AA:BB:CC:00:00:02", Alerted: at}},
+			State: store.ONUState{LastKey: "t1", PrevKey: "t0", NoWiFi: true, AppliedFor: "a1", AppliedAt: at, Returned: true, ReturnedAt: at}}
+		a1 := d.Accounts["a1"]
+		a1.HomeWiFi = store.WiFiDesired{Set: true, Same: true, SSID: "Home", PassEnc: "c2VhbGVk", UpdatedAt: at, UpdatedBy: "brian"}
+		d.Accounts["a1"] = a1
 		d.ONUs["o2"] = store.ONU{ID: "o2", Serial: "HWTC0000002", OUI: "00E0FC", Manufacturer: "Huawei", Root: store.RootTR181, LastInform: at}
 		d.ONUTasks["ot1"] = store.ONUTask{ID: "ot1", ONUID: "o1", SiteID: "s111111", AccountID: "a1", Kind: store.TaskWiFi, Status: store.TaskFailed, Fault: "9005 Invalid parameter name",
-			By: "brian", Attempts: 2, CreatedAt: at, StartedAt: at, FinishedAt: at}
+			By: "brian", Attempts: 2, CreatedAt: at, StartedAt: at, FinishedAt: at, AfterReboot: true, PassLeaf: "PreSharedKey.1.KeyPassphrase", ConfirmedAt: at, ConfirmedBy: "brian"}
 		d.Notes["n1"] = store.Note{ID: "n1", CustomerID: "c1", AccountID: "a1", SiteID: "s111111", EquipmentID: "e1", Text: "hello", Time: at}
 		d.Settings["wa.token"] = store.Setting{Key: "wa.token", Value: "c2VhbGVk", Enc: true, UpdatedAt: at}
 		d.Settings["wa.lang"] = store.Setting{Key: "wa.lang", Value: "sw", UpdatedAt: at}

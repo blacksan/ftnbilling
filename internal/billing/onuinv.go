@@ -50,13 +50,15 @@ func (s *Service) installONTLocked(d *store.Data, equipID string, a store.Accoun
 	return nil
 }
 
-// SwapONU gives a house another ONU from the register. The old ONU leaves the house with oldStatus (in stock,
-// faulty or returned); the house MAC becomes the new ONU's WAN MAC and the router is updated.
+// SwapONU gives a house another ONU from the register. The old ONU leaves the house with oldStatus (returned unless
+// the owner says in stock, faulty or retired): its ONU row is unlinked at once and a factory reset is queued for its
+// next check-in, so it never carries the house's Wi-Fi away. The house MAC becomes the new ONU's WAN MAC and the
+// router is updated; the new box gets the house's Wi-Fi on its first verified session.
 func (s *Service) SwapONU(ctx context.Context, accountID, newEquipID, oldStatus, note string) error {
 	switch oldStatus {
 	case store.EqInStock, store.EqFaulty, store.EqReturned, store.EqRetired:
 	case "":
-		oldStatus = store.EqInStock
+		oldStatus = store.EqReturned
 	default:
 		return errors.New("the old ONU can go back in stock, or be faulty, returned or retired")
 	}
