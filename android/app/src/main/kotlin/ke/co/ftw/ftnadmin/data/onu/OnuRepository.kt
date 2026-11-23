@@ -35,6 +35,23 @@ class OnuRepository(private val api: ApiClient) {
 
     suspend fun refresh(accountId: String): OnuTaskReply = api.post("accounts", accountId, "onu", "refresh")
 
+    /** "It works": the newest accepted Wi-Fi change becomes confirmed, and the ONU model remembers what took. */
+    suspend fun confirmWifi(accountId: String): OnuTaskReply = api.post("accounts", accountId, "onu", "confirm")
+
+    /** "It didn't work": the change is queued again another way. */
+    suspend fun rejectWifi(accountId: String): OnuTaskReply = api.post("accounts", accountId, "onu", "reject")
+
+    /** Cancels a queued task before it is sent. */
+    suspend fun cancelTask(taskId: String): kotlinx.serialization.json.JsonObject = api.post("onu-tasks", taskId, "cancel")
+
+    /** Answer to "ONU checked in from an unexpected place": bind it to where it came from. */
+    suspend fun approve(onuId: String): Onu = api.post("onus", onuId, "approve")
+
+    /** The other answer: that place is turned away for this serial. */
+    suspend fun block(onuId: String): Onu = api.post("onus", onuId, "block")
+
+    suspend fun unblock(onuId: String): Onu = api.post("onus", onuId, "unblock")
+
     suspend fun forRouter(siteId: String): List<Onu> = api.get<ItemList<Onu>>("sites", siteId, "onus").items
 
     suspend fun link(onuId: String, accountId: String): Onu =
@@ -61,7 +78,10 @@ class OnuRepository(private val api: ApiClient) {
         },
     )
 
-    /** Swaps the house's ONU for one of the register. The old one goes back with [oldStatus]. */
+    /**
+     * Swaps the house's ONU for one of the register. The old one is unlinked at once and a factory reset is queued for
+     * its next check-in; it goes back with [oldStatus] (the server's default is returned). The app has no screen for it yet.
+     */
     suspend fun swap(accountId: String, equipmentId: String, oldStatus: String): kotlinx.serialization.json.JsonObject =
         api.post(
             "accounts", accountId, "onu", "swap",

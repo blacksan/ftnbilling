@@ -32,6 +32,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ke.co.ftw.ftnadmin.data.onu.Onu
+import ke.co.ftw.ftnadmin.data.onu.OnuTask
 import ke.co.ftw.ftnadmin.ui.common.LabeledValue
 import ke.co.ftw.ftnadmin.ui.common.Loadable
 import ke.co.ftw.ftnadmin.ui.common.SectionCard
@@ -59,7 +60,7 @@ fun WifiCard(vm: WifiViewModel, canWrite: Boolean, modifier: Modifier = Modifier
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
-                    OnuBody(onu, o.value.task?.let { TaskLine(it.statusText, it.isQueued, it.isFailed) }, ui.error, canWrite, ui.busy, vm)
+                    OnuBody(onu, o.value.task ?: onu.lastTask, ui.error, canWrite, ui.busy, vm)
                 }
             }
         }
@@ -76,14 +77,22 @@ fun WifiCard(vm: WifiViewModel, canWrite: Boolean, modifier: Modifier = Modifier
     }
 }
 
-private data class TaskLine(val text: String, val queued: Boolean, val failed: Boolean)
-
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun OnuBody(onu: Onu, task: TaskLine?, error: String?, canWrite: Boolean, busy: Boolean, vm: WifiViewModel) {
+private fun OnuBody(onu: Onu, task: OnuTask?, error: String?, canWrite: Boolean, busy: Boolean, vm: WifiViewModel) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         StatusChip(if (onu.online) "ONU online" else "ONU silent", if (onu.online) Tone.Good else Tone.Warn)
         if (onu.desired.changedOnDevice) StatusChip("Changed on the device", Tone.Warn)
+        if (onu.isQuarantined) StatusChip("Held back: unexpected place", Tone.Bad)
+        if (onu.sharedLoginOnly) StatusChip("Shared login only", Tone.Neutral)
+        if (onu.returned) StatusChip("Returned: reset on next check-in", Tone.Neutral)
+    }
+    if (onu.isQuarantined) {
+        Text(
+            "This ONU checked in from an unexpected place and gets nothing until the owner approves or blocks it in the router's ONUs.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
     }
     LabeledValue("ONU", onu.title)
     LabeledValue("Serial", onu.serial)
@@ -102,12 +111,26 @@ private fun OnuBody(onu: Onu, task: TaskLine?, error: String?, canWrite: Boolean
     task?.let {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Last request", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            StatusChip(it.text, if (it.failed) Tone.Bad else if (it.queued) Tone.Neutral else Tone.Good)
+            StatusChip(it.statusText, if (it.isFailed) Tone.Bad else if (it.isExpired) Tone.Warn else if (it.isQueued || it.isAccepted) Tone.Neutral else Tone.Good)
+        }
+        if (it.isAccepted) {
+            Text(
+                "Accepted only means the box said yes. Check the Wi-Fi on a phone.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
     error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error) }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(onClick = vm::refresh, enabled = !busy) { Text("Refresh") }
+        if (canWrite && task != null && task.canConfirm) {
+            Button(onClick = vm::confirm, enabled = !busy) { Text("It works") }
+            OutlinedButton(onClick = vm::reject, enabled = !busy) { Text("It didn't work") }
+        }
+        if (canWrite && task != null && task.canCancel) {
+            OutlinedButton(onClick = { vm.cancelTask(task.id) }, enabled = !busy) { Text("Cancel request") }
+        }
         if (canWrite) {
             Button(onClick = vm::openSheet, enabled = !busy) { Text("Change Wi-Fi") }
             FilledTonalButton(onClick = vm::askReboot, enabled = !busy) { Text("Reboot ONU") }

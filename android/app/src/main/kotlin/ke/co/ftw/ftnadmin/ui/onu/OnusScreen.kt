@@ -124,6 +124,26 @@ private fun OnuCard(onu: Onu, canWrite: Boolean, busy: Boolean, vm: OnusViewMode
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             StatusChip(if (onu.online) "Online" else "Silent", if (onu.online) Tone.Good else Tone.Warn)
             if (!onu.inInventory) StatusChip("Not in the register", Tone.Neutral)
+            if (onu.isQuarantined) StatusChip("Held back", Tone.Bad)
+            if (onu.blocked) StatusChip("Blocked", Tone.Bad)
+            if (onu.sharedLoginOnly) StatusChip("Shared login only", Tone.Neutral)
+            if (onu.returned) StatusChip("Returned", Tone.Neutral)
+        }
+        onu.quarantine?.let { q ->
+            Text(
+                "ONU ${onu.serial} checked in from an unexpected place (${q.reason}). It gets no settings and no tasks until you decide.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+            if (canWrite) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { vm.approve(onu) }, enabled = !busy) { Text("Approve") }
+                    OutlinedButton(onClick = { vm.block(onu) }, enabled = !busy) { Text("Block") }
+                }
+            }
+        }
+        if (onu.blocked && !onu.isQuarantined && canWrite) {
+            OutlinedButton(onClick = { vm.unblock(onu) }, enabled = !busy) { Text("Unblock") }
         }
         LabeledValue("Serial", onu.serial)
         LabeledValue("Address", onu.mgmtIp)
@@ -154,7 +174,7 @@ private fun OnuCard(onu: Onu, canWrite: Boolean, busy: Boolean, vm: OnusViewMode
         AlertDialog(
             onDismissRequest = { confirmUnlink = false },
             title = { Text("Unlink this ONU?") },
-            text = { Text("The saved Wi-Fi choice of the house is dropped. The ONU itself keeps its settings.") },
+            text = { Text("The ONU is reset to factory settings when it next checks in, and it never gets this house's Wi-Fi again. The house keeps its saved Wi-Fi choice for its next ONU.") },
             confirmButton = { TextButton(onClick = { confirmUnlink = false; vm.unlink(onu) }) { Text("Unlink") } },
             dismissButton = { TextButton(onClick = { confirmUnlink = false }) { Text("Cancel") } },
         )

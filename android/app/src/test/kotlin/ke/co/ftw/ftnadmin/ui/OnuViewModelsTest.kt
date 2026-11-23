@@ -262,6 +262,108 @@ class OnuViewModelsTest {
         assertTrue(body, body.contains("AA:BB:CC:DD:EE:99"))
     }
 
+    // ---- task states, confirmation, quarantine ----
+
+    private val acceptedOnu = """{"onu":$onuJson,"task":{"id":"t9","kind":"wifi","status":"accepted","status_text":"Accepted: applies after the ONU restarts","after_reboot":true,"can_confirm":true}}"""
+
+    @Test fun taskStatesAreReadFromTheServer() = runTest(main.dispatcher) {
+        routes["GET /api/v1/accounts/a1/onu"] = ok(acceptedOnu)
+        val vm = main.track(WifiViewModel("a1", repo))
+        await(vm.state) { it.onu is Loadable.Ready }
+        val t = (vm.state.value.onu as Loadable.Ready).value.task!!
+        assertTrue(t.isAccepted)
+        assertTrue(t.afterReboot)
+        assertTrue(t.canConfirm)
+        assertFalse(t.isQueued)
+        val expired = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+            .decodeFromString(ke.co.ftw.ftnadmin.data.onu.OnuTask.serializer(), """{"id":"t8","kind":"reboot","status":"expired","status_text":"Expired","can_cancel":false}""")
+        assertTrue(expired.isExpired)
+        assertFalse(expired.isFailed)
+    }
+
+    @Test fun itWorksConfirmsTheAcceptedChange() = runTest(main.dispatcher) {
+        routes["GET /api/v1/accounts/a1/onu"] = ok(acceptedOnu)
+        routes["POST /api/v1/accounts/a1/onu/confirm"] = ok("""{"task":{"id":"t9","kind":"wifi","status":"confirmed","status_text":"Confirmed working"}}""")
+        val vm = main.track(WifiViewModel("a1", repo))
+        await(vm.state) { it.onu is Loadable.Ready }
+        vm.confirm()
+        await(vm.state) { !it.busy && it.info != null }
+        assertEquals(1, requests("POST /api/v1/accounts/a1/onu/confirm").size)
+    }
+
+    @Test fun itDidNotWorkAsksForAnotherTry() = runTest(main.dispatcher) {
+        routes["GET /api/v1/accounts/a1/onu"] = ok(acceptedOnu)
+        routes["POST /api/v1/accounts/a1/onu/reject"] = MockResponse().setResponseCode(202).setBody("""{"task":{"id":"t10","kind":"wifi","status":"queued","status_text":"Queued"}}""")
+        val vm = main.track(WifiViewModel("a1", repo))
+        await(vm.state) { it.onu is Loadable.Ready }
+        vm.reject()
+        await(vm.state) { !it.busy && it.info != null }
+        assertEquals(1, requests("POST /api/v1/accounts/a1/onu/reject").size)
+    }
+
+    @Test fun cancelSendsTheTaskId() = runTest(main.dispatcher) {
+        routes["GET /api/v1/accounts/a1/onu"] = ok(accountOnu)
+        routes["POST /api/v1/onu-tasks/t1/cancel"] = ok("""{"ok":true}""")
+        val vm = main.track(WifiViewModel("a1", repo))
+        await(vm.state) { it.onu is Loadable.Ready }
+        vm.cancelTask("t1")
+        await(vm.state) { !it.busy && it.info != null }
+        assertEquals(1, requests("POST /api/v1/onu-tasks/t1/cancel").size)
+    }
+
+    @Test fun confirmRefusalShowsTheReason() = runTest(main.dispatcher) {
+        routes["GET /api/v1/accounts/a1/onu"] = ok(accountOnu)
+        routes["POST /api/v1/accounts/a1/onu/confirm"] = err(409, "bad_state", msg = "there is no Wi-Fi change waiting for a confirmation on this house's ONU")
+        val vm = main.track(WifiViewModel("a1", repo))
+        await(vm.state) { it.onu is Loadable.Ready }
+        vm.confirm()
+        await(vm.state) { !it.busy && it.error != null }
+        assertTrue(vm.state.value.error!!.contains("no Wi-Fi change waiting"))
+    }
+
+    private val quarantinedJson = """{"id":"o5","serial":"SNQ5","manufacturer":"V-SOL","site_id":"s1","shared_login_only":true,"returned":false,
+        "quarantine":{"reason":"seen from another router","count":2,"ip":"10.6.4.50","mac":"AA:BB:CC:00:00:50","site_name":"Block B"}}"""
+
+    @Test fun quarantinedOnuIsShownAndApproved() = runTest(main.dispatcher) {
+        routes["GET /api/v1/sites/s1/onus"] = ok("""{"items":[$quarantinedJson]}""")
+        routes["POST /api/v1/onus/o5/approve"] = ok("""{"id":"o5","serial":"SNQ5"}""")
+        val vm = main.track(OnusViewModel("s1", repo, AccountsRepository(api)))
+        await(vm.state) { it.items is Loadable.Ready }
+        val onu = (vm.state.value.items as Loadable.Ready).value.single()
+        assertTrue(onu.isQuarantined)
+        assertTrue(onu.sharedLoginOnly)
+        assertEquals("seen from another router", onu.quarantine!!.reason)
+        vm.approve(onu)
+        await(vm.state) { !it.busy && it.info != null }
+        assertEquals(1, requests("POST /api/v1/onus/o5/approve").size)
+    }
+
+    @Test fun quarantinedOnuCanBeBlockedAndUnblocked() = runTest(main.dispatcher) {
+        routes["GET /api/v1/sites/s1/onus"] = ok("""{"items":[$quarantinedJson]}""")
+        routes["POST /api/v1/onus/o5/block"] = ok("""{"id":"o5","serial":"SNQ5","blocked":true}""")
+        routes["POST /api/v1/onus/o5/unblock"] = ok("""{"id":"o5","serial":"SNQ5"}""")
+        val vm = main.track(OnusViewModel("s1", repo, AccountsRepository(api)))
+        await(vm.state) { it.items is Loadable.Ready }
+        val onu = (vm.state.value.items as Loadable.Ready).value.single()
+        vm.block(onu)
+        await(vm.state) { !it.busy && it.info != null }
+        vm.clearInfo()
+        vm.unblock(onu)
+        await(vm.state) { !it.busy && it.info != null }
+        assertEquals(1, requests("POST /api/v1/onus/o5/block").size)
+        assertEquals(1, requests("POST /api/v1/onus/o5/unblock").size)
+    }
+
+    @Test fun approveWithNothingToApproveShowsTheReason() = runTest(main.dispatcher) {
+        routes["GET /api/v1/sites/s1/onus"] = ok("""{"items":[{"id":"o6","serial":"SN6"}]}""")
+        routes["POST /api/v1/onus/o6/approve"] = err(409, "bad_state", msg = "that ONU is not waiting for an approval")
+        val vm = main.track(OnusViewModel("s1", repo, AccountsRepository(api)))
+        await(vm.state) { it.items is Loadable.Ready }
+        vm.approve((vm.state.value.items as Loadable.Ready).value.single())
+        await(vm.state) { !it.busy && it.error != null }
+        assertTrue(vm.state.value.error!!.contains("not waiting for an approval"))
+    }
+
     // ---- the register ----
 
     @Test fun registerListsOnusAndRejectsABadMacLocally() = runTest(main.dispatcher) {

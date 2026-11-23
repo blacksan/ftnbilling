@@ -80,7 +80,28 @@ class OnusViewModel(
             val r = apiResult { repo.unlink(onu.id) }
             _state.update { cur ->
                 r.fold(
-                    { cur.copy(busy = false, info = "Unlinked") },
+                    { cur.copy(busy = false, info = "Unlinked. The box is reset to factory settings when it next checks in.") },
+                    { e -> cur.copy(busy = false, error = e.userMessage()) },
+                )
+            }
+            if (r.isSuccess) load()
+        }
+    }
+
+    /** The owner's answer to a check-in from an unexpected place. */
+    fun approve(onu: Onu) = decide(onu, "Approved. The ONU is bound to where it checked in from.") { repo.approve(onu.id) }
+
+    fun block(onu: Onu) = decide(onu, "Blocked. Check-ins from that place are ignored.") { repo.block(onu.id) }
+
+    fun unblock(onu: Onu) = decide(onu, "Unblocked.") { repo.unblock(onu.id) }
+
+    private fun decide(onu: Onu, done: String, call: suspend () -> Onu) {
+        _state.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            val r = apiResult { call() }
+            _state.update { cur ->
+                r.fold(
+                    { cur.copy(busy = false, info = done) },
                     { e -> cur.copy(busy = false, error = e.userMessage()) },
                 )
             }

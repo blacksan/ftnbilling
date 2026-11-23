@@ -22,7 +22,10 @@ data class OnuDesired(
     @SerialName("changed_on_device") val changedOnDevice: Boolean = false,
 )
 
-/** A queued, applied or failed request to the ONU. [status] is queued, applied or failed. */
+/**
+ * A request to the ONU. [status] is queued, sending, accepted, confirmed, failed, expired or done.
+ * Accepted only means the box said yes: the owner confirms a Wi-Fi change with "It works" ([canConfirm]).
+ */
 @Serializable
 data class OnuTask(
     val id: String = "",
@@ -30,10 +33,26 @@ data class OnuTask(
     val status: String = "queued",
     @SerialName("status_text") val statusText: String = "Queued",
     val fault: String = "",
+    @SerialName("after_reboot") val afterReboot: Boolean = false,
+    @SerialName("can_confirm") val canConfirm: Boolean = false,
+    @SerialName("can_cancel") val canCancel: Boolean = false,
 ) {
-    val isQueued: Boolean get() = status == "queued"
+    val isQueued: Boolean get() = status == "queued" || status == "sending"
     val isFailed: Boolean get() = status == "failed"
+    val isAccepted: Boolean get() = status == "accepted"
+    val isConfirmed: Boolean get() = status == "confirmed"
+    val isExpired: Boolean get() = status == "expired"
 }
+
+/** Why a check-in was held back: it came from a place the ONU is not bound to. It waits for Approve or Block. */
+@Serializable
+data class OnuQuarantine(
+    val reason: String = "",
+    val count: Int = 0,
+    val ip: String = "",
+    val mac: String = "",
+    @SerialName("site_name") val siteName: String = "",
+)
 
 @Serializable
 data class Onu(
@@ -59,7 +78,15 @@ data class Onu(
     @SerialName("inventory_status") val inventoryStatus: String = "",
     val warnings: List<String> = emptyList(),
     @SerialName("use_macs") val useMacs: List<String> = emptyList(),
+    /** Set while a check-in from an unexpected place waits for the owner (Approve or Block). */
+    val quarantine: OnuQuarantine? = null,
+    /** The box refused its own ACS login and uses the shared one: a weaker identity, not an error. */
+    @SerialName("shared_login_only") val sharedLoginOnly: Boolean = false,
+    /** The box left a house: a factory reset is queued and it never gets a house's Wi-Fi. */
+    val returned: Boolean = false,
+    val blocked: Boolean = false,
 ) {
+    val isQuarantined: Boolean get() = quarantine != null
     val title: String get() = listOf(manufacturer, model).filter { it.isNotBlank() }.joinToString(" ").ifBlank { "ONU" }
     val isLinked: Boolean get() = accountId.isNotBlank()
 }

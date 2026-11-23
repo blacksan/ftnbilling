@@ -113,7 +113,7 @@ class WifiViewModel(
             val r = apiResult { repo.setWifi(accountId, f.ssid, f.password, f.same, f.ssid5, f.password5) }
             r.fold(
                 {
-                    _state.update { it.copy(busy = false, sheet = false, form = WifiForm(), info = "Wi-Fi change queued. Press Refresh to see the result.") }
+                    _state.update { it.copy(busy = false, sheet = false, form = WifiForm(), info = "Wi-Fi change queued. When it shows Accepted, check the Wi-Fi on a phone and press It works.") }
                     load()
                 },
                 { e ->
@@ -141,6 +141,29 @@ class WifiViewModel(
             _state.update { cur ->
                 r.fold(
                     { cur.copy(busy = false, info = "Reboot queued. The house loses internet for a minute or two.") },
+                    { e -> cur.copy(busy = false, error = e.userMessage()) },
+                )
+            }
+            if (r.isSuccess) load()
+        }
+    }
+
+    /** "It works": the owner saw a phone join the new network. */
+    fun confirm() = taskAnswer("Thank you. The change is marked as working for this ONU model.") { repo.confirmWifi(accountId) }
+
+    /** "It didn't work": the box said yes but the network did not change; the change is sent again another way. */
+    fun reject() = taskAnswer("Noted. The change is sent again another way.") { repo.rejectWifi(accountId) }
+
+    /** Cancels a queued request before it is sent. */
+    fun cancelTask(taskId: String) = taskAnswer("Cancelled.") { repo.cancelTask(taskId) }
+
+    private fun <T> taskAnswer(done: String, call: suspend () -> T) {
+        _state.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            val r = apiResult { call() }
+            _state.update { cur ->
+                r.fold(
+                    { cur.copy(busy = false, info = done) },
                     { e -> cur.copy(busy = false, error = e.userMessage()) },
                 )
             }
