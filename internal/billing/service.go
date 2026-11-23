@@ -136,6 +136,8 @@ type Service struct {
 	hook  func()                                                   // called after a payment was applied (tenant messages)
 	sweep atomic.Pointer[func(ctx context.Context, siteID string)] // per-building work after each sweep pass (set once at start)
 	bg    sync.WaitGroup
+
+	onuLeases onuLeases // management-VLAN leases for the ACS
 }
 
 func NewService(st *store.Store, rs RouterSource, log *slog.Logger) *Service {
