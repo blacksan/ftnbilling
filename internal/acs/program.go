@@ -26,6 +26,9 @@ func (s *Service) program(ctx context.Context, ss *session, in Inform, onuID str
 	}
 	bootstrap := in.HasEvent("0")
 	boot := in.HasEvent("1")
+	if boot && !bootstrap && !v.reset {
+		in = s.withKey(ctx, ss, o, in)
+	}
 	reset := bootstrap || v.reset || s.keyShowsReset(o, in)
 	s.noteKey(onuID, in) // the key this Inform reports
 	needDiscover := !o.Profile.Discovered || reset || boot || (len(o.WiFi) == 0 && !o.State.NoWiFi) || hasTask(s, onuID, store.TaskRefresh)
@@ -50,7 +53,7 @@ func (s *Service) program(ctx context.Context, ss *session, in Inform, onuID str
 		}
 		s.queueHomeWiFi(onuID, reset)
 	}
-	s.runTasks(ctx, ss, onuID, v.trust)
+	s.runTasks(ctx, ss, onuID, v.trust, ai.kind == authShared)
 }
 
 func (s *Service) loadONU(id string) (o store.ONU, ok bool) {
@@ -84,6 +87,29 @@ func (s *Service) keyShowsReset(o store.ONU, in Inform) bool {
 		return false
 	}
 	return rep == "" || (rep != o.State.LastKey && rep != o.State.PrevKey)
+}
+
+// withKey: a box whose Inform leaves out the ParameterKey (it should be there; some firmware omits it) is asked for it
+// once on a boot, the moment a reset that keeps the login (and sends no 0 BOOTSTRAP) shows. One read; nothing on a
+// fault.
+func (s *Service) withKey(ctx context.Context, ss *session, o store.ONU, in Inform) Inform {
+	name := o.Root + "ManagementServer.ParameterKey"
+	if o.Root == "" || o.State.LastKey == "" {
+		return in
+	}
+	if _, has := in.Param(name); has {
+		return in
+	}
+	vals, f, err := ss.gpv(ctx, []string{name})
+	if err != nil || f != nil {
+		return in
+	}
+	for _, v := range vals {
+		if v.Name == name {
+			in.Params = append(append([]ParamValue(nil), in.Params...), v)
+		}
+	}
+	return in
 }
 
 // noteKey learns that a box reports the key we wrote (so a later change of it can be trusted as a reset).
@@ -210,7 +236,10 @@ func (s *Service) provision(ctx context.Context, ss *session, onuID string, rese
 			if state == store.CredPending {
 				cur.Sec.ACSUser, cur.Sec.ACSPassEnc = user, enc
 			} else {
-				cur.Sec.ACSUser, cur.Sec.ACSPassEnc = "", ""
+				cur.Sec.ACSPassEnc = ""
+				if cur.Sec.ACSPrevPassEnc == "" {
+					cur.Sec.ACSUser = "" // with a previous login kept, its user name stays so the original box is still known
+				}
 				s.log.Info("ACS: the ONU keeps the shared ACS login", "onu", onuID, "fault", f.Code)
 				s.audit(d, cur, "system", "", "ONU "+cur.Serial+" refused its own ACS login: it logs in with the shared login only (weaker)")
 			}
@@ -448,7 +477,7 @@ func (s *Service) finishWiFi(id string, r wifiResult) {
 	})
 }
 
-func (s *Service) runTasks(ctx context.Context, ss *session, onuID string, trust trustLevel) {
+func (s *Service) runTasks(ctx context.Context, ss *session, onuID string, trust trustLevel, shared bool) {
 	skipped := map[string]bool{}
 	for ctx.Err() == nil {
 		t, ok := s.nextTask(onuID, skipped)
@@ -461,6 +490,15 @@ func (s *Service) runTasks(ctx context.Context, ss *session, onuID string, trust
 			skipped[t.ID] = true
 			s.log.Info("ACS: Wi-Fi change waits: the ONU is not verified yet", "onu", onuID)
 			continue
+		}
+		if t.Kind == store.TaskFactoryReset && shared {
+			// The owed reset of a returned box goes to the box itself: on the shared login anyone who knows its serial
+			// could take it (and the old house's Wi-Fi would stay on the real box). It waits for the box's own login,
+			// unless the box refuses one.
+			if o, ok := s.loadONU(onuID); ok && o.Sec.ACSCred != store.CredShared {
+				skipped[t.ID] = true
+				continue
+			}
 		}
 		now := s.now()
 		s.setTask(t.ID, func(x *store.ONUTask) { x.Status, x.StartedAt, x.Attempts = store.TaskRunning, now, x.Attempts+1 })

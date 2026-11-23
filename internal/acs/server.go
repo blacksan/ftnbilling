@@ -177,6 +177,7 @@ func (s *Service) serve(w http.ResponseWriter, r *http.Request) {
 type authInfo struct {
 	kind  int    // authShared | authDevice
 	onuID string // the device whose own login was used (authDevice)
+	prev  bool   // authDevice with the login the box had before it last came back on the shared login
 }
 
 const (
@@ -206,24 +207,35 @@ func (s *Service) authenticate(w http.ResponseWriter, r *http.Request, ip netip.
 		user, _, _ = r.BasicAuth()
 	}
 	ai := authInfo{kind: authShared}
-	pass := gPass
+	pass, prev := gPass, ""
 	if user != "" && user != gUser {
-		if id, p, ok := s.deviceLogin(user); ok {
-			ai, pass = authInfo{kind: authDevice, onuID: id}, p
+		if id, p, pp, ok := s.deviceLogin(user); ok {
+			ai, pass, prev = authInfo{kind: authDevice, onuID: id}, p, pp
 		}
 	}
-	res := dgBad
-	switch {
-	case f != nil:
-		wantUser := gUser
-		if ai.kind == authDevice {
-			wantUser = user
+	check := func(pass string) int {
+		switch {
+		case pass == "":
+			return dgBad
+		case f != nil:
+			wantUser := gUser
+			if ai.kind == authDevice {
+				wantUser = user
+			}
+			return s.da.verify(r, wantUser, pass, s.cfg.ACSCompatAuth)
+		case s.cfg.ACSCompatAuth:
+			if u, p, ok := r.BasicAuth(); ok && subtle.ConstantTimeCompare([]byte(u), []byte(map[bool]string{true: user, false: gUser}[ai.kind == authDevice])) == 1 &&
+				subtle.ConstantTimeCompare([]byte(p), []byte(pass)) == 1 {
+				return dgOK
+			}
 		}
-		res = s.da.verify(r, wantUser, pass, s.cfg.ACSCompatAuth)
-	case s.cfg.ACSCompatAuth:
-		if u, p, ok := r.BasicAuth(); ok && subtle.ConstantTimeCompare([]byte(u), []byte(map[bool]string{true: user, false: gUser}[ai.kind == authDevice])) == 1 &&
-			subtle.ConstantTimeCompare([]byte(p), []byte(pass)) == 1 {
-			res = dgOK
+		return dgBad
+	}
+	res := check(pass)
+	if res == dgBad && ai.kind == authDevice && prev != "" {
+		// The box's login from before it came back on the shared login: only the box that was there before knows it.
+		if res = check(prev); res != dgBad {
+			ai.prev = true
 		}
 	}
 	switch res {
@@ -238,25 +250,35 @@ func (s *Service) authenticate(w http.ResponseWriter, r *http.Request, ip netip.
 	return authInfo{}, false
 }
 
-// deviceLogin finds the ONU whose own ACS user name is user and opens its password.
-func (s *Service) deviceLogin(user string) (id, pass string, ok bool) {
-	var enc string
+// deviceLogin finds the ONU whose own ACS user name is user and opens its password (and the one it had before it
+// last came back on the shared login, "" if none).
+func (s *Service) deviceLogin(user string) (id, pass, prev string, ok bool) {
+	var enc, prevEnc string
 	s.st.View(func(d *store.Data) {
 		for _, o := range d.ONUs {
-			if o.Sec.ACSUser == user && o.Sec.ACSPassEnc != "" {
-				id, enc = o.ID, o.Sec.ACSPassEnc
+			if o.Sec.ACSUser == user && (o.Sec.ACSPassEnc != "" || o.Sec.ACSPrevPassEnc != "") {
+				id, enc, prevEnc = o.ID, o.Sec.ACSPassEnc, o.Sec.ACSPrevPassEnc
 				return
 			}
 		}
 	})
 	if id == "" {
-		return "", "", false
+		return "", "", "", false
 	}
-	p, err := s.box.OpenAAD(enc, []byte("acs.dev"))
-	if err != nil {
-		return "", "", false
+	if enc != "" {
+		if p, err := s.box.OpenAAD(enc, []byte("acs.dev")); err == nil {
+			pass = p
+		}
 	}
-	return id, p, true
+	if prevEnc != "" {
+		if p, err := s.box.OpenAAD(prevEnc, []byte("acs.dev")); err == nil {
+			prev = p
+		}
+	}
+	if pass == "" && prev == "" {
+		return "", "", "", false
+	}
+	return id, pass, prev, true
 }
 
 // ipSession is the one live session of an address that was opened with the same login (M3: a CPE that drops the

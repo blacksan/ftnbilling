@@ -625,3 +625,50 @@ func TestRejectedNameGoesLastEvenWhenTheModelTableHasIt(t *testing.T) {
 		t.Fatalf("%v", got)
 	}
 }
+
+// One wrong "It works" must not mislead the fleet: another firmware of the model ignores a name confirmed once, and one
+// "It didn't work" on that firmware takes it out of the table.
+func TestOneWrongConfirmationDoesNotPoisonTheModel(t *testing.T) {
+	d := &store.Data{Settings: map[string]store.Setting{}}
+	prof := Profile{Pass: []string{"A", "B", "C"}}
+	v1 := store.ONU{OUI: "0019C6", ProductClass: "F670L", SWVersion: "V1"}
+	v2 := v1
+	v2.SWVersion = "V2"
+	now := time.Now()
+	writeWorks(d, map[string]Work{modelKey(v1.OUI, v1.ProductClass, v1.SWVersion): {OUI: v1.OUI, Class: v1.ProductClass, Firmware: "V1", PassLeaf: "C", Count: 1, Confirmed: now}}, now)
+	if got := passCandidates(d, v2, prof); got[0] != "A" {
+		t.Fatalf("one confirmation on V1 steers V2: %v", got)
+	}
+	if got := passCandidates(d, v1, prof); got[0] != "C" {
+		t.Fatalf("the same firmware does not use it: %v", got)
+	}
+	unlearnWork(d, v1, "C", now)
+	if len(readWorks(d)) != 0 {
+		t.Fatalf("one rejection did not undo one confirmation: %+v", readWorks(d))
+	}
+	writeWorks(d, map[string]Work{modelKey(v1.OUI, v1.ProductClass, v1.SWVersion): {OUI: v1.OUI, Class: v1.ProductClass, Firmware: "V1", PassLeaf: "C", Count: 2, Confirmed: now}}, now)
+	if got := passCandidates(d, v2, prof); got[0] != "C" {
+		t.Fatalf("two confirmations do not carry to another firmware: %v", got)
+	}
+	unlearnWork(d, v1, "B", now) // another name: nothing changes
+	if readWorks(d)[modelKey("0019C6", "F670L", "V1")].Count != 2 {
+		t.Fatal("a rejection of another name changed the entry")
+	}
+}
+
+// A house whose ONU is in the register is linked by serial only: a box the register does not know, reporting the
+// house's MAC, does not take the house (and its Wi-Fi), even while the registered box has not checked in yet.
+func TestUnregisteredBoxCannotTakeARegisteredHouseByMAC(t *testing.T) {
+	f := newFixture(t)
+	f.inventory("SNREAL", "", testAccountMAC, "a1")
+	a := newZTE(t, f, "SNFAKE", "10.6.3.99")
+	a.set(a.root+"WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.MACAddress", testAccountMAC)
+	for _, ev := range []string{"0 BOOTSTRAP", "2 PERIODIC"} {
+		if err := a.session(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if o := f.onuBySerial("SNFAKE"); o.AccountID != "" {
+		t.Fatalf("an unregistered box took a registered house by its MAC: %+v", o)
+	}
+}

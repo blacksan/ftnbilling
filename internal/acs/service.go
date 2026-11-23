@@ -302,6 +302,7 @@ type QuarantineView struct {
 	MAC      string    `json:"mac,omitempty"`
 	SiteID   string    `json:"site_id,omitempty"`
 	SiteName string    `json:"site_name,omitempty"`
+	Places   int       `json:"places,omitempty"` // more than 1: two devices claim the serial; Approve is refused
 }
 
 // ONUView is a device for the lists and the account card.
@@ -397,7 +398,7 @@ func (s *Service) view(d *store.Data, o store.ONU) ONUView {
 		v.WiFi = append(v.WiFi, WiFiView{Band: w.Band, SSID: w.SSID, Enabled: w.Enabled})
 	}
 	if q := o.Sec.Quarantine; q.Active {
-		v.Quarantine = &QuarantineView{Reason: q.Reason, Since: q.Since, LastAt: q.LastAt, Count: q.Count, IP: q.IP, MAC: q.MAC, SiteID: q.SiteID, SiteName: d.Sites[q.SiteID].Name}
+		v.Quarantine = &QuarantineView{Reason: q.Reason, Since: q.Since, LastAt: q.LastAt, Count: q.Count, IP: q.IP, MAC: q.MAC, SiteID: q.SiteID, SiteName: d.Sites[q.SiteID].Name, Places: q.Places}
 	}
 	switch o.Sec.ACSCred {
 	case store.CredDevice:
@@ -424,6 +425,9 @@ func (s *Service) view(d *store.Data, o store.ONU) ONUView {
 		v.Kick = k.Text()
 	}
 	s.inventoryView(d, o, &v)
+	if o.Sec.RestoreOwed && o.AccountID != "" {
+		v.Warnings = append(v.Warnings, "This ONU came back on the shared login (a factory reset?). The house's Wi-Fi is restored at its first check-in after "+o.Sec.HoldUntil.Local().Format("15:04")+", once no other device has claimed to be it.")
+	}
 	return v
 }
 
@@ -499,7 +503,7 @@ func (s *Service) inventoryView(d *store.Data, o store.ONU, v *ONUView) {
 	v.InInventory, v.InventoryID, v.InvStatus, v.InvMAC = true, inv.ID, inv.Status, inv.MAC
 	if m, ok := store.CanonMAC(inv.MAC); ok && len(o.MACs) > 0 && !containsMAC(o.MACs, m) {
 		v.Warnings = append(v.Warnings, "The WAN MAC this ONU reports ("+strings.Join(o.MACs, ", ")+") is not the one in the register ("+m+"). The label's MAC is often the LAN MAC: check which one the router sees.")
-		if inv.AccountID != "" && verifiedReports(o) {
+		if inv.AccountID != "" && verifiedReports(o, s.now()) {
 			v.UseMACs = append(v.UseMACs, o.MACs...)
 		}
 	}
@@ -518,9 +522,12 @@ func (s *Service) inventoryView(d *store.Data, o store.ONU, v *ONUView) {
 // verifiedReports: what the ONU reports (its WAN MACs) comes from a box that is not quarantined, is bound to a management
 // MAC, and has been seen logging in with its own ACS login (or, when it refuses one, from the place the router leased to
 // its MAC). Only then may the owner switch a house's MAC to a reported one in one click.
-func verifiedReports(o store.ONU) bool {
+func verifiedReports(o store.ONU, now time.Time) bool {
 	if o.Sec.Quarantine.Active || o.Sec.MgmtMAC == "" {
 		return false
+	}
+	if o.Sec.RestoreOwed || (!o.Sec.CloneAt.IsZero() && now.Sub(o.Sec.CloneAt) < cloneMemory) {
+		return false // back on the shared login and still held, or another device claimed it lately: what it reports may be a copy's
 	}
 	return o.Sec.ACSCred == store.CredDevice || o.Sec.ACSCred == store.CredShared
 }
@@ -531,7 +538,7 @@ func (s *Service) CanUseMAC(accountID, mac string) bool {
 	ok := false
 	s.st.View(func(d *store.Data) {
 		o, found := d.ONUOfAccount(accountID)
-		if !found || !verifiedReports(o) {
+		if !found || !verifiedReports(o, s.now()) {
 			return
 		}
 		m, good := store.CanonMAC(mac)

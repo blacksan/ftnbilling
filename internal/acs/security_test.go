@@ -1,6 +1,7 @@
 package acs
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -102,9 +103,6 @@ func TestLegitFactoryResetIsRestored(t *testing.T) {
 			if err := c.session(ev); err != nil {
 				t.Fatal(err)
 			}
-			if c.get(c.wlan("1")+"SSID") != "HouseNet" || c.get(c.wlan("5")+"PreSharedKey.1.KeyPassphrase") != "housepass99" {
-				t.Fatal("the house's Wi-Fi was not restored")
-			}
 			ms := c.root + "ManagementServer."
 			if c.get(ms+"PeriodicInformEnable") != "1" || c.get(ms+"ConnectionRequestUsername") == "admin" || c.get(ms+"ConnectionRequestUsername") == "" {
 				t.Fatal("periodic inform or the connection-request login not restored")
@@ -113,15 +111,26 @@ func TestLegitFactoryResetIsRestored(t *testing.T) {
 			if o.Sec.Quarantine.Active || o.Sec.ACSCred != store.CredPending || c.nextUser == "" {
 				t.Fatalf("own login not re-set: %+v nextUser=%q", o.Sec, c.nextUser)
 			}
-			if f.alertCount() != 0 {
-				t.Fatalf("a legitimate reset raised an alert: %v", f.alerts)
+			// The house's Wi-Fi waits for the hold (a copied MAC and address would look the same as this reset).
+			if c.get(c.wlan("1")+"SSID") == "HouseNet" || !o.Sec.RestoreOwed {
+				t.Fatalf("the Wi-Fi went out before the hold: %+v", o.Sec)
 			}
-			// and it logs in with the new login next time
+			// it logs in with the new login next time, still held
 			if err := c.session("2 PERIODIC"); err != nil {
 				t.Fatal(err)
 			}
-			if f.onuBySerial("SNRESET").Sec.ACSCred != store.CredDevice {
-				t.Fatal("the new login was not used")
+			if f.onuBySerial("SNRESET").Sec.ACSCred != store.CredDevice || c.get(c.wlan("1")+"SSID") == "HouseNet" {
+				t.Fatal("the new login was not used, or the hold did not hold")
+			}
+			f.advance(f.svc.resetHold() + time.Second)
+			if err := c.session("2 PERIODIC"); err != nil {
+				t.Fatal(err)
+			}
+			if c.get(c.wlan("1")+"SSID") != "HouseNet" || c.get(c.wlan("5")+"PreSharedKey.1.KeyPassphrase") != "housepass99" {
+				t.Fatal("the house's Wi-Fi was not restored after the hold")
+			}
+			if f.alertCount() != 0 || f.onuBySerial("SNRESET").Sec.RestoreOwed {
+				t.Fatalf("a legitimate reset raised an alert or stayed owed: %v", f.alerts)
 			}
 		})
 	}
@@ -255,6 +264,10 @@ func TestLeaseUnknownMeansNoSecretsAndNoAlert(t *testing.T) {
 	if err := c.session("0 BOOTSTRAP"); err != nil { // the next inform, router back
 		t.Fatal(err)
 	}
+	f.advance(f.svc.resetHold() + time.Second)
+	if err := c.session("2 PERIODIC"); err != nil {
+		t.Fatal(err)
+	}
 	if c.get(c.wlan("1")+"SSID") != "HouseNet" {
 		t.Fatal("not restored once the lease was readable")
 	}
@@ -317,7 +330,7 @@ func TestFlappingSerialIsQuarantined(t *testing.T) {
 			t.Fatalf("not quarantined after %d moves", i)
 		}
 	}
-	if f.alertCount() != 1 {
+	if f.alertCount() != 2 { // held back, then "claimed from 2 different places"; no more within the hour
 		t.Fatalf("alerts %v", f.alerts)
 	}
 }
@@ -585,5 +598,169 @@ func TestUnboundLinkedRecordIsNotTakenFromAnotherAddress(t *testing.T) {
 	}
 	if g := f.onuBySerial("SNOLD"); g.Sec.MgmtMAC != c.mgmtMAC {
 		t.Fatalf("the real box did not bind: %+v", g.Sec)
+	}
+}
+
+// A tenant on the management VLAN who copies a neighbour box's MAC and address and logs in with the shared login looks
+// exactly like that box after a factory reset. The house's Wi-Fi waits for the hold; the real box, still online with
+// its own login, shows itself within it: it keeps its login (it is not locked out), nothing is sent to the copy, the
+// owner is told, and the copy's later returns are held back.
+func TestCopiedMACAndAddressGetNothingWhileTheRealBoxIsOnline(t *testing.T) {
+	f := newFixture(t)
+	c := linkedWithOwnLogin(t, f, "SNCLONE", "10.6.3.20")
+	a := newZTE(t, f, "SNCLONE", "10.6.3.20") // the same address, leased to the same MAC: a perfect copy
+	if err := a.session("0 BOOTSTRAP"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.session("2 PERIODIC"); err != nil { // with the new own login it was given
+		t.Fatal(err)
+	}
+	if a.get(a.wlan("1")+"SSID") == "HouseNet" || a.get(a.wlan("5")+"PreSharedKey.1.KeyPassphrase") == "housepass99" {
+		t.Fatal("the copy got the house's Wi-Fi")
+	}
+	if f.alertCount() != 0 {
+		t.Fatalf("alerted before anything was known: %v", f.alerts)
+	}
+	if o := f.onuBySerial("SNCLONE"); o.Sec.ACSCred != store.CredDevice || verifiedReports(o, f.now) {
+		t.Fatalf("during the hold what the box reports must not move the house's MAC: %+v", o.Sec)
+	}
+	// the real box's periodic Inform, with the login it always had
+	f.advance(4 * time.Minute)
+	if err := c.session("2 PERIODIC"); err != nil {
+		t.Fatalf("the real box was locked out: %v", err)
+	}
+	o := f.onuBySerial("SNCLONE")
+	if o.Sec.ACSCred != store.CredDevice || o.Sec.RestoreOwed || f.alertCount() != 1 || !strings.Contains(f.alerts[0], "Nothing secret was sent") {
+		t.Fatalf("sec=%+v alerts=%v", o.Sec, f.alerts)
+	}
+	// the copy's login no longer works, and after the hold it still gets nothing
+	f.advance(f.svc.resetHold() + time.Second)
+	if err := a.session("2 PERIODIC"); err == nil {
+		t.Fatal("the copy's own login still works")
+	}
+	a.mu.Lock()
+	a.acsUser, a.acsPass, a.nextUser, a.nextPass = "", "", "", ""
+	a.mu.Unlock()
+	n := a.setCount()
+	if err := a.session("0 BOOTSTRAP"); err != nil {
+		t.Fatal(err)
+	}
+	if a.setCount() != n || !f.onuBySerial("SNCLONE").Sec.Quarantine.Active || a.get(a.wlan("1")+"SSID") == "HouseNet" {
+		t.Fatalf("a second return of the copy was served: sets=%d sec=%+v", a.setCount()-n, f.onuBySerial("SNCLONE").Sec)
+	}
+	// the real box still works
+	if err := c.session("2 PERIODIC"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A device's own login used with another serial is refused (a tenant can read their own box's login).
+func TestOwnLoginOfAnotherBoxIsRefused(t *testing.T) {
+	f := newFixture(t)
+	linkedWithOwnLogin(t, f, "SNHOUSE", "10.6.3.20")
+	mine := newZTE(t, f, "SNMINE", "10.6.3.40")
+	for i := 0; i < 2; i++ {
+		if err := mine.session("2 PERIODIC"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.onuBySerial("SNMINE").Sec.ACSCred != store.CredDevice {
+		t.Fatal("setup: the tenant's box has no own login")
+	}
+	mine.mu.Lock()
+	mine.Serial = "SNHOUSE"
+	mine.mu.Unlock()
+	if err := mine.session("0 BOOTSTRAP"); err == nil {
+		t.Fatal("an own login was accepted for another serial")
+	}
+	if g := f.onuBySerial("SNHOUSE"); g.MgmtIP != "10.6.3.20" || g.Sec.Quarantine.Active {
+		t.Fatalf("the house's record was touched: %+v", g)
+	}
+}
+
+// Two devices claim a held-back serial from different places: Approve would bind whichever checked in last (maybe
+// after the owner looked), so it is refused, and the owner is told at once. After blocking the wrong place, the other
+// one can be approved.
+func TestApproveIsRefusedWhenTwoPlacesClaimTheSerial(t *testing.T) {
+	f := newFixture(t)
+	linkedWithOwnLogin(t, f, "SNTWO", "10.6.3.20")
+	o := f.onuBySerial("SNTWO")
+	moved := newZTE(t, f, "SNTWO", "10.6.3.88") // the box, moved for real
+	if err := moved.session("0 BOOTSTRAP"); err != nil {
+		t.Fatal(err)
+	}
+	n := f.alertCount()
+	attacker := newZTE(t, f, "SNTWO", "10.6.3.99")
+	if err := attacker.session("0 BOOTSTRAP"); err != nil {
+		t.Fatal(err)
+	}
+	if f.alertCount() != n+1 {
+		t.Fatalf("no new alert for a second place: %v", f.alerts)
+	}
+	if err := f.svc.ApproveONU("owner", "", o.ID); !errors.Is(err, ErrTwoPlaces) {
+		t.Fatalf("approve with two places: %v", err)
+	}
+	if err := f.svc.BlockONU("owner", "", o.ID); err != nil { // the latest place: the attacker's
+		t.Fatal(err)
+	}
+	if err := moved.session("2 PERIODIC"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.ApproveONU("owner", "", o.ID); err != nil {
+		t.Fatal(err)
+	}
+	if g := f.onuBySerial("SNTWO"); g.MgmtIP != "10.6.3.88" || g.Sec.MgmtMAC != moved.mgmtMAC {
+		t.Fatalf("%+v", g)
+	}
+	if err := attacker.session("2 PERIODIC"); err == nil {
+		t.Fatal("the blocked place was answered")
+	}
+}
+
+// A box that leaves the ParameterKey out of its Inform is asked for it on a boot: a reset that kept the login and sent
+// no 0 BOOTSTRAP is still seen, and a plain boot still writes nothing.
+func TestParameterKeyIsReadWhenTheInformLeavesItOut(t *testing.T) {
+	f := newFixture(t)
+	c := linkedWithOwnLogin(t, f, "SNNOKEY2", "10.6.3.20")
+	c.noKey = true
+	n := c.setCount()
+	if err := c.session("1 BOOT"); err != nil {
+		t.Fatal(err)
+	}
+	if c.setCount() != n || !f.onuBySerial("SNNOKEY2").State.KeyWorks {
+		t.Fatalf("a plain boot wrote (%d) or the key was not read: %+v", c.setCount()-n, f.onuBySerial("SNNOKEY2").State)
+	}
+	c.mu.Lock()
+	c.params[c.wlan("1")+"SSID"] = "ZTE-default"
+	c.params[c.root+"ManagementServer.ParameterKey"] = ""
+	c.mu.Unlock()
+	if err := c.session("1 BOOT"); err != nil {
+		t.Fatal(err)
+	}
+	if c.get(c.wlan("1")+"SSID") != "HouseNet" {
+		t.Fatal("a box that lost its key (not in its Inform) was not restored")
+	}
+}
+
+// The owed factory reset of a returned box is not given away to a shared-login check-in that names its serial: it
+// waits for the box's own login.
+func TestReturnedBoxResetIsNotTakenOnTheSharedLogin(t *testing.T) {
+	f := newFixture(t)
+	c := linkedWithOwnLogin(t, f, "SNGONE", "10.6.3.20")
+	if err := f.svc.UnlinkONU("owner", "", f.onuBySerial("SNGONE").ID); err != nil {
+		t.Fatal(err)
+	}
+	a := newZTE(t, f, "SNGONE", "10.6.3.99")
+	if err := a.session("2 PERIODIC"); err != nil {
+		t.Fatal(err)
+	}
+	if a.count("FactoryReset") != 0 {
+		t.Fatal("the owed reset went to a shared-login check-in")
+	}
+	if err := c.session("2 PERIODIC"); err != nil {
+		t.Fatal(err)
+	}
+	if c.count("FactoryReset") != 1 {
+		t.Fatalf("the returned box did not get its reset: %v", c.rpcs)
 	}
 }

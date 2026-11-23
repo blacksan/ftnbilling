@@ -92,10 +92,15 @@ func (s *Service) needLease(cur store.ONU, found bool, siteID, ip string, ai aut
 }
 
 const (
-	flapWindow = time.Hour
-	flapMax    = 3 // address or router changes inside the window before the serial is quarantined
-	alertEvery = time.Hour
+	cloneMemory = 24 * time.Hour // after the original box showed up with its old login, shared-login returns are held back
+	flapWindow  = time.Hour
+	flapMax     = 3 // address or router changes inside the window before the serial is quarantined
+	alertEvery  = time.Hour
 )
+
+// resetHold is how long the house's secrets wait after a box with its own login came back on the shared login: longer
+// than two periodic Informs, so the original box, if it is still online, logs in with its old login first.
+func (s *Service) resetHold() time.Duration { return 2*s.informEvery() + 2*time.Minute }
 
 // decide judges an Inform and records it. It runs inside the store transaction and returns the row as it is stored.
 func (s *Service) decide(d *store.Data, in Inform, site store.Site, ip netip.Addr, ai authInfo, lease leaseResult, now time.Time) (store.ONU, verdict) {
@@ -159,6 +164,10 @@ func (s *Service) decide(d *store.Data, in Inform, site store.Site, ip netip.Add
 				// No MAC was bound yet (a record from before binding, or a first contact the router could not answer
 				// for): only the address it was seen at can bind it. Anyone else on the router could claim it here.
 				reason = fmt.Sprintf("it checked in from %s, not from %s where it was seen, before its MAC was bound", ipS, cur.MgmtIP)
+			case ai.kind == authShared && cur.Sec.ACSCred == store.CredDevice && !cur.Sec.CloneAt.IsZero() && now.Sub(cur.Sec.CloneAt) < cloneMemory:
+				// The original box was seen with its previous login after a shared-login return not long ago: another
+				// device at its place claims to be it. Its next "reset" gets nothing, not even a new own login.
+				reason = fmt.Sprintf("a device at its address (MAC %s) logs in with the shared login while the box itself still uses its own: its MAC and address may be copied", macText(lease.mac))
 			case macState == "unknown" || macState == "nolease":
 				// The router could not say who holds the address: no secret goes out, and nobody is accused.
 				cur.LastInform, cur.LastEvents = now, strings.Join(in.Events, ",")
@@ -179,7 +188,14 @@ func (s *Service) decide(d *store.Data, in Inform, site store.Site, ip netip.Add
 		if reason != "" {
 			q := &cur.Sec.Quarantine
 			if !q.Active {
-				q.Active, q.Since, q.Count = true, now, 0
+				q.Active, q.Since, q.Count, q.Places = true, now, 0, 1
+			} else if q.SiteID != site.ID || q.IP != ipS || q.MAC != lease.mac {
+				// Another place than the held-back check-in the owner may be looking at: Approve must not bind the serial
+				// to whichever came last, and the owner hears about it now.
+				if q.Places++; q.Places == 2 {
+					q.Alerted = time.Time{} // once at once; after that hourly, like any held-back check-in
+				}
+				reason = fmt.Sprintf("%s (and the serial is claimed from %d different places)", reason, q.Places)
 			}
 			q.Count++
 			q.LastAt, q.Reason, q.SiteID, q.IP, q.MAC = now, reason, site.ID, ipS, lease.mac
@@ -195,6 +211,24 @@ func (s *Service) decide(d *store.Data, in Inform, site store.Site, ip netip.Add
 			cur.Sec.MgmtMAC = lease.mac
 		}
 		switch {
+		case ai.kind == authDevice && ai.prev:
+			// The box that was there before still has the login it had: the shared-login "reset" came from another
+			// device at its place. The original keeps its login (the one written since is dropped), nothing owed is
+			// sent, and the owner is told.
+			sent := !cur.Sec.RestoreOwed && !cur.Sec.HoldUntil.IsZero()
+			cur.Sec.ACSPassEnc, cur.Sec.ACSPrevPassEnc = cur.Sec.ACSPrevPassEnc, ""
+			cur.Sec.ACSCred, cur.Sec.ACSTries = store.CredDevice, 0
+			cur.Sec.HoldUntil, cur.Sec.RestoreOwed = time.Time{}, false
+			first := cur.Sec.CloneAt.IsZero() || now.Sub(cur.Sec.CloneAt) >= alertEvery
+			cur.Sec.CloneAt = now
+			if first {
+				v.alert = fmt.Sprintf("ONU %s: another device used the shared login with this box's serial on router %s while the box itself still uses its own login. Someone on the management VLAN knows the shared login (and may copy this box's MAC %s and address): check the OLT for that MAC on another port.", cur.Serial, s.siteName(d, site.ID), cur.Sec.MgmtMAC)
+				if sent {
+					v.alert += " The house's Wi-Fi may have been sent to it: change the house's Wi-Fi password."
+				} else {
+					v.alert += " Nothing secret was sent to it."
+				}
+			}
 		case ai.kind == authDevice && cur.Sec.ACSCred == store.CredPending:
 			cur.Sec.ACSCred, cur.Sec.ACSTries = store.CredDevice, 0
 		case ai.kind == authShared && cur.Sec.ACSCred == store.CredPending:
@@ -203,11 +237,28 @@ func (s *Service) decide(d *store.Data, in Inform, site store.Site, ip netip.Add
 			}
 		case ai.kind == authShared && cur.Sec.ACSCred == store.CredDevice:
 			cur.Sec.ACSCred, v.reset = store.CredNone, true // it lost its own login: a factory reset, or the OLT re-pushed its profile
+			// Anyone who knows the shared login and the serial can say the same. The old login is kept, so the original
+			// box, if it still has it, is not locked out by the new one written now, and shows who it is.
+			if !cur.Sec.RestoreOwed && cur.Sec.ACSPassEnc != "" {
+				cur.Sec.ACSPrevPassEnc = cur.Sec.ACSPassEnc // during a hold the first one is kept: it is the original's
+			}
+			if linked {
+				// A device that copied the box's MAC and address passes the place check. The house's secrets wait until
+				// the original box, if it is still there, has had two periodic Informs to show itself with its old login.
+				cur.Sec.HoldUntil, cur.Sec.RestoreOwed = now.Add(s.resetHold()), true
+			}
 		}
 		v.state = stOK
 		v.trust = trustNew
 		if linked {
 			v.trust = trustFull
+			if cur.Sec.RestoreOwed {
+				if now.Before(cur.Sec.HoldUntil) {
+					v.trust = trustNew // provisioning only while the hold lasts
+				} else {
+					v.reset, cur.Sec.RestoreOwed = true, false // the hold passed with no sign of another box: restore now
+				}
+			}
 		}
 	}
 	cur.Manufacturer, cur.ProductClass = nonEmpty(in.Manufacturer, cur.Manufacturer), nonEmpty(cleanText(in.ProductClass), cur.ProductClass)

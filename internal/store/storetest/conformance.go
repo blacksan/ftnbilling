@@ -79,7 +79,7 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 			WiFi:    []store.ONUWiFi{{Path: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.", Band: "2.4", SSID: "Home", Enabled: true, Channel: 6}},
 			Profile: store.ONUProfile{Root: store.RootTR098, PassLeaf: "PreSharedKey.1.KeyPassphrase", Vendor: "tr098", Discovered: true}, AccountID: "a1", Link: store.LinkAuto,
 			Sec: store.ONUSec{ACSUser: "ftn-o1", ACSPassEnc: "c2VhbGVk", ACSCred: store.CredDevice, ACSTries: 1, MgmtMAC: "AA:BB:CC:00:00:01", FlapCount: 2, FlapSince: at,
-				AdminPassEnc: "c2VhbGVk", AdminPass: store.AdminUnverified,
+				AdminPassEnc: "c2VhbGVk", AdminPass: store.AdminUnverified, ACSPrevPassEnc: "cHJldg==", HoldUntil: at, RestoreOwed: true, CloneAt: at,
 				Quarantine: store.ONUQuarantine{Active: true, Since: at, LastAt: at, Count: 2, Reason: "r", SiteID: "s111111", IP: "10.6.1.99", MAC: "AA:BB:CC:00:00:02", Alerted: at}},
 			State: store.ONUState{LastKey: "t1", PrevKey: "t0", NoWiFi: true, AppliedFor: "a1", AppliedAt: at, Returned: true, ReturnedAt: at}}
 		a1 := d.Accounts["a1"]

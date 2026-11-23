@@ -589,3 +589,50 @@ func TestWiFiTaskNeverEndsAsDone(t *testing.T) {
 		}
 	})
 }
+
+// The bench V-SOL V2804N-Z is 2.4 GHz only and has SSID1 to SSID4, all 2.4 GHz (2 to 4 off). The house's Wi-Fi goes
+// to SSID1 only; nothing is written for a 5 GHz band it does not have, and the other SSIDs are left alone.
+func TestVSOLTwoPointFourOnlyWithFourSSIDs(t *testing.T) {
+	f := newFixture(t)
+	c := newVSOL(t, f, "VSOL00127E0F", "10.6.3.20", false)
+	r := c.root + "LANDevice.1.WLANConfiguration."
+	c.mu.Lock()
+	for k := range c.params {
+		if strings.HasPrefix(k, r+"5.") {
+			delete(c.params, k)
+		}
+	}
+	c.mu.Unlock()
+	for _, n := range []string{"2", "3", "4"} {
+		p := r + n + "."
+		c.set(p+"SSID", "VSOL-2G-"+n)
+		c.set(p+"Enable", "0")
+		c.set(p+"Channel", "0")
+		c.set(p+"Standard", "b,g,n")
+		c.set(p+"PossibleChannels", "1-13")
+		c.set(p+"BeaconType", "None")
+		c.set(p+"IEEE11iAuthenticationMode", "None")
+		c.set(p+"IEEE11iEncryptionModes", "None")
+		c.set(p+"PreSharedKey.1.KeyPassphrase", "factorypass")
+	}
+	setupLinked(t, c)
+	o := f.onuBySerial("VSOL00127E0F")
+	if p := primaryBand(o, "2.4"); !strings.HasSuffix(p, "WLANConfiguration.1.") {
+		t.Fatalf("2.4 GHz is %q (%+v)", p, o.WiFi)
+	}
+	if p := primaryBand(o, "5"); p != "" {
+		t.Fatalf("a 5 GHz band was found on a 2.4 GHz-only box: %s", p)
+	}
+	if _, err := f.svc.SetWiFi("owner", "", "a1", WiFiInput{SSID: "House24", Pass: "house24pass", Same: true}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "accepted", f.acceptedWiFi(c))
+	if c.get(r+"1.SSID") != "House24" || c.get(r+"1.PreSharedKey.1.KeyPassphrase") != "house24pass" {
+		t.Fatal("SSID1 not set")
+	}
+	for _, n := range []string{"2", "3", "4"} {
+		if c.get(r+n+".SSID") != "VSOL-2G-"+n || c.get(r+n+".Enable") != "0" {
+			t.Fatalf("SSID%s was touched", n)
+		}
+	}
+}

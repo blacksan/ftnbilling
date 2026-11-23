@@ -136,6 +136,9 @@ type ONUQuarantine struct {
 	IP      string    `json:"ip,omitempty"`
 	MAC     string    `json:"mac,omitempty"` // the MAC the router leased that address to ("" = unknown)
 	Alerted time.Time `json:"alerted,omitempty"`
+	// Places counts the different places (router, address, MAC) held-back check-ins came from. With more than one,
+	// two devices claim the serial and Approve is refused until the owner blocks the wrong one.
+	Places int `json:"places,omitempty"`
 }
 
 // ONUSec is the security state of an ONU: its own ACS login, the management-WAN MAC it is bound to, the
@@ -146,6 +149,16 @@ type ONUSec struct {
 	ACSPassEnc string `json:"acs_pass_enc,omitempty"`
 	ACSCred    string `json:"acs_cred,omitempty"` // Cred*
 	ACSTries   int    `json:"acs_tries,omitempty"`
+	// ACSPrevPassEnc is the own password the box had before it came back on the shared login (sealed). A real factory
+	// reset forgets it, so a later login with it means the original box is still there and the "reset" came from
+	// another device at its place (a copied MAC and address).
+	ACSPrevPassEnc string `json:"acs_prev_pass_enc,omitempty"`
+	// HoldUntil and RestoreOwed: after such a return the house's secrets wait (longer than two periodic Informs) so
+	// that the original box, if it is still online, shows itself first. RestoreOwed is the Wi-Fi restore that waits.
+	HoldUntil   time.Time `json:"hold_until,omitempty"`
+	RestoreOwed bool      `json:"restore_owed,omitempty"`
+	// CloneAt is when the original box was last seen with its previous login after such a return.
+	CloneAt time.Time `json:"clone_at,omitempty"`
 	// MgmtMAC is the MAC the router's management DHCP server leased the ONU's management address to. It is
 	// hardware: it survives a factory reset.
 	MgmtMAC string `json:"mgmt_mac,omitempty"`

@@ -15,6 +15,7 @@ var (
 	ErrNotQuarantined   = errors.New("that ONU is not waiting for an approval")
 	ErrNoAdminPassword  = errors.New("no admin password was set on this ONU")
 	ErrTaskGone         = errors.New("that task is not queued any more")
+	ErrTwoPlaces        = errors.New("check-ins for this ONU came from more than one place while it was held back, so one of them is not the real box: block the place shown (the latest) if it is not the box, or wait for its next check-in, then approve")
 )
 
 // newestWiFiTask is the newest Wi-Fi task of an ONU.
@@ -55,6 +56,9 @@ func (s *Service) ConfirmWiFi(by, ip, accountID string) error {
 			works := readWorks(d)
 			k := modelKey(o.OUI, o.ProductClass, o.SWVersion)
 			w := works[k]
+			if w.PassLeaf != t.PassLeaf {
+				w.Count = 0 // another name: the confirmations of the old one do not carry over
+			}
 			w.OUI, w.Class, w.Firmware, w.Profile, w.PassLeaf = o.OUI, o.ProductClass, o.SWVersion, pickProfile(o.Root, o.Manufacturer, o.OUI, o.ProductClass).Name, t.PassLeaf
 			w.Count++
 			w.Confirmed, w.By = now, by
@@ -90,6 +94,7 @@ func (s *Service) RejectWiFi(by, ip, accountID string) (store.ONUTask, error) {
 				o.Profile.BadLeaves = append(o.Profile.BadLeaves, old.PassLeaf)
 			}
 			d.ONUs[o.ID] = o
+			unlearnWork(d, o, old.PassLeaf, s.now())
 		}
 		o = d.ONUs[o.ID]
 		t = queue(d, o, store.TaskWiFi, by, s.now())
@@ -131,6 +136,9 @@ func (s *Service) ApproveONU(by, ip, onuID string) error {
 		q := o.Sec.Quarantine
 		if !q.Active {
 			return ErrNotQuarantined
+		}
+		if q.Places > 1 {
+			return ErrTwoPlaces
 		}
 		if q.SiteID != "" && o.AccountID != "" && d.Accounts[o.AccountID].SiteID != q.SiteID {
 			return ErrSite

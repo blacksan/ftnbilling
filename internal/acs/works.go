@@ -44,7 +44,12 @@ func writeWorks(d *store.Data, m map[string]Work, now time.Time) {
 	d.Settings[keyWorks] = store.Setting{Key: keyWorks, Value: string(b), UpdatedAt: now}
 }
 
-// workFor finds the confirmed name for a model: the exact firmware first, else any firmware of the same OUI and class.
+// crossFirmwareMin is how many boxes must have confirmed a name before boxes of the same model on another firmware try it
+// first: one wrong "It works" then misleads only boxes of that very firmware, and "It didn't work" there removes it.
+const crossFirmwareMin = 2
+
+// workFor finds the confirmed name for a model: the exact firmware first, else the newest entry of the same OUI and
+// class on another firmware that was confirmed on at least crossFirmwareMin boxes.
 func workFor(m map[string]Work, o store.ONU) (Work, bool) {
 	if w, ok := m[modelKey(o.OUI, o.ProductClass, o.SWVersion)]; ok {
 		return w, true
@@ -52,7 +57,7 @@ func workFor(m map[string]Work, o store.ONU) (Work, bool) {
 	var best Work
 	found := false
 	for _, w := range m {
-		if strings.EqualFold(w.OUI, o.OUI) && w.Class == o.ProductClass && (!found || w.Confirmed.After(best.Confirmed)) {
+		if w.Count >= crossFirmwareMin && strings.EqualFold(w.OUI, o.OUI) && w.Class == o.ProductClass && (!found || w.Confirmed.After(best.Confirmed)) {
 			best, found = w, true
 		}
 	}
@@ -89,6 +94,23 @@ func passCandidates(d *store.Data, o store.ONU, prof Profile) []string {
 		}
 	}
 	return append(out, last...)
+}
+
+// unlearnWork: the owner said a name did not work on a box. The model entry of that box's firmware loses one
+// confirmation for that name, and goes when none is left (a single wrong "It works" is undone by one "It didn't work").
+func unlearnWork(d *store.Data, o store.ONU, leaf string, now time.Time) {
+	works := readWorks(d)
+	k := modelKey(o.OUI, o.ProductClass, o.SWVersion)
+	w, ok := works[k]
+	if !ok || w.PassLeaf != leaf {
+		return
+	}
+	if w.Count--; w.Count <= 0 {
+		delete(works, k)
+	} else {
+		works[k] = w
+	}
+	writeWorks(d, works, now)
 }
 
 func contains(l []string, s string) bool {

@@ -261,7 +261,9 @@ func autoLink(d *store.Data, onuID string, now time.Time) bool {
 	}
 	// 2. No register entry for the serial: the WAN MAC is the house MAC (existing houses).
 	for _, a := range d.Accounts {
-		if a.SiteID != o.SiteID || a.MACConflict {
+		if a.SiteID != o.SiteID || a.MACConflict || hasRegisteredONT(d, a.ID) {
+			// A house whose ONU is in the register is linked by serial only: a box the register does not know cannot
+			// take it by reporting the house's MAC (any device on the management VLAN can report any MAC).
 			continue
 		}
 		am, ok := store.CanonMAC(a.MAC)
@@ -287,6 +289,16 @@ func autoLink(d *store.Data, onuID string, now time.Time) bool {
 		}
 	}
 	return changed
+}
+
+// hasRegisteredONT: the register has an ONT installed at the house.
+func hasRegisteredONT(d *store.Data, accountID string) bool {
+	for _, e := range d.Equipment {
+		if e.Kind == store.KindONT && e.Status == store.EqInstalled && e.AccountID == accountID {
+			return true
+		}
+	}
+	return false
 }
 
 func containsMAC(list []string, m string) bool {
