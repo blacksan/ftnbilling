@@ -151,9 +151,9 @@ type ONUSec struct {
 	MgmtMAC string `json:"mgmt_mac,omitempty"`
 	// BlockedFrom lists the places the owner blocked for this serial: "mac:AA:BB:CC:DD:EE:FF" or "ip:<site>/<address>".
 	BlockedFrom []string      `json:"blocked_from,omitempty"`
-	Quarantine ONUQuarantine `json:"quarantine"`
-	FlapCount  int           `json:"flap_count,omitempty"`
-	FlapSince  time.Time     `json:"flap_since,omitempty"`
+	Quarantine  ONUQuarantine `json:"quarantine"`
+	FlapCount   int           `json:"flap_count,omitempty"`
+	FlapSince   time.Time     `json:"flap_since,omitempty"`
 	// AdminPassEnc is the random password set on the ONU's own web admin (sealed); AdminPass the state (Admin*).
 	AdminPassEnc string `json:"admin_pass_enc,omitempty"`
 	AdminPass    string `json:"admin_pass,omitempty"`
