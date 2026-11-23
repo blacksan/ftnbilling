@@ -91,7 +91,7 @@ func (d *Data) UnplacedONUs() []Equipment {
 		if e.Kind != KindONT || e.Status == EqRetired {
 			continue
 		}
-		if o, ok := d.Equipment[e.OLTID]; e.OLTID == "" || !ok || o.Kind != KindOLT {
+		if o, ok := d.Equipment[e.OLTID]; e.OLTID == "" || !ok || o.Kind != KindOLT || o.Status == EqRetired { // a retired OLT is not in the tree
 			out = append(out, e)
 		}
 	}

@@ -153,7 +153,7 @@ func (s *Service) SaveOLT(in OLTInput) (store.Equipment, error) {
 		if serialTaken(d, store.KindOLT, serial, in.ID) {
 			return fmt.Errorf("an olt with serial number %s is already in the register", serial)
 		}
-		if e.Status != store.EqRetired { // a retired OLT may keep a MAC another item now uses
+		if e.Status != store.EqRetired || in.Status != "" { // a retired OLT may keep a MAC another item now uses, until it is brought back
 			if err := oltMACTakenLocked(d, mac, in.ID); err != nil {
 				return err
 			}

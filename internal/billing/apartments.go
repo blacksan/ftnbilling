@@ -240,6 +240,33 @@ func (s *Service) DeleteApartment(id string) error {
 				delete(d.ApartmentSites, k)
 			}
 		}
+		// A PON port that served it no longer does: a dangling apartment id in a PON map fails store.Validate
+		// (which the JSON to Postgres import runs).
+		for k, e := range d.Equipment {
+			changed := false
+			for port, ids := range e.PONApartments {
+				keep := ids[:0:0]
+				for _, x := range ids {
+					if x != id {
+						keep = append(keep, x)
+					}
+				}
+				if len(keep) != len(ids) {
+					changed = true
+					if e.PONApartments = clonePONMap(e.PONApartments); len(keep) == 0 {
+						delete(e.PONApartments, port)
+					} else {
+						e.PONApartments[port] = keep
+					}
+				}
+			}
+			if changed {
+				if len(e.PONApartments) == 0 {
+					e.PONApartments = nil
+				}
+				d.Equipment[k] = e
+			}
+		}
 		delete(d.Apartments, id)
 		d.AddEvent(store.Event{Time: s.now(), Kind: "info", Msg: "apartment deleted: " + a.Name})
 		return nil
@@ -617,4 +644,13 @@ func (s *Service) MoveToApartment(ctx context.Context, in MoveInput) (store.Acco
 		s.runSitesShort(ctx, to, from) // both at once: the new router never waits for the old one
 	}
 	return out, err
+}
+
+// clonePONMap copies a PON map so a change does not alias the stored value.
+func clonePONMap(m map[string][]string) map[string][]string {
+	out := make(map[string][]string, len(m))
+	for k, v := range m {
+		out[k] = append([]string(nil), v...)
+	}
+	return out
 }

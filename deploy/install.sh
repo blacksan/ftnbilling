@@ -925,7 +925,7 @@ EOF
     *) die "MAC_VENDOR_LOOKUP must be online or off, got: $MAC_VENDOR_LOOKUP" ;;
   esac
   if [ -n "${MAC_VENDOR_DAILY:-}" ]; then
-    [[ $MAC_VENDOR_DAILY =~ ^[0-9]{1,6}$ ]] && [ "$MAC_VENDOR_DAILY" -ge 1 ] || die "MAC_VENDOR_DAILY must be a number from 1 to 100000, got: $MAC_VENDOR_DAILY"
+    [[ $MAC_VENDOR_DAILY =~ ^[0-9]{1,6}$ ]] && [ "$((10#$MAC_VENDOR_DAILY))" -ge 1 ] && [ "$((10#$MAC_VENDOR_DAILY))" -le 100000 ] || die "MAC_VENDOR_DAILY must be a number from 1 to 100000, got: $MAC_VENDOR_DAILY"
     setkv MAC_VENDOR_DAILY "$MAC_VENDOR_DAILY"
   fi
   # DATA_KEY encrypts the secrets saved in Settings and national IDs. Every

@@ -317,3 +317,64 @@ func TestEquipmentTreeShape(t *testing.T) {
 		t.Fatalf("served by B %+v", sb)
 	}
 }
+
+// Review fixes: deleting an apartment drops it from PON maps (store.Validate stays clean), an ONU under a retired
+// OLT shows as unplaced, an OLT with ONUs keeps its kind, a retired OLT is brought back only with a free MAC.
+func TestOLTDanglingRefs(t *testing.T) {
+	e := newEnv(t)
+	aptA := e.apt(t, "MG One", e.site)
+	aptB := e.apt(t, "MG Two", e.site)
+	o := e.olt(t, OLTInput{Name: "Block A OLT", MAC: macOLT, PONPorts: 4, PONApartments: map[int][]string{1: {aptA.ID, aptB.ID}, 2: {aptB.ID}}})
+	if err := e.svc.DeleteApartment(aptB.ID); err != nil {
+		t.Fatal(err)
+	}
+	e.svc.st.View(func(d *store.Data) {
+		g := d.Equipment[o.ID]
+		if len(g.PONApartments) != 1 || len(g.PONApartments["1"]) != 1 || g.PONApartments["1"][0] != aptA.ID {
+			t.Fatalf("PON map after delete: %v", g.PONApartments)
+		}
+		if p := store.Validate(d); len(p) > 0 {
+			t.Fatalf("validate: %v", p)
+		}
+	})
+
+	onu, err := e.svc.SaveEquipment(EquipmentInput{Kind: store.KindONT, Serial: "VSOL0001", MAC: macONU, SetPlacement: true, OLTID: o.ID, PONPort: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.SaveEquipment(EquipmentInput{ID: o.ID, Kind: store.KindSwitch, MAC: macOLT, SiteID: e.site}); err == nil {
+		t.Fatal("an OLT with ONUs changed kind")
+	}
+	if err := e.svc.st.Update(func(d *store.Data) error {
+		g := d.Equipment[o.ID]
+		g.Status, g.SiteID = store.EqRetired, ""
+		d.Equipment[o.ID] = g
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, n := range e.svc.Tree(nil).UnplacedONUs {
+		found = found || n.Equip.ID == onu.ID
+	}
+	if !found {
+		t.Fatal("an ONU under a retired OLT is missing from the tree")
+	}
+
+	// another item takes the retired OLT's MAC; bringing the OLT back must not duplicate it
+	if _, err := e.svc.SaveEquipment(EquipmentInput{ID: onu.ID, Kind: store.KindONT, Serial: "VSOL0001", MAC: "68:22:9F:00:00:02"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.SaveEquipment(EquipmentInput{Kind: store.KindSwitch, Serial: "SW1", MAC: macOLT}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.SaveOLT(OLTInput{ID: o.ID, Name: "Block A OLT", MAC: macOLT, Status: store.EqInStock}); !errors.Is(err, ErrDuplicateEquipmentMAC) {
+		t.Fatalf("un-retire with a taken MAC: %v", err)
+	}
+}
+
+func TestCleanVendorDropsFormatChars(t *testing.T) {
+	if got := cleanVendor([]byte("Hua‮wei​ Tech")); got != "Huawei Tech" {
+		t.Fatalf("%q", got)
+	}
+}

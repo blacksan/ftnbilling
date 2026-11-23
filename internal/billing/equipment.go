@@ -108,6 +108,13 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 				e.Status, e.InstalledAt = store.EqInstalled, now
 			}
 		}
+		if exists && e.Kind == store.KindOLT && kind != store.KindOLT {
+			for _, o := range d.Equipment {
+				if o.OLTID == e.ID {
+					return errors.New("ONUs are placed under this OLT: move them to another OLT before changing what kind of equipment it is")
+				}
+			}
+		}
 		if kind == store.KindOLT && mac != "" && e.Status != store.EqRetired {
 			if a, ok := d.AccountByMAC(mac); ok {
 				return fmt.Errorf("that MAC is already the ONT of house %s (%s)", a.Unit, a.Code)

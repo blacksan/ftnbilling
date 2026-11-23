@@ -75,10 +75,13 @@ func VendorAlias(full string) string {
 	return ""
 }
 
-// cleanVendor makes the answer of the web service safe to keep and show: one line, no control characters, at most
-// store.MaxOUIVendor characters. "" means "not a vendor name" (empty, or an error document).
+// cleanVendor makes the answer of the web service safe to keep and show: one line, no control or format characters
+// (bidi overrides, zero-width), at most store.MaxOUIVendor characters. "" means "not a vendor name" (empty, or an error document).
 func cleanVendor(b []byte) string {
 	s := strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) {
+			return -1 // dropped
+		}
 		if unicode.IsControl(r) || r == ' ' || r == ' ' || r == '�' {
 			return ' '
 		}
