@@ -308,9 +308,10 @@ func (s *Server) apiAccountCreate(w http.ResponseWriter, r *http.Request, c *api
 		Phone       string `json:"phone"`
 		Notes       string `json:"notes"`
 		// Extended body (v4): one form for the whole customer.
-		PackageID string `json:"package_id"`
-		Activate  bool   `json:"activate"`
-		Note      string `json:"note"`
+		PackageID   string `json:"package_id"`
+		EquipmentID string `json:"equipment_id"` // an in-stock ONU of the register: its WAN MAC becomes the house MAC (mac may be empty)
+		Activate    bool   `json:"activate"`
+		Note        string `json:"note"`
 	}
 	if !decode(w, r, &req, false) {
 		return
@@ -334,6 +335,9 @@ func (s *Server) apiAccountCreate(w http.ResponseWriter, r *http.Request, c *api
 		fields["unit"] = "a house number is required, e.g. B4"
 	}
 	mac, merr := billing.NormalizeMAC(req.MAC)
+	if req.EquipmentID != "" && strings.TrimSpace(req.MAC) == "" {
+		merr, mac = nil, "" // the ONU's own WAN MAC is used
+	}
 	if merr != nil {
 		fields["mac"] = "must be 12 hex digits, like AA:BB:CC:DD:EE:FF"
 	}
@@ -346,7 +350,7 @@ func (s *Server) apiAccountCreate(w http.ResponseWriter, r *http.Request, c *api
 		note = req.Notes
 	}
 	a, _, err := s.svc.CreateCustomer(r.Context(), billing.AddCustomerInput{ApartmentID: req.ApartmentID, SiteID: req.SiteID, Unit: req.Unit, MAC: mac, Tenant: req.Tenant, Phone: req.Phone,
-		PackageID: req.PackageID, Activate: req.Activate, Note: note})
+		PackageID: req.PackageID, Activate: req.Activate, Note: note, EquipmentID: req.EquipmentID})
 	if err != nil {
 		s.billingErr(w, err, mac)
 		return
