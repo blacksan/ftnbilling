@@ -207,6 +207,7 @@ type acctRow struct {
 	Pkg       store.Package
 	State     string
 	Router    string
+	Apartment string // building name
 	Seen      string
 	Sync      string
 	SyncCls   string
@@ -237,7 +238,7 @@ func (s *Server) adminAccounts(w http.ResponseWriter, r *http.Request) {
 			if !sc.Has(a.SiteID) {
 				continue
 			}
-			row := acctRow{A: a, Pkg: d.Packages[a.PackageID], State: billing.AccountState(a, now), Router: names[a.SiteID], Online: live[a.SiteID+"/"+a.Code]}
+			row := acctRow{A: a, Pkg: d.Packages[a.PackageID], State: billing.AccountState(a, now), Router: names[a.SiteID], Apartment: d.Apartments[a.ApartmentID].Name, Online: live[a.SiteID+"/"+a.Code]}
 			row.New = now.Sub(a.CreatedAt) < 7*24*time.Hour
 			row.Expiring7 = row.State == billing.StateActive && a.ExpiresAt.Sub(now) <= 7*24*time.Hour
 			all = append(all, row)
@@ -533,7 +534,18 @@ func (s *Server) adminAccountMove(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminAccountUpdate(w http.ResponseWriter, r *http.Request) {
 	id := r.PostFormValue("id")
-	err := s.svc.UpdateAccount(id, r.PostFormValue("flat"), r.PostFormValue("tenant"), r.PostFormValue("phone"), r.PostFormValue("notes"))
+	// The house number is changed only by the apartment move form. An old form that still posts "flat" is ignored.
+	cur, ok := s.svc.GetAccount(id)
+	var err error
+	if !ok {
+		err = billing.ErrNotFound
+	} else {
+		unit := cur.Unit
+		if unit == "" {
+			unit = cur.Flat
+		}
+		err = s.svc.UpdateAccount(id, unit, r.PostFormValue("tenant"), r.PostFormValue("phone"), r.PostFormValue("notes"))
+	}
 	if err == nil {
 		err = s.svc.SetWhatsApp(id, r.PostFormValue("whatsapp"), r.PostFormValue("wa_same") == "1", r.PostFormValue("wa_optout") == "1")
 	}

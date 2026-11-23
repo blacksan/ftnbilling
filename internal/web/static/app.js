@@ -320,6 +320,8 @@
     var sel = $("[data-router-select]", form); if (sel && sel.value !== siteId && Array.prototype.some.call(sel.options, function (op) { return op.value === siteId; })) sel.value = siteId;
   }
   $$("[data-apt-select]").forEach(function (a) { a.addEventListener("change", function () { aptRouters(a.form); }); });
+  /* Account page: the apartment card narrows its router list to the saved apartment already chosen. */
+  $$("form[data-apt-move]").forEach(function (f) { aptRouters(f); });
   var ac = $("#addcustomer");
   if (ac) ac.addEventListener("ftn:open", function () { var f = $("form", ac); if (f && !f._devs) devsFor(f); });
 
@@ -515,7 +517,7 @@
         td("Link", p.link || "");
         td("State", pill(p));
         td("Receive", rate(p.rx_bps), "n"); td("Send", rate(p.tx_bps), "n"); td("MAC", p.mac || "", "mono");
-        var act = el("td"); act.setAttribute("data-label", "Actions");
+        var act = el("td", "pact"); act.setAttribute("data-label", "Actions");
         if (p.locked) { act.appendChild(el("span", "muted", "locked: set in the router's network settings")); }
         else if (!p.can_change) { act.appendChild(el("span", "muted", p.needs_owner ? "owner only" : "")); }
         else {
