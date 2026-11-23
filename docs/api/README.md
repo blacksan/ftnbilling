@@ -7,6 +7,7 @@
 | `v4-w5c.md` | historical: the provisioning job (superseded by v5) and the `POST /accounts` extension |
 | `v4-w9.md` | live router data, interfaces, clients, overview, reboot |
 | `v5-bootstrap.md` | the one-line router set-up, router record, automatic fixes, checks, ports; lists the calls that answer 410 |
+| `v8-onu.md` | ONU management (TR-069): Wi-Fi change, reboot, ONU list and links, the ONU register (serial + WAN MAC pairs), swap ONU |
 | `v7-webfig.md` | remote WebFig: `webfig_url` on router JSON, the admin step-up pages, the WebFig host |
 | `v6-apartments.md` | apartments (buildings), units, caretaker and landlord, the MAC-in-another-apartment rule |
 
