@@ -137,7 +137,9 @@ func portList(ports []int) string {
 
 // SetupLines are the RouterOS lines (section 4b of the bootstrap, and the snippet an operator pastes on a router
 // that is already built) that make the management network: VLAN, address, pool, DHCP option 43, DHCP server and
-// network, NTP server. They are idempotent: an earlier copy of each object is removed first. oltIface is the
+// network (no DNS server: the ACS URL is an address, so the ONUs have nothing to look up; the router also does not
+// answer them), NTP server. The VLAN answers ARP only for its own address (arp=reply-only) and the DHCP server adds
+// an ARP entry per lease (add-arp=yes), so the lease table is also the ARP table and an ONU cannot take another's address. They are idempotent: an earlier copy of each object is removed first. oltIface is the
 // OLT port the VLAN sits on.
 func (p ONUMgmtPlan) SetupLines(oltIface string) []string {
 	var l []string
@@ -148,7 +150,7 @@ func (p ONUMgmtPlan) SetupLines(oltIface string) []string {
 	add(`/ip/pool remove [find where name="%s"]`, ONUMgmtPool)
 	add(`/ip/address remove [find where comment="%s"]`, ONUMgmtGatewayComment)
 	add(`/interface/vlan remove [find where name="%s"]`, p.Iface)
-	add(`/interface/vlan add name=%s vlan-id=%d interface=%s comment="%s"`, p.Iface, p.VLAN, oltIface, ONUMgmtVLANComment)
+	add(`/interface/vlan add name=%s vlan-id=%d interface=%s arp=reply-only comment="%s"`, p.Iface, p.VLAN, oltIface, ONUMgmtVLANComment)
 	add(`/ip/address add address=%s interface=%s comment="%s"`, p.GatewayCIDR, p.Iface, ONUMgmtGatewayComment)
 	add(`/ip/pool add name=%s ranges=%s-%s comment="%s"`, ONUMgmtPool, p.PoolFrom, p.PoolTo, ONUMgmtPoolComment)
 	netOpts := ""
@@ -157,8 +159,8 @@ func (p ONUMgmtPlan) SetupLines(oltIface string) []string {
 		add(`/ip/dhcp-server/option add name=%s code=43 value=%s comment="%s"`, ONUMgmtOption, p.OptionValue, ONUMgmtOptComment)
 		netOpts = " dhcp-option=" + ONUMgmtOption
 	}
-	add(`/ip/dhcp-server add name=%s interface=%s address-pool=%s lease-time=1d add-arp=no disabled=no comment="%s"`, ONUMgmtDHCPServer, p.Iface, ONUMgmtPool, ONUMgmtDHCPComment)
-	add(`/ip/dhcp-server/network add address=%s gateway=%s dns-server=%s ntp-server=%s%s comment="%s"`, p.Subnet, p.Gateway, p.Gateway, p.Gateway, netOpts, ONUMgmtNetComment)
+	add(`/ip/dhcp-server add name=%s interface=%s address-pool=%s lease-time=1d add-arp=yes disabled=no comment="%s"`, ONUMgmtDHCPServer, p.Iface, ONUMgmtPool, ONUMgmtDHCPComment)
+	add(`/ip/dhcp-server/network add address=%s gateway=%s ntp-server=%s%s comment="%s"`, p.Subnet, p.Gateway, p.Gateway, netOpts, ONUMgmtNetComment)
 	if p.NTPServer {
 		// The ONUs take their clock from the router (they have no internet). The router's NTP client keeps the router right.
 		add(`:do { /system/ntp/server set enabled=yes } on-error={ :put "   (this RouterOS has no NTP server setting; the ONUs use their own clock)" }`)
@@ -180,8 +182,6 @@ func (p ONUMgmtPlan) Rules() (forward, input []ipoeRule) {
 	}
 	input = []ipoeRule{
 		f("chain=input action=accept protocol=udp dst-port=67 in-interface="+p.Iface, ONUDHCPInComment),
-		f("chain=input action=accept protocol=udp dst-port=53 in-interface="+p.Iface, ONUDNSInComment),
-		f("chain=input action=accept protocol=tcp dst-port=53 in-interface="+p.Iface, ONUDNSInComment),
 		f("chain=input action=accept protocol=udp dst-port=123 in-interface="+p.Iface, ONUNTPInComment),
 	}
 	return forward, input

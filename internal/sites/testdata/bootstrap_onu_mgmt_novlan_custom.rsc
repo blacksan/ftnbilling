@@ -148,12 +148,12 @@
   /ip/pool remove [find where name="ftn-onu-pool"]
   /ip/address remove [find where comment="ftn: onu mgmt gateway"]
   /interface/vlan remove [find where name="vlan200-onu"]
-  /interface/vlan add name=vlan200-onu vlan-id=200 interface=br-customers comment="ftn: onu mgmt VLAN"
+  /interface/vlan add name=vlan200-onu vlan-id=200 interface=br-customers arp=reply-only comment="ftn: onu mgmt VLAN"
   /ip/address add address=10.6.12.1/24 interface=vlan200-onu comment="ftn: onu mgmt gateway"
   /ip/pool add name=ftn-onu-pool ranges=10.6.12.10-10.6.12.250 comment="ftn: onu mgmt pool"
   /ip/dhcp-server/option add name=ftn-onu-acs code=43 value=0x0116687474703a2f2f31302e39392e302e313a373534372f comment="ftn: onu mgmt option 43"
-  /ip/dhcp-server add name=ftn-onu-dhcp interface=vlan200-onu address-pool=ftn-onu-pool lease-time=1d add-arp=no disabled=no comment="ftn: onu mgmt DHCP"
-  /ip/dhcp-server/network add address=10.6.12.0/24 gateway=10.6.12.1 dns-server=10.6.12.1 ntp-server=10.6.12.1 dhcp-option=ftn-onu-acs comment="ftn: onu mgmt DHCP network"
+  /ip/dhcp-server add name=ftn-onu-dhcp interface=vlan200-onu address-pool=ftn-onu-pool lease-time=1d add-arp=yes disabled=no comment="ftn: onu mgmt DHCP"
+  /ip/dhcp-server/network add address=10.6.12.0/24 gateway=10.6.12.1 ntp-server=10.6.12.1 dhcp-option=ftn-onu-acs comment="ftn: onu mgmt DHCP network"
   :do { /system/ntp/server set enabled=yes } on-error={ :put "   (this RouterOS has no NTP server setting; the ONUs use their own clock)" }
 } do={ :set report ($report . "13 ONU management: " . $e . "\n"); :set abort ("ftn: section 13 ONU management failed: " . $e); :error $abort }
 
@@ -223,8 +223,6 @@
   /ip/firewall/filter add chain=input action=accept protocol=udp dst-port=67 in-interface=br-customers comment="ftn: customer dhcp"
   /ip/firewall/filter add chain=input action=accept protocol=icmp in-interface=br-customers comment="ftn: customer icmp"
   /ip/firewall/filter add chain=input action=accept protocol=udp dst-port=67 in-interface=vlan200-onu comment="ftn: onu dhcp"
-  /ip/firewall/filter add chain=input action=accept protocol=udp dst-port=53 in-interface=vlan200-onu comment="ftn: onu dns"
-  /ip/firewall/filter add chain=input action=accept protocol=tcp dst-port=53 in-interface=vlan200-onu comment="ftn: onu dns"
   /ip/firewall/filter add chain=input action=accept protocol=udp dst-port=123 in-interface=vlan200-onu comment="ftn: onu ntp"
   /ip/firewall/filter add chain=input action=drop protocol=tcp in-interface=br-customers dst-port=8729 comment="ftn: ipoe block rest"
   /ip/firewall/filter add chain=input action=accept protocol=udp dst-port=67 src-address-list=ftn-unreg comment="ftn: ipoe walled dhcp ftn-unreg"

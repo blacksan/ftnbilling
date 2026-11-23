@@ -44,7 +44,7 @@ func TestPlanONUMgmt(t *testing.T) {
 	}
 }
 
-// The management firewall: the subnet may reach the ACS and the router's DNS, NTP and DHCP, and nothing else;
+// The management firewall: the subnet may reach the ACS and the router's NTP and DHCP (no DNS: the ACS URL is an address), and nothing else;
 // the server may reach the subnet on the connection-request ports only. Nothing opens the internet.
 func TestONUMgmtRulesAreTight(t *testing.T) {
 	p, _ := PlanONUMgmt(onuSite(), "10.99.0.1", 7547, "", []int{7547, 30005})
@@ -168,9 +168,9 @@ func TestONUMgmtCheck(t *testing.T) {
 	p, _ := f.m.ONUPlan(site)
 	fwd, in := p.Rules()
 	sn := newSnapshot()
-	sn.rows["/interface/vlan"] = []routeros.Row{{"name": p.Iface, "vlan-id": "99", "interface": "sfp-sfpplus1", "disabled": "false"}}
+	sn.rows["/interface/vlan"] = []routeros.Row{{"name": p.Iface, "vlan-id": "99", "interface": "sfp-sfpplus1", "disabled": "false", "arp": "reply-only"}}
 	sn.rows["/ip/address"] = []routeros.Row{{"address": p.GatewayCIDR, "interface": p.Iface, "disabled": "false"}}
-	sn.rows["/ip/dhcp-server"] = []routeros.Row{{"name": ONUMgmtDHCPServer, "interface": p.Iface, "disabled": "false"}}
+	sn.rows["/ip/dhcp-server"] = []routeros.Row{{"name": ONUMgmtDHCPServer, "interface": p.Iface, "disabled": "false", "add-arp": "true"}}
 	var rules []routeros.Row
 	for _, r := range append(fwd, in...) {
 		rules = append(rules, routeros.Row{"comment": r.Comment, "disabled": "false"})
@@ -182,6 +182,16 @@ func TestONUMgmtCheck(t *testing.T) {
 	if it.Status != StatusOK {
 		t.Fatalf("complete network: %s %s", it.Status, it.Detail)
 	}
+	// A router built before: the VLAN answers every ARP and the DHCP server adds none: warned, with the fix said.
+	sn.rows["/interface/vlan"][0]["arp"] = "enabled"
+	sn.rows["/ip/dhcp-server"][0]["add-arp"] = "false"
+	it = CheckItem{}
+	evalONUMgmt(e, &it)
+	if it.Status != StatusWarn || !strings.Contains(it.Detail, "ARP reply-only on "+p.Iface) || !strings.Contains(it.Detail, "add-arp on the DHCP server") {
+		t.Fatalf("old ARP settings: %s %s", it.Status, it.Detail)
+	}
+	sn.rows["/interface/vlan"][0]["arp"] = "reply-only"
+	sn.rows["/ip/dhcp-server"][0]["add-arp"] = "true"
 	sn.rows["/ip/firewall/filter"] = rules[:3]
 	it = CheckItem{}
 	evalONUMgmt(e, &it)
@@ -208,5 +218,31 @@ func TestONUMgmtParent(t *testing.T) {
 	s.VLANID = 0
 	if got := ONUMgmtParent(s); got != CustomerBridge {
 		t.Errorf("without a customer VLAN: %q", got)
+	}
+}
+
+// M1 and L8: the management VLAN answers ARP only for its own address, the DHCP server adds an ARP entry per lease,
+// and the ONUs are not told a DNS server and may not ask the router for one.
+func TestONUMgmtSetupHardening(t *testing.T) {
+	f := newFixture(t, func(c *config.Config) { c.ACSListen = "10.99.0.1:7547"; c.ACSCRPorts = []int{7547, 30005} })
+	p, _ := f.m.ONUPlan(onuSite())
+	lines := strings.Join(p.SetupLines("sfp-sfpplus1"), "\n")
+	if !strings.Contains(lines, "/interface/vlan add name="+p.Iface+" vlan-id=99 interface=sfp-sfpplus1 arp=reply-only") {
+		t.Errorf("the VLAN is not reply-only:\n%s", lines)
+	}
+	if !strings.Contains(lines, "add-arp=yes") || strings.Contains(lines, "add-arp=no") {
+		t.Errorf("the DHCP server does not add ARP entries:\n%s", lines)
+	}
+	if strings.Contains(lines, "dns-server") {
+		t.Errorf("the ONUs are told a DNS server:\n%s", lines)
+	}
+	if !strings.Contains(lines, "ntp-server=") {
+		t.Errorf("NTP was dropped:\n%s", lines)
+	}
+	_, in := p.Rules()
+	for _, r := range in {
+		if strings.Contains(r.Args(), "dst-port=53") {
+			t.Errorf("the router answers DNS to the ONUs: %s", r.Args())
+		}
 	}
 }

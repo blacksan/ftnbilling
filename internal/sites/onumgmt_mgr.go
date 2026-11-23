@@ -102,14 +102,16 @@ func evalONUMgmt(e *evalCtx, it *CheckItem) {
 		return
 	}
 	var missing []string
-	has := false
+	has, arpOK := false, false
 	for _, r := range e.sn.tbl("/interface/vlan") {
 		if r["name"] == p.Iface && r["interface"] == ONUMgmtParent(e.site) && r["vlan-id"] == strconv.Itoa(p.VLAN) && !rowDisabled(r) {
-			has = true
+			has, arpOK = true, r["arp"] == "reply-only"
 		}
 	}
 	if !has {
 		missing = append(missing, "the VLAN "+p.Iface)
+	} else if !arpOK {
+		missing = append(missing, "ARP reply-only on "+p.Iface)
 	}
 	has = false
 	for _, r := range e.sn.tbl("/ip/address") {
@@ -120,14 +122,16 @@ func evalONUMgmt(e *evalCtx, it *CheckItem) {
 	if !has {
 		missing = append(missing, "the address "+p.GatewayCIDR)
 	}
-	has = false
+	has, addARP := false, false
 	for _, r := range e.sn.tbl("/ip/dhcp-server") {
 		if r["name"] == ONUMgmtDHCPServer && r["interface"] == p.Iface && !rowDisabled(r) {
-			has = true
+			has, addARP = true, yes(r["add-arp"])
 		}
 	}
 	if !has {
 		missing = append(missing, "the DHCP server "+ONUMgmtDHCPServer)
+	} else if !addARP {
+		missing = append(missing, "add-arp on the DHCP server "+ONUMgmtDHCPServer)
 	}
 	fwd, in := p.Rules()
 	have := map[string]bool{}
