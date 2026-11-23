@@ -17,9 +17,9 @@ const (
 
 // Link kinds of an ONU to an account.
 const (
-	LinkAuto   = "auto"   // the ONU's WAN MAC is the account's MAC on the same router
+	LinkAuto      = "auto"      // the ONU's WAN MAC is the account's MAC on the same router
 	LinkInventory = "inventory" // the ONU's serial is an ONT of the equipment register installed at the house
-	LinkManual = "manual" // the owner picked the account
+	LinkManual    = "manual"    // the owner picked the account
 )
 
 // ONU task kinds and statuses.
