@@ -346,12 +346,18 @@ func (s *Server) adminAccountONURefresh(w http.ResponseWriter, r *http.Request) 
 }
 
 // onuStock lists the ONUs of the register that can be given to a new house: in stock, with a WAN MAC.
-func (s *Server) onuStock() []store.Equipment {
-	var out []store.Equipment
+// onuStockItem is an in-stock ONU with the apartments its PON port serves (for the Add customer dialog to preselect).
+type onuStockItem struct {
+	store.Equipment
+	ApartmentIDs []string
+}
+
+func (s *Server) onuStock() []onuStockItem {
+	var out []onuStockItem
 	s.st.View(func(d *store.Data) {
 		for _, e := range d.Equipment {
 			if e.Kind == store.KindONT && e.Status == store.EqInStock && e.MAC != "" {
-				out = append(out, e)
+				out = append(out, onuStockItem{e, billing.ONUApartmentIDs(d, e)})
 			}
 		}
 	})

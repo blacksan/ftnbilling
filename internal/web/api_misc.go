@@ -185,6 +185,10 @@ func (s *Server) apiUnregistered(w http.ResponseWriter, r *http.Request, c *apiC
 		if own {
 			continue
 		}
+		cls := s.svc.ClassifyMAC(dv.SiteID, dv.MAC)
+		if cls.Class == billing.ClassRouter {
+			continue // a router's own interface is never a device
+		}
 		sg, ok := sugs[dv.SiteID]
 		if !ok {
 			a, b := s.suggestAccounts(dv.SiteID, now)
@@ -211,7 +215,8 @@ func (s *Server) apiUnregistered(w http.ResponseWriter, r *http.Request, c *apiC
 		}
 		items = append(items, map[string]any{"site_id": dv.SiteID, "site_name": names[dv.SiteID], "mac": dv.MAC, "vendor": dv.Vendor,
 			"host_name": dv.HostName, "ip": dv.IP, "source": dv.Source, "port": dv.Port, "address_note": billing.UnregDevice{Device: dv}.AddrNote(), "online": on, "first_seen": tp(dv.FirstSeen), "last_seen": tp(dv.LastSeen),
-			"hits": dv.Hits, "suggested_account": suggested, "belongs_to": belongs})
+			"hits": dv.Hits, "suggested_account": suggested, "belongs_to": belongs,
+			"class": apiDeviceClass(cls)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
@@ -279,7 +284,10 @@ func (s *Server) apiUnregCreate(w http.ResponseWriter, r *http.Request, c *apiCt
 		Tenant      string `json:"tenant"`
 		Phone       string `json:"phone"`
 		PackageID   string `json:"package_id"`
-		Activate    bool   `json:"activate"` // grant the package's first period free; default false, like POST /accounts
+		Activate    bool   `json:"activate"`     // grant the package's first period free; default false, like POST /accounts
+		EquipmentID string `json:"equipment_id"` // an in-stock ONU of the register (the device is that ONU)
+		// ConfirmNoAddress: yes, this device that never asked for an address is the customer's ONU.
+		ConfirmNoAddress bool `json:"confirm_no_address"`
 	}
 	if !decode(w, r, &req, false) {
 		return
@@ -317,7 +325,8 @@ func (s *Server) apiUnregCreate(w http.ResponseWriter, r *http.Request, c *apiCt
 	// The same door as POST /accounts: a package is set as the plan and the tenant pays for it; free time only
 	// when "activate" says so. A package that cannot be set refuses the request before anything is made.
 	a, _, err := s.svc.CreateCustomer(r.Context(), billing.AddCustomerInput{ApartmentID: req.ApartmentID, SiteID: req.SiteID, Unit: req.Unit, Flat: req.Unit,
-		MAC: mac, Tenant: req.Tenant, Phone: req.Phone, PackageID: req.PackageID, Activate: req.Activate})
+		MAC: mac, Tenant: req.Tenant, Phone: req.Phone, PackageID: req.PackageID, Activate: req.Activate,
+		EquipmentID: req.EquipmentID, ConfirmNoAddress: req.ConfirmNoAddress})
 	if err != nil {
 		s.billingErr(w, err, mac)
 		return
@@ -348,4 +357,16 @@ func (s *Server) apiUnregDismiss(w http.ResponseWriter, r *http.Request, c *apiC
 	}
 	c.audit(s, "device "+mac+" dismissed")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// apiDeviceClass is a New devices row's place in the equipment hierarchy: kind is "olt" (no Create customer or
+// Attach: dismiss only), "onu" (an ONU of the register; create the customer with equipment_id) or "unknown"
+// (never_asked: the device only showed up at layer 2, creating a customer needs confirm_no_address).
+func apiDeviceClass(c billing.DeviceClass) map[string]any {
+	ids := c.ApartmentIDs
+	if ids == nil {
+		ids = []string{}
+	}
+	return map[string]any{"kind": c.Class, "label": c.Label, "equipment_id": c.EquipmentID, "creatable": c.Creatable,
+		"attachable": c.Class != billing.ClassOLT, "never_asked": c.NeverAsked, "apartment_ids": ids}
 }

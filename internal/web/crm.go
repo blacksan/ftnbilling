@@ -307,6 +307,7 @@ func (s *Server) accountCards(d map[string]any, a store.Account, sc scope) {
 	sort.Slice(stock, func(i, j int) bool { return stock[i].Kind+stock[i].Serial < stock[j].Kind+stock[j].Serial })
 	sort.Slice(notes, func(i, j int) bool { return notes[i].Time.After(notes[j].Time) })
 	d["Cust"], d["Custs"], d["Equip"], d["Stock"], d["Splitters"], d["Notes"] = cust, custs, eq, stock, splitters, notes
+	d["Place"] = s.placements(eq)
 	if dev, ok := s.svc.AccountDevice(a.ID); ok {
 		d["AcctDev"] = dev
 	}
@@ -325,6 +326,12 @@ func (s *Server) adminEquipment(w http.ResponseWriter, r *http.Request) {
 	sc := s.scopeOf(r)
 	qv := r.URL.Query()
 	kind, status, q := qv.Get("kind"), qv.Get("status"), strings.TrimSpace(qv.Get("q"))
+	if qv.Get("view") != "list" && kind == "" && status == "" && q == "" { // the tree is the front page of Equipment
+		p.Data["View"], p.Data["Tree"] = "tree", s.treeFor(sc)
+		s.render(w, "admin_equipment", p)
+		return
+	}
+	p.Data["View"] = "list"
 	names := map[string]string{}
 	for _, st := range sc.Sites {
 		names[st.ID] = st.Name
@@ -399,11 +406,19 @@ func (s *Server) adminEquipmentView(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if e.Kind == store.KindOLT {
+		http.Redirect(w, r, "/admin/olts/view?id="+url.QueryEscape(e.ID), http.StatusSeeOther)
+		return
+	}
 	sort.Slice(hist, func(i, j int) bool { return hist[i].Ev.Time.After(hist[j].Ev.Time) })
 	p.Data["E"], p.Data["Acct"], p.Data["Cust"], p.Data["Hist"], p.Data["Accts"] = e, acct, cust, hist, accts
 	p.Data["Kinds"], p.Data["Statuses"] = billing.EquipmentKinds, billing.EquipmentStatuses
 	p.Data["Sites"] = sc.Sites
 	p.Data["SiteName"] = p.Data["SiteNames"].(map[string]string)[e.SiteID]
+	if e.Kind == store.KindONT {
+		p.Data["OLTs"] = s.oltChoices(sc)
+		p.Data["Place"] = s.svc.PlacementOf(e.ID)
+	}
 	s.render(w, "admin_equipment_view", p)
 }
 
@@ -413,6 +428,14 @@ func (s *Server) adminEquipmentSave(w http.ResponseWriter, r *http.Request) {
 		SiteID: r.PostFormValue("site"), Notes: r.PostFormValue("notes")}
 	if in.ID == "" && in.SiteID == "" {
 		in.SiteID = s.scopeOf(r).ID
+	}
+	if in.ID == "" && strings.EqualFold(in.Kind, store.KindOLT) { // an OLT has its own form (name, router port, PON ports)
+		http.Redirect(w, r, "/admin/olts/new?site="+url.QueryEscape(in.SiteID), http.StatusSeeOther)
+		return
+	}
+	if r.PostFormValue("placement") == "1" { // the ONU form: its OLT and PON port
+		in.SetPlacement, in.OLTID = true, r.PostFormValue("olt")
+		in.PONPort, _ = strconv.Atoi(strings.TrimSpace(r.PostFormValue("pon_port")))
 	}
 	e, err := s.svc.SaveEquipment(in)
 	if err != nil {

@@ -99,6 +99,10 @@
         var rsel = $("[data-router-select]", f); if (rsel && o.getAttribute("data-site")) rsel.value = o.getAttribute("data-site");
         aptsFor(f, o.getAttribute("data-site"));
         var fl = o.getAttribute("data-flat"); if (fl) { var ui = $("input[name=unit]", f); if (ui) ui.value = fl; }
+        var cn = $("input[name=confirm_no_address]", f); if (cn) cn.value = "";
+        var osel = $("select[name=equipment_id]", f); // a device that is an ONU of the register: use that item
+        if (osel) { osel.value = o.getAttribute("data-equipment") || ""; }
+        if (o.getAttribute("data-equipment")) presetApts(f, (o.getAttribute("data-apts") || "").split(",").filter(Boolean));
         step(f, "form"); devsFor(f);
       } else if (dlg) {
         var f0 = $("form", dlg); if (f0) aptsFor(f0, ""); // not from a device row: show every apartment again
@@ -320,6 +324,19 @@
     var sel = $("[data-router-select]", form); if (sel && sel.value !== siteId && Array.prototype.some.call(sel.options, function (op) { return op.value === siteId; })) sel.value = siteId;
   }
   $$("[data-apt-select]").forEach(function (a) { a.addEventListener("change", function () { aptRouters(a.form); }); });
+  /* An ONU of the register that sits on a PON port: preselect the apartment(s) the port serves (one: chosen; several: only those are offered). */
+  function presetApts(form, ids) {
+    var a = $("[data-apt-select]", form); if (!a || !ids.length) return;
+    Array.prototype.forEach.call(a.options, function (op) { if (op.value) { op.hidden = op.disabled = ids.indexOf(op.value) < 0; } });
+    if (ids.length === 1) a.value = ids[0];
+    a.dispatchEvent(new Event("ftn:aptsync")); aptRouters(form);
+  }
+  $$("select[name=equipment_id]").forEach(function (s) {
+    s.addEventListener("change", function () {
+      var op = s.options[s.selectedIndex], f = s.form, m = $("input[name=mac]", f);
+      if (op && op.value) { if (m) m.value = op.getAttribute("data-mac") || ""; presetApts(f, (op.getAttribute("data-apts") || "").split(",").filter(Boolean)); }
+    });
+  });
   var ac = $("#addcustomer");
   if (ac) ac.addEventListener("ftn:open", function () { var f = $("form", ac); if (f && !f._devs) devsFor(f); });
 
@@ -357,6 +374,11 @@
         .then(function (r) { return r.json().catch(function () { return { error: "The server sent something unexpected." }; }); })
         .then(function (j) {
           if (btn) btn.disabled = false;
+          var cn = $("input[name=confirm_no_address]", form);
+          if (!j.ok && j.confirm && cn && window.confirm(j.error + "\n\nCreate the customer on this device anyway?")) {
+            cn.value = "1"; form.requestSubmit(); return; // sent again, confirmed
+          }
+          if (cn) cn.value = "";
           if (!j.ok) {
             var er = el("div", "flash bad ajax-err", j.error || "That did not work."); er.setAttribute("role", "alert");
             var first = $("[data-step=form]", form); first.insertBefore(er, first.firstChild); return;

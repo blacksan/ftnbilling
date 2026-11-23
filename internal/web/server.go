@@ -112,6 +112,7 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 		"inc":      func(i int) int { return i + 1 },
 		"day":      day,
 		"stat":     func(v string) string { return strings.ReplaceAll(v, "_", " ") },
+		"oltLabel": store.OLTLabel,
 		"deref":    func(b *bool) bool { return b != nil && *b },
 		"last4":    lastFour,
 		"maskCode": maskCode,

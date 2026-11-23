@@ -497,3 +497,23 @@ dialog.aptpick-dlg{width:min(520px,calc(100vw - 24px))}
 .aptrow-addr{color:var(--ink-2);font-size:var(--fs-13)}
 .aptrow-meta{color:var(--muted);font-size:var(--fs-12)}
 .aptpick-empty{margin:var(--sp-3) 0 0}
+
+/* ---- equipment tree: router > OLT > PON > ONU (Lattice Teal tokens only) ---- */
+.eqtree{display:flex;flex-direction:column;gap:var(--sp-4)}
+.eqtree details{border:1px solid var(--line);border-radius:var(--r1);background:var(--surface);margin:var(--sp-2) 0}
+.eqtree details>summary{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2) var(--sp-3);padding:var(--sp-2) var(--sp-3);color:var(--ink);font-weight:600}
+.eqtree details>summary .muted{font-weight:400}
+.eqtree details[open]>summary{border-bottom:1px solid var(--line);background:var(--brand-soft)}
+.eqtree .eqin{padding:var(--sp-2) var(--sp-3) var(--sp-3)}
+.eqtree .eqin details{margin-left:var(--sp-3)}
+.eqtree .eqapts{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:var(--sp-2)}
+.eqtree .eqapts li{padding:2px 10px;border-radius:var(--r-pill);background:var(--brand-soft);color:var(--brand-ink);border:1px solid var(--line)}
+.eqtree .eqwarn{color:var(--warn);background:var(--warn-soft);border-radius:var(--r1);padding:2px 8px;font-size:var(--fs-13);margin:2px 0;display:block}
+.eqtree .eqkind{display:inline-block;min-width:2.6em;text-align:center;padding:0 6px;border-radius:6px;background:var(--brand);color:var(--on-brand);font:600 var(--fs-12)/1.6 var(--f-sans)}
+.eqtree .eqkind.olt{background:var(--teal-700)}
+.eqtree .eqkind.onu{background:var(--teal-400);color:var(--ink)}
+.eqcol{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);gap:var(--sp-4)}
+@media(max-width:900px){.eqcol{grid-template-columns:1fr}}
+.klass{display:inline-block;padding:0 8px;border-radius:var(--r-pill);font:600 var(--fs-12)/1.6 var(--f-sans);border:1px solid var(--line);background:var(--surface-2);color:var(--ink-2)}
+.klass.olt{background:var(--teal-800);color:#fff;border-color:transparent}
+.klass.onu{background:var(--brand-soft);color:var(--brand-ink)}

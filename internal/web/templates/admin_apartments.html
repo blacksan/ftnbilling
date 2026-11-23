@@ -45,6 +45,7 @@
 {{range $a.Accounts}}<tr><td class="who"><b><a href="/admin/accounts/view?code={{.Code}}">{{.Unit}}</a></b><span>{{.Code}}</span></td><td data-label="Customer">{{.Tenant}}</td><td data-label="Router">{{index $a.RouterOf .ID}}</td>
 <td data-label="State"><span class="pill {{state .}}">{{state .}}</span></td><td data-label="Problem">{{with index $d.Data.Issue .ID}}<span class="bad">{{.}}</span>{{end}}</td></tr>{{end}}</tbody></table></div>
 {{else}}<p class="muted nil">No houses yet. Use Add customer and pick this apartment.</p>{{end}}</section>
+{{template "apt_equipment" .}}
 {{if $d.CanWrite}}<section class="mt-4 panel danger"><h2 class="bad">Remove apartment</h2><p class="muted" style="margin:6px 0 10px">Only possible when no account, open or closed, belongs to it.</p>
 <form method="post" action="/admin/apartments/delete" data-confirm="Remove {{$a.Name}}?"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$a.ID}}"><button>Remove</button></form></section>{{end}}
 {{template "afoot" .}}{{end}}

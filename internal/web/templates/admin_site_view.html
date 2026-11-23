@@ -73,6 +73,7 @@
 <input name="confirm_name" placeholder="{{$s.Name}}" required autocomplete="off" aria-label="Type the router name to reset it"><button class="ghost">Reset router</button></form></section>{{end}}
 </div>
 
+{{else if eq $tab "equipment"}}{{template "rt_equipment" .}}
 {{else if eq $tab "onus"}}{{template "onu_tab" .}}
 {{else if eq $tab "clients"}}
 {{template "rt_clients" .}}

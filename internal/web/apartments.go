@@ -79,6 +79,7 @@ func (s *Server) adminApartment(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p.Data["Issue"] = issues
+	s.apartmentEquipmentData(p.Data, det.ID)
 	p.Acts = nil
 	if p.CanWrite {
 		p.Acts = []heroAct{{Label: "Edit", Href: "/admin/apartments/edit?id=" + url.QueryEscape(det.ID)}, {Label: "Add customer", Modal: "addcustomer", Ghost: true}}
