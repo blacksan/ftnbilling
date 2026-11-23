@@ -480,9 +480,12 @@ const (
 // that is installed at a customer has an AccountID; one that belongs to a
 // building (its router, its OLT) has a SiteID and no account.
 type Equipment struct {
-	ID          string    `json:"id"`
-	Kind        string    `json:"kind"`
-	Serial      string    `json:"serial,omitempty"`
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	Serial string `json:"serial,omitempty"`
+	// GPONSerial is the OLT-side serial (e.g. HWTC1234ABCD), only when it differs from the serial the ONU reports
+	// over TR-069 (Serial). Either one finds the item.
+	GPONSerial  string    `json:"gpon_serial,omitempty"`
 	MAC         string    `json:"mac,omitempty"`
 	Model       string    `json:"model,omitempty"`
 	Firmware    string    `json:"firmware,omitempty"`

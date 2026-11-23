@@ -18,6 +18,7 @@ const (
 // Link kinds of an ONU to an account.
 const (
 	LinkAuto   = "auto"   // the ONU's WAN MAC is the account's MAC on the same router
+	LinkInventory = "inventory" // the ONU's serial is an ONT of the equipment register installed at the house
 	LinkManual = "manual" // the owner picked the account
 )
 
@@ -286,4 +287,32 @@ func (d *Data) SiteByONUIP(ip string) (Site, bool) {
 		}
 	}
 	return Site{}, false
+}
+
+// NormSerial is the form serials are compared in: upper case, no spaces.
+func NormSerial(s string) string {
+	return strings.ToUpper(strings.Join(strings.Fields(s), ""))
+}
+
+// ONTBySerial finds an ONT of the equipment register by the serial an ONU reports over TR-069, matching its
+// Serial or its GPONSerial. Retired items are skipped.
+func (d *Data) ONTBySerial(serial string) (Equipment, bool) {
+	n := NormSerial(serial)
+	if n == "" {
+		return Equipment{}, false
+	}
+	var best Equipment
+	found := false
+	for _, e := range d.Equipment {
+		if e.Kind != KindONT || e.Status == EqRetired {
+			continue
+		}
+		if NormSerial(e.Serial) == n || NormSerial(e.GPONSerial) == n {
+			// an installed item beats a stock one when (wrongly) two carry the serial
+			if !found || e.Status == EqInstalled {
+				best, found = e, true
+			}
+		}
+	}
+	return best, found
 }

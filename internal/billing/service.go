@@ -198,6 +198,9 @@ type AccountInput struct {
 	// WhatsApp is the tenant's WhatsApp number; WASamePhone copies Phone instead.
 	WhatsApp    string
 	WASamePhone bool
+	// EquipmentID: an ONU of the register (in stock) to give the house. Its WAN MAC becomes the house MAC
+	// (MAC may then be empty); a MAC typed as well must be the same.
+	EquipmentID string
 }
 
 func cleanText(s string, max int) string {
@@ -287,6 +290,19 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 	if unit == "" {
 		return store.Account{}, errors.New("the house number is required, e.g. B4")
 	}
+	if in.EquipmentID != "" {
+		var eqMAC string
+		s.st.View(func(d *store.Data) { eqMAC = d.Equipment[in.EquipmentID].MAC })
+		if eqMAC == "" {
+			return store.Account{}, errors.New("choose an ONU from the register that has a WAN MAC")
+		}
+		if strings.TrimSpace(in.MAC) != "" {
+			if m, err := NormalizeMAC(in.MAC); err != nil || !strings.EqualFold(m, eqMAC) {
+				return store.Account{}, errors.New("the MAC typed is not the MAC of the chosen ONU")
+			}
+		}
+		in.MAC = eqMAC
+	}
 	mac, err := NormalizeMAC(in.MAC)
 	if err != nil {
 		return store.Account{}, err
@@ -330,6 +346,16 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 		d.Accounts[a.ID] = a
 		delete(d.Devices, store.DeviceKey(a.SiteID, mac))
 		s.enqueueLocked(d, a, "account created")
+		if in.EquipmentID != "" {
+			e := d.Equipment[in.EquipmentID]
+			if e.Kind != store.KindONT || e.Status != store.EqInStock {
+				return errors.New("that ONU is not in stock")
+			}
+			from := e.Status
+			e.AccountID, e.SiteID, e.Status, e.InstalledAt, e.UpdatedAt = a.ID, a.SiteID, store.EqInstalled, s.now(), s.now()
+			d.Equipment[e.ID] = e
+			addEqEvent(d, e, store.EqEvAssigned, from, e.Status, "given to a new house", s.now())
+		}
 		return nil
 	})
 	if err == nil {

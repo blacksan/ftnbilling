@@ -304,12 +304,12 @@ var customersC = (&codec[store.Customer]{
 
 var equipmentC = (&codec[store.Equipment]{
 	name: "equipment", pk: []string{"id"}, key: func(v store.Equipment) string { return v.ID },
-	cols: []string{"id", "kind", "serial", "mac", "model", "firmware", "status", "site_id", "account_id", "installed_at", "notes", "created_at", "updated_at"},
+	cols: []string{"id", "kind", "serial", "mac", "model", "firmware", "status", "site_id", "account_id", "installed_at", "notes", "created_at", "updated_at", "gpon_serial"},
 	args: func(v store.Equipment) []any {
-		return []any{v.ID, v.Kind, v.Serial, v.MAC, v.Model, v.Firmware, v.Status, fk(v.SiteID), fk(v.AccountID), nt(v.InstalledAt), v.Notes, tm(v.CreatedAt), nt(v.UpdatedAt)}
+		return []any{v.ID, v.Kind, v.Serial, v.MAC, v.Model, v.Firmware, v.Status, fk(v.SiteID), fk(v.AccountID), nt(v.InstalledAt), v.Notes, tm(v.CreatedAt), nt(v.UpdatedAt), v.GPONSerial}
 	},
 	dst: func(v *store.Equipment) []any {
-		return []any{&v.ID, &v.Kind, &v.Serial, &v.MAC, &v.Model, &v.Firmware, &v.Status, s_(&v.SiteID), s_(&v.AccountID), t_(&v.InstalledAt), &v.Notes, t_(&v.CreatedAt), t_(&v.UpdatedAt)}
+		return []any{&v.ID, &v.Kind, &v.Serial, &v.MAC, &v.Model, &v.Firmware, &v.Status, s_(&v.SiteID), s_(&v.AccountID), t_(&v.InstalledAt), &v.Notes, t_(&v.CreatedAt), t_(&v.UpdatedAt), &v.GPONSerial}
 	},
 }).build()
 
