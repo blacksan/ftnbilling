@@ -155,6 +155,10 @@ func (s *Service) decide(d *store.Data, in Inform, site store.Site, ip netip.Add
 				reason = fmt.Sprintf("it checked in from router %s, but it is on router %s", s.siteName(d, site.ID), s.siteName(d, cur.SiteID))
 			case macState == "mismatch":
 				reason = fmt.Sprintf("its address %s is leased to MAC %s, not to this box's MAC %s", ipS, macText(lease.mac), cur.Sec.MgmtMAC)
+			case macState == "unbound" && ipChanged:
+				// No MAC was bound yet (a record from before binding, or a first contact the router could not answer
+				// for): only the address it was seen at can bind it. Anyone else on the router could claim it here.
+				reason = fmt.Sprintf("it checked in from %s, not from %s where it was seen, before its MAC was bound", ipS, cur.MgmtIP)
 			case macState == "unknown" || macState == "nolease":
 				// The router could not say who holds the address: no secret goes out, and nobody is accused.
 				cur.LastInform, cur.LastEvents = now, strings.Join(in.Events, ",")

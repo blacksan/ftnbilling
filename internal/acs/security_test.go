@@ -552,3 +552,38 @@ func TestApproveKeepsTheOwnLoginTheBoxUses(t *testing.T) {
 		t.Fatalf("%+v", g.Sec)
 	}
 }
+
+// A linked record with no bound MAC (every linked ONU right after the upgrade, or one whose first contact the router
+// could not answer for) is bound only from the address it was seen at; a shared-login check-in from another address
+// of the same router is held back instead of taking the record and the house's Wi-Fi.
+func TestUnboundLinkedRecordIsNotTakenFromAnotherAddress(t *testing.T) {
+	f := newFixture(t)
+	c := linkedWithOwnLogin(t, f, "SNOLD", "10.6.3.20")
+	o := f.onuBySerial("SNOLD")
+	f.st.Update(func(d *store.Data) error {
+		x := d.ONUs[o.ID]
+		x.Sec = store.ONUSec{} // as migrated: nothing bound, no own login
+		d.ONUs[o.ID] = x
+		return nil
+	})
+	a := newZTE(t, f, "SNOLD", "10.6.3.99")
+	for i := 0; i < 2; i++ {
+		if err := a.session("0 BOOTSTRAP"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	g := f.onuBySerial("SNOLD")
+	if a.get(a.wlan("1")+"SSID") == "HouseNet" || g.MgmtIP != "10.6.3.20" || !g.Sec.Quarantine.Active {
+		t.Fatalf("an unbound record was taken from another address: ip=%s q=%v", g.MgmtIP, g.Sec.Quarantine.Active)
+	}
+	// the real box, from where it was seen, binds the record and works
+	c.mu.Lock()
+	c.acsUser, c.acsPass, c.nextUser, c.nextPass = "", "", "", ""
+	c.mu.Unlock()
+	if err := c.session("2 PERIODIC"); err != nil {
+		t.Fatal(err)
+	}
+	if g := f.onuBySerial("SNOLD"); g.Sec.MgmtMAC != c.mgmtMAC {
+		t.Fatalf("the real box did not bind: %+v", g.Sec)
+	}
+}
