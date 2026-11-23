@@ -153,6 +153,7 @@ fun RouterDetailScreen(
     onChecks: (String) -> Unit,
     onPorts: (String, String) -> Unit,
     onEdit: (String) -> Unit,
+    onOnus: (String) -> Unit = {},
 ) {
     val container = LocalContainer.current
     val vm: RouterDetailViewModel = viewModel(key = "router-$id", factory = vmFactory { RouterDetailViewModel(id, container.sites) })
@@ -215,6 +216,7 @@ fun RouterDetailScreen(
                     item { Button(onClick = { onNewDevices(id) }, modifier = Modifier.fillMaxWidth()) { Text("New devices on this router") } }
                     item { Button(onClick = { onChecks(id) }, modifier = Modifier.fillMaxWidth()) { Text("Setup and checks") } }
                     item { Button(onClick = { onPorts(id, s.value.label) }, modifier = Modifier.fillMaxWidth()) { Text("Ports") } }
+                    item { Button(onClick = { onOnus(id) }, modifier = Modifier.fillMaxWidth()) { Text("ONUs (Wi-Fi and TR-069)") } }
                     if (user.isOwner) {
                         item { OutlinedButton(onClick = { onEdit(id) }, modifier = Modifier.fillMaxWidth()) { Text("Router settings") } }
                     }

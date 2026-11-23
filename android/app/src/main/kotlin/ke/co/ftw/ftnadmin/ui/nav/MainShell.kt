@@ -188,7 +188,20 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
                 onChecks = { nav.navigate(SetupRoute(it)) },
                 onPorts = { id2, name -> nav.navigate(PortsRoute(id2, name)) },
                 onEdit = { nav.navigate(EditRouterRoute(it)) },
+                onOnus = { nav.navigate(OnusRoute(it)) },
             )
+        }
+        composable<OnusRoute> { e ->
+            ke.co.ftw.ftnadmin.ui.onu.OnusScreen(
+                siteId = e.toRoute<OnusRoute>().routerId,
+                user = user,
+                onBack = { nav.popBackStack() },
+                onOpenAccount = openAccount,
+                onRegister = { nav.navigate(OnuRegisterRoute) },
+            )
+        }
+        composable<OnuRegisterRoute> {
+            ke.co.ftw.ftnadmin.ui.onu.RegisterScreen(user = user, onBack = { nav.popBackStack() })
         }
         composable<AddRouterRoute> {
             AddRouterScreen(onBack = { nav.popBackStack() }, onOpenRouter = { nav.navigate(RouterRoute(it)) })

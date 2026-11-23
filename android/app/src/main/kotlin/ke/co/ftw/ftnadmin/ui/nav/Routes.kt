@@ -42,3 +42,9 @@ import kotlinx.serialization.Serializable
 @Serializable data object AlertsRoute
 
 @Serializable data object SettingsRoute
+
+/** The ONUs (TR-069) of one router. */
+@Serializable data class OnusRoute(val routerId: String)
+
+/** The ONU register: serial and WAN MAC pairs. */
+@Serializable data object OnuRegisterRoute
