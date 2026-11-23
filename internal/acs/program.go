@@ -191,12 +191,14 @@ func (s *Service) provision(ctx context.Context, ss *session, onuID string, rese
 		if err != nil {
 			return err
 		}
-		applied, refused, err := s.setLoose(ctx, ss, onuID, []ParamValue{{Name: ms + "Username", Value: user}, {Name: ms + "Password", Value: pass}})
+		// One Set, never split: a box that took the user name but refused the password would log in with a login
+		// that neither side knows, and nothing could reach it until a factory reset.
+		_, f, err := s.spvKeyed(ctx, ss, onuID, []ParamValue{{Name: ms + "Username", Value: user}, {Name: ms + "Password", Value: pass}})
 		if err != nil {
 			return err
 		}
 		state := store.CredShared
-		if len(applied) == 2 {
+		if f == nil {
 			state = store.CredPending
 		}
 		_ = s.st.Update(func(d *store.Data) error {
@@ -209,7 +211,7 @@ func (s *Service) provision(ctx context.Context, ss *session, onuID string, rese
 				cur.Sec.ACSUser, cur.Sec.ACSPassEnc = user, enc
 			} else {
 				cur.Sec.ACSUser, cur.Sec.ACSPassEnc = "", ""
-				s.log.Info("ACS: the ONU keeps the shared ACS login", "onu", onuID, "refused", len(refused))
+				s.log.Info("ACS: the ONU keeps the shared ACS login", "onu", onuID, "fault", f.Code)
 				s.audit(d, cur, "system", "", "ONU "+cur.Serial+" refused its own ACS login: it logs in with the shared login only (weaker)")
 			}
 			d.ONUs[cur.ID] = cur

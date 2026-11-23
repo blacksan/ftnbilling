@@ -80,7 +80,9 @@ func passCandidates(d *store.Data, o store.ONU, prof Profile) []string {
 			continue
 		}
 		seen[l] = true
-		if bad[l] && !contains(first, l) {
+		// A name the owner said did not work on this box goes last, even when the model table puts it first (else "It
+		// didn't work" would send the same name again, for ever). Only the name confirmed on this very box is exempt.
+		if bad[l] && l != o.Profile.PassLeaf {
 			last = append(last, l)
 		} else {
 			out = append(out, l)

@@ -605,3 +605,23 @@ func TestReturnedBoxGetsResetNeverWiFi(t *testing.T) {
 		t.Fatalf("relinked by itself: %+v", o)
 	}
 }
+
+// A wrong "It works" on one box puts a name first for its whole model; "It didn't work" on another box of that model
+// must then move that name last for that box, or the retry sends the same name again.
+func TestRejectedNameGoesLastEvenWhenTheModelTableHasIt(t *testing.T) {
+	d := &store.Data{Settings: map[string]store.Setting{}}
+	prof := Profile{Pass: []string{"A", "B", "C"}}
+	o := store.ONU{OUI: "0019C6", ProductClass: "F670L", SWVersion: "V1"}
+	writeWorks(d, map[string]Work{modelKey(o.OUI, o.ProductClass, o.SWVersion): {OUI: o.OUI, Class: o.ProductClass, Firmware: o.SWVersion, PassLeaf: "B"}}, time.Now())
+	if got := passCandidates(d, o, prof); got[0] != "B" {
+		t.Fatalf("the model's confirmed name is not first: %v", got)
+	}
+	o.Profile.BadLeaves = []string{"B"}
+	if got := passCandidates(d, o, prof); strings.Join(got, ",") != "A,C,B" {
+		t.Fatalf("a name rejected on this box must go last: %v", got)
+	}
+	o.Profile.PassLeaf = "C" // confirmed on this box
+	if got := passCandidates(d, o, prof); got[0] != "C" || got[len(got)-1] != "B" {
+		t.Fatalf("%v", got)
+	}
+}

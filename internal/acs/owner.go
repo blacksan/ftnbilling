@@ -213,6 +213,11 @@ func (s *Service) AdminPassword(onuID string) (string, error) {
 func expireTasks(d *store.Data, now time.Time) int {
 	n := 0
 	for _, t := range d.ONUTasks {
+		if t.Kind == store.TaskFactoryReset {
+			if o, ok := d.ONUs[t.ONUID]; ok && o.State.Returned && o.AccountID == "" {
+				continue // a returned box keeps its reset until it checks in: the old house's Wi-Fi must not travel with it
+			}
+		}
 		if t.Status == store.TaskPending && now.Sub(t.CreatedAt) > store.TaskTTL(t.Kind) {
 			t.Status, t.Fault, t.FinishedAt = store.TaskExpired, "the ONU did not check in in time, so this was not sent", now
 			d.ONUTasks[t.ID] = t
@@ -222,15 +227,24 @@ func expireTasks(d *store.Data, now time.Time) int {
 	return n
 }
 
-// Upkeep expires old queued tasks and forgets boxes that are not at any house and have not been heard from for a week
-// (unknown, bench or quarantine records would otherwise pile up and fill a router's quota). A box linked to a house is
-// never forgotten.
+// Upkeep expires old queued tasks and forgets boxes that are not at any house, not in the register and not returned,
+// and have not been heard from for a week (unknown or fake records would otherwise pile up and fill a router's quota).
+// A box linked to a house is never forgotten.
 func (s *Service) Upkeep() {
 	now := s.now()
 	_ = s.st.Update(func(d *store.Data) error {
 		changed := expireTasks(d, now) > 0
 		for id, o := range d.ONUs {
 			if o.AccountID != "" {
+				continue
+			}
+			// A returned box (its reset is still owed) and a box in the register are kept: forgetting one that holds
+			// its own ACS login would lock it out for good (nobody knows that login any more), and a forgotten returned
+			// box would never be reset. Fake serials are never in the register, so they still go.
+			if o.State.Returned {
+				continue
+			}
+			if _, inReg := d.ONTBySerial(o.Serial); inReg {
 				continue
 			}
 			seen := o.LastInform

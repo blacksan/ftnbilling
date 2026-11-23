@@ -125,6 +125,9 @@ class SetupViewModelsTest {
         val vm = setupVm()
         await(vm.state) { it.checks is Loadable.Ready }
         val it0 = (vm.state.value.checks as Loadable.Ready).value.items.single()
+        // After the fix the router reports the check as ok: the fresh re-read the view model starts at once must not
+        // race the assertion below with the stale "warn".
+        routes["GET /api/v1/routers/s1/checks"] = ok(checks(item("traffic_flow", "ok")))
 
         vm.requestFix(it0)
         await(vm.state) { s -> s.fixing.isEmpty() && s.message?.contains("set interface") == true }

@@ -176,6 +176,25 @@ func TestBoxWithoutParameterKeyIsNotResetEveryTime(t *testing.T) {
 	}
 }
 
+// A box that takes the ACS user name but refuses the password must not be left with half a login: the user name and
+// the password go in one Set, so a refusal changes neither and the box keeps working on the shared login.
+func TestOwnLoginHalfRefusedChangesNothing(t *testing.T) {
+	f := newFixture(t)
+	c := newZTE(t, f, "SNHALF", "10.6.3.20")
+	c.readonly[c.root+"ManagementServer.Password"] = true
+	for i, ev := range []string{"0 BOOTSTRAP", "2 PERIODIC", "2 PERIODIC"} {
+		if err := c.session(ev); err != nil {
+			t.Fatalf("session %d: %v", i, err)
+		}
+	}
+	if u := c.get(c.root + "ManagementServer.Username"); u != "" {
+		t.Fatalf("the user name was written without its password: %q", u)
+	}
+	if o := f.onuBySerial("SNHALF"); o.Sec.ACSCred != store.CredShared || o.Sec.ACSUser != "" {
+		t.Fatalf("%+v", o.Sec)
+	}
+}
+
 // Per-device login refused: the box is flagged "shared login only" and goes on working.
 func TestOwnLoginRefusedIsFlaggedAndWorks(t *testing.T) {
 	f := newFixture(t)
@@ -466,3 +485,42 @@ func TestUnreadableACSPasswordIsNotRegenerated(t *testing.T) {
 }
 
 var _ = httptest.NewRecorder
+
+// H2 and M5 together: a box that left its house and then sat on a shelf for more than a week is neither forgotten (it
+// still logs in with its own ACS login, which only its record knows) nor let off its factory reset.
+func TestReturnedBoxKeepsItsRecordAndItsReset(t *testing.T) {
+	f := newFixture(t)
+	c := linkedWithOwnLogin(t, f, "SNSHELF", "10.6.3.20")
+	o := f.onuBySerial("SNSHELF")
+	if err := f.svc.UnlinkONU("owner", "", o.ID); err != nil {
+		t.Fatal(err)
+	}
+	var reset store.ONUTask
+	f.st.View(func(d *store.Data) {
+		for _, tk := range d.ONUTasksOf(o.ID) {
+			if tk.Kind == store.TaskFactoryReset {
+				reset = tk
+			}
+		}
+	})
+	if reset.ID == "" {
+		t.Fatal("no factory reset queued")
+	}
+	f.advance(10 * 24 * time.Hour)
+	f.svc.Upkeep()
+	if f.onuBySerial("SNSHELF").ID == "" {
+		t.Fatal("a returned box was forgotten: its own ACS login would be refused for ever")
+	}
+	var st string
+	f.st.View(func(d *store.Data) { st = d.ONUTasks[reset.ID].Status })
+	if st != store.TaskPending {
+		t.Fatalf("the returned box's factory reset expired: %s", st)
+	}
+	n := c.count("FactoryReset")
+	if err := c.session("2 PERIODIC"); err != nil {
+		t.Fatalf("the returned box could not log in again: %v", err)
+	}
+	if c.count("FactoryReset") != n+1 {
+		t.Fatal("the returned box was not reset when it came back")
+	}
+}

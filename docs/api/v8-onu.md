@@ -24,7 +24,7 @@ Every customer has an ONU the owner supplies, in routing mode. The ONU is a pair
 
 ## Task states and expiry
 
-A task is `queued` until the ONU checks in, `sending` while the ACS talks to it, then for a Wi-Fi change `accepted` (status 0 from the box, or "applies after the ONU restarts" for status 1) and `confirmed` once the owner says "It works". Reboot, refresh and factory reset end as `done`. A queued task that waited too long becomes `expired` and is never sent: reboot 1 hour, Wi-Fi 24 hours, factory reset 7 days. A ONU that is unlinked or quarantined and silent for 7 days is forgotten.
+A task is `queued` until the ONU checks in, `sending` while the ACS talks to it, then for a Wi-Fi change `accepted` (status 0 from the box, or "applies after the ONU restarts" for status 1) and `confirmed` once the owner says "It works". Reboot, refresh and factory reset end as `done`. A queued task that waited too long becomes `expired` and is never sent: reboot 1 hour, Wi-Fi 24 hours, factory reset 7 days (the reset of a returned box never expires: it waits for the box). An ONU that is not linked to a house, not in the register and not returned, and silent for 7 days, is forgotten.
 
 ## Lists and links
 
