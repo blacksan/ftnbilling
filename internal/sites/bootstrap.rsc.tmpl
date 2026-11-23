@@ -160,7 +160,16 @@
 {{- end}}
   /ip/address add address={{.Plan.GatewayIP}} interface={{.CustBridge}} comment="ftn: customer gateway"
 {{secClose 4 "customer network" true}}
-
+{{if .ONU}}
+:put "ftn 4b: ONU management network {{.ONU.Subnet}} on VLAN {{.ONU.VLAN}} (TR-069)"
+{{secOpen 13 "ONU management" true}}
+  # The ONUs' TR-069 network: its own VLAN on the OLT port, a DHCP server, and a firewall (section 6) that lets
+  # it reach the billing server's ACS ({{.ONU.ServerIP}} tcp {{.ONU.ACSPort}}) and the router's DNS and NTP, nothing else.
+{{- range .ONUSetup}}
+{{.}}
+{{- end}}
+{{secClose 13 "ONU management" true}}
+{{end}}
 :put "ftn 5/12: DHCP for the customers (unregistered .10-.59, flats get fixed addresses from the server)"
 {{secOpen 5 "DHCP" true}}
   /ip/dhcp-server/network remove [find where comment="ftn: customer DHCP network"]

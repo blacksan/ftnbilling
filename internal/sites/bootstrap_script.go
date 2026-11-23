@@ -63,6 +63,12 @@ type BootstrapInput struct {
 	NetflowPort int
 	// WebFigDomain (WEBFIG_DOMAIN) is, with the host of PublicBase and PublicIP, what the admin port may reach.
 	WebFigDomain string
+	// ONU management (TR-069): used when the site has a management subnet (Site.ONUMgmtN > 0). ACSPort and ACSURL
+	// are the ACS the ONUs are pointed to (zero values mean tcp/7547 on the tunnel address); CRPorts the
+	// connection-request ports the server may use towards the ONUs (empty = 7547 and 30005).
+	ACSPort int
+	ACSURL  string
+	CRPorts []int
 }
 
 // bootstrapData is the template view of BootstrapInput.
@@ -95,6 +101,8 @@ type bootstrapData struct {
 	Plan                             SubnetPlan
 	DHCPServer, UnregList, UnregPool string
 	DNSServers                       string
+	ONU                              *ONUMgmtPlan
+	ONUSetup                         []string
 	Filter, NAT                      []string
 	AdminAllow                       []AdminAllowEntry
 	AdminList                        string
@@ -156,7 +164,7 @@ func (r ipoeRule) line() string {
 // bootstrapFirewall is the whole firewall of the router, top to bottom. The
 // script owns the tables: nothing is opened on the WAN (the router dials the
 // tunnel itself) and there is no FastTrack, so the flats' queues see traffic.
-func bootstrapFirewall(plan SubnetPlan, lan LANPlan, serverIP, mgmt, publicIP string, restPort int) (filter, nat []string) {
+func bootstrapFirewall(plan SubnetPlan, lan LANPlan, serverIP, mgmt, publicIP string, restPort int, onu *ONUMgmtPlan) (filter, nat []string) {
 	w := walledRules(plan, publicIP, restPort)
 	f := func(args, comment string) { filter = append(filter, ruleLine("filter", args, comment)) }
 	// Forward. The admin port rules come first of all: nothing above them can accept the admin LAN's traffic,
@@ -169,6 +177,16 @@ func bootstrapFirewall(plan SubnetPlan, lan LANPlan, serverIP, mgmt, publicIP st
 	}
 	f("chain=forward action=accept connection-state=established,related", "ftn: forward est/rel")
 	f("chain=forward action=drop connection-state=invalid", "ftn: forward drop invalid")
+	// The ONU management network (TR-069) crosses the tunnel to the ACS and back: these accepts sit above the
+	// two tunnel drops below, and the management VLAN may go nowhere else.
+	var onuIn []ipoeRule
+	if onu != nil {
+		var fwd []ipoeRule
+		fwd, onuIn = onu.Rules()
+		for _, r := range fwd {
+			filter = append(filter, r.line())
+		}
+	}
 	f("chain=forward action=drop in-interface="+WGInterface, "ftn: wg no forward in")
 	f("chain=forward action=drop out-interface="+WGInterface, "ftn: wg no forward out")
 	f("chain=forward action=accept in-interface-list=LAN out-interface="+CustomerBridge, "ftn: lan to customers")
@@ -191,6 +209,9 @@ func bootstrapFirewall(plan SubnetPlan, lan LANPlan, serverIP, mgmt, publicIP st
 	f("chain=input action=accept protocol=tcp dst-port=53 in-interface="+CustomerBridge, custDNSComment)
 	f("chain=input action=accept protocol=udp dst-port=67 in-interface="+CustomerBridge, "ftn: customer dhcp")
 	f("chain=input action=accept protocol=icmp in-interface="+CustomerBridge, "ftn: customer icmp")
+	for _, r := range onuIn {
+		filter = append(filter, r.line())
+	}
 	for _, r := range w.Input {
 		filter = append(filter, r.line())
 	}
@@ -315,7 +336,19 @@ func RenderBootstrap(in BootstrapInput) ([]byte, error) {
 		keep = append(keep, `"`+p+`"`)
 	}
 	d.KeepUp = "{" + strings.Join(keep, ";") + "}"
-	d.Filter, d.NAT = bootstrapFirewall(plan, lan, serverIP, mgmt.String(), in.PublicIP, s.RESTPort)
+	var onu *ONUMgmtPlan
+	if s.ONUMgmtN > 0 {
+		op, err := PlanONUMgmt(s, serverIP, in.ACSPort, in.ACSURL, in.CRPorts)
+		if err != nil {
+			return nil, fmt.Errorf("bootstrap script: %w", err)
+		}
+		if err := checkONUOverlap(op, plan, lan, in.WGSubnet, mgmt, s); err != nil {
+			return nil, fmt.Errorf("bootstrap script: %w", err)
+		}
+		onu = &op
+		d.ONU, d.ONUSetup = onu, onu.SetupLines(s.OLTInterface)
+	}
+	d.Filter, d.NAT = bootstrapFirewall(plan, lan, serverIP, mgmt.String(), in.PublicIP, s.RESTPort, onu)
 	out, err := execScript(bootstrapTmpl, in.ROSVersion, d)
 	if err != nil {
 		return nil, err

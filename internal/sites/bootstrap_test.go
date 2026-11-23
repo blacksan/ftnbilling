@@ -52,6 +52,15 @@ func TestBootstrapGolden(t *testing.T) {
 			in.PPPoEPass = tPPP
 		},
 		"old_ros": func(_ *store.Site, in *BootstrapInput) { in.ROSVersion = "7.12" },
+		// ONU management (TR-069): the VLAN, DHCP and firewall of section 4b, with and without a customer VLAN.
+		"onu_mgmt_vlan": func(s *store.Site, in *BootstrapInput) {
+			s.ONUMgmtN = 3
+			in.ACSURL = "http://10.99.0.1:7547/"
+		},
+		"onu_mgmt_novlan_custom": func(s *store.Site, in *BootstrapInput) {
+			s.VLANID, s.CustomerPorts, s.ONUMgmtN, s.ONUMgmtVLAN = 0, "", 12, 200
+			in.CRPorts = []int{7547, 30005, 4567}
+		},
 	}
 	for name, mut := range cases {
 		t.Run(name, func(t *testing.T) {
