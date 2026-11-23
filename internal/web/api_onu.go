@@ -25,6 +25,12 @@ func (s *Server) onuRoutesAPI(h func(string, string, apiFunc)) {
 	h("POST /api/v1/accounts/{id}/onu/refresh", operator, s.apiAccountONUAction("refresh"))
 	h("POST /api/v1/accounts/{id}/onu/swap", operator, s.apiAccountONUSwap)
 	h("POST /api/v1/accounts/{id}/onu/use-reported-mac", operator, s.apiAccountUseMAC)
+	h("POST /api/v1/accounts/{id}/onu/confirm", operator, s.apiAccountONUConfirm)
+	h("POST /api/v1/accounts/{id}/onu/reject", operator, s.apiAccountONUReject)
+	h("POST /api/v1/onu-tasks/{id}/cancel", operator, s.apiONUTaskCancel)
+	h("POST /api/v1/onus/{id}/approve", operator, s.apiONUDecide("approve"))
+	h("POST /api/v1/onus/{id}/block", operator, s.apiONUDecide("block"))
+	h("POST /api/v1/onus/{id}/unblock", operator, s.apiONUDecide("unblock"))
 	h("GET /api/v1/sites/{id}/onus", viewer, s.apiSiteONUs)
 	h("GET /api/v1/onus", viewer, s.apiONUs)
 	h("POST /api/v1/onus/{id}/link", operator, s.apiONULink)
@@ -51,6 +57,8 @@ func (s *Server) acsErr(w http.ResponseWriter, err error) {
 		validationErr(w, map[string]string{fe.Field: fe.Msg})
 	case errors.Is(err, acs.ErrNoONU), errors.Is(err, acs.ErrONUGone), errors.Is(err, acs.ErrNoAccount):
 		apiErr(w, http.StatusNotFound, codeNotFound, err.Error(), nil)
+	case errors.Is(err, acs.ErrNothingToConfirm), errors.Is(err, acs.ErrNotQuarantined), errors.Is(err, acs.ErrTaskGone):
+		apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
 	case errors.Is(err, acs.ErrLinked), errors.Is(err, acs.ErrONULinked), errors.Is(err, acs.ErrSite):
 		apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
 	default:
@@ -129,6 +137,73 @@ func (s *Server) apiAccountONUAction(kind string) apiFunc {
 	}
 }
 
+func (s *Server) apiAccountONUConfirm(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	a, ok := s.accountOr404(w, r.PathValue("id"))
+	if !ok || !s.apiACS(w) {
+		return
+	}
+	if err := s.acs.ConfirmWiFi(c.user.Username, c.ip, a.ID); err != nil {
+		s.acsErr(w, err)
+		return
+	}
+	c.audit(s, "account "+a.Code+" Wi-Fi change confirmed working")
+	tv, _ := s.acs.TaskStatus(a.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"task": tv})
+}
+
+// apiAccountONUReject: the owner says the accepted change did not take; the ACS tries another way.
+func (s *Server) apiAccountONUReject(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	a, ok := s.accountOr404(w, r.PathValue("id"))
+	if !ok || !s.apiACS(w) {
+		return
+	}
+	if _, err := s.acs.RejectWiFi(c.user.Username, c.ip, a.ID); err != nil {
+		s.acsErr(w, err)
+		return
+	}
+	c.audit(s, "account "+a.Code+" Wi-Fi change reported as not working")
+	tv, _ := s.acs.TaskStatus(a.ID)
+	writeJSON(w, http.StatusAccepted, map[string]any{"task": tv})
+}
+
+func (s *Server) apiONUTaskCancel(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	if !s.apiACS(w) {
+		return
+	}
+	if err := s.acs.CancelTask(c.user.Username, c.ip, r.PathValue("id")); err != nil {
+		s.acsErr(w, err)
+		return
+	}
+	c.audit(s, "ONU task cancelled")
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// apiONUDecide is the owner's answer to "ONU <serial> checked in from an unexpected place": approve (bind it
+// to the new place) or block it. Unblock lifts a block.
+func (s *Server) apiONUDecide(what string) apiFunc {
+	return func(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+		if !s.apiACS(w) {
+			return
+		}
+		var err error
+		switch what {
+		case "approve":
+			err = s.acs.ApproveONU(c.user.Username, c.ip, r.PathValue("id"))
+		case "block":
+			err = s.acs.BlockONU(c.user.Username, c.ip, r.PathValue("id"))
+		default:
+			err = s.acs.UnblockONU(c.user.Username, c.ip, r.PathValue("id"))
+		}
+		if err != nil {
+			s.acsErr(w, err)
+			return
+		}
+		c.audit(s, "ONU "+r.PathValue("id")+" "+what)
+		v, _ := s.acs.ONU(r.PathValue("id"))
+		writeJSON(w, http.StatusOK, v)
+	}
+}
+
 func (s *Server) apiAccountONUSwap(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 	a, ok := s.accountOr404(w, r.PathValue("id"))
 	if !ok {
@@ -171,6 +246,10 @@ func (s *Server) apiAccountUseMAC(w http.ResponseWriter, r *http.Request, c *api
 	mac, err := billing.NormalizeMAC(req.MAC)
 	if err != nil {
 		validationErr(w, map[string]string{"mac": "must be 12 hex digits, like AA:BB:CC:DD:EE:FF"})
+		return
+	}
+	if s.acs != nil && !s.acs.CanUseMAC(a.ID, mac) {
+		validationErr(w, map[string]string{"mac": "that MAC was not reported by a verified session of this house's ONU"})
 		return
 	}
 	if err := s.svc.UseReportedMAC(r.Context(), a.ID, mac); err != nil {

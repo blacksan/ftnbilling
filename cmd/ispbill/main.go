@@ -159,23 +159,22 @@ func run(log *slog.Logger) error {
 		log.Warn("ONU management (TR-069 ACS) is off: it needs DATA_KEY to seal Wi-Fi passwords and logins")
 	} else if cfg.ACSEnabled() {
 		// The built-in TR-069 ACS (ONU management). It listens on the tunnel address only.
-		acsSvc, err := acs.New(acs.Options{Store: st, Cfg: cfg, Log: log, DataKey: cfg.DataKey})
+		acsSvc, err := acs.New(acs.Options{Store: st, Cfg: cfg, Log: log, DataKey: cfg.DataKey, Lease: svc.ONUMgmtLease,
+			Alert: webSrv.ONUAlert})
 		if err != nil {
-			stop()
-			wg.Wait()
-			mgr.Wait()
-			svc.Wait()
-			return fmt.Errorf("ACS: %w", err)
+			// Billing keeps running; only ONU management stays off (the message says why and what to do).
+			log.Error("ONU management (TR-069 ACS) is off", "err", err)
+		} else {
+			webSrv.SetACS(acsSvc)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := acsSvc.Run(ctx); err != nil {
+					log.Error("ACS stopped", "err", err)
+					errc <- err
+				}
+			}()
 		}
-		webSrv.SetACS(acsSvc)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := acsSvc.Run(ctx); err != nil {
-				log.Error("ACS stopped", "err", err)
-				errc <- err
-			}
-		}()
 	}
 	wg.Add(1)
 	go func() {

@@ -105,6 +105,7 @@ type adminPage struct {
 	Detail             string
 	H1a, H1b, Lead     string
 	Acts               []heroAct
+	IsOwner            bool            // the signed-in user is an owner
 	CanWrite           bool            // owner or operator: the add and edit buttons show
 	Pkgs               []store.Package // enabled plans, for the Add customer form
 	Initial            string          // avatar letter
@@ -139,6 +140,7 @@ func (s *Server) page(r *http.Request, active string) adminPage {
 	p.UnregCount = s.svc.UnregisteredOnline(sc.Has) // online, unregistered devices only
 	p.PendingRegs = s.svc.PendingRegistrationCount(sc.Has)
 	p.NavDevices = p.UnregCount + p.PendingRegs
+	p.IsOwner = p.Role == store.RoleOwner
 	p.CanWrite = p.Role == store.RoleOwner || p.Role == store.RoleOperator
 	p.Initial = initialOf(p.User)
 	if p.CanWrite {

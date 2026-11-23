@@ -39,6 +39,13 @@ func (s *Server) onuRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/accounts/wifi", s.adminAccountWiFi)
 	post("/admin/accounts/onu/reboot", s.adminAccountONUReboot)
 	post("/admin/accounts/onu/refresh", s.adminAccountONURefresh)
+	post("/admin/accounts/onu/confirm", s.adminAccountONUConfirm)
+	post("/admin/accounts/onu/reject", s.adminAccountONUReject)
+	post("/admin/onus/approve", s.adminONUApprove)
+	post("/admin/onus/block", s.adminONUBlock)
+	post("/admin/onus/unblock", s.adminONUUnblock)
+	post("/admin/onus/task/cancel", s.adminONUTaskCancel)
+	post("/admin/onus/adminpw", s.adminONUAdminPW)
 }
 
 func (s *Server) acsOff(w http.ResponseWriter, r *http.Request) bool {
@@ -197,7 +204,83 @@ func (s *Server) adminONUUnlink(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, store.ErrNoChange) {
 		err = nil
 	}
-	s.back(w, r, to, msgOr(err, "ONU unlinked. Its saved Wi-Fi choice was dropped."))
+	s.back(w, r, to, msgOr(err, "ONU unlinked. It is reset to factory settings when it next checks in, and it never gets a house's Wi-Fi again."))
+}
+
+// ---- quarantine, confirmation, task cancel, the box's own web-admin password ----
+
+func (s *Server) adminONUApprove(w http.ResponseWriter, r *http.Request) {
+	if s.acsOff(w, r) {
+		return
+	}
+	err := s.acs.ApproveONU(s.actorOf(r), realIP(r), r.PostFormValue("onu"))
+	s.back(w, r, s.onuBack(r, "/admin/onus"), msgOr(err, "Approved. The ONU is bound to where it checked in from."))
+}
+
+func (s *Server) adminONUBlock(w http.ResponseWriter, r *http.Request) {
+	if s.acsOff(w, r) {
+		return
+	}
+	err := s.acs.BlockONU(s.actorOf(r), realIP(r), r.PostFormValue("onu"))
+	s.back(w, r, s.onuBack(r, "/admin/onus"), msgOr(err, "Blocked. Check-ins from that place are ignored."))
+}
+
+func (s *Server) adminONUUnblock(w http.ResponseWriter, r *http.Request) {
+	if s.acsOff(w, r) {
+		return
+	}
+	err := s.acs.UnblockONU(s.actorOf(r), realIP(r), r.PostFormValue("onu"))
+	s.back(w, r, s.onuBack(r, "/admin/onus"), msgOr(err, "Unblocked."))
+}
+
+func (s *Server) adminONUTaskCancel(w http.ResponseWriter, r *http.Request) {
+	if s.acsOff(w, r) {
+		return
+	}
+	err := s.acs.CancelTask(s.actorOf(r), realIP(r), r.PostFormValue("task"))
+	s.back(w, r, s.onuBack(r, "/admin/onus"), msgOr(err, "Cancelled."))
+}
+
+func (s *Server) adminAccountONUConfirm(w http.ResponseWriter, r *http.Request) {
+	id := r.PostFormValue("id")
+	if s.acsOff(w, r) {
+		return
+	}
+	err := s.acs.ConfirmWiFi(s.actorOf(r), realIP(r), id)
+	s.back(w, r, s.accountURL(id), msgOr(err, "Thank you. The Wi-Fi change is marked as working for this model of ONU."))
+}
+
+func (s *Server) adminAccountONUReject(w http.ResponseWriter, r *http.Request) {
+	id := r.PostFormValue("id")
+	if s.acsOff(w, r) {
+		return
+	}
+	_, err := s.acs.RejectWiFi(s.actorOf(r), realIP(r), id)
+	s.back(w, r, s.accountURL(id), msgOr(err, "Noted. The change is sent again another way; check the Wi-Fi when it is accepted."))
+}
+
+// adminONUAdminPW shows the random web-admin password the ACS set on a box. Only an owner, and only with the
+// owner's password again. Tenants must never get it: the box's admin page can change what the ACS set.
+func (s *Server) adminONUAdminPW(w http.ResponseWriter, r *http.Request) {
+	if s.acsOff(w, r) {
+		return
+	}
+	to := s.onuBack(r, "/admin/onus")
+	if u, _ := userOf(r); u.Role != store.RoleOwner {
+		s.back(w, r, to, "Error: only an owner can see this password")
+		return
+	}
+	if !s.reauth(w, r, to) {
+		return
+	}
+	pw, err := s.acs.AdminPassword(r.PostFormValue("onu"))
+	if err != nil {
+		s.back(w, r, to, "Error: "+err.Error())
+		return
+	}
+	s.audit(r, "ONU web-admin password shown")
+	w.Header().Set("Cache-Control", "no-store")
+	s.notice(w, r, http.StatusOK, "ONU web-admin password", "Password "+pw+" (set for the box's web-admin accounts; the user names are the ones the box already had). It is not verified on the box. Never give it to the tenant.", to, "Back")
 }
 
 func (s *Server) adminSiteONUEnable(w http.ResponseWriter, r *http.Request) {
@@ -318,6 +401,10 @@ func (s *Server) adminONUInventory(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminONUUseMAC(w http.ResponseWriter, r *http.Request) {
 	to := s.onuBack(r, "/admin/onus")
 	acct := r.PostFormValue("account")
+	if s.acs != nil && !s.acs.CanUseMAC(acct, r.PostFormValue("mac")) {
+		s.back(w, r, to, "Error: that MAC was not reported by a verified session of this house's ONU")
+		return
+	}
 	err := s.svc.UseReportedMAC(r.Context(), acct, r.PostFormValue("mac"))
 	if err == nil && s.acs != nil {
 		if a, ok := s.svc.GetAccount(acct); ok {

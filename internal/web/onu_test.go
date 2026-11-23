@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"ispbill/internal/config"
+	"ispbill/internal/secretbox"
 	"ispbill/internal/store"
 )
 
@@ -26,6 +27,7 @@ func (a *app) seedONU(t *testing.T, id, serial, accountID string, macs ...string
 		d.Sites[a.site] = s
 		o := store.ONU{ID: id, Serial: serial, Manufacturer: "ZTE", ProductClass: "F670L", Root: store.RootTR098, SiteID: a.site, MgmtIP: "10.6.5.20",
 			ConnReqURL: "http://10.6.5.20:7547/cr", MACs: macs, LastInform: time.Now(), FirstSeen: time.Now(), AccountID: accountID,
+			Sec:  store.ONUSec{ACSCred: store.CredDevice, MgmtMAC: "AA:BB:CC:00:00:99"},
 			WiFi: []store.ONUWiFi{{Path: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.", AP: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.", Band: "2.4", SSID: "Old2G", Enabled: true}}}
 		if accountID != "" {
 			o.Link = store.LinkManual
@@ -57,7 +59,7 @@ func TestONUSettingsPageHidesAndRevealsLogin(t *testing.T) {
 	}
 	r = a.admin("POST", "/admin/settings/onu/reveal", url.Values{"current_password": {pw}})
 	if b = body(t, r); !strings.Contains(b, pass) {
-		t.Fatalf("not revealed after step-up: %d", r.StatusCode)
+		t.Fatalf("not revealed after step-up: %d %s", r.StatusCode, r.Header.Get("Location"))
 	}
 	if !strings.Contains(a.adminGet(t, "/admin/settings/onu"), "V-SOL") {
 		t.Fatal("OLT instructions missing")
@@ -184,4 +186,112 @@ func TestONUInventoryFlowsOnWeb(t *testing.T) {
 			t.Fatalf("not registered and installed: %+v", e)
 		}
 	})
+}
+
+func TestONUQuarantineApproveBlockOnWeb(t *testing.T) {
+	a := newONUApp(t)
+	a.seedONU(t, "onuq", "SNQ1", "", "AA:BB:CC:DD:EE:31")
+	q := func(id string) {
+		a.st.Update(func(d *store.Data) error {
+			o := d.ONUs[id]
+			o.Sec.Quarantine = store.ONUQuarantine{Active: true, Since: time.Now(), LastAt: time.Now(), Count: 1, Reason: "another place", SiteID: a.site, IP: "10.6.5.77", MAC: "AA:BB:CC:00:00:77"}
+			d.ONUs[id] = o
+			return nil
+		})
+	}
+	q("onuq")
+	page := a.adminGet(t, "/admin/onus")
+	if !strings.Contains(page, "checked in from an unexpected place") || !strings.Contains(page, "Approve") || !strings.Contains(page, "Block") {
+		t.Fatal("the quarantine card with Approve / Block is missing")
+	}
+	if l := a.adminPost(t, "/admin/onus/approve", url.Values{"onu": {"onuq"}}); strings.Contains(l, "Error") {
+		t.Fatal(l)
+	}
+	a.st.View(func(d *store.Data) {
+		o := d.ONUs["onuq"]
+		if o.Sec.Quarantine.Active || o.MgmtIP != "10.6.5.77" || o.Sec.MgmtMAC != "AA:BB:CC:00:00:77" {
+			t.Fatalf("%+v", o.Sec)
+		}
+	})
+	if l := a.adminPost(t, "/admin/onus/approve", url.Values{"onu": {"onuq"}}); !strings.Contains(l, "Error") {
+		t.Fatal("approved twice")
+	}
+	q("onuq")
+	a.adminPost(t, "/admin/onus/block", url.Values{"onu": {"onuq"}})
+	a.st.View(func(d *store.Data) {
+		o := d.ONUs["onuq"]
+		if o.Sec.Quarantine.Active || len(o.Sec.BlockedFrom) == 0 {
+			t.Fatalf("%+v", o.Sec)
+		}
+	})
+	if !strings.Contains(a.adminGet(t, "/admin/onus"), "Unblock") {
+		t.Fatal("no Unblock")
+	}
+}
+
+func TestONUUseMACNeedsAVerifiedBox(t *testing.T) {
+	a := newONUApp(t)
+	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"Flat 5"}, "mac": {mac1}})
+	acct := a.account(t, "Flat 5")
+	a.seedONU(t, "onuv", "SNV1", acct.ID, "AA:BB:CC:DD:EE:41")
+	a.st.Update(func(d *store.Data) error {
+		o := d.ONUs["onuv"]
+		o.Sec.ACSCred = store.CredNone
+		d.ONUs["onuv"] = o
+		return nil
+	})
+	if l := a.adminPost(t, "/admin/onus/usemac", url.Values{"account": {acct.ID}, "mac": {"AA:BB:CC:DD:EE:41"}}); !strings.Contains(l, "Error") {
+		t.Fatalf("a box that has not proved itself set the house MAC: %s", l)
+	}
+}
+
+func TestONUAdminPasswordRevealIsOwnerStepUp(t *testing.T) {
+	a := newONUApp(t)
+	a.seedONU(t, "onua", "SNA1", "", "AA:BB:CC:DD:EE:51")
+	a.st.Update(func(d *store.Data) error {
+		o := d.ONUs["onua"]
+		box, err := secretbox.NewLabelled(testKey, "ispbill/acs", "ispbill/acs-idx")
+		if err != nil {
+			t.Fatal(err)
+		}
+		enc, err := box.SealAAD("Secret-Admin-77", []byte("onu.admin"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.Sec.AdminPassEnc, o.Sec.AdminPass = enc, store.AdminUnverified
+		d.ONUs["onua"] = o
+		return nil
+	})
+	if strings.Contains(a.adminGet(t, "/admin/onus"), "Secret-Admin-77") {
+		t.Fatal("shown on the list")
+	}
+	r := a.admin("POST", "/admin/onus/adminpw", url.Values{"onu": {"onua"}, "current_password": {"wrong"}})
+	if strings.Contains(body(t, r), "Secret-Admin-77") {
+		t.Fatal("revealed with a wrong password")
+	}
+	r = a.admin("POST", "/admin/onus/adminpw", url.Values{"onu": {"onua"}, "current_password": {pw}})
+	if b := body(t, r); !strings.Contains(b, "Secret-Admin-77") || r.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("not revealed after step-up: %d %s", r.StatusCode, r.Header.Get("Location"))
+	}
+}
+
+func TestONUConfirmFromAccountPage(t *testing.T) {
+	a := newONUApp(t)
+	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"Flat 6"}, "mac": {mac1}})
+	acct := a.account(t, "Flat 6")
+	a.seedONU(t, "onuc", "SNC1", acct.ID, "AA:BB:CC:DD:EE:61")
+	a.st.Update(func(d *store.Data) error {
+		d.ONUTasks["tc1"] = store.ONUTask{ID: "tc1", ONUID: "onuc", SiteID: a.site, AccountID: acct.ID, Kind: store.TaskWiFi, Status: store.TaskAccepted, CreatedAt: time.Now(), PassLeaf: "KeyPassphrase"}
+		return nil
+	})
+	page := a.adminGet(t, "/admin/accounts/view?code="+acct.Code)
+	if !strings.Contains(page, "It works") || !strings.Contains(page, "Accepted by the ONU") {
+		t.Fatal("the confirm buttons are missing")
+	}
+	if l := a.adminPost(t, "/admin/accounts/onu/confirm", url.Values{"id": {acct.ID}}); strings.Contains(l, "Error") {
+		t.Fatal(l)
+	}
+	if !strings.Contains(a.adminGet(t, "/admin/accounts/view?code="+acct.Code), "Confirmed working") {
+		t.Fatal("not confirmed")
+	}
 }

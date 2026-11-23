@@ -17,6 +17,10 @@ func (s *Server) securityAlert(msg string) { s.ownerAlert("Admin sign-in", msg) 
 // credited, and nothing else will say so).
 func (s *Server) PaymentAlert(msg string) { s.ownerAlert("Payment needs attention", msg) }
 
+// ONUAlert tells the owners about the ONU management service (a box checked in from an unexpected place). The
+// message never carries a secret.
+func (s *Server) ONUAlert(subject, msg string) { s.ownerAlert(subject, msg) }
+
 func (s *Server) ownerAlert(subject, msg string) {
 	if s.alertSink != nil { // tests
 		s.alertSink(msg)
