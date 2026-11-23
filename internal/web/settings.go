@@ -88,6 +88,7 @@ func (s *Server) settingsTabs(active string) []settingsTab {
 		{"email", "Email", "/admin/settings/email"},
 		{"support", "Support contacts", "/admin/settings/support"},
 		{"equipment", "Equipment", "/admin/settings/equipment"},
+		{"onu", "ONU management", "/admin/settings/onu"},
 		{"tools", "Tools", "/admin/tools"},
 	}
 }

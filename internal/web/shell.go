@@ -50,6 +50,8 @@ var pageMetas = map[string]pageMeta{
 	"set-support":   {"System", "Support contacts", "/admin/settings/support", "Support", "settings.", "The phone, email and WhatsApp shown on the pages a walled device sees."},
 	"set-equipment": {"System", "Equipment tools", "/admin/settings/equipment", "Equipment", "tools.", "Look up a serial or MAC against the vendor lists."},
 	"security":      {"System", "Security", "/admin/security", "Account", "security.", "Password, authenticator, signed-in devices and who else can sign in."},
+	"onus":          {"Network", "ONUs", "/admin/onus", "Customer", "ONUs.", "The ONUs that report to the server (TR-069): which house each one belongs to and when it last checked in."},
+	"set-onu":       {"System", "ONU management", "/admin/settings/onu", "ONU", "management.", "The TR-069 address and login the OLT hands to every ONU."},
 	"set-tools":     {"System", "Tools", "/admin/tools", "Router", "tools.", "Ping, trace and run a read-only command from the server."},
 	"audit":         {"System", "Audit", "/admin/audit", "Audit", "trail.", "Who changed what, newest first."},
 	"search":        {"", "Search", "/admin/search", "Search", "results.", ""},

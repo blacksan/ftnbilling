@@ -3,6 +3,7 @@ package web_test
 import (
 	"bytes"
 	"context"
+	"ispbill/internal/acs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -34,6 +35,9 @@ func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(
 
 // multi is an app with no legacy building: sites are created through the
 // manager, and each has its own fake router.
+// forceACS turns ONU management on in the multi-router rigs (set by the test that needs it).
+var forceACS bool
+
 type multi struct {
 	*app
 	mocks map[string]*routeros.Mock
@@ -75,6 +79,9 @@ func newMultiOps(t *testing.T, mut func(*config.Config), mkOps func(cfg config.C
 	if mut != nil {
 		mut(&cfg)
 	}
+	if forceACS {
+		cfg.ACSListen, cfg.ACSCRPorts, cfg.ACSInformInterval, cfg.ACSMaxPerRouter = "10.99.0.1:7547", []int{7547, 30005}, 300, 200
+	}
 	st, _ := storetest.Open(t, cfg.DataDir)
 	logs := &syncBuf{}
 	t.Cleanup(func() {
@@ -106,13 +113,22 @@ func newMultiOps(t *testing.T, mut func(*config.Config), mkOps func(cfg config.C
 	t.Cleanup(tp.Wait)
 	prov := map[string]payments.Provider{"test": tp, "voucher": payments.Voucher{C: svc}, "mpesa": mp}
 	srv := web.New(cfg, st, svc, prov, mp, mgr, log)
+	var acsSvc *acs.Service
+	if cfg.ACSEnabled() {
+		var err error
+		if acsSvc, err = acs.New(acs.Options{Store: st, Cfg: cfg, Log: log, DataKey: cfg.DataKey}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(acsSvc.Wait)
+		srv.SetACS(acsSvc)
+	}
 	if mkOps != nil {
 		srv.SetOps(mkOps(cfg, st, mgr, svc))
 	}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	srv.SetSecurityAlertSink(func(msg string) { m.alertMu.Lock(); m.alerts = append(m.alerts, msg); m.alertMu.Unlock() })
-	m.app = &app{ts: ts, st: st, svc: svc, mgr: mgr, srv: srv, cl: &http.Client{CheckRedirect: noRedirect}}
+	m.app = &app{ts: ts, st: st, svc: svc, mgr: mgr, srv: srv, cl: &http.Client{CheckRedirect: noRedirect}, acs: acsSvc}
 	m.owner = seedUser(t, srv, st, "admin", store.RoleOwner, pw)
 	m.br = signIn(t, ts, srv, st, m.owner)
 	m.csrf = m.br.CSRF

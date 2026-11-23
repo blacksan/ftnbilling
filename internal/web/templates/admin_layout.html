@@ -17,6 +17,7 @@
 <a class="nav" href="/admin/routers"{{if or (eq $a "sites") (eq $a "fleet")}} aria-current="page"{{end}}>{{template "navi" "sites"}}Routers</a>
 <a class="nav" href="/admin/packages"{{if eq $a "packages"}} aria-current="page"{{end}}>{{template "navi" "packages"}}Plans</a>
 <a class="nav" href="/admin/map"{{if eq $a "map"}} aria-current="page"{{end}}>{{template "navi" "map"}}Network map</a>
+<a class="nav" href="/admin/onus"{{if eq $a "onus"}} aria-current="page"{{end}}>{{template "navi" "equipment"}}ONUs</a>
 <a class="nav" href="/admin/equipment"{{if eq $a "equipment"}} aria-current="page"{{end}}>{{template "navi" "equipment"}}Equipment</a>
 <a class="nav" href="/admin/metrics"{{if eq $a "metrics"}} aria-current="page"{{end}}>{{template "navi" "metrics"}}Usage and quality</a>
 {{if .HasOps}}<a class="nav" href="/admin/uptime"{{if eq $a "uptime"}} aria-current="page"{{end}}>{{template "navi" "uptime"}}Uptime</a>{{end}}</div></details>
@@ -72,7 +73,8 @@
 <fieldset class="field" style="border:0;padding:0;margin:0"><legend style="font:600 13px var(--f-sans);padding:0;margin-bottom:6px">Plan</legend>
 <div class="pkgs">{{range .Pkgs}}<label class="pkg"><input type="radio" name="package" value="{{.ID}}"><b>{{.Name}}</b><span>{{.SpeedMbps}} Mbps &middot; {{dur .DurationMin}}</span><em>{{kes .PriceKES}}</em></label>{{else}}<p class="muted">No plans yet. <a href="/admin/packages">Create one</a> first.</p>{{end}}</div></fieldset>
 <label class="field" data-router-field>Router<select name="site" data-router-select><option value="">Choose a router</option>{{range .Sites}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select><span class="hint" data-router-hint>Only needed when the apartment has more than one router.</span></label>
-<div class="field"><label for="ac-mac" style="display:block">MAC address of the ONT</label><input id="ac-mac" name="mac" required autocomplete="off" spellcheck="false" placeholder="AA:BB:CC:DD:EE:FF" style="width:100%;margin-top:5px;font-family:var(--f-mono)">
+{{if .Data.ONUStock}}<div class="field"><label for="ac-onu" style="display:block">ONU from the register</label><select id="ac-onu" name="equipment_id" style="width:100%;margin-top:5px"><option value="">None: type the MAC below</option>{{range .Data.ONUStock}}<option value="{{.ID}}">{{.Serial}}{{if .Model}} ({{.Model}}){{end}} {{.MAC}}</option>{{end}}</select><small class="muted">The ONU's WAN MAC becomes the house MAC. Leave the MAC empty when you choose one.</small></div>{{end}}
+<div class="field"><label for="ac-mac" style="display:block">MAC address of the ONT</label><input id="ac-mac" name="mac" {{if not .Data.ONUStock}}required {{end}}autocomplete="off" spellcheck="false" placeholder="AA:BB:CC:DD:EE:FF" style="width:100%;margin-top:5px;font-family:var(--f-mono)">
 <span class="hint" data-mac-hint>Pick a device this router can see, or paste the MAC.</span><div class="devlist" data-devlist></div></div>
 <label class="ck"><input type="checkbox" name="activate" value="1"><span><b>Activate now</b><small>Gives the first period free. Leave it off if they will pay by M-Pesa: they land on the payment page.</small></span></label>
 </div>

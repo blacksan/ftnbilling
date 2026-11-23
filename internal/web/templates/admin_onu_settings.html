@@ -1,0 +1,22 @@
+{{define "admin_onu_settings"}}{{template "ahead" .}}{{template "set_tabs" .}}
+{{if not .Data.On}}<div class="flash">ONU management is off on this server.</div>{{else}}
+<section class="panel"><h2>What the ONUs connect to</h2>
+<table><tr><td>ACS URL</td><td><code>{{.Data.URL}}</code></td></tr>
+<tr><td>Username</td><td><code>{{.Data.User}}</code></td></tr>
+<tr><td>Password</td><td>{{if .Data.Pass}}<code>{{.Data.Pass}}</code>{{else}}<span class="muted">hidden</span>{{end}}</td></tr>
+<tr><td>Inform every</td><td>{{.Data.Interval}} seconds</td></tr>
+<tr><td>Management VLAN</td><td>{{.Data.Default}} by default, set per router on its ONUs tab</td></tr></table>
+<p class="muted">The ACS listens on the tunnel address only. It cannot be reached from the internet, and only addresses inside a router's management network are accepted.</p>
+<form method="post" action="/admin/settings/onu/reveal" class="row mt-3"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label class="field">Your password<input type="password" name="current_password" autocomplete="current-password" required></label><button class="ghost">Show the password</button></form>
+<form method="post" action="/admin/settings/onu/rotate" class="row mt-3" data-confirm="Make a new password? Every ONU stops reporting until the OLT profile has it."><input type="hidden" name="_csrf" value="{{.CSRF}}"><label class="field">Your password<input type="password" name="current_password" autocomplete="current-password" required></label><button class="ghost">Make a new password</button></form></section>
+<section class="panel"><h2>Set up the OLT</h2>
+<p>Do this once per OLT profile. Each router also needs its management network (the router's ONUs tab, or a new join line).</p>
+<h3>V-SOL</h3><ol>
+<li>Create a VLAN for management on the OLT (default {{.Data.Default}}) and allow it tagged on the uplink port that goes to the router.</li>
+<li>In the ONU profile used for tenants, add a service/WAN of mode <b>TR-069</b> (internet type "TR069"), VLAN <b>{{.Data.Default}}</b>, DHCP, and turn on its binding to the LAN side as the profile asks.</li>
+<li>In the profile's TR-069 section set URL <code>{{.Data.URL}}</code>, the username and password above, and periodic inform on at {{.Data.Interval}} seconds.</li>
+<li>Apply the profile to the ONUs (or re-register them). Within a few minutes the ONU appears under ONUs.</li></ol>
+<h3>ZTE</h3><p>On the ONU template set the same WAN of type TR069 on the management VLAN with DHCP, and the ACS URL, username and password. Newer ZTE boxes also have a TR-069 page in their own web page under Management.</p>
+<h3>Huawei</h3><p>In the ONT line or service profile add a TR069 WAN on the management VLAN, DHCP, and set the ACS URL, username and password on the ONT (OMCI or the device's web page). Some Huawei models only take the URL from DHCP option 43, which the router already sends.</p>
+<p class="muted">Changing the password above breaks every ONU's login until its profile has the new one.</p></section>{{end}}
+{{template "afoot" .}}{{end}}

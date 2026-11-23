@@ -409,7 +409,7 @@ func (s *Server) adminEquipmentView(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminEquipmentSave(w http.ResponseWriter, r *http.Request) {
 	in := billing.EquipmentInput{ID: r.PostFormValue("id"), Kind: r.PostFormValue("kind"), Serial: r.PostFormValue("serial"),
-		MAC: r.PostFormValue("mac"), Model: r.PostFormValue("model"), Firmware: r.PostFormValue("firmware"),
+		MAC: r.PostFormValue("mac"), Model: r.PostFormValue("model"), Firmware: r.PostFormValue("firmware"), GPONSerial: r.PostFormValue("gpon_serial"),
 		SiteID: r.PostFormValue("site"), Notes: r.PostFormValue("notes")}
 	if in.ID == "" && in.SiteID == "" {
 		in.SiteID = s.scopeOf(r).ID

@@ -1,0 +1,54 @@
+{{define "onu_list"}}{{$d := .P}}{{$free := .Free}}{{$next := .Next}}
+{{if .ONUs}}<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr><th>Serial</th><th>Model</th><th>Router</th><th>Address</th><th>Last seen</th><th>House</th><th>Wi-Fi as reported</th><th>Register</th></tr></thead><tbody>
+{{range .ONUs}}<tr>
+<td><code>{{.Serial}}</code></td><td>{{.Manufacturer}} {{.Model}}<br><span class="muted">{{.DataModel}}</span></td><td>{{.SiteName}}</td><td><code>{{.MgmtIP}}</code></td>
+<td>{{if .LastInform.IsZero}}never{{else}}{{eat .LastInform}}{{end}} <span class="pill {{if .Online}}active{{else}}suspended{{end}}">{{if .Online}}online{{else}}silent{{end}}</span></td>
+<td>{{if .AccountID}}<a href="/admin/accounts/view?code={{.AccountCode}}">{{.Unit}} ({{.AccountCode}})</a> <span class="muted">{{if eq .Link "inventory"}}matched by serial{{else if eq .Link "auto"}}matched by MAC{{else}}linked by hand{{end}}</span>
+{{if $d.CanWrite}}<form method="post" action="/admin/onus/unlink" style="display:inline" data-confirm="Unlink this ONU from the house? Its saved Wi-Fi choice is dropped."><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="onu" value="{{.ID}}"><input type="hidden" name="next" value="{{$next}}"><button class="ghost sm">Unlink</button></form>{{end}}
+{{else}}{{if $d.CanWrite}}<form method="post" action="/admin/onus/link" class="row"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="onu" value="{{.ID}}"><input type="hidden" name="next" value="{{$next}}"><select name="account" aria-label="House">{{$site := .SiteID}}{{range $free}}{{if eq .SiteID $site}}<option value="{{.ID}}">{{.Unit}} ({{.Code}})</option>{{end}}{{end}}</select><button class="sm">Link</button></form>{{else}}<span class="muted">not linked</span>{{end}}{{end}}</td>
+<td>{{range .WiFi}}{{.Band}} GHz: {{.SSID}}{{if not .Enabled}} (off){{end}}<br>{{end}}</td>
+<td>{{template "onu_reg" (dict "P" $d "O" . "Next" $next)}}</td></tr>{{end}}</tbody></table></div>
+{{else}}<p class="muted">No ONU has reported yet. Once the OLT hands out the TR-069 address (see ONU management in Settings), each ONU appears here within a few minutes.</p>{{end}}{{end}}
+
+{{define "onu_reg"}}{{$d := .P}}{{$o := .O}}{{range $o.Warnings}}<div class="flash bad">{{.}}</div>{{end}}
+{{if $d.CanWrite}}{{if and $o.AccountID $o.UseMACs}}<form method="post" action="/admin/onus/usemac" class="row"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="account" value="{{$o.AccountID}}"><input type="hidden" name="next" value="{{.Next}}"><select name="mac" aria-label="Reported MAC">{{range $o.UseMACs}}<option>{{.}}</option>{{end}}</select><button class="ghost sm">Use the reported MAC</button></form>{{end}}
+{{if not $o.InInventory}}{{if $o.MACs}}<form method="post" action="/admin/onus/inventory" class="row"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="onu" value="{{$o.ID}}"><input type="hidden" name="next" value="{{.Next}}"><select name="mac" aria-label="WAN MAC">{{range $o.MACs}}<option>{{.}}</option>{{end}}</select><button class="ghost sm">Add to the register</button></form>{{end}}{{else}}<span class="muted">in the register ({{$o.InvStatus}})</span>{{end}}{{end}}{{end}}
+
+{{define "admin_onus"}}{{template "ahead" .}}
+{{template "onu_list" (dict "P" . "ONUs" .Data.ONUs "Free" .Data.FreeAccounts "Next" "/admin/onus")}}
+{{template "afoot" .}}{{end}}
+
+{{define "onu_tab"}}{{$s := .Data.Site}}{{$d := .}}
+{{if not .Data.ONUOn}}<section class="panel"><p class="muted">ONU management is off on this server.</p></section>{{else}}
+<section class="panel"><h2>Management network</h2>
+{{if .Data.ONUSubnet}}<p>Subnet <code>{{.Data.ONUSubnet}}</code>, router address <code>{{.Data.ONUGateway}}</code>, VLAN <b>{{.Data.ONUVLAN}}</b> on the OLT port. The ONUs get an address here by DHCP and are told where the ACS is (option 43). They can reach the ACS and nothing else.</p>
+{{if .Data.ONUPlanErr}}<div class="flash bad">{{.Data.ONUPlanErr}}</div>{{end}}
+{{if .CanWrite}}<form method="post" action="/admin/routers/onu/enable" class="row mt-3"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><label class="field">VLAN<input name="vlan" value="{{.Data.ONUVLAN}}" inputmode="numeric" style="width:6em"></label><button class="ghost">Change VLAN</button></form>{{end}}
+{{if .Data.ONUSnippet}}<h3 class="mt-3">Routers built before this feature</h3><p class="muted">A router set up from a new join line already has this. For one built earlier, paste this in its terminal once (it removes and re-adds only objects whose comment starts with "ftn: onu"). The server never writes these over the API.</p><pre class="code">{{.Data.ONUSnippet}}</pre>{{end}}
+{{else}}<p class="muted">This router has no management network yet.</p>
+{{if .CanWrite}}<form method="post" action="/admin/routers/onu/enable" class="row mt-3"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><label class="field">VLAN<input name="vlan" value="{{.Data.ONUDefault}}" inputmode="numeric" style="width:6em"></label><button>Set up the management network</button></form>{{end}}{{end}}</section>
+<section class="panel"><h2>ONUs on this router</h2>{{template "onu_list" (dict "P" . "ONUs" .Data.ONUs "Free" .Data.FreeAccounts "Next" (printf "/admin/routers/view?id=%s&tab=onus" $s.ID))}}</section>{{end}}{{end}}
+
+{{define "onu_card"}}{{$A := .Data.A}}{{$d := .}}
+{{if .Data.ONUOn}}<section class="panel"><h2>Wi-Fi and ONU</h2>
+{{with .Data.ONU}}
+{{range .Warnings}}<div class="flash bad">{{.}}</div>{{end}}
+<p class="muted" style="margin:6px 0 10px">{{.Manufacturer}} {{.Model}}, serial <code>{{.Serial}}</code>, {{.DataModel}}{{if .SoftwareVer}}, software {{.SoftwareVer}}{{end}}.
+Last seen {{if .LastInform.IsZero}}never{{else}}{{eat .LastInform}}{{end}}, <b>{{if .Online}}online{{else}}silent{{end}}</b>.</p>
+<p>{{range .WiFi}}{{.Band}} GHz: <b>{{.SSID}}</b>{{if not .Enabled}} (off){{end}}<br>{{end}}{{if not .WiFi}}<span class="muted">The ONU has not reported its Wi-Fi yet.</span>{{end}}</p>
+{{if .Desired.Changed}}<div class="flash bad">The Wi-Fi name on the device is not the one saved here. The tenant may have changed it on the box. Saving again will overwrite it.</div>{{end}}
+{{if .LastTask}}<p>Last request: {{.LastTask.Kind}}, <b>{{.LastTask.StatusText}}</b> <span class="muted">({{eat .LastTask.CreatedAt}})</span></p>{{end}}
+{{if .Kick}}<p class="muted">{{.Kick}}</p>{{end}}
+{{if $d.CanWrite}}
+<form method="post" action="/admin/accounts/wifi" class="stack-col mt-3" autocomplete="off"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
+<div class="two"><label class="field">Wi-Fi name<input name="ssid" maxlength="32" required></label><label class="field">New password (8 to 63 characters)<input name="password" type="password" minlength="8" maxlength="63" autocomplete="new-password" required></label></div>
+<label class="ck"><input type="checkbox" name="same" value="1" checked> Same name and password on 2.4 and 5 GHz</label>
+<details><summary>Different 5 GHz name and password</summary><div class="two"><label class="field">5 GHz name<input name="ssid5" maxlength="32"></label><label class="field">5 GHz password<input name="password5" type="password" maxlength="63" autocomplete="new-password"></label></div><p class="muted">Untick the box above to use these.</p></details>
+<p class="muted">The current password is never shown. It is stored encrypted so it can be put back if the box is reset to factory settings.</p>
+<div><button>Change Wi-Fi</button></div></form>
+<div class="row mt-3">
+<form method="post" action="/admin/accounts/onu/refresh"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}"><button class="ghost">Refresh</button></form>
+<form method="post" action="/admin/accounts/onu/reboot" data-confirm="Reboot the ONU? The house loses internet for a minute or two."><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}"><button class="ghost">Reboot ONU</button></form>
+<form method="post" action="/admin/onus/unlink" data-confirm="Unlink this ONU from the house?"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="onu" value="{{.ID}}"><input type="hidden" name="next" value="/admin/accounts/view?code={{$A.Code}}"><button class="ghost">Unlink</button></form></div>
+{{end}}
+{{else}}<p class="muted">No ONU is linked to this house. It links by itself when the ONU's WAN MAC equals the house MAC; otherwise link it from the router's ONUs tab.</p>{{end}}</section>{{end}}{{end}}
