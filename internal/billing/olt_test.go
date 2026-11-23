@@ -378,3 +378,156 @@ func TestCleanVendorDropsFormatChars(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// An account on an OLT's MAC (the 707/D56552 incident) is found whichever came first, is only a warning
+// (store.Validate stays clean, so the JSON to Postgres import is not blocked).
+func TestAccountOnAnOLTMACIsWarnedNotBlocked(t *testing.T) {
+	e := newEnv(t)
+	apt := e.apt(t, "MG One", e.site)
+	// order 1: the house first, then an OLT item that the old SaveEquipment let through (written straight to the store)
+	h1 := e.unitAt(t, apt, e.site, "D56552", macOLT)
+	if err := e.svc.st.Update(func(d *store.Data) error {
+		d.Equipment["legacy"] = store.Equipment{ID: "legacy", Kind: store.KindOLT, Name: "Block A OLT", MAC: macOLT, Status: store.EqInstalled, SiteID: e.site}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	check := func(want int) {
+		t.Helper()
+		e.svc.st.View(func(d *store.Data) {
+			if got := d.AccountsOnOLTMAC(); len(got) != want {
+				t.Fatalf("clashes %d, want %d", len(got), want)
+			}
+			if w := store.Warnings(d); len(w) != want {
+				t.Fatalf("warnings %v", w)
+			}
+			if p := store.Validate(d); len(p) > 0 {
+				t.Fatalf("a warning must not fail Validate (it blocks the import): %v", p)
+			}
+		})
+	}
+	check(1)
+	e.svc.st.View(func(d *store.Data) {
+		c := d.AccountsOnOLTMAC()[0]
+		if c.Account.ID != h1.ID || !strings.Contains(store.OLTMACWarning(c), "Block A OLT") {
+			t.Fatalf("%+v", c)
+		}
+	})
+	// the account is still served: Replace the ONT fixes it
+	if err := e.svc.ChangeMAC(context.Background(), h1.ID, macONU); err != nil {
+		t.Fatal(err)
+	}
+	check(0)
+	// order 2: the OLT first, then the house's MAC set directly
+	if err := e.svc.st.Update(func(d *store.Data) error {
+		a := d.Accounts[h1.ID]
+		a.MAC = strings.ToLower(macOLT)
+		d.Accounts[h1.ID] = a
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	check(1)
+}
+
+func TestPONMapFollowsTheRouter(t *testing.T) {
+	e := newEnv(t)
+	aptA := e.apt(t, "MG One", e.site)
+	other, _ := e.addSite(t, "Block Z")
+	aptZ := e.apt(t, "Elsewhere", other)
+	o := e.olt(t, OLTInput{Name: "OLT1", MAC: macOLT, PONPorts: 4, PONApartments: map[int][]string{1: {aptA.ID}}})
+	// changing the router with the old router's rows still posted saves in one go; apartments the new router does not serve are dropped
+	g, err := e.svc.SaveOLT(OLTInput{ID: o.ID, Name: "OLT1", MAC: macOLT, SiteID: other, PONPorts: 4, PONApartments: map[int][]string{1: {aptA.ID}, 2: {aptZ.ID}}})
+	if err != nil {
+		t.Fatalf("router change with the old rows: %v", err)
+	}
+	if len(g.PONApartments) != 1 || g.PONApartments["2"][0] != aptZ.ID {
+		t.Fatalf("pon map %v", g.PONApartments)
+	}
+	// the same router keeps refusing an apartment it does not serve
+	if _, err := e.svc.SaveOLT(OLTInput{ID: o.ID, Name: "OLT1", MAC: macOLT, SiteID: other, PONPorts: 4, PONApartments: map[int][]string{1: {aptA.ID}}}); err == nil {
+		t.Fatal("an apartment the router does not serve was accepted")
+	}
+	// without a posted map, moving back drops what the old router served
+	g, err = e.svc.SaveOLT(OLTInput{ID: o.ID, Name: "OLT1", MAC: macOLT, SiteID: e.site, PONPorts: 4})
+	if err != nil || len(g.PONApartments) != 0 {
+		t.Fatalf("move back: %v %v", g.PONApartments, err)
+	}
+	if _, err := e.svc.SaveOLT(OLTInput{ID: o.ID, Name: "OLT1", MAC: macOLT, SiteID: e.site, PONPorts: 4, PONApartments: map[int][]string{1: {aptA.ID}}}); err != nil {
+		t.Fatal(err)
+	}
+	// stock: the map is cleared, not refused (even when the form still carries it)
+	g, err = e.svc.SaveOLT(OLTInput{ID: o.ID, Name: "OLT1", MAC: macOLT, PONPorts: 4, Status: store.EqInStock, PONApartments: map[int][]string{1: {aptA.ID}}})
+	if err != nil || g.SiteID != "" || len(g.PONApartments) != 0 {
+		t.Fatalf("stock: %+v %v", g, err)
+	}
+	// unlinking an apartment from its router drops it from that router's OLTs; an OLT elsewhere keeps its own
+	o2 := e.olt(t, OLTInput{Name: "OLT2", MAC: macONU, SiteID: e.site, PONPorts: 4, PONApartments: map[int][]string{3: {aptA.ID}}})
+	if err := e.svc.UnlinkRouter(aptA.ID, e.site); err != nil {
+		t.Fatal(err)
+	}
+	e.svc.st.View(func(d *store.Data) {
+		if m := d.Equipment[o2.ID].PONApartments; len(m) != 0 {
+			t.Fatalf("PON map after unlink: %v", m)
+		}
+		if p := store.Validate(d); len(p) > 0 {
+			t.Fatalf("validate: %v", p)
+		}
+	})
+}
+
+func TestGenericEquipmentPathsApplyTheOLTRules(t *testing.T) {
+	e := newEnv(t)
+	apt := e.apt(t, "MG One", e.site)
+	// no nameless OLT through the generic save, the CSV import, or an OLT made from another kind
+	if _, err := e.svc.SaveEquipment(EquipmentInput{Kind: "olt", Serial: "X1", MAC: macOLT, SiteID: e.site}); err == nil {
+		t.Fatal("generic save made an OLT")
+	}
+	res, err := e.svc.ImportEquipment("olt,X2," + macOLT + ",V1600")
+	if err != nil || res.Added != 0 || len(res.Skipped) != 1 {
+		t.Fatalf("import: %+v %v", res, err)
+	}
+	sw, _ := e.svc.SaveEquipment(EquipmentInput{Kind: "switch", Serial: "SW1", MAC: macB})
+	if _, err := e.svc.SaveEquipment(EquipmentInput{ID: sw.ID, Kind: "olt", Serial: "SW1", MAC: macB}); err == nil {
+		t.Fatal("a switch was turned into an OLT without a name")
+	}
+	// an edit of a real OLT through the generic save follows SaveOLT: MAC against accounts and routers, router when deployed
+	o := e.olt(t, OLTInput{Name: "Block A OLT", MAC: macOLT, RouterPort: "ether3"})
+	e.unitAt(t, apt, e.site, "A1", macA)
+	if _, err := e.svc.SaveEquipment(EquipmentInput{ID: o.ID, Kind: "olt", Serial: "", MAC: macA, SiteID: e.site}); err == nil {
+		t.Fatal("generic edit took a house's MAC")
+	}
+	if _, err := e.svc.SaveEquipment(EquipmentInput{ID: o.ID, Kind: "olt", MAC: macOLT}); err == nil {
+		t.Fatal("generic edit left a deployed OLT without its router")
+	}
+	g, err := e.svc.SaveEquipment(EquipmentInput{ID: o.ID, Kind: "olt", MAC: macOLT, SiteID: e.site, Model: "V1600GS-R"})
+	if err != nil || g.Name != "Block A OLT" || g.Model != "V1600GS-R" || g.RouterPort != "ether3" {
+		t.Fatalf("%+v %v", g, err)
+	}
+}
+
+func TestNoONUOnAnOLTOutOfService(t *testing.T) {
+	e := newEnv(t)
+	o := e.olt(t, OLTInput{Name: "OLT1", MAC: macOLT, PONPorts: 4})
+	onu, err := e.svc.SaveEquipment(EquipmentInput{Kind: "ont", Serial: "Z1", MAC: macONU, SetPlacement: true, OLTID: o.ID, PONPort: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []string{store.EqFaulty, store.EqRetired, store.EqInStock} {
+		if err := e.svc.st.Update(func(d *store.Data) error {
+			g := d.Equipment[o.ID]
+			g.Status = st
+			d.Equipment[o.ID] = g
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.svc.SaveEquipment(EquipmentInput{Kind: "ont", Serial: "Z2", MAC: macB, SetPlacement: true, OLTID: o.ID, PONPort: 1}); err == nil {
+			t.Fatalf("a new ONU was placed on a %s OLT", st)
+		}
+		// the ONU already there can still be edited
+		if _, err := e.svc.SaveEquipment(EquipmentInput{ID: onu.ID, Kind: "ont", Serial: "Z1", MAC: macONU, SetPlacement: true, OLTID: o.ID, PONPort: 1, Model: "F601"}); err != nil {
+			t.Fatalf("editing the ONU already on a %s OLT: %v", st, err)
+		}
+	}
+}

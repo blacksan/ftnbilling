@@ -34,6 +34,38 @@ func (d *Data) OLTByMAC(mac string) (Equipment, bool) {
 	return Equipment{}, false
 }
 
+// OLTMACClash is an open account whose MAC is the MAC of a live OLT (it was made before the OLT was added, or the OLT
+// was added before the rule existed).
+type OLTMACClash struct {
+	Account Account
+	OLT     Equipment
+}
+
+// AccountsOnOLTMAC lists the open accounts that use a live OLT's MAC, by account code, whichever came first.
+func (d *Data) AccountsOnOLTMAC() []OLTMACClash {
+	var out []OLTMACClash
+	for _, a := range d.Accounts {
+		if a.MAC == "" {
+			continue
+		}
+		if o, ok := d.OLTByMAC(a.MAC); ok {
+			out = append(out, OLTMACClash{Account: a, OLT: o})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Account.Code != out[j].Account.Code {
+			return out[i].Account.Code < out[j].Account.Code
+		}
+		return out[i].Account.ID < out[j].Account.ID
+	})
+	return out
+}
+
+// OLTMACWarning is the plain-words line for an account on an OLT's MAC.
+func OLTMACWarning(c OLTMACClash) string {
+	return "This house's MAC is the OLT " + OLTLabel(c.OLT) + "'s MAC — use Replace the ONT to set the ONU's WAN MAC"
+}
+
 // OLTsOfSite lists the OLTs plugged into a router, by name.
 func (d *Data) OLTsOfSite(siteID string) []Equipment {
 	var out []Equipment

@@ -41,6 +41,8 @@ class AccountsRepository(private val api: ApiClient) {
         packageId: String?,
         activate: Boolean,
         note: String? = null,
+        /** The operator said yes to a device that never asked for an address (after a 409 confirm_required). */
+        confirmNoAddress: Boolean = false,
     ): Account = api.post(
         "accounts",
         body = buildJsonObject {
@@ -54,6 +56,7 @@ class AccountsRepository(private val api: ApiClient) {
             putIfNotBlank("package_id", packageId)
             put("activate", activate)
             putIfNotBlank("note", note)
+            if (confirmNoAddress) put("confirm_no_address", true)
         },
     )
 

@@ -334,3 +334,14 @@ func Conflicts(d *Data) []string {
 	}
 	return out
 }
+
+// Warnings are the soft problems of the data: things an operator should look at that must not stop billing or the
+// JSON to Postgres import (Validate is the hard list and the import refuses on any of it). Today: an open account
+// whose MAC is a live OLT's MAC.
+func Warnings(d *Data) []string {
+	var out []string
+	for _, c := range d.AccountsOnOLTMAC() {
+		out = append(out, fmt.Sprintf("House %s (%s) uses the MAC of the OLT %s.", c.Account.Unit, c.Account.Code, OLTLabel(c.OLT)))
+	}
+	return out
+}

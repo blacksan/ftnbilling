@@ -264,6 +264,28 @@ class ApartmentsTest {
         assertTrue(body, body.contains("\"apartment_id\":\"ap1\"") && body.contains("\"unit\":\"B4\""))
     }
 
+    @Test fun addCustomerAsksToConfirmADeviceThatNeverAskedForAnAddressThenResendsWithIt() = runTest(main.dispatcher) {
+        addRoutes("""{"items":[$apt]}""")
+        routes["POST /api/v1/accounts"] = err(409, "confirm_required", msg = "This device has never asked for an address.")
+        val vm = addVm(router = "r1")
+        await(vm.state) { it.apartmentId == "ap1" && it.packages is Loadable.Ready }
+        vm.onUnit("B4")
+        vm.onPackage("p1")
+        vm.onMac("AA:BB:CC:DD:EE:09")
+        vm.submit()
+        await(vm.state) { !it.submitting && it.confirmNoAddress }
+        assertNull("the prompt is not a generic error", vm.state.value.error)
+        assertNull(vm.state.value.added)
+        routes["POST /api/v1/accounts"] = ok("""{"id":"a7","flat":"B4","unit":"B4","code":"FTN-7"}""")
+        vm.confirmCreateWithoutAddress()
+        await(vm.state) { it.added != null }
+        assertFalse(vm.state.value.confirmNoAddress)
+        val posts = requests("POST /api/v1/accounts")
+        assertEquals(2, posts.size)
+        assertFalse(posts[0].body.readUtf8().contains("confirm_no_address"))
+        assertTrue(posts[1].body.readUtf8().contains("\"confirm_no_address\":true"))
+    }
+
     // ---- New devices ----
 
     private val otherDevice = """{"site_id":"r2","site_name":"Lavington","router_id":"r2","router_name":"Lavington","mac":"AA:BB:CC:DD:EE:05","online":true,

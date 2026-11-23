@@ -308,6 +308,12 @@ func (s *Server) accountCards(d map[string]any, a store.Account, sc scope) {
 	sort.Slice(notes, func(i, j int) bool { return notes[i].Time.After(notes[j].Time) })
 	d["Cust"], d["Custs"], d["Equip"], d["Stock"], d["Splitters"], d["Notes"] = cust, custs, eq, stock, splitters, notes
 	d["Place"] = s.placements(eq)
+	d["OLTMACWarn"] = ""
+	s.st.View(func(dd *store.Data) {
+		if o, ok := dd.OLTByMAC(a.MAC); ok && a.MAC != "" {
+			d["OLTMACWarn"] = store.OLTMACWarning(store.OLTMACClash{Account: a, OLT: o})
+		}
+	})
 	if dev, ok := s.svc.AccountDevice(a.ID); ok {
 		d["AcctDev"] = dev
 	}

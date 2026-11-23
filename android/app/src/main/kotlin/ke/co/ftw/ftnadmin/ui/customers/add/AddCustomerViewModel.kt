@@ -83,6 +83,8 @@ data class AddCustomerUiState(
     val macOwner: MacOwner? = null,
     /** Set on a 409 `mac_other_building`: the MAC belongs to a customer of another apartment. */
     val macOther: BelongsTo? = null,
+    /** Set on a 409 `confirm_required`: the device never asked for an address; the operator must say yes first. */
+    val confirmNoAddress: Boolean = false,
     val added: AddedCustomer? = null,
 ) {
     val apartment: Apartment? get() = (apartments as? Loadable.Ready)?.value?.firstOrNull { it.id == apartmentId }
@@ -213,11 +215,11 @@ class AddCustomerViewModel(
 
     fun onActivate(v: Boolean) = _state.update { it.copy(activate = v) }
 
-    fun submit() {
+    fun submit(confirmed: Boolean = false) {
         val s = _state.value
         if (!s.canSubmit) return
         val mac = MacAddress.normalize(s.macInput) ?: return
-        _state.update { it.copy(submitting = true, error = null, macOwner = null, macOther = null) }
+        _state.update { it.copy(submitting = true, error = null, macOwner = null, macOther = null, confirmNoAddress = false) }
         viewModelScope.launch {
             val r = apiResult {
                 accounts.create(
@@ -229,6 +231,7 @@ class AddCustomerViewModel(
                     mac = mac,
                     packageId = s.packageId,
                     activate = s.activate,
+                    confirmNoAddress = confirmed,
                 )
             }
             r.fold(
@@ -241,6 +244,7 @@ class AddCustomerViewModel(
                     val api = e as? ApiError
                     _state.update {
                         when {
+                            api != null && api.code == ErrorCode.CONFIRM_REQUIRED -> it.copy(submitting = false, confirmNoAddress = true)
                             api != null && api.code == ErrorCode.MAC_IN_USE && api.macOwner != null -> it.copy(submitting = false, macOwner = api.macOwner)
                             api != null && api.code == ErrorCode.MAC_OTHER_BUILDING && api.macOtherBuilding != null ->
                                 it.copy(submitting = false, macOther = api.macOtherBuilding)
@@ -253,6 +257,14 @@ class AddCustomerViewModel(
             )
         }
     }
+
+    /** "Create anyway" on the no-address prompt: sends the same request with `confirm_no_address`. */
+    fun confirmCreateWithoutAddress() {
+        _state.update { it.copy(confirmNoAddress = false) }
+        submit(confirmed = true)
+    }
+
+    fun cancelConfirmNoAddress() = _state.update { it.copy(confirmNoAddress = false) }
 
     private fun routerOnline(id: String?): Boolean? = _state.value.routers.firstOrNull { it.key == id }?.online
 

@@ -72,6 +72,7 @@
 </div>
 <nav class="tabs" aria-label="Customer sections">{{range $t := (seq "overview|Overview" "payments|Payments" "usage|Usage" "events|Events")}}{{$k := index (split $t "|") 0}}{{$l := index (split $t "|") 1}}<a class="tab" href="/admin/accounts/view?code={{$A.Code}}&amp;tab={{$k}}"{{if eq $k $tab}} aria-current="page"{{end}}>{{$l}}</a>{{end}}</nav>
 {{if eq $tab "overview"}}
+{{if .Data.OLTMACWarn}}<div class="flag warn" role="alert">{{.Data.OLTMACWarn}}</div>{{end}}
 <div class="grid c2">
 <section class="panel"><h2>Details</h2><form method="post" action="/admin/accounts/update" class="mt-3 stack-col"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <div class="two"><label class="field">House number<input name="flat" value="{{$A.Flat}}" required></label><label class="field">Tenant<input name="tenant" value="{{$A.Tenant}}"></label></div>
@@ -81,7 +82,7 @@
 <label class="field">Notes<textarea name="notes" rows="2">{{$A.Notes}}</textarea></label><div><button>Save details</button></div></form></section>
 <div class="stack-col">
 {{template "onu_card" .}}
-<section class="panel"><h2>Replace the ONT</h2><p class="muted" style="margin:6px 0 10px">Updates the router and ends the session on the old ONT.</p>
+<section class="panel{{if .Data.OLTMACWarn}} hl{{end}}" id="replace-ont"><h2>Replace the ONT</h2><p class="muted" style="margin:6px 0 10px">Updates the router and ends the session on the old ONT.</p>
 <form method="post" action="/admin/accounts/mac" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}">
 <label class="field" style="flex:1;min-width:200px">New ONT WAN MAC<input name="mac" placeholder="AA:BB:CC:DD:EE:FF" required style="font-family:var(--f-mono)"></label><button>Change MAC</button></form>
 <p class="muted" style="margin:10px 0 0">The New devices page lists what the router sees: <a href="/admin/devices">pick a MAC there</a> and attach it to this house.</p></section>

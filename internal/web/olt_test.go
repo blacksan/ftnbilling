@@ -136,7 +136,7 @@ func TestOLTFormTreeRouterTabAndApartmentPage(t *testing.T) {
 		t.Fatalf("redirect %d %s", r.StatusCode, r.Header.Get("Location"))
 	}
 	// a PON mapped to an apartment of another router is refused, nothing is saved
-	if l := a.adminPost(t, "/admin/olts/save", url.Values{"id": {oid}, "name": {"Block A OLT"}, "mac": {tOLTMAC}, "site": {a.site}, "pon_ports": {"4"}, "pon_form": {"1"}, "pon_apt_2": {"nope"}}); !strings.Contains(l, "Error") {
+	if r := a.admin("POST", "/admin/olts/save", url.Values{"id": {oid}, "name": {"Block A OLT"}, "mac": {tOLTMAC}, "site": {a.site}, "pon_ports": {"4"}, "pon_form": {"1"}, "pon_apt_2": {"nope"}}); r.StatusCode != 422 || !strings.Contains(body(t, r), "Error") {
 		t.Fatal("a bad PON mapping was saved")
 	}
 }
@@ -227,4 +227,79 @@ func (a *app) adminJSON(t *testing.T, method, path string, form url.Values) *htt
 		t.Fatal(err)
 	}
 	return resp
+}
+
+func TestAccountOnAnOLTMACShowsAWarningAndHighlightsReplaceTheONT(t *testing.T) {
+	a := newONUApp(t)
+	a.makeOLT(t, nil)
+	oid := a.oltID(t)
+	a.adminPost(t, "/admin/equipment/save", url.Values{"kind": {"ont"}, "serial": {"ZTEG1"}, "mac": {tONUMAC}})
+	var eq string
+	a.st.View(func(d *store.Data) {
+		for _, e := range d.Equipment {
+			if e.Serial == "ZTEG1" {
+				eq = e.ID
+			}
+		}
+	})
+	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"A1"}, "tenant": {"Jane"}, "equipment_id": {eq}, "apartment_id": {a.aptID(t)}})
+	code := a.account(t, "A1").Code
+	page := a.adminGet(t, "/admin/accounts/view?code="+code)
+	if strings.Contains(page, "is the OLT") || strings.Contains(page, `panel hl`) {
+		t.Fatal("warning without a clash")
+	}
+	// the 707/D56552 incident: the house carries the OLT's MAC (data from before the rule)
+	a.st.Update(func(d *store.Data) error {
+		for id, x := range d.Accounts {
+			if x.Code == code {
+				x.MAC = tOLTMAC
+				d.Accounts[id] = x
+			}
+		}
+		return nil
+	})
+	page = a.adminGet(t, "/admin/accounts/view?code="+code)
+	for _, want := range []string{"This house&#39;s MAC is the OLT Block A OLT&#39;s MAC", "use Replace the ONT to set the ONU&#39;s WAN MAC", `class="panel hl"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("account card lacks %q", want)
+		}
+	}
+	_ = oid
+}
+
+func TestRejectedNewOLTKeepsWhatWasTypedButNotThePassword(t *testing.T) {
+	a := newONUApp(t)
+	if err := a.svc.SetDataKey([]byte("0123456789abcdef0123456789abcdef")); err != nil {
+		t.Fatal(err)
+	}
+	r := a.admin("POST", "/admin/olts/save", url.Values{"name": {"Typed OLT"}, "model": {"V1600GS-R"}, "mac": {"not-a-mac"}, "site": {a.site}, "router_port": {"ether4"},
+		"pon_ports": {"8"}, "mgmt_ip": {"192.168.1.77"}, "mgmt_user": {"admin"}, "mgmt_pass": {"Sekret-Typed-1"}})
+	b := body(t, r)
+	if r.StatusCode != 422 || !strings.Contains(b, "Error") {
+		t.Fatalf("status %d", r.StatusCode)
+	}
+	for _, want := range []string{`value="Typed OLT"`, `value="V1600GS-R"`, `value="not-a-mac"`, `value="ether4"`, `value="192.168.1.77"`, `value="8"`} {
+		if !strings.Contains(b, want) {
+			t.Errorf("the re-rendered form lost %s", want)
+		}
+	}
+	if strings.Contains(b, "Sekret-Typed-1") {
+		t.Fatal("the password was rendered back")
+	}
+}
+
+func TestOLTPasswordRevealIsRateLimited(t *testing.T) {
+	a := newONUApp(t)
+	a.makeOLT(t, nil)
+	oid := a.oltID(t)
+	for i := 0; i < 5; i++ {
+		r := a.admin("POST", "/admin/olts/reveal", url.Values{"id": {oid}, "current_password": {pw}})
+		if b := body(t, r); !strings.Contains(b, "Olt-Secret-99") {
+			t.Fatalf("limited after %d tries", i)
+		}
+	}
+	r := a.admin("POST", "/admin/olts/reveal", url.Values{"id": {oid}, "current_password": {pw}})
+	if b := body(t, r); strings.Contains(b, "Olt-Secret-99") || !strings.Contains(r.Header.Get("Location"), "too+many") {
+		t.Fatalf("the sixth reveal went through: %d %s", r.StatusCode, r.Header.Get("Location"))
+	}
 }

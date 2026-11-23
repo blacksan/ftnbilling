@@ -57,6 +57,9 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 	if !equipKinds[kind] {
 		return store.Equipment{}, errors.New("choose what kind of equipment this is")
 	}
+	if kind == store.KindOLT {
+		return s.saveOLTGeneric(in) // an OLT has one set of rules, wherever it is saved from
+	}
 	serial := strings.ToUpper(cleanText(in.Serial, 60))
 	gpon := strings.ToUpper(strings.Join(strings.Fields(cleanText(in.GPONSerial, 60)), ""))
 	if gpon == strings.Join(strings.Fields(serial), "") {
@@ -121,7 +124,7 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 			}
 		}
 		if in.SetPlacement && kind == store.KindONT {
-			if err := checkPlacementLocked(d, in.OLTID, in.PONPort); err != nil {
+			if err := checkPlacementLocked(d, in.OLTID, in.PONPort, e.OLTID); err != nil {
 				return err
 			}
 			e.OLTID, e.PONPort = in.OLTID, in.PONPort
@@ -379,4 +382,18 @@ func (s *Service) ImportEquipment(text string) (ImportResult, error) {
 		res.Added++
 	}
 	return res, nil
+}
+
+// saveOLTGeneric is SaveEquipment for kind olt (import, API, the generic form): a new OLT is refused (it needs a
+// name and a router, which only the OLT form and /olts carry), and an edit of an OLT goes through SaveOLT, so the
+// same rules apply: name, router when deployed, MAC uniqueness against equipment, accounts and routers.
+func (s *Service) saveOLTGeneric(in EquipmentInput) (store.Equipment, error) {
+	var cur store.Equipment
+	found := false
+	s.st.View(func(d *store.Data) { cur, found = d.Equipment[in.ID] })
+	if in.ID == "" || !found || cur.Kind != store.KindOLT {
+		return store.Equipment{}, errors.New("add an OLT with the OLT form (Equipment, Add OLT): it needs a name, a router and its MAC")
+	}
+	return s.SaveOLT(OLTInput{ID: cur.ID, Name: cur.Name, Model: in.Model, Serial: in.Serial, MAC: in.MAC, Firmware: in.Firmware, Notes: in.Notes,
+		SiteID: in.SiteID, RouterPort: cur.RouterPort, PONPorts: cur.PONPorts, MgmtIP: cur.MgmtIP, MgmtUser: cur.MgmtUser})
 }

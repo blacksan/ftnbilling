@@ -242,31 +242,7 @@ func (s *Service) DeleteApartment(id string) error {
 		}
 		// A PON port that served it no longer does: a dangling apartment id in a PON map fails store.Validate
 		// (which the JSON to Postgres import runs).
-		for k, e := range d.Equipment {
-			changed := false
-			for port, ids := range e.PONApartments {
-				keep := ids[:0:0]
-				for _, x := range ids {
-					if x != id {
-						keep = append(keep, x)
-					}
-				}
-				if len(keep) != len(ids) {
-					changed = true
-					if e.PONApartments = clonePONMap(e.PONApartments); len(keep) == 0 {
-						delete(e.PONApartments, port)
-					} else {
-						e.PONApartments[port] = keep
-					}
-				}
-			}
-			if changed {
-				if len(e.PONApartments) == 0 {
-					e.PONApartments = nil
-				}
-				d.Equipment[k] = e
-			}
-		}
+		dropApartmentFromPONs(d, id, "")
 		delete(d.Apartments, id)
 		d.AddEvent(store.Event{Time: s.now(), Kind: "info", Msg: "apartment deleted: " + a.Name})
 		return nil
@@ -324,6 +300,7 @@ func (s *Service) UnlinkRouter(aptID, siteID string) error {
 			return &RouterBlockedError{Apartment: apt.Name, Router: d.Sites[siteID].Name, Units: units}
 		}
 		delete(d.ApartmentSites, k)
+		dropApartmentFromPONs(d, aptID, siteID)
 		d.AddEvent(store.Event{Time: s.now(), SiteID: siteID, Kind: "info",
 			Msg: fmt.Sprintf("router %s no longer serves apartment %s", d.Sites[siteID].Name, apt.Name)})
 		return nil
@@ -364,6 +341,7 @@ func (s *Service) SetApartmentRouters(aptID string, siteIDs []string) error {
 				return &RouterBlockedError{Apartment: apt.Name, Router: d.Sites[l.SiteID].Name, Units: units}
 			}
 			delete(d.ApartmentSites, store.ApartmentSiteKey(aptID, l.SiteID))
+			dropApartmentFromPONs(d, aptID, l.SiteID)
 			changed = true
 		}
 		if !changed {
@@ -653,4 +631,39 @@ func clonePONMap(m map[string][]string) map[string][]string {
 		out[k] = append([]string(nil), v...)
 	}
 	return out
+}
+
+// dropApartmentFromPONs removes an apartment from the PON maps of the OLTs on a router (siteID "" = every OLT): a
+// router that no longer serves an apartment has no PON port that serves it. The map is cloned, never edited in place.
+func dropApartmentFromPONs(d *store.Data, aptID, siteID string) {
+	for k, e := range d.Equipment {
+		if siteID != "" && e.SiteID != siteID {
+			continue
+		}
+		changed := false
+		next := clonePONMap(e.PONApartments)
+		for port, ids := range next {
+			keep := ids[:0:0]
+			for _, x := range ids {
+				if x != aptID {
+					keep = append(keep, x)
+				}
+			}
+			if len(keep) != len(ids) {
+				changed = true
+				if len(keep) == 0 {
+					delete(next, port)
+				} else {
+					next[port] = keep
+				}
+			}
+		}
+		if changed {
+			if len(next) == 0 {
+				next = nil
+			}
+			e.PONApartments = next
+			d.Equipment[k] = e
+		}
+	}
 }

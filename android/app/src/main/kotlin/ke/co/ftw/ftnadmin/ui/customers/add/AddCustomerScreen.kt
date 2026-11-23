@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -97,6 +98,15 @@ fun AddCustomerScreen(routerId: String?, mac: String?, onBack: () -> Unit, onOpe
             }
         },
     ) { inner ->
+        if (ui.confirmNoAddress) {
+            AlertDialog(
+                onDismissRequest = vm::cancelConfirmNoAddress,
+                title = { Text("No address yet") },
+                text = { Text("This device has never asked for an address. Is it really a customer's ONU?") },
+                confirmButton = { TextButton(onClick = vm::confirmCreateWithoutAddress) { Text("Create anyway") } },
+                dismissButton = { TextButton(onClick = vm::cancelConfirmNoAddress) { Text("Cancel") } },
+            )
+        }
         Column(
             Modifier.padding(inner).fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),

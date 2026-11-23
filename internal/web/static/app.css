@@ -136,6 +136,7 @@ a.stat:hover{border-color:var(--line-strong)}
 .panel-h a{font-size:var(--fs-13);font-weight:500}
 .panel .sub{color:var(--muted);font-size:var(--fs-13);margin:-4px 0 var(--sp-3)}
 .card.danger,.panel.danger{border-color:var(--bad)}
+.panel.hl{border-color:var(--warn-fill);box-shadow:0 0 0 2px var(--warn-soft)}
 .grid{display:grid;gap:var(--sp-4);margin:0 0 var(--sp-4)}
 .grid.c2{grid-template-columns:repeat(2,minmax(0,1fr))}
 .grid.c21{grid-template-columns:minmax(0,2fr) minmax(0,1fr)}

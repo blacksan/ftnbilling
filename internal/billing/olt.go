@@ -190,13 +190,22 @@ func (s *Service) SaveOLT(in OLTInput) (store.Equipment, error) {
 				}
 			}
 		}
+		// The PON map follows the router: in stock it is empty, and when the router changes the apartments the new
+		// router does not serve are dropped (the form still carries the old router's rows), not refused.
 		pons := e.PONApartments
-		if in.PONApartments != nil {
-			if pons, err = checkPONMap(d, siteID, in.PONPorts, in.PONApartments); err != nil {
+		switch {
+		case siteID == "":
+			pons = nil
+		case in.PONApartments != nil:
+			m := in.PONApartments
+			if exists && siteID != e.SiteID {
+				m = prunePONMap(d, siteID, m)
+			}
+			if pons, err = checkPONMap(d, siteID, in.PONPorts, m); err != nil {
 				return err
 			}
-		} else if len(pons) > 0 && siteID != "" { // the router changed under an existing mapping
-			if _, err := checkPONMap(d, siteID, in.PONPorts, intKeys(pons)); err != nil {
+		case siteID != e.SiteID && len(pons) > 0: // the router changed under an existing mapping
+			if pons, err = checkPONMap(d, siteID, in.PONPorts, prunePONMap(d, siteID, intKeys(pons))); err != nil {
 				return err
 			}
 		}
@@ -251,6 +260,19 @@ func (s *Service) SaveOLT(in OLTInput) (store.Equipment, error) {
 		out.MgmtPass = "" // the caller never needs the sealed value
 	}
 	return out, err
+}
+
+// prunePONMap drops the apartments that do not exist or that the router does not serve.
+func prunePONMap(d *store.Data, siteID string, in map[int][]string) map[int][]string {
+	out := map[int][]string{}
+	for n, ids := range in {
+		for _, id := range ids {
+			if _, ok := d.Apartments[id]; ok && d.ApartmentServedBy(id, siteID) {
+				out[n] = append(out[n], id)
+			}
+		}
+	}
+	return out
 }
 
 func intKeys(m map[string][]string) map[int][]string {
@@ -337,8 +359,9 @@ func (s *Service) RevealOLTPassword(id string) (string, error) {
 
 // ---- ONU placement ------------------------------------------------------------------------------------------
 
-// checkPlacementLocked validates an ONU's OLT and PON port.
-func checkPlacementLocked(d *store.Data, oltID string, pon int) error {
+// checkPlacementLocked validates an ONU's OLT and PON port. An OLT that is retired, faulty or in stock takes no new
+// ONU (current is the OLT the ONU is already under: keeping it is not a new placement).
+func checkPlacementLocked(d *store.Data, oltID string, pon int, current string) error {
 	if oltID == "" {
 		if pon != 0 {
 			return errors.New("choose the OLT before the PON port")
@@ -348,6 +371,9 @@ func checkPlacementLocked(d *store.Data, oltID string, pon int) error {
 	o, ok := d.Equipment[oltID]
 	if !ok || o.Kind != store.KindOLT {
 		return errors.New("choose an OLT from the register")
+	}
+	if oltID != current && (o.Status == store.EqRetired || o.Status == store.EqFaulty || o.Status == store.EqInStock) {
+		return fmt.Errorf("%s is %s: put the ONU under an OLT that is in service", store.OLTLabel(o), strings.ReplaceAll(o.Status, "_", " "))
 	}
 	if pon < 0 || pon > MaxPONPorts || (o.PONPorts > 0 && pon > o.PONPorts) {
 		return fmt.Errorf("PON port %d does not exist on %s (it has %d)", pon, store.OLTLabel(o), o.PONPorts)

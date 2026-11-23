@@ -62,8 +62,13 @@ type ponApt struct {
 	Serves   bool
 }
 
-func (s *Server) oltForm(w http.ResponseWriter, r *http.Request, e store.Equipment, existing bool) {
+// oltForm renders the OLT form. With rejected set (a save that was refused) it shows that error over the values the
+// operator typed, with status 422; the password is never put back.
+func (s *Server) oltForm(w http.ResponseWriter, r *http.Request, e store.Equipment, existing bool, rejected ...string) {
 	p := s.page(r, "equipment")
+	if len(rejected) > 0 {
+		p.Flash, p.FlashBad = "Error: "+rejected[0], true
+	}
 	sc := s.scopeOf(r)
 	var rows []ponRow
 	var apts []store.Apartment
@@ -118,8 +123,9 @@ func (s *Server) oltForm(w http.ResponseWriter, r *http.Request, e store.Equipme
 	p.Data["RouterName"] = p.Data["SiteNames"].(map[string]string)[e.SiteID]
 	p.Data["HasApts"] = len(apts) > 0
 	p.Data["ONUCount"] = onus
-	if v := r.URL.Query().Get("form"); v != "" { // a rejected save returns what was typed
-		p.Data["Typed"] = true
+	if len(rejected) > 0 {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusUnprocessableEntity)
 	}
 	s.render(w, "admin_olt", p)
 }
@@ -149,11 +155,32 @@ func (s *Server) adminOLTSave(w http.ResponseWriter, r *http.Request) {
 	}
 	e, err := s.svc.SaveOLT(in)
 	if err != nil {
-		to := "/admin/olts/new?site=" + url.QueryEscape(in.SiteID)
+		// A refused save keeps what was typed (never the password).
+		var cur store.Equipment
+		var exists bool
 		if id != "" {
-			to = "/admin/olts/view?id=" + url.QueryEscape(id)
+			s.st.View(func(d *store.Data) { cur, exists = d.Equipment[id] })
+			if !exists || cur.Kind != store.KindOLT {
+				s.back(w, r, "/admin/equipment", "Error: "+err.Error())
+				return
+			}
+		} else {
+			cur = store.Equipment{Kind: store.KindOLT}
 		}
-		s.back(w, r, to, "Error: "+err.Error())
+		cur.Name, cur.Model, cur.Serial, cur.MAC, cur.Firmware, cur.Notes = in.Name, in.Model, in.Serial, in.MAC, in.Firmware, in.Notes
+		cur.SiteID, cur.RouterPort, cur.PONPorts, cur.MgmtIP, cur.MgmtUser = in.SiteID, in.RouterPort, in.PONPorts, in.MgmtIP, in.MgmtUser
+		if in.Status != "" {
+			cur.Status = in.Status
+		}
+		if in.PONApartments != nil {
+			cur.PONApartments = map[string][]string{}
+			for n, ids := range in.PONApartments {
+				if len(ids) > 0 {
+					cur.PONApartments[store.PONKey(n)] = ids
+				}
+			}
+		}
+		s.oltForm(w, r, cur, id != "", err.Error())
 		return
 	}
 	s.back(w, r, "/admin/olts/view?id="+url.QueryEscape(e.ID), "Saved")
@@ -166,6 +193,12 @@ func (s *Server) adminOLTReveal(w http.ResponseWriter, r *http.Request) {
 	to := "/admin/olts/view?id=" + url.QueryEscape(id)
 	if u, _ := userOf(r); u.Role != store.RoleOwner {
 		s.back(w, r, to, "Error: only an owner can see this password")
+		return
+	}
+	// A few reveals per owner in ten minutes, wrong passwords included.
+	u, _ := userOf(r)
+	if !s.revealRL.allow("olt-reveal:" + u.ID) {
+		s.back(w, r, to, "Error: too many password reveals in a short time; wait a few minutes and try again")
 		return
 	}
 	if !s.reauth(w, r, to) {
