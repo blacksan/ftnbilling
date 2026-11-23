@@ -60,6 +60,16 @@ type OLTInput struct {
 
 var mgmtAAD = []byte("olt.mgmt")
 
+// errOLTNoKey is ErrNoDataKey in the OLT form's words.
+var errOLTNoKey = &noKeyError{}
+
+type noKeyError struct{}
+
+func (*noKeyError) Error() string {
+	return "the OLT password cannot be stored: set DATA_KEY on the server (openssl rand -base64 32), or leave the password empty"
+}
+func (*noKeyError) Is(t error) bool { return t == ErrNoDataKey }
+
 func parseMgmtIP(s string) (string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -122,7 +132,7 @@ func (s *Service) SaveOLT(in OLTInput) (store.Equipment, error) {
 	var sealed string
 	if in.MgmtPass != "" {
 		if s.box == nil {
-			return store.Equipment{}, ErrNoDataKey
+			return store.Equipment{}, errOLTNoKey
 		}
 		if len(in.MgmtPass) > 128 {
 			return store.Equipment{}, errors.New("the password is too long")
@@ -303,7 +313,7 @@ func HasOLTPassword(e store.Equipment) bool { return e.MgmtPass != "" }
 // reauth). Every reveal is an audit event; the password is never logged.
 func (s *Service) RevealOLTPassword(id string) (string, error) {
 	if s.box == nil {
-		return "", ErrNoDataKey
+		return "", errOLTNoKey
 	}
 	var plain string
 	err := s.st.Update(func(d *store.Data) error {
