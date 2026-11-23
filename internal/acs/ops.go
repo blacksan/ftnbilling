@@ -241,9 +241,38 @@ func autoLink(d *store.Data, onuID string) bool {
 			d.ONUs[o.ID], changed = o, true
 		}
 	}
+	// 1. The equipment register: the ONU's serial is an ONT installed at a house on this router.
+	if o.Link != store.LinkManual {
+		if inv, ok := d.ONTBySerial(o.Serial); ok && inv.Status == store.EqInstalled && inv.AccountID != "" {
+			if a, ok := d.Accounts[inv.AccountID]; ok && a.SiteID == o.SiteID && o.AccountID != a.ID {
+				if other, taken := d.ONUOfAccount(a.ID); taken && other.ID != o.ID {
+					if other.Link == store.LinkManual {
+						return changed // the owner's own link stays
+					}
+					o.Desired = other.Desired // the replacement box inherits the house's Wi-Fi choice
+					other.AccountID, other.Link, other.Desired = "", "", store.WiFiDesired{}
+					d.ONUs[other.ID] = other
+				}
+				if o.AccountID != "" { // was linked elsewhere (an old automatic link): the register wins
+					o.Desired = store.WiFiDesired{}
+				}
+				o.AccountID, o.Link = a.ID, store.LinkInventory
+				d.ONUs[o.ID] = o
+				return true
+			} else if ok && o.AccountID == a.ID {
+				if o.Link != store.LinkInventory {
+					o.Link = store.LinkInventory
+					d.ONUs[o.ID] = o
+					return true
+				}
+				return changed
+			}
+		}
+	}
 	if o.AccountID != "" {
 		return changed
 	}
+	// 2. No register entry for the serial: the WAN MAC is the house MAC (existing houses).
 	for _, a := range d.Accounts {
 		if a.SiteID != o.SiteID || a.MACConflict {
 			continue
@@ -257,7 +286,7 @@ func autoLink(d *store.Data, onuID string) bool {
 				if other, taken := d.ONUOfAccount(a.ID); taken {
 					// The house's MAC moved to this ONU (the box was replaced): an automatic link to the old box
 					// gives way, and the new box inherits the house's Wi-Fi choice. A link the owner made stays.
-					if other.Link != store.LinkAuto || containsMAC(other.MACs, am) {
+					if other.Link == store.LinkManual || containsMAC(other.MACs, am) {
 						return changed
 					}
 					o.Desired = other.Desired

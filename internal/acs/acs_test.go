@@ -410,3 +410,115 @@ func TestRunRefusesPublicListen(t *testing.T) {
 		t.Fatal("started on a public address")
 	}
 }
+
+func (f *fixture) inventory(serial, gpon, mac, account string) {
+	f.t.Helper()
+	if err := f.st.Update(func(d *store.Data) error {
+		e := store.Equipment{ID: "eq-" + serial, Kind: store.KindONT, Serial: serial, GPONSerial: gpon, MAC: mac, Status: store.EqInStock, CreatedAt: f.now}
+		if account != "" {
+			e.Status, e.AccountID, e.SiteID = store.EqInstalled, account, d.Accounts[account].SiteID
+		}
+		d.Equipment[e.ID] = e
+		return nil
+	}); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func TestInventorySerialLinksBeforeMAC(t *testing.T) {
+	f := newFixture(t)
+	// the register says this ONU belongs to a2; the box's WAN MAC is a1's: the register wins, and the mismatch is flagged
+	f.inventory("SNINV", "", "AA:BB:CC:00:11:33", "a2")
+	c := newZTE(t, f, "SNINV", "10.6.3.20")
+	if err := c.session("0 BOOTSTRAP"); err != nil {
+		t.Fatal(err)
+	}
+	o := f.onuBySerial("SNINV")
+	if o.AccountID != "a2" || o.Link != store.LinkInventory {
+		t.Fatalf("link %q %q", o.AccountID, o.Link)
+	}
+	v, ok := f.svc.OfAccount("a2")
+	if !ok || !v.InInventory || len(v.Warnings) == 0 || len(v.UseMACs) == 0 {
+		t.Fatalf("expected a MAC mismatch warning with a fix: %+v", v)
+	}
+	// the account MAC was not touched
+	f.st.View(func(d *store.Data) {
+		if d.Accounts["a2"].MAC != "AA:BB:CC:00:11:33" {
+			t.Fatal("account MAC changed by itself")
+		}
+	})
+}
+
+func TestInventoryGPONSerialMatches(t *testing.T) {
+	f := newFixture(t)
+	f.inventory("OTHER-SERIAL", "ZTEG-1234", testAccountMAC, "a1")
+	c := newZTE(t, f, "zteg1234", "10.6.3.20")
+	if err := c.session("0 BOOTSTRAP"); err != nil {
+		t.Fatal(err)
+	}
+	if o := f.onuBySerial("ZTEG1234"); o.AccountID != "" {
+		// "zteg1234" has no hyphen: the register's serial is ZTEG-1234, so this must NOT match
+		t.Fatalf("hyphen-insensitive match is not intended: %+v", o)
+	}
+	c2 := newZTE(t, f, "ZTEG-1234", "10.6.3.21")
+	if err := c2.session("0 BOOTSTRAP"); err != nil {
+		t.Fatal(err)
+	}
+	if o := f.onuBySerial("ZTEG-1234"); o.AccountID != "a1" || o.Link != store.LinkInventory {
+		t.Fatalf("%+v", o)
+	}
+}
+
+func TestInventoryOtherRouterNotLinkedAndWarned(t *testing.T) {
+	f := newFixture(t)
+	f.st.Update(func(d *store.Data) error {
+		d.Accounts["b1"] = store.Account{ID: "b1", SiteID: "s2", Code: "GHJ789", Flat: "C1", Unit: "C1", MAC: "AA:BB:CC:00:22:22", CreatedAt: f.now}
+		return nil
+	})
+	f.inventory("SNELSE", "", testAccountMAC, "b1")
+	c := newZTE(t, f, "SNELSE", "10.6.3.20") // on router s1, registered to a house of s2
+	if err := c.session("0 BOOTSTRAP"); err != nil {
+		t.Fatal(err)
+	}
+	o := f.onuBySerial("SNELSE")
+	if o.AccountID == "b1" {
+		t.Fatal("linked across routers")
+	}
+	var warned bool
+	for _, v := range f.svc.ONUs("s1") {
+		if v.Serial == "SNELSE" && len(v.Warnings) > 0 {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatal("no warning for an ONU on the wrong router")
+	}
+}
+
+func TestInventorySwapMovesLink(t *testing.T) {
+	f := newFixture(t)
+	f.inventory("OLDBOX", "", testAccountMAC, "a1")
+	old := newZTE(t, f, "OLDBOX", "10.6.3.20")
+	if err := old.session("0 BOOTSTRAP"); err != nil {
+		t.Fatal(err)
+	}
+	f.st.Update(func(d *store.Data) error { // the owner swapped: new box installed, old one returned
+		o := d.Equipment["eq-OLDBOX"]
+		o.Status, o.AccountID = store.EqFaulty, ""
+		d.Equipment[o.ID] = o
+		d.Accounts["a1"] = func() store.Account { a := d.Accounts["a1"]; a.MAC = "AA:BB:CC:00:55:55"; return a }()
+		return nil
+	})
+	f.inventory("NEWBOX", "", "AA:BB:CC:00:55:55", "a1")
+	nb := newZTE(t, f, "NEWBOX", "10.6.3.21")
+	nb.set(nb.root+"WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.MACAddress", "AA:BB:CC:00:55:55")
+	if err := nb.session("0 BOOTSTRAP"); err != nil {
+		t.Fatal(err)
+	}
+	if o := f.onuBySerial("NEWBOX"); o.AccountID != "a1" || o.Link != store.LinkInventory {
+		t.Fatalf("new box: %+v", o)
+	}
+	if o := f.onuBySerial("OLDBOX"); o.AccountID != "" {
+		t.Fatalf("old box still linked: %+v", o)
+	}
+}

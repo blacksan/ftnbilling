@@ -280,6 +280,13 @@ type ONUView struct {
 	LastTask     *TaskView   `json:"last_task,omitempty"`
 	CRApplied    bool        `json:"cr_applied"`
 	Kick         string      `json:"kick,omitempty"` // what the last "contact the ONU now" did
+	// The equipment register: InInventory says the serial is registered; InventoryID/Status/MAC are its pair.
+	InInventory bool     `json:"in_inventory"`
+	InventoryID string   `json:"inventory_id,omitempty"`
+	InvStatus   string   `json:"inventory_status,omitempty"`
+	InvMAC      string   `json:"inventory_mac,omitempty"`
+	Warnings    []string `json:"warnings"`
+	UseMACs     []string `json:"use_macs,omitempty"` // reported MACs the house can be switched to in one click
 }
 
 // StatusOf is the words of a task's status.
@@ -329,6 +336,7 @@ func (s *Service) view(d *store.Data, o store.ONU) ONUView {
 	if k, ok := s.kickOf(o.ID); ok {
 		v.Kick = k.Text()
 	}
+	s.inventoryView(d, o, &v)
 	return v
 }
 
@@ -392,3 +400,30 @@ func (s *Service) CountsBySite() (total, online map[string]int) {
 }
 
 func trimMAC(m string) string { return strings.ToUpper(strings.TrimSpace(m)) }
+
+// inventoryView fills the register fields of an ONU and the warnings that come from comparing the register with
+// what the ONU reports. Nothing is changed automatically.
+func (s *Service) inventoryView(d *store.Data, o store.ONU, v *ONUView) {
+	v.Warnings = []string{}
+	inv, ok := d.ONTBySerial(o.Serial)
+	if !ok {
+		return
+	}
+	v.InInventory, v.InventoryID, v.InvStatus, v.InvMAC = true, inv.ID, inv.Status, inv.MAC
+	if m, ok := store.CanonMAC(inv.MAC); ok && len(o.MACs) > 0 && !containsMAC(o.MACs, m) {
+		v.Warnings = append(v.Warnings, "The WAN MAC this ONU reports ("+strings.Join(o.MACs, ", ")+") is not the one in the register ("+m+"). The label's MAC is often the LAN MAC: check which one the router sees.")
+		if inv.AccountID != "" {
+			v.UseMACs = append(v.UseMACs, o.MACs...)
+		}
+	}
+	if inv.Status == store.EqInstalled && inv.AccountID != "" {
+		if a, ok := d.Accounts[inv.AccountID]; ok && a.SiteID != o.SiteID {
+			v.Warnings = append(v.Warnings, "This ONU is registered to house "+a.Code+" on router "+d.Sites[a.SiteID].Name+" but it is online on router "+d.Sites[o.SiteID].Name+".")
+		} else if ok && o.AccountID != "" && o.AccountID != inv.AccountID {
+			v.Warnings = append(v.Warnings, "This ONU is registered to house "+a.Code+" but is linked to another house.")
+		}
+	}
+	if inv.Status != store.EqInstalled && v.Online {
+		v.Warnings = append(v.Warnings, "This ONU is online but the register says it is "+strings.ReplaceAll(inv.Status, "_", " ")+".")
+	}
+}
