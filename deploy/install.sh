@@ -85,6 +85,7 @@ BIN=/usr/local/bin/$APP
 SBIN=/usr/local/sbin
 BACKUPS=/var/backups/$APP
 WG_IF=wg0
+ACS_PORT=7547   # the built-in ACS (ONU management, TR-069): reachable on $WG_IF only
 # A re-run is an upgrade: WG_PORT and WG_SUBNET not given again come from the settings file
 # (or the live wg0.conf), so wg-sync, ufw and the WinBox rules keep matching the tunnel.
 _envk() { if [ -f "$ENVF" ]; then grep -m1 "^$1=" "$ENVF" | cut -d= -f2- | tr -d "\"'" || true; fi; }
@@ -853,6 +854,10 @@ WG_SUBNET=$WG_SUBNET
 # Metrics: routers send NetFlow to the tunnel address only
 NETFLOW_ADDR=$WG_SERVER_IP:2055
 
+# ONU management (TR-069): the built-in ACS listens on the tunnel address only (ufw allows it on wg0 only).
+# The ONUs reach it through their router's management VLAN. Set ACS_LISTEN=off to turn it off.
+ACS_LISTEN=$WG_SERVER_IP:$ACS_PORT
+
 # Remote WinBox: devices (sudo ftnbilling-mgmt add <name>) join this separate WireGuard
 # interface and reach the routers' WinBox through this server. Routers built from the
 # billing admin accept WinBox from MGMT_SUBNET. Changing it needs the routers rebuilt.
@@ -890,6 +895,7 @@ EOF
     addkv WG_PUBLIC_KEY "$WG_PUB"
     addkv WG_ENDPOINT "$PUBIP:$WG_PORT"
     addkv WG_SUBNET "$WG_SUBNET"
+    addkv ACS_LISTEN "$WG_SERVER_IP:$ACS_PORT"
     setkv MGMT_PORT "$MGMT_PORT"
     addkv MGMT_SUBNET "$MGMT_SUBNET"
     [ -z "${ADMIN_PASS:-}" ] || setkv ADMIN_PASS "$ADMIN_PASS"
@@ -1240,6 +1246,8 @@ firewall() {
     if [ "$DRY" = 1 ]; then printf '    [dry-run] ufw delete allow 2055/udp (public)\n'; else ufw delete allow 2055/udp >/dev/null 2>&1 || true; fi
   fi
   runq ufw allow in on $WG_IF to "$WG_SERVER_IP" port 2055 proto udp
+  # The ONU management ACS (TR-069): tcp only, on the tunnel interface and the tunnel address only. Never public.
+  runq ufw allow in on $WG_IF to "$WG_SERVER_IP" port "$ACS_PORT" proto tcp
   # Routers get nothing but NetFlow: no routing to other peers or the LAN.
   # Re-added last so the deny rules stay below the allow rules on upgrades.
   if [ "$DRY" = 1 ]; then printf '    [dry-run] ufw deny in on %s; ufw route deny in on %s\n' "$WG_IF" "$WG_IF"
