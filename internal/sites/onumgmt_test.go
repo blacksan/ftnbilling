@@ -197,3 +197,16 @@ func TestONUMgmtCheck(t *testing.T) {
 	}
 	_ = netip.Prefix{}
 }
+
+// Without a customer VLAN the OLT port is a bridge port, and a VLAN interface on a bridge port never receives a
+// frame: the management VLAN then sits on the customer bridge.
+func TestONUMgmtParent(t *testing.T) {
+	s := store.Site{OLTInterface: "sfp-sfpplus1", VLANID: 100}
+	if got := ONUMgmtParent(s); got != "sfp-sfpplus1" {
+		t.Errorf("with a customer VLAN: %q", got)
+	}
+	s.VLANID = 0
+	if got := ONUMgmtParent(s); got != CustomerBridge {
+		t.Errorf("without a customer VLAN: %q", got)
+	}
+}

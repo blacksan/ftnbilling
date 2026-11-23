@@ -346,7 +346,7 @@ func RenderBootstrap(in BootstrapInput) ([]byte, error) {
 			return nil, fmt.Errorf("bootstrap script: %w", err)
 		}
 		onu = &op
-		d.ONU, d.ONUSetup = onu, onu.SetupLines(s.OLTInterface)
+		d.ONU, d.ONUSetup = onu, onu.SetupLines(ONUMgmtParent(s))
 	}
 	d.Filter, d.NAT = bootstrapFirewall(plan, lan, serverIP, mgmt.String(), in.PublicIP, s.RESTPort, onu)
 	out, err := execScript(bootstrapTmpl, in.ROSVersion, d)

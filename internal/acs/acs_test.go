@@ -522,3 +522,27 @@ func TestInventorySwapMovesLink(t *testing.T) {
 		t.Fatalf("old box still linked: %+v", o)
 	}
 }
+
+// A Wi-Fi change made while the previous one is running gets its own task: the running one may have sent the old
+// values already. A reboot still joins the active one.
+func TestQueueWiFiJoinsOnlyPending(t *testing.T) {
+	d := &store.Data{ONUs: map[string]store.ONU{}, ONUTasks: map[string]store.ONUTask{}}
+	o := store.ONU{ID: "o1", SiteID: "s1"}
+	d.ONUs[o.ID] = o
+	now := time.Now()
+	a := queue(d, o, store.TaskWiFi, "x", now)
+	if b := queue(d, o, store.TaskWiFi, "x", now); b.ID != a.ID {
+		t.Fatal("a pending Wi-Fi task must be joined")
+	}
+	a.Status = store.TaskRunning
+	d.ONUTasks[a.ID] = a
+	if b := queue(d, o, store.TaskWiFi, "x", now.Add(time.Second)); b.ID == a.ID || b.Status != store.TaskPending {
+		t.Fatalf("a running Wi-Fi task must not swallow a newer change: %+v", b)
+	}
+	r := queue(d, o, store.TaskReboot, "x", now)
+	r.Status = store.TaskRunning
+	d.ONUTasks[r.ID] = r
+	if b := queue(d, o, store.TaskReboot, "x", now); b.ID != r.ID {
+		t.Fatal("a running reboot is joined")
+	}
+}

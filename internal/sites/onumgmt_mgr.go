@@ -104,7 +104,7 @@ func evalONUMgmt(e *evalCtx, it *CheckItem) {
 	var missing []string
 	has := false
 	for _, r := range e.sn.tbl("/interface/vlan") {
-		if r["name"] == p.Iface && r["interface"] == e.site.OLTInterface && r["vlan-id"] == strconv.Itoa(p.VLAN) && !rowDisabled(r) {
+		if r["name"] == p.Iface && r["interface"] == ONUMgmtParent(e.site) && r["vlan-id"] == strconv.Itoa(p.VLAN) && !rowDisabled(r) {
 			has = true
 		}
 	}
@@ -141,7 +141,7 @@ func evalONUMgmt(e *evalCtx, it *CheckItem) {
 			missing = append(missing, "the firewall rule \""+r.Comment+"\"")
 		}
 	}
-	it.Evidence = append(it.Evidence, fmt.Sprintf("%s %s VLAN %d on %s", p.Iface, p.Subnet, p.VLAN, e.site.OLTInterface))
+	it.Evidence = append(it.Evidence, fmt.Sprintf("%s %s VLAN %d on %s", p.Iface, p.Subnet, p.VLAN, ONUMgmtParent(e.site)))
 	if len(missing) == 0 {
 		okItem(it, "The ONU management network "+p.Subnet+" (VLAN "+strconv.Itoa(p.VLAN)+") is in place on the router.")
 		return

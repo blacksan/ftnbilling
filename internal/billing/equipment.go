@@ -80,9 +80,10 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 			return fmt.Errorf("a %s with serial number %s is already in the register", kind, serial)
 		}
 		if kind == store.KindONT {
-			// A serial (either kind) identifies one ONU: it cannot be on two inventory items.
+			// A serial (either kind) identifies one ONU: it cannot be on two inventory items. Retired items count
+			// too, like serialTaken and the Postgres unique index on gpon_serial (JSON and Postgres refuse alike).
 			for _, o := range d.Equipment {
-				if o.ID == in.ID || o.Kind != store.KindONT || o.Status == store.EqRetired {
+				if o.ID == in.ID || o.Kind != store.KindONT {
 					continue
 				}
 				for _, mine := range []string{serial, gpon} {

@@ -88,3 +88,19 @@ func TestImportONUShorthand(t *testing.T) {
 		t.Fatalf("%+v", res)
 	}
 }
+
+// A retired ONT keeps its GPON serial: a new item cannot take it (the Postgres unique index refuses it too, so
+// both stores answer the same).
+func TestONUGPONSerialOfRetiredItemStaysTaken(t *testing.T) {
+	e := newEnv(t)
+	o, err := e.svc.SaveEquipment(EquipmentInput{Kind: "ont", Serial: "hw001", GPONSerial: "HWTC0001", MAC: macA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.ReturnEquipment(o.ID, store.EqRetired, "old"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.SaveEquipment(EquipmentInput{Kind: "ont", Serial: "hw002", GPONSerial: "hwtc0001", MAC: macB}); err == nil || !strings.Contains(err.Error(), "already in the register") {
+		t.Fatalf("the GPON serial of a retired item was taken again: %v", err)
+	}
+}

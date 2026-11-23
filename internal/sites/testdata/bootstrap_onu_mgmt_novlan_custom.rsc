@@ -148,7 +148,7 @@
   /ip/pool remove [find where name="ftn-onu-pool"]
   /ip/address remove [find where comment="ftn: onu mgmt gateway"]
   /interface/vlan remove [find where name="vlan200-onu"]
-  /interface/vlan add name=vlan200-onu vlan-id=200 interface=sfp-sfpplus1 comment="ftn: onu mgmt VLAN"
+  /interface/vlan add name=vlan200-onu vlan-id=200 interface=br-customers comment="ftn: onu mgmt VLAN"
   /ip/address add address=10.6.12.1/24 interface=vlan200-onu comment="ftn: onu mgmt gateway"
   /ip/pool add name=ftn-onu-pool ranges=10.6.12.10-10.6.12.250 comment="ftn: onu mgmt pool"
   /ip/dhcp-server/option add name=ftn-onu-acs code=43 value=0x0116687474703a2f2f31302e39392e302e313a373534372f comment="ftn: onu mgmt option 43"

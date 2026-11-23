@@ -10,6 +10,7 @@ import (
 
 	"ispbill/internal/acs"
 	"ispbill/internal/billing"
+	"ispbill/internal/sites"
 	"ispbill/internal/store"
 )
 
@@ -111,7 +112,7 @@ func (s *Server) onuTabData(data map[string]any, st store.Site) {
 	if st.ONUMgmtN > 0 {
 		data["ONUSubnet"], data["ONUGateway"] = st.MgmtSubnet(), st.MgmtGateway()
 		if plan, err := s.mgr.ONUPlan(st); err == nil {
-			data["ONUSnippet"] = plan.Snippet(s.mgr.Effective(st).OLTInterface)
+			data["ONUSnippet"] = plan.Snippet(sites.ONUMgmtParent(s.mgr.Effective(st)))
 		} else {
 			data["ONUPlanErr"] = err.Error()
 		}

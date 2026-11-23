@@ -154,7 +154,10 @@ func run(log *slog.Logger) error {
 	webSrv.SetSettings(setm)
 	mp.SetAlert(webSrv.PaymentAlert)
 	webSrv.SetOps(ops)
-	if cfg.ACSEnabled() {
+	if cfg.ACSEnabled() && len(cfg.DataKey) == 0 {
+		// ACS_LISTEN defaults on; an older install without DATA_KEY keeps running with ONU management off.
+		log.Warn("ONU management (TR-069 ACS) is off: it needs DATA_KEY to seal Wi-Fi passwords and logins")
+	} else if cfg.ACSEnabled() {
 		// The built-in TR-069 ACS (ONU management). It listens on the tunnel address only.
 		acsSvc, err := acs.New(acs.Options{Store: st, Cfg: cfg, Log: log, DataKey: cfg.DataKey})
 		if err != nil {

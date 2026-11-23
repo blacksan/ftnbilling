@@ -68,6 +68,16 @@ type ONUMgmtPlan struct {
 // ONUMgmtVLANName is the VLAN interface the bootstrap builds on the OLT port.
 func ONUMgmtVLANName(vlan int) string { return fmt.Sprintf("vlan%d-onu", vlan) }
 
+// ONUMgmtParent is the interface the management VLAN sits on: the OLT port when the customers have their own VLAN
+// (the port is then no bridge port), else the customer bridge, because a VLAN interface on a bridge port never
+// receives a frame (the bridge takes them all first; MikroTik "Layer2 misconfiguration", VLAN on a slave interface).
+func ONUMgmtParent(s store.Site) string {
+	if s.VLANID > 0 {
+		return s.OLTInterface
+	}
+	return CustomerBridge
+}
+
 // ErrNoONUMgmt: the router has no management subnet allocated.
 var ErrNoONUMgmt = errors.New("ONU management is not set up on this router")
 

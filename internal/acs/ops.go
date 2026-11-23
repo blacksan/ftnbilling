@@ -33,10 +33,10 @@ func (in WiFiInput) check() error {
 	}
 	if !in.Same {
 		if m := ValidSSID(in.SSID5); m != "" {
-			return &FieldError{"ssid_5ghz", m}
+			return &FieldError{"ssid_5g", m}
 		}
 		if m := ValidPassphrase(in.Pass5); m != "" {
-			return &FieldError{"password_5ghz", m}
+			return &FieldError{"password_5g", m}
 		}
 	}
 	return nil
@@ -49,10 +49,11 @@ func (s *Service) audit(d *store.Data, o store.ONU, by, ip, msg string) {
 	d.AddEvent(store.Event{Time: s.now(), SiteID: o.SiteID, Kind: "audit", AccountID: o.AccountID, Msg: msg, Actor: by, IP: ip})
 }
 
-// queue adds a task to the ONU unless an active one of the same kind exists (then that one is returned).
+// queue adds a task to the ONU unless an active one of the same kind exists (then that one is returned). A Wi-Fi
+// change joins only a pending one: a running one may already have sent the previous name and password.
 func queue(d *store.Data, o store.ONU, kind, by string, now time.Time) store.ONUTask {
 	for _, t := range d.ONUTasksOf(o.ID) {
-		if t.Kind == kind && t.Active() {
+		if t.Kind == kind && t.Active() && (kind != store.TaskWiFi || t.Status == store.TaskPending) {
 			return t
 		}
 	}
