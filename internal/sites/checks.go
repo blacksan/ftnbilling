@@ -61,6 +61,7 @@ const (
 	CheckWAN          = "wan.internet"
 	CheckBootFile     = "bootstrap.file"
 	CheckAdminNet     = "admin.no_internet"
+	CheckONUMgmt      = "onu.mgmt"
 	checksCacheFor    = 60 * time.Second
 	checksBudget      = 45 * time.Second // the whole pass, all reads together
 	recheckMax        = 6                // ... this many times in a row
@@ -509,6 +510,7 @@ var needs = map[string][]string{
 	CheckWAN:         {"/ip/route"},
 	CheckBootFile:    {"/file"},
 	CheckAdminNet:    {"/ip/firewall/filter", "/ip/firewall/address-list", "/interface/bridge"},
+	CheckONUMgmt:     {"/interface/vlan", "/ip/address", "/ip/dhcp-server", "/ip/firewall/filter"},
 }
 
 type checkDef struct {
@@ -540,6 +542,7 @@ var checkDefs = []checkDef{
 	{CheckBootFile, "router", "No set-up script left on the router", false, "", evalBootFile},
 	{CheckIPv6, "network", "IPv6", false, "", evalIPv6},
 	{CheckPublicIP, "services", "Server public address is set", true, "", evalPublicIP},
+	{CheckONUMgmt, "services", "ONU management network (TR-069)", false, "", evalONUMgmt},
 }
 
 func okItem(it *CheckItem, detail string, ev ...string) {
@@ -1272,7 +1275,8 @@ func assessPort(sn *snapshot, site store.Site, iface string) portAssess {
 		}
 	}
 	for _, r := range sn.tbl("/interface/vlan") {
-		if r["interface"] == iface {
+		// The ONU management VLAN shares the OLT port with the customer VLAN and is no bridge port by design.
+		if r["interface"] == iface && !strings.HasPrefix(r["comment"], onuPrefix) {
 			a.vlans = append(a.vlans, r["name"])
 		}
 	}

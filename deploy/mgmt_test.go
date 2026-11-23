@@ -564,7 +564,7 @@ func (r *fwRig) run(vars, body string) (string, error) {
 	script += fnSrc(r.t, "mgmt_rules") + "\n"
 	script += `MGMT_SYSCTL=$FTN_MGMT_SYSCTL
 DRY=0; MGMT_IF=wg-mgmt; WG_IF=wg0; WG_SUBNET=10.99.0.0/22; MGMT_SUBNET=10.98.0.0/24; MGMT_PORT=51821; WG_PORT=51820
-MGMT_MARK=ftnbilling-mgmt; MGMT_ON=1; ENVF=/nonexistent; WG_SERVER_IP=10.99.0.1
+MGMT_MARK=ftnbilling-mgmt; MGMT_ON=1; ENVF=/nonexistent; WG_SERVER_IP=10.99.0.1; ACS_PORT=7547
 step() { :; }; note() { :; }; warn() { :; }; run() { "$@"; }; runq() { "$@" >/dev/null; }; try() { "$@" >/dev/null 2>&1 || true; }
 die() { echo "DIE: $*" >&2; exit 3; }
 writef() { cat >"$3"; }
@@ -747,5 +747,30 @@ func TestBackupIncludesMgmtConfig(t *testing.T) {
 		if !strings.Contains(string(doc), want) {
 			t.Errorf("BACKUP.md lacks %q", want)
 		}
+	}
+}
+
+// ONU management (TR-069): the ACS port is opened on the tunnel interface and the tunnel address only, never publicly.
+func TestInstallACSPortOnlyOnTunnel(t *testing.T) {
+	bashOrSkip(t)
+	cmd := exec.Command("bash", "install.sh")
+	cmd.Env = append(os.Environ(), "DRY_RUN=1", "DOMAIN=billing.example.co.ke", "PUBLIC_IP=203.0.113.7")
+	b, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, b)
+	}
+	out := string(b)
+	if !strings.Contains(out, "ufw allow in on wg0 to 10.99.0.1 port 7547 proto tcp") {
+		t.Errorf("the ACS port is not allowed on wg0:\n%s", out)
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "7547") && strings.Contains(l, "ufw") && !strings.Contains(l, "in on wg0 to 10.99.0.1") {
+			t.Errorf("the ACS port must only be opened on the tunnel: %q", l)
+		}
+	}
+	// The env file names the private listen address.
+	src, _ := os.ReadFile("install.sh")
+	if !strings.Contains(string(src), "ACS_LISTEN=$WG_SERVER_IP:$ACS_PORT") {
+		t.Error("install.sh does not write ACS_LISTEN with the tunnel address")
 	}
 }

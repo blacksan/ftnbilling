@@ -298,7 +298,7 @@ func (m *Manager) Peers() []wg.Peer {
 	m.st.View(func(d *store.Data) {
 		for _, s := range d.Sites {
 			if !s.Removed && s.Mode == store.SiteModeWG && s.WGPublicKey != "" && s.TunnelIP != "" {
-				out = append(out, wg.Peer{PublicKey: s.WGPublicKey, TunnelIP: s.TunnelIP})
+				out = append(out, wg.Peer{PublicKey: s.WGPublicKey, TunnelIP: s.TunnelIP, MgmtSubnet: s.MgmtSubnet()})
 			}
 		}
 	})

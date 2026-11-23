@@ -359,6 +359,7 @@ func (s *Service) reconcileSite(ctx context.Context, site store.Site, ps *provSt
 	if err != nil {
 		return run, fmt.Errorf("reading DHCP leases: %w", err)
 	}
+	s.noteMgmtLeases(siteID, site.MgmtSubnet(), leases)
 	queues, err := rt.Rows(ctx, pathQueue, nil)
 	if err != nil {
 		return run, fmt.Errorf("reading queues: %w", err)

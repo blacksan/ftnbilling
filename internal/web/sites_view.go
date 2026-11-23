@@ -250,7 +250,7 @@ func (s *Server) siteByID(id string) (store.Site, bool) {
 
 type tabDef struct{ Key, Label string }
 
-var routerTabs = []tabDef{{"overview", "Overview"}, {"setup", "Setup"}, {"clients", "Clients"}, {"interfaces", "Interfaces"}, {"ports", "Ports"}, {"plans", "Plans"}, {"profile", "Profile"}, {"danger", "Danger"}}
+var routerTabs = []tabDef{{"overview", "Overview"}, {"setup", "Setup"}, {"clients", "Clients"}, {"interfaces", "Interfaces"}, {"onus", "ONUs"}, {"ports", "Ports"}, {"plans", "Plans"}, {"profile", "Profile"}, {"danger", "Danger"}}
 
 // siteView builds the router page; cmd and noCheck are set only in the
 // response to a join request, which is the one time the line is shown.
@@ -327,6 +327,9 @@ func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site,
 	states := s.siteStates(ctx, []store.Site{st})
 	p.Data["State"] = states[st.ID]
 	s.routerTabData(r.Context(), p.Data, st, status, tab, strings.TrimSpace(r.URL.Query().Get("q")))
+	if tab == "onus" {
+		s.onuTabData(p.Data, st)
+	}
 	if cmd != "" {
 		w.Header().Set("Cache-Control", "no-store")
 	}

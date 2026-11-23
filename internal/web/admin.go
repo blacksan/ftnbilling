@@ -78,6 +78,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	s.apartmentRoutes(get, post)
 	s.metricsRoutes(get, post)
 	s.opsRoutes(get, post)
+	s.onuRoutes(get, post)
 }
 
 type adminPage struct {
@@ -104,6 +105,7 @@ type adminPage struct {
 	Detail             string
 	H1a, H1b, Lead     string
 	Acts               []heroAct
+	IsOwner            bool            // the signed-in user is an owner
 	CanWrite           bool            // owner or operator: the add and edit buttons show
 	Pkgs               []store.Package // enabled plans, for the Add customer form
 	Initial            string          // avatar letter
@@ -138,12 +140,14 @@ func (s *Server) page(r *http.Request, active string) adminPage {
 	p.UnregCount = s.svc.UnregisteredOnline(sc.Has) // online, unregistered devices only
 	p.PendingRegs = s.svc.PendingRegistrationCount(sc.Has)
 	p.NavDevices = p.UnregCount + p.PendingRegs
+	p.IsOwner = p.Role == store.RoleOwner
 	p.CanWrite = p.Role == store.RoleOwner || p.Role == store.RoleOperator
 	p.Initial = initialOf(p.User)
 	if p.CanWrite {
 		p.Data["RouterDefaults"] = sites.ApplyDefaults(s.cfg, store.Site{Mode: store.SiteModeWG})
 		p.Data["JoinTTL"] = int(s.cfg.JoinTokenTTL.Minutes())
 		p.Data["AptOpts"] = s.apartmentOptions()
+		p.Data["ONUStock"] = s.onuStock()
 	}
 	s.st.View(func(d *store.Data) {
 		for _, pk := range d.EffectivePackages(sc.ID) {
@@ -313,6 +317,7 @@ func (s *Server) adminAccounts(w http.ResponseWriter, r *http.Request) {
 // customerForm is everything the Add customer form can say.
 type customerForm struct {
 	SiteID, ApartmentID, Flat, Tenant, Phone, WhatsApp, MAC, PackageID, Notes string
+	EquipmentID                                                               string // an ONU of the register
 	WASame, Activate                                                          bool
 }
 
@@ -322,7 +327,7 @@ func customerFormOf(r *http.Request, site string) customerForm {
 	if unit == "" {
 		unit = f("flat") // the older field name
 	}
-	return customerForm{SiteID: site, ApartmentID: f("apartment_id"), Flat: unit, Tenant: f("tenant"), Phone: f("phone"), WhatsApp: f("whatsapp"), MAC: f("mac"),
+	return customerForm{SiteID: site, ApartmentID: f("apartment_id"), Flat: unit, Tenant: f("tenant"), Phone: f("phone"), WhatsApp: f("whatsapp"), MAC: f("mac"), EquipmentID: f("equipment_id"),
 		PackageID: f("package"), Notes: f("notes"), WASame: r.PostFormValue("wa_same") == "1", Activate: r.PostFormValue("activate") == "1"}
 }
 
@@ -349,7 +354,7 @@ func (s *Server) createCustomer(ctx context.Context, in customerForm) (store.Acc
 		note = "activated on create"
 	}
 	a, rs, err := s.svc.CreateCustomer(ctx, billing.AddCustomerInput{ApartmentID: in.ApartmentID, SiteID: in.SiteID, Unit: in.Flat, Flat: in.Flat, Tenant: in.Tenant, Phone: in.Phone, MAC: mac,
-		PackageID: in.PackageID, Activate: in.Activate, Note: note})
+		PackageID: in.PackageID, Activate: in.Activate, Note: note, EquipmentID: in.EquipmentID})
 	if a.ID != "" {
 		if in.Activate && in.Notes != "" {
 			_ = s.svc.UpdateAccount(a.ID, a.Flat, a.Tenant, a.Phone, in.Notes)
@@ -507,6 +512,7 @@ func (s *Server) adminAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	p.Data["MoveTo"] = others
 	s.accountCards(p.Data, a, s.scopeOf(r))
+	s.onuCardData(p.Data, a)
 	s.render(w, "admin_account", p)
 }
 

@@ -14,6 +14,8 @@ import (
 // EquipmentInput is the add/edit form of an equipment item.
 type EquipmentInput struct {
 	ID, Kind, Serial, MAC, Model, Firmware, SiteID, Notes string
+	// GPONSerial is the OLT-side serial of an ONT when it differs from Serial (the TR-069 serial).
+	GPONSerial string
 }
 
 var equipKinds = map[string]bool{store.KindONT: true, store.KindRouter: true, store.KindOLT: true, store.KindSplitter: true, store.KindSwitch: true, store.KindOther: true}
@@ -52,6 +54,13 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 		return store.Equipment{}, errors.New("choose what kind of equipment this is")
 	}
 	serial := strings.ToUpper(cleanText(in.Serial, 60))
+	gpon := strings.ToUpper(strings.Join(strings.Fields(cleanText(in.GPONSerial, 60)), ""))
+	if gpon == strings.Join(strings.Fields(serial), "") {
+		gpon = "" // the same serial twice says nothing
+	}
+	if gpon != "" && kind != store.KindONT {
+		return store.Equipment{}, errors.New("only an ONT has a GPON serial")
+	}
 	mac := ""
 	if strings.TrimSpace(in.MAC) != "" {
 		m, err := NormalizeMAC(in.MAC)
@@ -69,6 +78,20 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 		}
 		if serialTaken(d, kind, serial, in.ID) {
 			return fmt.Errorf("a %s with serial number %s is already in the register", kind, serial)
+		}
+		if kind == store.KindONT {
+			// A serial (either kind) identifies one ONU: it cannot be on two inventory items. Retired items count
+			// too, like serialTaken and the Postgres unique index on gpon_serial (JSON and Postgres refuse alike).
+			for _, o := range d.Equipment {
+				if o.ID == in.ID || o.Kind != store.KindONT {
+					continue
+				}
+				for _, mine := range []string{serial, gpon} {
+					if n := store.NormSerial(mine); n != "" && (store.NormSerial(o.Serial) == n || store.NormSerial(o.GPONSerial) == n) {
+						return fmt.Errorf("an ONT with serial number %s is already in the register", mine)
+					}
+				}
+			}
 		}
 		now := s.now()
 		e, exists := d.Equipment[in.ID]
@@ -89,7 +112,7 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 			}
 		}
 		oldSite := e.SiteID
-		e.Kind, e.Serial, e.MAC = kind, serial, mac
+		e.Kind, e.Serial, e.MAC, e.GPONSerial = kind, serial, mac, gpon
 		e.Model, e.Firmware, e.Notes = cleanText(in.Model, 60), cleanText(in.Firmware, 40), cleanText(in.Notes, 300)
 		if e.AccountID == "" {
 			e.SiteID = in.SiteID
@@ -197,6 +220,15 @@ func returnLocked(d *store.Data, key string, e store.Equipment, status, note str
 		kind = store.EqEvUnassigned
 	}
 	addEqEvent(d, e, kind, from, status, note, now) // before the account link is cleared
+	if e.Kind == store.KindONT && e.AccountID != "" && from == store.EqInstalled {
+		// The box leaves its house: its ONU row is unlinked now and a factory reset waits for its next check-in, so the
+		// old tenant's Wi-Fi name and password do not go to whoever gets the box next.
+		for _, o := range d.ONUsOfSerial(e.Serial, e.GPONSerial) {
+			if o.AccountID == e.AccountID {
+				d.ReleaseONU(o.ID, now, "system")
+			}
+		}
+	}
 	e.AccountID, e.Status, e.UpdatedAt = "", status, now
 	if status != store.EqInstalled {
 		e.SiteID = ""
@@ -304,7 +336,15 @@ func (s *Service) ImportEquipment(text string) (ImportResult, error) {
 		if i == 0 && strings.EqualFold(get(0), "kind") {
 			continue // header line
 		}
-		if _, err := s.SaveEquipment(EquipmentInput{Kind: get(0), Serial: get(1), MAC: get(2), Model: get(3)}); err != nil {
+		in := EquipmentInput{Kind: get(0), Serial: get(1), MAC: get(2), Model: get(3)}
+		if !equipKinds[strings.ToLower(get(0))] {
+			// "serial,mac,model[,gpon serial]": the ONU shorthand
+			if i == 0 && strings.EqualFold(get(0), "serial") {
+				continue
+			}
+			in = EquipmentInput{Kind: store.KindONT, Serial: get(0), MAC: get(1), Model: get(2), GPONSerial: get(3)}
+		}
+		if _, err := s.SaveEquipment(in); err != nil {
 			res.Skipped = append(res.Skipped, fmt.Sprintf("line %d: %v", i+1, err))
 			continue
 		}

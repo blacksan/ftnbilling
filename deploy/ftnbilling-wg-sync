@@ -8,7 +8,11 @@
 #
 #   [Peer]
 #   PublicKey = <44 characters of base64>
-#   AllowedIPs = <one address inside the tunnel subnet>/32
+#   AllowedIPs = <one address inside the tunnel subnet>/32[, <ONU management /24 inside ONU_SUPERNET>]
+#
+# The optional second entry is the router's ONU management subnet (TR-069): 10.6.<n>.0/24. It lets the
+# built-in ACS (10.99.0.1:7547) reach the ONUs behind the router. wg syncconf does not install routes, so
+# this script keeps one route for the whole ONU_SUPERNET into the tunnel interface.
 #
 # A peer block with anything else in it (PostUp, Endpoint, an address outside
 # the tunnel subnet) is skipped and reported (stderr and the status file); the
@@ -21,6 +25,8 @@ CONF=${FTN_WG_SYNC_CONF:-/etc/ftnbilling/wg-sync.env}
 IFACE=${WG_IFACE:-wg0}
 DATA=${DATA:-/var/lib/ftnbilling}
 WG_SUBNET=${WG_SUBNET:-10.99.0.0/22}
+ONU_SUPERNET=${ONU_SUPERNET:-10.6.0.0/16}
+IPBIN=${IP_BIN:-ip}
 WG=${WG_BIN:-wg}
 WGQ=${WG_QUICK_BIN:-wg-quick}
 FILE=$DATA/wg/peers.conf
@@ -41,6 +47,12 @@ BITS=${WG_SUBNET#*/}
 MASK=$(((0xFFFFFFFF << (32 - BITS)) & 0xFFFFFFFF))
 NETINT=$(($(ip2int "$NET") & MASK))
 SERVER=$((NETINT + 1))
+ONUNET=${ONU_SUPERNET%/*}
+ONUBITS=${ONU_SUPERNET#*/}
+[[ $ONUNET =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "bad ONU_SUPERNET"
+[[ $ONUBITS =~ ^[0-9]+$ ]] && [ "$ONUBITS" -ge 8 ] && [ "$ONUBITS" -le 24 ] || die "bad ONU_SUPERNET"
+ONUMASK=$(((0xFFFFFFFF << (32 - ONUBITS)) & 0xFFFFFFFF))
+ONUNETINT=$(($(ip2int "$ONUNET") & ONUMASK))
 
 if [ ! -e "$FILE" ]; then
   echo "no peers file yet; nothing to do"
@@ -65,6 +77,8 @@ blk_bad=""
 blk_key=""
 blk_has_allowed=0
 blk_lines=()
+seen_mgmt=""
+seen_pending=""
 flush_block() {
   [ "$blk_start" -gt 0 ] || return 0
   if [ -z "$blk_bad" ] && [ -z "$blk_key" ]; then blk_bad="no PublicKey"; fi
@@ -77,7 +91,7 @@ flush_block() {
     printf '%s\n' "[Peer]" "${blk_lines[@]}" "" >>"$OUT"
     good=$((good + 1))
   fi
-  blk_start=0; blk_bad=""; blk_key=""; blk_has_allowed=0; blk_lines=()
+  blk_start=0; blk_bad=""; blk_key=""; blk_has_allowed=0; blk_lines=(); seen_pending=""
 }
 bad() { [ -n "$blk_bad" ] || blk_bad="line $n: $*"; }
 
@@ -108,17 +122,36 @@ while IFS= read -r line || [ -n "$line" ]; do
           v=${line#AllowedIPs = }
           if [ -z "$blk_key" ]; then bad "AllowedIPs before PublicKey"
           elif [ "$blk_has_allowed" = 1 ]; then bad "a second AllowedIPs"
-          elif [[ ! $v =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/32$ ]]; then bad "AllowedIPs must be one /32 address"
           else
-            for o in "${BASH_REMATCH[@]:1:4}"; do
-              [ "$((10#$o))" -le 255 ] || bad "bad address"
-            done
-            if [ -z "$blk_bad" ]; then
-              ip=${v%/32}
-              i=$(ip2int "$ip")
-              if [ $((i & MASK)) -ne "$NETINT" ]; then bad "$ip is outside $WG_SUBNET"
-              elif [ "$i" -eq "$SERVER" ] || [ "$i" -eq "$NETINT" ]; then bad "$ip is reserved"
-              else blk_has_allowed=1; blk_lines+=("$line"); fi
+            first=${v%%, *}
+            second=""
+            [ "$first" = "$v" ] || second=${v#*, }
+            if [[ ! $first =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/32$ ]]; then bad "AllowedIPs must start with one /32 address"
+            else
+              for o in "${BASH_REMATCH[@]:1:4}"; do
+                [ "$((10#$o))" -le 255 ] || bad "bad address"
+              done
+              if [ -z "$blk_bad" ]; then
+                ip=${first%/32}
+                i=$(ip2int "$ip")
+                if [ $((i & MASK)) -ne "$NETINT" ]; then bad "$ip is outside $WG_SUBNET"
+                elif [ "$i" -eq "$SERVER" ] || [ "$i" -eq "$NETINT" ]; then bad "$ip is reserved"
+                fi
+              fi
+              if [ -z "$blk_bad" ] && [ -n "$second" ]; then
+                if [[ ! $second =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.0/24$ ]]; then bad "the second AllowedIPs entry must be one a.b.c.0/24 ONU management subnet"
+                else
+                  for o in "${BASH_REMATCH[@]:1:3}"; do
+                    [ "$((10#$o))" -le 255 ] || bad "bad ONU management subnet"
+                  done
+                  mi=$(ip2int "${second%/24}")
+                  [ -n "$blk_bad" ] || [ $((mi & ONUMASK)) -eq "$ONUNETINT" ] || bad "$second is outside $ONU_SUPERNET"
+                  # one management subnet belongs to one peer
+                  [ -n "$blk_bad" ] || case " $seen_mgmt " in *" $second "*) bad "$second is already given to another peer" ;; esac
+                  [ -n "$blk_bad" ] || seen_pending=$second
+                fi
+              fi
+              if [ -z "$blk_bad" ]; then blk_has_allowed=1; blk_lines+=("$line"); [ -z "$seen_pending" ] || { seen_mgmt="$seen_mgmt $seen_pending"; seen_pending=""; }; fi
             fi
           fi
           ;;
@@ -138,5 +171,7 @@ write_status() {
 }
 
 "$WG" syncconf "$IFACE" <("$WGQ" strip "$IFACE"; cat "$OUT")
+# syncconf installs no routes: the ONU management range goes into the tunnel interface (idempotent).
+"$IPBIN" route replace "$ONU_SUPERNET" dev "$IFACE" 2>/dev/null || echo "ftnbilling-wg-sync: could not route $ONU_SUPERNET into $IFACE (ONU management unreachable)" >&2
 write_status
 echo "applied $good peers to $IFACE$([ "$skipped" = 0 ] || echo " ($skipped skipped, see above)")"

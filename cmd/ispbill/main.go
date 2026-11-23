@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"ispbill/internal/acs"
 	"ispbill/internal/authn"
 	"ispbill/internal/billing"
 	"ispbill/internal/config"
@@ -148,10 +149,33 @@ func run(log *slog.Logger) error {
 		svc.Wait()
 		return err
 	}
+	errc := make(chan error, 3)
 	webSrv := web.New(cfg, st, svc, providers, mp, mgr, log)
 	webSrv.SetSettings(setm)
 	mp.SetAlert(webSrv.PaymentAlert)
 	webSrv.SetOps(ops)
+	if cfg.ACSEnabled() && len(cfg.DataKey) == 0 {
+		// ACS_LISTEN defaults on; an older install without DATA_KEY keeps running with ONU management off.
+		log.Warn("ONU management (TR-069 ACS) is off: it needs DATA_KEY to seal Wi-Fi passwords and logins")
+	} else if cfg.ACSEnabled() {
+		// The built-in TR-069 ACS (ONU management). It listens on the tunnel address only.
+		acsSvc, err := acs.New(acs.Options{Store: st, Cfg: cfg, Log: log, DataKey: cfg.DataKey, Lease: svc.ONUMgmtLease,
+			Alert: webSrv.ONUAlert})
+		if err != nil {
+			// Billing keeps running; only ONU management stays off (the message says why and what to do).
+			log.Error("ONU management (TR-069 ACS) is off", "err", err)
+		} else {
+			webSrv.SetACS(acsSvc)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := acsSvc.Run(ctx); err != nil {
+					log.Error("ACS stopped", "err", err)
+					errc <- err
+				}
+			}()
+		}
+	}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -175,7 +199,6 @@ func run(log *slog.Logger) error {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	errc := make(chan error, 2)
 	go func() { errc <- srv.ListenAndServe() }()
 
 	var lockErr error

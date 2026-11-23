@@ -37,6 +37,7 @@ const (
 	WipePayments        = "payments"
 	WipeDevices         = "devices and leases"
 	WipeRegistrations   = "self-registrations"
+	WipeONUs            = "ONUs and their TR-069 tasks"
 	WipeTasks           = "tasks"
 	WipeEvents          = "events and audit log"
 	WipeNotes           = "CRM notes"
@@ -85,7 +86,7 @@ func (d *Data) WipeReport() WipeReport {
 			{WipeAccounts, len(d.Accounts) + len(d.ClosedAccounts)}, {WipeTenancies, len(d.Tenancies)},
 			{WipeEquipment, len(d.Equipment)}, {WipeEquipmentEvents, len(d.EquipmentEvents)}, {WipeApartments, len(d.Apartments) + len(d.ApartmentSites)},
 			{WipeOrders, len(d.Orders)}, {WipeVouchers, len(d.Vouchers)}, {WipePayments, len(d.Payments)},
-			{WipeDevices, len(d.Devices)}, {WipeRegistrations, len(d.Registrations)}, {WipeTasks, len(d.Tasks)}, {WipeEvents, len(d.Events)}, {WipeNotes, len(d.Notes)},
+			{WipeDevices, len(d.Devices)}, {WipeRegistrations, len(d.Registrations)}, {WipeONUs, len(d.ONUs) + len(d.ONUTasks)}, {WipeTasks, len(d.Tasks)}, {WipeEvents, len(d.Events)}, {WipeNotes, len(d.Notes)},
 			{WipeRouterSettings, rs}, {WipeSessions, len(d.AdminSessions)}, {WipePhones, len(d.APIDevices)},
 		},
 		KeptAdminUser: len(d.AdminUsers),

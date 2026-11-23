@@ -3,6 +3,7 @@ package pgstore
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -259,20 +260,20 @@ var sitesC = (&codec[store.Site]{
 		"join_hash", "join_expires_at", "join_created_at", "join_used_at", "join_used_from", "joined_at", "wan_interface", "wan_list",
 		"olt_interface", "vlan_id", "customer_subnet", "wan_cap_mbps", "olt_cap_mbps", "fup_tb", "bench_port",
 		"pkg_overrides", "address", "lat", "lng", "go_live", "access_mode", "created_at",
-		"wan_mode", "wan_address", "wan_gateway", "wan_dns", "pppoe_user", "pppoe_pass_enc", "lan_ports", "lan_subnet", "customer_ports", "disabled_ports", "ports_policy", "enabled_ports"},
+		"wan_mode", "wan_address", "wan_gateway", "wan_dns", "pppoe_user", "pppoe_pass_enc", "lan_ports", "lan_subnet", "customer_ports", "disabled_ports", "ports_policy", "enabled_ports", "onu_mgmt_n", "onu_mgmt_vlan"},
 	args: func(v store.Site) []any {
 		return []any{v.ID, v.Name, v.Mode, v.Notes, v.SupportPhone, v.Disabled, v.Removed, v.TunnelIP, v.WGPublicKey, v.RESTUser, v.RESTPass, v.RESTPort,
 			v.Join.Hash, nt(v.Join.ExpiresAt), nt(v.Join.CreatedAt), nt(v.Join.UsedAt), v.Join.UsedFrom, nt(v.JoinedAt), v.WANInterface, v.WANList,
 			v.OLTInterface, v.VLANID, v.CustomerSubnet, v.WANCapMbps, v.OLTCapMbps, v.FUPTB, v.BenchPort,
 			overridesArg(v.PkgOverrides), v.Address, v.Lat, v.Lng, nt(v.GoLive), accessMode(v.AccessMode), tm(v.CreatedAt),
-			v.WANMode, v.WANAddress, v.WANGateway, v.WANDNS, v.PPPoEUser, v.PPPoEPassEnc, v.LANPorts, v.LANSubnet, v.CustomerPorts, v.DisabledPorts, v.PortsPolicy, v.EnabledPorts}
+			v.WANMode, v.WANAddress, v.WANGateway, v.WANDNS, v.PPPoEUser, v.PPPoEPassEnc, v.LANPorts, v.LANSubnet, v.CustomerPorts, v.DisabledPorts, v.PortsPolicy, v.EnabledPorts, v.ONUMgmtN, v.ONUMgmtVLAN}
 	},
 	dst: func(v *store.Site) []any {
 		return []any{&v.ID, &v.Name, &v.Mode, &v.Notes, &v.SupportPhone, &v.Disabled, &v.Removed, &v.TunnelIP, &v.WGPublicKey, &v.RESTUser, &v.RESTPass, &v.RESTPort,
 			&v.Join.Hash, t_(&v.Join.ExpiresAt), t_(&v.Join.CreatedAt), t_(&v.Join.UsedAt), &v.Join.UsedFrom, t_(&v.JoinedAt), &v.WANInterface, &v.WANList,
 			&v.OLTInterface, &v.VLANID, &v.CustomerSubnet, &v.WANCapMbps, &v.OLTCapMbps, &v.FUPTB, &v.BenchPort,
 			overridesDst{&v.PkgOverrides}, &v.Address, &v.Lat, &v.Lng, t_(&v.GoLive), &v.AccessMode, t_(&v.CreatedAt),
-			&v.WANMode, &v.WANAddress, &v.WANGateway, &v.WANDNS, &v.PPPoEUser, &v.PPPoEPassEnc, &v.LANPorts, &v.LANSubnet, &v.CustomerPorts, &v.DisabledPorts, &v.PortsPolicy, &v.EnabledPorts}
+			&v.WANMode, &v.WANAddress, &v.WANGateway, &v.WANDNS, &v.PPPoEUser, &v.PPPoEPassEnc, &v.LANPorts, &v.LANSubnet, &v.CustomerPorts, &v.DisabledPorts, &v.PortsPolicy, &v.EnabledPorts, &v.ONUMgmtN, &v.ONUMgmtVLAN}
 	},
 }).build()
 
@@ -303,12 +304,12 @@ var customersC = (&codec[store.Customer]{
 
 var equipmentC = (&codec[store.Equipment]{
 	name: "equipment", pk: []string{"id"}, key: func(v store.Equipment) string { return v.ID },
-	cols: []string{"id", "kind", "serial", "mac", "model", "firmware", "status", "site_id", "account_id", "installed_at", "notes", "created_at", "updated_at"},
+	cols: []string{"id", "kind", "serial", "mac", "model", "firmware", "status", "site_id", "account_id", "installed_at", "notes", "created_at", "updated_at", "gpon_serial"},
 	args: func(v store.Equipment) []any {
-		return []any{v.ID, v.Kind, v.Serial, v.MAC, v.Model, v.Firmware, v.Status, fk(v.SiteID), fk(v.AccountID), nt(v.InstalledAt), v.Notes, tm(v.CreatedAt), nt(v.UpdatedAt)}
+		return []any{v.ID, v.Kind, v.Serial, v.MAC, v.Model, v.Firmware, v.Status, fk(v.SiteID), fk(v.AccountID), nt(v.InstalledAt), v.Notes, tm(v.CreatedAt), nt(v.UpdatedAt), v.GPONSerial}
 	},
 	dst: func(v *store.Equipment) []any {
-		return []any{&v.ID, &v.Kind, &v.Serial, &v.MAC, &v.Model, &v.Firmware, &v.Status, s_(&v.SiteID), s_(&v.AccountID), t_(&v.InstalledAt), &v.Notes, t_(&v.CreatedAt), t_(&v.UpdatedAt)}
+		return []any{&v.ID, &v.Kind, &v.Serial, &v.MAC, &v.Model, &v.Firmware, &v.Status, s_(&v.SiteID), s_(&v.AccountID), t_(&v.InstalledAt), &v.Notes, t_(&v.CreatedAt), t_(&v.UpdatedAt), &v.GPONSerial}
 	},
 }).build()
 
@@ -316,16 +317,16 @@ var accountsC = (&codec[store.Account]{
 	name: "accounts", pk: []string{"id"}, key: func(v store.Account) string { return v.ID },
 	cols: []string{"id", "site_id", "code", "flat", "floor", "mac", "tenant", "phone", "notes", "whatsapp", "wa_opt_out", "customer_id", "package_id",
 		"expires_at", "suspended", "reminded_for", "expired_for", "odb", "splitter_id", "splitter_port", "created_at", "closed_at",
-		"mac_conflict", "ip", "apartment_id", "unit", "wa_same_phone"},
+		"mac_conflict", "ip", "apartment_id", "unit", "wa_same_phone", "home_wifi"},
 	args: func(v store.Account) []any {
 		return []any{v.ID, v.SiteID, v.Code, v.Flat, v.Floor, v.MAC, v.Tenant, v.Phone, v.Notes, v.WhatsApp, v.WAOptOut, fk(v.CustomerID), fk(v.PackageID),
 			nt(v.ExpiresAt), v.Suspended, nt(v.RemindedFor), nt(v.ExpiredFor), v.ODB, fk(v.SplitterID), v.SplitterPort, tm(v.CreatedAt), nt(v.ClosedAt),
-			v.MACConflict, v.IP, fk(v.ApartmentID), v.Unit, v.WASamePhone}
+			v.MACConflict, v.IP, fk(v.ApartmentID), v.Unit, v.WASamePhone, jsonArg(v.HomeWiFi, "{}")}
 	},
 	dst: func(v *store.Account) []any {
 		return []any{&v.ID, &v.SiteID, &v.Code, &v.Flat, &v.Floor, &v.MAC, &v.Tenant, &v.Phone, &v.Notes, &v.WhatsApp, &v.WAOptOut, s_(&v.CustomerID), s_(&v.PackageID),
 			t_(&v.ExpiresAt), &v.Suspended, t_(&v.RemindedFor), t_(&v.ExpiredFor), &v.ODB, s_(&v.SplitterID), &v.SplitterPort, t_(&v.CreatedAt), t_(&v.ClosedAt),
-			&v.MACConflict, &v.IP, s_(&v.ApartmentID), &v.Unit, &v.WASamePhone}
+			&v.MACConflict, &v.IP, s_(&v.ApartmentID), &v.Unit, &v.WASamePhone, jsonScan[store.WiFiDesired]{&v.HomeWiFi}}
 	},
 }).build()
 
@@ -434,6 +435,73 @@ var registrationsC = (&codec[store.Registration]{
 	},
 	dst: func(v *store.Registration) []any {
 		return []any{&v.ID, &v.SiteID, &v.ApartmentID, &v.Unit, &v.Name, &v.Phone, &v.Email, &v.MAC, &v.GuessMAC, &v.Status, t_(&v.ConsentAt), t_(&v.CreatedAt), t_(&v.DecidedAt), &v.DecidedBy, &v.AccountID, &v.DeviceName, &v.Building}
+	},
+}).build()
+
+// jsonArg stores a nested value as jsonb ("null" never reaches the column: a nil slice is "[]").
+func jsonArg(v any, empty string) any {
+	b, err := json.Marshal(v)
+	if err != nil || string(b) == "null" {
+		return empty
+	}
+	return string(b)
+}
+
+// jsonScan scans jsonb into *p.
+type jsonScan[T any] struct{ p *T }
+
+func (d jsonScan[T]) Scan(v any) error {
+	var raw []byte
+	switch x := v.(type) {
+	case nil:
+		var zero T
+		*d.p = zero
+		return nil
+	case string:
+		raw = []byte(x)
+	case []byte:
+		raw = x
+	default:
+		return fmt.Errorf("pgstore: cannot scan %T into jsonb", v)
+	}
+	var out T
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return err
+	}
+	if rv := reflect.ValueOf(&out).Elem(); rv.Kind() == reflect.Slice && rv.Len() == 0 {
+		rv.Set(reflect.Zero(rv.Type())) // an empty list is nil, as the JSON file reads it
+	}
+	*d.p = out
+	return nil
+}
+
+var onusC = (&codec[store.ONU]{
+	name: "onus", pk: []string{"id"}, key: func(v store.ONU) string { return v.ID },
+	cols: []string{"id", "serial", "oui", "manufacturer", "product_class", "sw_version", "hw_version", "root", "site_id", "mgmt_ip", "conn_req_url",
+		"cr_user_enc", "cr_pass_enc", "cr_applied", "first_seen", "last_inform", "last_events", "macs", "wifi", "profile", "account_id", "link", "sec", "state"},
+	args: func(v store.ONU) []any {
+		return []any{v.ID, v.Serial, v.OUI, v.Manufacturer, v.ProductClass, v.SWVersion, v.HWVersion, v.Root, v.SiteID, v.MgmtIP, v.ConnReqURL,
+			v.ConnReqUserEnc, v.ConnReqPassEnc, v.CRApplied, nt(v.FirstSeen), nt(v.LastInform), v.LastEvents, jsonArg(v.MACs, "[]"), jsonArg(v.WiFi, "[]"),
+			jsonArg(v.Profile, "{}"), v.AccountID, v.Link, jsonArg(v.Sec, "{}"), jsonArg(v.State, "{}")}
+	},
+	dst: func(v *store.ONU) []any {
+		return []any{&v.ID, &v.Serial, &v.OUI, &v.Manufacturer, &v.ProductClass, &v.SWVersion, &v.HWVersion, &v.Root, &v.SiteID, &v.MgmtIP, &v.ConnReqURL,
+			&v.ConnReqUserEnc, &v.ConnReqPassEnc, &v.CRApplied, t_(&v.FirstSeen), t_(&v.LastInform), &v.LastEvents, jsonScan[[]string]{&v.MACs}, jsonScan[[]store.ONUWiFi]{&v.WiFi},
+			jsonScan[store.ONUProfile]{&v.Profile}, &v.AccountID, &v.Link, jsonScan[store.ONUSec]{&v.Sec}, jsonScan[store.ONUState]{&v.State}}
+	},
+}).build()
+
+var onuTasksC = (&codec[store.ONUTask]{
+	name: "onu_tasks", pk: []string{"id"}, key: func(v store.ONUTask) string { return v.ID },
+	cols: []string{"id", "onu_id", "site_id", "account_id", "kind", "status", "fault", "by", "attempts", "created_at", "started_at", "finished_at",
+		"after_reboot", "pass_leaf", "confirmed_at", "confirmed_by"},
+	args: func(v store.ONUTask) []any {
+		return []any{v.ID, v.ONUID, v.SiteID, v.AccountID, v.Kind, v.Status, v.Fault, v.By, v.Attempts, tm(v.CreatedAt), nt(v.StartedAt), nt(v.FinishedAt),
+			v.AfterReboot, v.PassLeaf, nt(v.ConfirmedAt), v.ConfirmedBy}
+	},
+	dst: func(v *store.ONUTask) []any {
+		return []any{&v.ID, &v.ONUID, &v.SiteID, &v.AccountID, &v.Kind, &v.Status, &v.Fault, &v.By, &v.Attempts, t_(&v.CreatedAt), t_(&v.StartedAt), t_(&v.FinishedAt),
+			&v.AfterReboot, &v.PassLeaf, t_(&v.ConfirmedAt), &v.ConfirmedBy}
 	},
 }).build()
 

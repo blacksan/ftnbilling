@@ -309,3 +309,52 @@ doctor_and_banner 2>&1`, installLib(t), envf, sbin)
 		t.Fatalf("the admin password was printed again for an enrolled owner:\n%s", out)
 	}
 }
+
+// ONU management: a peer may carry its router's management /24 (inside ONU_SUPERNET) next to its /32, a subnet
+// belongs to one peer, anything else is skipped, and the supernet is routed into the tunnel interface.
+func TestWgSyncONUMgmtSubnet(t *testing.T) {
+	d := t.TempDir()
+	os.MkdirAll(filepath.Join(d, "wg"), 0o755)
+	key := func(c string) string { return strings.Repeat(c, 43) + "=" }
+	peers := fmt.Sprintf("[Peer]\nPublicKey = %s\nAllowedIPs = 10.99.0.2/32, 10.6.1.0/24\n\n"+
+		"[Peer]\nPublicKey = %s\nAllowedIPs = 10.99.0.3/32, 10.6.1.0/24\n\n"+ // the same subnet again
+		"[Peer]\nPublicKey = %s\nAllowedIPs = 10.99.0.4/32, 10.8.1.0/24\n\n"+ // outside the supernet
+		"[Peer]\nPublicKey = %s\nAllowedIPs = 10.99.0.5/32, 10.6.2.0/25\n\n"+ // not a /24
+		"[Peer]\nPublicKey = %s\nAllowedIPs = 10.99.0.6/32, 10.6.3.0/24, 0.0.0.0/0\n\n"+ // a third entry
+		"[Peer]\nPublicKey = %s\nAllowedIPs = 10.6.4.0/24\n\n"+ // the management subnet alone is no peer address
+		"[Peer]\nPublicKey = %s\nAllowedIPs = 10.99.0.7/32, 10.6.7.0/24\n\n",
+		key("A"), key("B"), key("C"), key("D"), key("E"), key("F"), key("G"))
+	os.WriteFile(filepath.Join(d, "wg", "peers.conf"), []byte(peers), 0o640)
+	conf := filepath.Join(d, "wg-sync.env")
+	os.WriteFile(conf, []byte(fmt.Sprintf("DATA=%s\nWG_SUBNET=10.99.0.0/22\nWG_IFACE=wg0\n", d)), 0o644)
+	log := filepath.Join(d, "calls.log")
+	applied := filepath.Join(d, "applied.conf")
+	bin := fakeBin(t, map[string]string{
+		"wg":       `echo "wg $*" >>"$FTN_LOG"; cat "$3" >"$FTN_APPLIED"`,
+		"wg-quick": `echo "[Interface]"`,
+		"ip":       `echo "ip $*" >>"$FTN_LOG"`,
+	})
+	out, err := bash(t, []string{"FTN_WG_SYNC_CONF=" + conf, "WG_BIN=" + filepath.Join(bin, "wg"), "WG_QUICK_BIN=" + filepath.Join(bin, "wg-quick"),
+		"IP_BIN=" + filepath.Join(bin, "ip"), "FTN_LOG=" + log, "FTN_APPLIED=" + applied, "FTN_WG_SYNC_STATUS=" + filepath.Join(d, "status")}, "bash ./ftnbilling-wg-sync")
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	got, _ := os.ReadFile(applied)
+	for _, want := range []string{"AllowedIPs = 10.99.0.2/32, 10.6.1.0/24", "AllowedIPs = 10.99.0.7/32, 10.6.7.0/24"} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("not applied: %q\n%s", want, got)
+		}
+	}
+	for _, bad := range []string{"10.99.0.3/32", "10.8.1.0", "10.6.2.0/25", "10.99.0.6/32", "10.6.4.0/24\n"} {
+		if strings.Contains(string(got), bad) {
+			t.Errorf("must be skipped: %q\n%s", bad, got)
+		}
+	}
+	calls, _ := os.ReadFile(log)
+	if !strings.Contains(string(calls), "ip route replace 10.6.0.0/16 dev wg0") {
+		t.Errorf("the ONU range is not routed into wg0: %q", calls)
+	}
+	if !strings.Contains(out, "already given to another peer") || !strings.Contains(out, "outside 10.6.0.0/16") {
+		t.Errorf("the reasons are not reported: %s", out)
+	}
+}

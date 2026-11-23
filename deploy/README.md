@@ -236,6 +236,58 @@ Not yet run on a real RouterOS 7.25.1 router. On the bench RB5009, once, before 
 - [ ] After the sweep, `ether3` and the OLT port stay off until enabled in the Ports tab; enabling the OLT port brings the customers back.
 - [ ] A router built with PPPoE on `ether1`: edit nothing, run two sweeps, `ether1` stays up.
 
+## ONU management (TR-069)
+
+The server has a TR-069 ACS built in. It lets the admin web and the Android app change a customer's Wi-Fi name and password and reboot the ONU, and puts the Wi-Fi back by itself after a factory reset. Customers cannot do any of this themselves.
+
+### How it is wired
+
+- Each router gets a **management VLAN** (default 99) on its OLT port with the address `10.6.<n>.1/24`; `n` is unique per router and shown on the router's ONUs tab. ONUs get an address there by DHCP, along with the ACS address in DHCP option 43. The VLAN answers ARP only for its own address (`arp=reply-only`) and the DHCP server adds an ARP entry per lease (`add-arp=yes`); the router check warns on an older router that lacks either, and the snippet on the ONUs tab fixes it.
+- The ONU network can reach **only the ACS** (`10.99.0.1` port 7547) and the router's NTP and DHCP. It gets no DNS (the ACS URL is an address) and has no internet. The server can reach the network only on the connection-request ports (7547 and 30005).
+- The server adds the router's management subnet to that router's WireGuard peer (`AllowedIPs`), and `ftnbilling-wg-sync` adds a route `10.6.0.0/16 dev wg0`. The router's own WireGuard needs no change.
+- The ACS listens on `ACS_LISTEN` (default the server's tunnel address, port 7547) and **refuses to start on a public address**. ufw allows 7547/tcp on the WireGuard interface only. It accepts only connections from inside a known router's management subnet, with HTTP Digest login. Optional TLS: `ACS_TLS_CERT` and `ACS_TLS_KEY` (set both). `ACS_LISTEN` must be the server's WireGuard address or loopback; another private address needs `ACS_LISTEN_ALLOW_PRIVATE=true` (do not use it on a NIC that is NATed to a public address). `ACS_COMPAT_AUTH=true` lets an ONU that can only do Basic authentication in; it is off by default and weaker. Digest needs `qop=auth`; an expired nonce is answered `stale=true`. If `DATA_KEY` changes the stored ACS password cannot be opened and ONU management stays off with a clear message: restore the old key, or start once with `ACS_RESET_CREDENTIALS=true` to make a new login (then every ONU profile on the OLT needs it, and every box a reset or a visit).
+
+### Turning it on for a router
+
+- A router set up from a **new join line** already has the management network (section "ftn 4b").
+- A router built earlier: open the router, tab **ONUs**, press **Set up the management network** (VLAN 99 unless you choose another), then paste the lines shown on that tab into the router terminal once. They only touch objects whose comment starts with `ftn: onu`. The server never writes these over the API.
+
+### What you do on the OLT (once per ONU profile)
+
+Open **Settings, ONU management** for the URL and login (the password is shown after you type your own password).
+
+V-SOL (the full steps, with what is still unverified, are in `deploy/V-SOL-OLT.md`):
+1. Make the management VLAN (99 by default) on the OLT and allow it tagged on the uplink to the router.
+2. In the ONU profile for tenants add a WAN of type TR069 on that VLAN, with DHCP.
+3. In the profile's TR-069 settings give the ACS URL, the user name and the password, and turn periodic inform on (300 seconds).
+4. Apply the profile. The ONU shows up under ONUs within a few minutes.
+
+ZTE and Huawei: the same WAN of type TR069 on the management VLAN with DHCP and the ACS URL and login, set on the OLT template or on the ONU's own page. Some Huawei boxes take only the URL, from option 43.
+
+Changing the ACS password breaks every ONU's login until the profile has the new one. (After the first check-in a box uses its own login, so only boxes that were reset, or that refused one, need the profile.)
+
+**Isolate the ONUs from each other.** Turn on ONU isolation on the OLT for the management VLAN (the V-SOL menu is not documented where we could read it; see `deploy/V-SOL-OLT.md`). The router side already refuses to answer ARP for anything but its own address. **Tenants must never get an ONU's web-admin login or page**: with it they can change what the server set, including the Wi-Fi security and the ACS address. The server sets a random web-admin password on the box when the model allows it; the owner can show it behind their own password.
+
+**The first claim.** A serial the server has never seen is accepted on its first contact with the shared login. Keep the shared login private, use serial authentication on the OLT, and register ONUs before they go out. A box that later checks in for a serial that is already known, from another router or address, is held back and the owners get an alert with Approve and Block.
+
+### The ONU register
+
+Every customer has an ONU you supply, in routing mode. Register each ONU **before** it goes out: serial, WAN MAC, model (Equipment, or the ONUs list). **The MAC printed on the label is often the base or LAN MAC, not the WAN MAC the router sees.** Confirm the WAN MAC on the bench: it is what appears under New devices (or in the lease) when the ONU first connects, and TR-069 also reports it. Then save the pair. Adding a customer from a register ONU, or "Swap ONU" on a house, sets the house MAC from the pair: you no longer type it. Older houses with a typed MAC keep working and link by MAC; use "Add to the register" in the ONUs list for them.
+
+### What you see
+
+The house page has a Wi-Fi card: the names as the ONU reports them, a Change Wi-Fi form (the password is never shown back; it is kept encrypted so it can be restored), Reboot ONU, and the state of the last request: Queued, Sent, Accepted (or "applies after the ONU restarts"), Confirmed, Failed with the reason, or Expired. "Accepted" only means the box said yes: check the Wi-Fi on a phone and press **It works** (the model then remembers which setting name took) or **It didn't work** (another name is tried). Queued tasks expire if the box never checks in: reboot after 1 hour, Wi-Fi after 24 hours, factory reset after 7 days (except the reset of a returned box, which waits for the box). The Wi-Fi choice belongs to the house, not to the box: Unlink and Swap ONU unlink the old box at once and queue a factory reset for its next check-in (the owner can cancel it), and a returned box never gets a house's Wi-Fi. A warning appears when the WAN MAC an ONU reports is not the one in the register, when a registered ONU is online on another router, or when the tenant changed the name on the box. The mismatch warning has a button "Use the reported MAC".
+
+### Troubleshooting
+
+- ONU never appears: check the OLT profile (VLAN, DHCP on the TR069 WAN, URL, login). On the router, the lease table of `ftn-onu-dhcp` should show it. From the server, `curl http://10.99.0.1:7547/` must answer 401 from the tunnel only.
+- Appears but Wi-Fi changes stay Queued: the ONU did not take the connection request. Queued changes are applied at its next periodic inform (up to 5 minutes). Check that the server can reach `10.6.<n>.x` on port 7547 or 30005 (the router firewall rules `ftn: acs to onu`).
+- Failed with a fault such as 9005: the ONU does not have that parameter name. Tell us the model; vendor quirks are a table in `internal/acs/profile.go`.
+- Wrong ONU for a house: use the ONUs list, Unlink, then link by hand, or use Swap ONU on the house.
+- A red "checked in from an unexpected place" card on an ONU: its serial came from another router, address or MAC than the one it is bound to (or is flapping). It gets nothing until you press Approve (bind it to the new place) or Block.
+- "shared login only" on an ONU: it refused to take its own ACS login, so it logs in with the shared one. Works, weaker identity.
+- Rotating the ACS password: every ONU stops reporting until its OLT profile has the new one.
+
 ## 3. Check
 
 - `sudo ftnbilling-doctor` checks the whole server.

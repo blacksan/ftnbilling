@@ -62,14 +62,24 @@ import ke.co.ftw.ftnadmin.ui.common.formatDateTime
 import ke.co.ftw.ftnadmin.ui.common.formatExpiry
 import ke.co.ftw.ftnadmin.ui.common.formatKes
 import ke.co.ftw.ftnadmin.ui.common.vmFactory
+import ke.co.ftw.ftnadmin.ui.onu.WifiCard
+import ke.co.ftw.ftnadmin.ui.onu.WifiViewModel
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CustomerDetailScreen(id: String, user: UserInfo, onBack: () -> Unit, onOpenOther: (String) -> Unit) {
     val container = LocalContainer.current
     val vm: CustomerDetailViewModel = viewModel(key = "detail-$id", factory = vmFactory { CustomerDetailViewModel(id, container.accounts, container.apartments) })
+    val wifiVm: WifiViewModel = viewModel(key = "wifi-$id", factory = vmFactory { WifiViewModel(id, container.onu) })
+    val wifiUi by wifiVm.state.collectAsStateWithLifecycle()
     val ui by vm.state.collectAsStateWithLifecycle()
     val snack = remember { SnackbarHostState() }
+    LaunchedEffect(wifiUi.info) {
+        wifiUi.info?.let {
+            snack.showSnackbar(it)
+            wifiVm.clearInfo()
+        }
+    }
     LaunchedEffect(ui.info) {
         ui.info?.let {
             snack.showSnackbar(it)
@@ -113,6 +123,7 @@ fun CustomerDetailScreen(id: String, user: UserInfo, onBack: () -> Unit, onOpenO
                     }
                 }
                 item { DeviceCard(acc) }
+                item { WifiCard(wifiVm, user.canWrite) }
                 acc.customer?.let { c ->
                     item {
                         SectionCard("Contact") {

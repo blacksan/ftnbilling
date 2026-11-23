@@ -85,6 +85,25 @@ type Config struct {
 	AllowInsecureJoin     bool // permit minting join links when PUBLIC_BASE_URL is not https (bench only)
 	JoinRequireMikrotikUA bool // only a RouterOS fetch User-Agent ("RouterOS 7.x" or "Mikrotik/6.x") consumes a join token
 
+	// ONU management (TR-069 ACS built into the server). ACSListen is host:port ("off" = disabled); it must be a
+	// private address (the WireGuard address of the server), never a public one. ACSTLSCert/Key are optional.
+	ACSListen         string
+	ACSTLSCert        string
+	ACSTLSKey         string
+	ACSInformInterval int   // seconds, PeriodicInformInterval set on the devices
+	ACSCRPorts        []int // tcp ports the server may connect to on an ONU (connection requests)
+	ACSMaxPerRouter   int   // most ONUs the ACS keeps per router
+	// ACSCompatAuth lets CPEs that cannot do HTTP digest with qop=auth log in (RFC 2069 digest, HTTP Basic). Off by
+	// default: those logins have no replay protection or send the password in the clear on the management VLAN.
+	ACSCompatAuth bool
+	// ACSResetCreds makes a new ACS login when the stored one cannot be opened (DATA_KEY lost). Off: ONU management
+	// refuses to start instead of silently cutting every ONU off.
+	ACSResetCreds bool
+	// ACSAllowPrivate lets ACS_LISTEN be a private address that is neither the server's WireGuard address nor
+	// loopback (ACS_LISTEN_ALLOW_PRIVATE=true). Off by default: a private NIC that is 1:1 NATed to a public address
+	// would expose the ACS.
+	ACSAllowPrivate bool
+
 	// Metrics / QoE collector.
 	WANInterface    string
 	OLTInterface    string
@@ -234,6 +253,7 @@ func Load(getenv func(string) string) (Config, error) {
 	// ADMIN_ALLOW_CIDR (the old wg-admin network) is no longer read: the admin
 	// pages are public and protected by sign-in, so old env lines are ignored.
 	c.WGDumpPath = get("WG_DUMP_PATH", "/run/ftnbilling/wg0.dump")
+	c.loadACS(get, &errs)
 	c.JoinTokenTTL = dur("JOIN_TOKEN_TTL", 30*time.Minute)
 	c.AllowInsecureJoin = parseBool(getenv("ALLOW_INSECURE_JOIN"))
 	c.JoinRequireMikrotikUA = get("JOIN_REQUIRE_MIKROTIK_UA", "true") != "false"
@@ -465,6 +485,110 @@ func checkWebFigDomain(d, base string) error {
 		if u, err := url.Parse(base); err == nil && strings.EqualFold(u.Hostname(), d) {
 			return errors.New("WEBFIG_DOMAIN must differ from the admin's host name (PUBLIC_BASE_URL): WebFig needs its own origin")
 		}
+	}
+	return nil
+}
+
+// DefaultACSPort is the tcp port of the ACS and the usual TR-069 connection-request port.
+const DefaultACSPort = 7547
+
+// loadACS reads the ACS_* settings. The default listen address is the server's tunnel address (the first
+// host of WG_SUBNET) on tcp/7547.
+func (c *Config) loadACS(get func(k, def string) string, errs *[]error) {
+	def := ""
+	if p, err := netip.ParsePrefix(c.WGSubnet); err == nil && p.Addr().Is4() {
+		def = net.JoinHostPort(p.Masked().Addr().Next().String(), strconv.Itoa(DefaultACSPort))
+	}
+	c.ACSListen = get("ACS_LISTEN", def)
+	c.ACSTLSCert, c.ACSTLSKey = get("ACS_TLS_CERT", ""), get("ACS_TLS_KEY", "")
+	if (c.ACSTLSCert == "") != (c.ACSTLSKey == "") {
+		*errs = append(*errs, errors.New("ACS_TLS_CERT and ACS_TLS_KEY go together: set both or neither"))
+	}
+	c.ACSInformInterval = 300
+	if v := get("ACS_INFORM_INTERVAL", ""); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 60 || n > 86400 {
+			*errs = append(*errs, errors.New("ACS_INFORM_INTERVAL must be a number of seconds from 60 to 86400"))
+		} else {
+			c.ACSInformInterval = n
+		}
+	}
+	c.ACSMaxPerRouter = 200
+	if v := get("ACS_MAX_PER_ROUTER", ""); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 5000 {
+			*errs = append(*errs, errors.New("ACS_MAX_PER_ROUTER must be a number from 1 to 5000"))
+		} else {
+			c.ACSMaxPerRouter = n
+		}
+	}
+	c.ACSCompatAuth = parseBool(get("ACS_COMPAT_AUTH", ""))
+	c.ACSAllowPrivate = parseBool(get("ACS_LISTEN_ALLOW_PRIVATE", ""))
+	c.ACSResetCreds = parseBool(get("ACS_RESET_CREDENTIALS", ""))
+	c.ACSCRPorts = []int{7547, 30005}
+	if v := get("ACS_CR_PORTS", ""); v != "" {
+		var ports []int
+		for _, f := range SplitList(v) {
+			n, err := strconv.Atoi(f)
+			if err != nil || n < 1 || n > 65535 {
+				*errs = append(*errs, fmt.Errorf("ACS_CR_PORTS: %q is not a tcp port", f))
+				return
+			}
+			ports = append(ports, n)
+		}
+		if len(ports) > 0 {
+			c.ACSCRPorts = ports
+		}
+	}
+	if c.ACSListen != "" && !strings.EqualFold(c.ACSListen, "off") {
+		if err := c.CheckACSListenAddr(); err != nil {
+			*errs = append(*errs, err)
+		}
+	}
+}
+
+// ACSEnabled says whether the ACS listener is on.
+func (c Config) ACSEnabled() bool {
+	return c.ACSListen != "" && !strings.EqualFold(c.ACSListen, "off")
+}
+
+// CheckACSListenAddr is CheckACSListen plus the rule that the address is the server's WireGuard address (the first
+// host of WG_SUBNET) or loopback, unless ACS_LISTEN_ALLOW_PRIVATE is set.
+func (c Config) CheckACSListenAddr() error {
+	if err := CheckACSListen(c.ACSListen); err != nil {
+		return err
+	}
+	host, _, _ := net.SplitHostPort(c.ACSListen)
+	ip, _ := netip.ParseAddr(host)
+	if ip.IsLoopback() || c.ACSAllowPrivate {
+		return nil
+	}
+	sub := c.WGSubnet
+	if sub == "" {
+		sub = "10.99.0.0/22"
+	}
+	if p, err := netip.ParsePrefix(sub); err == nil && p.Addr().Is4() && p.Masked().Addr().Next() == ip {
+		return nil
+	}
+	return fmt.Errorf("ACS_LISTEN %s is not the server's WireGuard address nor loopback: another private address can be reachable from outside (a private NIC with a public 1:1 NAT). Use the WireGuard address, or set ACS_LISTEN_ALLOW_PRIVATE=true if you know this address is only reachable from the router tunnels", ip)
+}
+
+// CheckACSListen refuses an ACS address that is not private: the ACS must never be reachable from the internet.
+// A wildcard address (":7547", "0.0.0.0") is refused too, since it would answer on every interface.
+func CheckACSListen(addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return errors.New("ACS_LISTEN must be host:port, e.g. 10.99.0.1:7547")
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		return errors.New("ACS_LISTEN has a bad port")
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil || !ip.Is4() {
+		return errors.New("ACS_LISTEN must name one private IPv4 address (the server's WireGuard address), not a host name or a wildcard")
+	}
+	if ip.IsUnspecified() || !(ip.IsPrivate() || ip.IsLoopback()) {
+		return fmt.Errorf("ACS_LISTEN %s is not a private address: the ACS must never be reachable from the internet (use the WireGuard address, e.g. 10.99.0.1:7547)", ip)
 	}
 	return nil
 }

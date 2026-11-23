@@ -183,6 +183,14 @@ func (m *Manager) consume(token, rosVersion, from string, noCheck bool) (script 
 			}
 			site.TunnelIP = ip
 		}
+		if m.cfg.ACSEnabled() && site.ONUMgmtN == 0 {
+			// The router gets its ONU management subnet with its first script (the server routes it to the router).
+			if n, ok := d.NextONUMgmtN(); ok {
+				site.ONUMgmtN = n
+			} else {
+				m.log.Warn("no ONU management subnet is left; the script is made without ONU management", "site", site.ID)
+			}
+		}
 		pppoe, err := m.OpenPPPoEPass(site)
 		if err != nil {
 			return fmt.Errorf("%w: the PPPoE password: %v", ErrCannotRender, err)
@@ -190,8 +198,9 @@ func (m *Manager) consume(token, rosVersion, from string, noCheck bool) (script 
 		in := BootstrapInput{
 			Site: ApplyDefaults(m.cfg, site), PPPoEPass: pppoe, PrivateKey: priv, RESTPass: pass, ServerPub: m.cfg.WGPublicKey,
 			Endpoint: m.cfg.WGEndpoint, WGSubnet: m.pfx, MgmtSubnet: m.mgmt, PublicBase: m.cfg.PublicBaseURL, PublicIP: m.cfg.PublicIP, WebFigDomain: m.cfg.WebFigDomain, Generated: now, NoCheck: noCheck,
-			ROSVersion: rosVersion, Token: token,
+			ROSVersion: rosVersion, Token: token, CRPorts: m.cfg.ACSCRPorts,
 		}
+		in.ACSPort, in.ACSURL = m.ACSAddress()
 		if w, ok := m.flowWant(""); ok {
 			fmt.Sscanf(w.port, "%d", &in.NetflowPort)
 		}

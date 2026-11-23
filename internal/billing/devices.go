@@ -688,6 +688,8 @@ type AddCustomerInput struct {
 	// ApartmentID, SiteID (the router: empty = the apartment's only router) and
 	// Unit say where the customer lives. Flat is the older name of Unit.
 	ApartmentID, SiteID, Unit, Flat, Tenant, Phone, MAC, PackageID string
+	// EquipmentID: an ONU of the register (in stock) given to the house; its WAN MAC becomes the house MAC.
+	EquipmentID string
 	// Activate grants the package's time at once (an admin grant, like
 	// ExtendAccount). Without it the package is only set as the flat's plan
 	// and the tenant pays on the payment page: the flat gets its lease and
@@ -721,7 +723,7 @@ func (s *Service) CreateCustomer(ctx context.Context, in AddCustomerInput) (stor
 			return store.Account{}, AccountRouterState{}, fmt.Errorf("choose a package from the list")
 		}
 	}
-	a, err := s.CreateAccount(AccountInput{ApartmentID: in.ApartmentID, SiteID: in.SiteID, Unit: in.Unit, Flat: in.Flat, MAC: in.MAC, Tenant: in.Tenant, Phone: in.Phone, Notes: in.Note})
+	a, err := s.CreateAccount(AccountInput{ApartmentID: in.ApartmentID, SiteID: in.SiteID, Unit: in.Unit, Flat: in.Flat, MAC: in.MAC, Tenant: in.Tenant, Phone: in.Phone, Notes: in.Note, EquipmentID: in.EquipmentID})
 	if err != nil {
 		return store.Account{}, AccountRouterState{}, err
 	}

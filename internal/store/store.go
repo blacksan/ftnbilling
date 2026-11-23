@@ -131,6 +131,11 @@ type Site struct {
 	// AccessMode is always ipoe; empty is stored as ipoe.
 	AccessMode string `json:"access_mode,omitempty"`
 
+	// ONU management (TR-069). ONUMgmtN > 0 gives the router the management subnet 10.6.<n>.0/24 (unique per
+	// router, allocated like the tunnel address) on VLAN ONUMgmtVLAN (0 = 99) of the OLT port.
+	ONUMgmtN    int `json:"onu_mgmt_n,omitempty"`
+	ONUMgmtVLAN int `json:"onu_mgmt_vlan,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -210,6 +215,9 @@ type Account struct {
 	// WAOptOut above stay authoritative for messaging and are copied from
 	// the customer when it is saved or linked.
 	CustomerID string `json:"customer_id,omitempty"`
+	// HomeWiFi is the Wi-Fi name and (sealed) password the owner chose for this house. It is applied to whichever
+	// ONU is linked to the house, and is never carried by a box.
+	HomeWiFi WiFiDesired `json:"home_wifi,omitzero"`
 	// Location inside the building.
 	Floor        string `json:"floor,omitempty"`
 	ODB          string `json:"odb,omitempty"`
@@ -475,9 +483,12 @@ const (
 // that is installed at a customer has an AccountID; one that belongs to a
 // building (its router, its OLT) has a SiteID and no account.
 type Equipment struct {
-	ID          string    `json:"id"`
-	Kind        string    `json:"kind"`
-	Serial      string    `json:"serial,omitempty"`
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	Serial string `json:"serial,omitempty"`
+	// GPONSerial is the OLT-side serial (e.g. HWTC1234ABCD), only when it differs from the serial the ONU reports
+	// over TR-069 (Serial). Either one finds the item.
+	GPONSerial  string    `json:"gpon_serial,omitempty"`
 	MAC         string    `json:"mac,omitempty"`
 	Model       string    `json:"model,omitempty"`
 	Firmware    string    `json:"firmware,omitempty"`
@@ -581,6 +592,10 @@ type Data struct {
 
 	// Registrations are the captive page's self-registrations (pending, approved, rejected).
 	Registrations map[string]Registration `json:"registrations"`
+
+	// ONUs are the TR-069 devices the built-in ACS has met; ONUTasks their queued actions.
+	ONUs     map[string]ONU     `json:"onus"`
+	ONUTasks map[string]ONUTask `json:"onu_tasks"`
 }
 
 func (d *Data) init() {
@@ -611,6 +626,12 @@ func (d *Data) init() {
 	}
 	if d.Registrations == nil {
 		d.Registrations = map[string]Registration{}
+	}
+	if d.ONUs == nil {
+		d.ONUs = map[string]ONU{}
+	}
+	if d.ONUTasks == nil {
+		d.ONUTasks = map[string]ONUTask{}
 	}
 	if d.ClosedAccounts == nil {
 		d.ClosedAccounts = map[string]Account{}

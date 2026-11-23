@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"ispbill/internal/acs"
 	"ispbill/internal/authn"
 	"ispbill/internal/billing"
 	"ispbill/internal/config"
@@ -61,9 +62,10 @@ type Server struct {
 	authn     *authn.Service
 	alertSink func(string) // tests: take security alerts instead of the outbox
 	idem      *idemStore
-	searchRL  *limiter    // search, by signed-in user (web and API)
-	refreshRL *limiter    // /api/v1/auth/refresh by client address
-	reboots   rebootGuard // one router reboot per 10 minutes per router (api_live.go)
+	searchRL  *limiter     // search, by signed-in user (web and API)
+	refreshRL *limiter     // /api/v1/auth/refresh by client address
+	acs       *acs.Service // nil = ONU management off
+	reboots   rebootGuard  // one router reboot per 10 minutes per router (api_live.go)
 
 	wf webfigState
 

@@ -535,6 +535,7 @@ func (s *Server) apiRoutes(mux *http.ServeMux) {
 	h("POST /api/v1/payments/{key}/assign", operator, s.apiPaymentAssign)
 	h("POST /api/v1/payments/{key}/resolve", operator, s.apiPaymentResolve)
 	h("POST /api/v1/alerts/mute", operator, s.apiAlertMute)
+	s.onuRoutesAPI(h)
 
 	h("POST /api/v1/sites/{id}/unregistered/refresh", operator, s.apiUnregRefresh)
 	h("POST /api/v1/unregistered/attach", operator, s.apiUnregAttach)

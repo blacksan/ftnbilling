@@ -274,3 +274,53 @@ func TestSupportContactDefaultsAndOff(t *testing.T) {
 		t.Fatalf("%+v", c)
 	}
 }
+
+func TestACSDefaultsAndPublicRefusal(t *testing.T) {
+	c, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ACSListen != "10.99.0.1:7547" || !c.ACSEnabled() || c.ACSInformInterval != 300 || c.ACSMaxPerRouter != 200 || len(c.ACSCRPorts) != 2 {
+		t.Fatalf("defaults: %+v", c)
+	}
+	// The default follows WG_SUBNET.
+	c, err = Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true", "WG_SUBNET": "10.77.0.0/22"}))
+	if err != nil || c.ACSListen != "10.77.0.1:7547" {
+		t.Fatalf("listen %q err %v", c.ACSListen, err)
+	}
+	// Off switches it off.
+	c, err = Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true", "ACS_LISTEN": "off"}))
+	if err != nil || c.ACSEnabled() {
+		t.Fatalf("off: %v %+v", err, c.ACSListen)
+	}
+	for _, bad := range []string{"203.0.113.9:7547", ":7547", "0.0.0.0:7547", "acs.example.com:7547", "10.99.0.1", "8.8.8.8:7547", "10.99.0.1:0"} {
+		if _, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true", "ACS_LISTEN": bad})); err == nil {
+			t.Errorf("ACS_LISTEN=%q must be refused", bad)
+		}
+	}
+	for _, ok := range []string{"10.99.0.1:7547", "127.0.0.1:7547"} {
+		if _, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true", "ACS_LISTEN": ok})); err != nil {
+			t.Errorf("ACS_LISTEN=%q: %v", ok, err)
+		}
+	}
+	// Another private address is refused unless the owner says so (L10).
+	if _, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true", "ACS_LISTEN": "192.168.1.5:9000"})); err == nil {
+		t.Error("a private address that is not the WireGuard address must be refused")
+	}
+	if _, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true", "ACS_LISTEN": "192.168.1.5:9000", "ACS_LISTEN_ALLOW_PRIVATE": "true"})); err != nil {
+		t.Errorf("the override must allow it: %v", err)
+	}
+	if c, _ := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true"})); c.ACSCompatAuth {
+		t.Error("compat auth must be off by default")
+	}
+	if _, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true", "ACS_TLS_CERT": "/x"})); err == nil {
+		t.Error("a certificate without a key must be refused")
+	}
+	if _, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true", "ACS_INFORM_INTERVAL": "5"})); err == nil {
+		t.Error("an inform interval under 60s must be refused")
+	}
+	c, _ = Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true", "ACS_CR_PORTS": "7547, 4567"}))
+	if len(c.ACSCRPorts) != 2 || c.ACSCRPorts[1] != 4567 {
+		t.Fatalf("cr ports %v", c.ACSCRPorts)
+	}
+}

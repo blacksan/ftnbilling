@@ -322,6 +322,10 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	do(err)
 	tsk, err := queryAll(ctx, tx, tasksC, "")
 	do(err)
+	onus, err := queryAll(ctx, tx, onusC, "")
+	do(err)
+	onut, err := queryAll(ctx, tx, onuTasksC, "")
+	do(err)
 	eqe, err := queryAll(ctx, tx, eqEventsC, "")
 	do(err)
 	nts, err := queryAll(ctx, tx, notesC, "")
@@ -353,6 +357,7 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	d.Tasks, d.EquipmentEvents, d.Notes = map[string]store.Task{}, map[string]store.EquipmentEvent{}, map[string]store.Note{}
 	d.Settings = map[string]store.Setting{}
 	d.Registrations = map[string]store.Registration{}
+	d.ONUs, d.ONUTasks = map[string]store.ONU{}, map[string]store.ONUTask{}
 	d.AdminUsers, d.AdminSessions, d.APIDevices = map[string]store.AdminUser{}, map[string]store.AdminSession{}, map[string]store.APIDevice{}
 	fill(d.Sites, sites, sitesC)
 	fill(d.Packages, pk, packagesC)
@@ -373,6 +378,8 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	fill(d.Payments, pay, paymentsC)
 	fill(d.Devices, dev, devicesC)
 	fill(d.Registrations, regs, registrationsC)
+	fill(d.ONUs, onus, onusC)
+	fill(d.ONUTasks, onut, onuTasksC)
 	fill(d.Tasks, tsk, tasksC)
 	fill(d.EquipmentEvents, eqe, eqEventsC)
 	fill(d.Notes, nts, notesC)
@@ -415,6 +422,8 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	vouchersC.queueDeletes(batch, cs.Vouchers.Delete)
 	devicesC.queueDeletes(batch, cs.Devices.Delete)
 	registrationsC.queueDeletes(batch, cs.Registrations.Delete)
+	onuTasksC.queueDeletes(batch, cs.ONUTasks.Delete)
+	onusC.queueDeletes(batch, cs.ONUs.Delete)
 	tasksC.queueDeletes(batch, cs.Tasks.Delete)
 	eqEventsC.queueDeletes(batch, cs.EquipmentEvents.Delete)
 	notesC.queueDeletes(batch, cs.Notes.Delete)
@@ -451,6 +460,10 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	mark("devices")
 	registrationsC.queueUpserts(batch, cs.Registrations)
 	mark("registrations")
+	onusC.queueUpserts(batch, cs.ONUs)
+	mark("onus")
+	onuTasksC.queueUpserts(batch, cs.ONUTasks)
+	mark("onu_tasks")
 	tasksC.queueUpserts(batch, cs.Tasks)
 	mark("tasks")
 	eqEventsC.queueUpserts(batch, cs.EquipmentEvents)

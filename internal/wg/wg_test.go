@@ -162,3 +162,21 @@ func TestReadDumpMissingIsUnknown(t *testing.T) {
 		t.Fatal(m, mt, err)
 	}
 }
+
+func TestPeersWithONUMgmtSubnet(t *testing.T) {
+	got := string(RenderPeers([]Peer{
+		{PublicKey: k(1), TunnelIP: "10.99.0.2", MgmtSubnet: "10.6.1.0/24"},
+		{PublicKey: k(2), TunnelIP: "10.99.0.3", MgmtSubnet: "10.6.1.0/24"}, // a subnet belongs to one peer
+		{PublicKey: k(3), TunnelIP: "10.99.0.4", MgmtSubnet: "10.7.1.0/24"}, // outside the ONU range
+		{PublicKey: k(4), TunnelIP: "10.99.0.5", MgmtSubnet: "10.6.1.0/16"}, // not a /24
+		{PublicKey: k(5), TunnelIP: "10.99.0.6", MgmtSubnet: "10.6.9.0/24"},
+	}))
+	for _, want := range []string{"AllowedIPs = 10.99.0.2/32, 10.6.1.0/24\n", "AllowedIPs = 10.99.0.3/32\n", "AllowedIPs = 10.99.0.4/32\n", "AllowedIPs = 10.99.0.5/32\n", "AllowedIPs = 10.99.0.6/32, 10.6.9.0/24\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("peers file lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Count(got, "10.6.1.0/24") != 1 {
+		t.Errorf("one management subnet, one peer:\n%s", got)
+	}
+}
