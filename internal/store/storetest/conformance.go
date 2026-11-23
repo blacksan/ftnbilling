@@ -27,7 +27,7 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 			Join:         store.JoinToken{Hash: "h", ExpiresAt: at, CreatedAt: at, UsedAt: at, UsedFrom: "1.2.3.4"},
 			JoinedAt:     at,
 			WANInterface: "ether1", WANList: "WAN", OLTInterface: "sfp1", VLANID: 20, CustomerSubnet: "10.20.0.0/24",
-			WANCapMbps: 100.5, OLTCapMbps: 1000, FUPTB: 2.5, CustomerPorts: "ether5,ether4", DisabledPorts: "ether6", PortsPolicy: "off", EnabledPorts: "ether5,ether4",
+			WANCapMbps: 100.5, OLTCapMbps: 1000, FUPTB: 2.5, CustomerPorts: "ether5,ether4", DisabledPorts: "ether6", PortsPolicy: "off", EnabledPorts: "ether5,ether4", ONUMgmtN: 3, ONUMgmtVLAN: 98,
 			PkgOverrides: map[string]store.PkgOverride{"p1": {Hidden: true, PriceKES: 70}},
 			Address:      "Kilimani Rd", Lat: -1.2921, Lng: 36.8219, GoLive: at, AccessMode: store.AccessIPoE, CreatedAt: at}
 		d.Sites["s222222"] = store.Site{ID: "s222222", Name: "Env", Mode: store.SiteModeEnv, CreatedAt: at}
@@ -73,6 +73,15 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 		d.Registrations["r1"] = store.Registration{ID: "r1", SiteID: "s111111", ApartmentID: "", Unit: "B4", Name: "Wanjiru", Phone: "254712345678", Email: "w@example.com",
 			GuessMAC: "AA:BB:CC:DD:EE:09", DeviceName: "Wanjiru's iPhone", Status: store.RegPending, ConsentAt: at, CreatedAt: at}
 		d.Registrations["r2"] = store.Registration{ID: "r2", Unit: "C2", Name: "Otieno", Phone: "254722000111", Building: "Riverside Court", Status: store.RegPending, ConsentAt: at, CreatedAt: at}
+		d.ONUs["o1"] = store.ONU{ID: "o1", Serial: "ZTEGC0000001", OUI: "00259E", Manufacturer: "ZTE", ProductClass: "F670L", SWVersion: "V9.0", HWVersion: "V1",
+			Root: store.RootTR098, SiteID: "s111111", MgmtIP: "10.6.1.20", ConnReqURL: "http://10.6.1.20:7547/", ConnReqUserEnc: "c2VhbGVk", ConnReqPassEnc: "c2VhbGVk",
+			CRApplied: true, FirstSeen: at, LastInform: at, LastEvents: "2 PERIODIC", MACs: []string{"AA:BB:CC:DD:EE:09"},
+			WiFi:    []store.ONUWiFi{{Path: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.", Band: "2.4", SSID: "Home", Enabled: true, Channel: 6}},
+			Profile: store.ONUProfile{Root: store.RootTR098, PassIdx: 1, Vendor: "tr098", Discovered: true}, AccountID: "a1", Link: store.LinkAuto,
+			Desired: store.WiFiDesired{Set: true, Same: true, SSID: "Home", PassEnc: "c2VhbGVk", UpdatedAt: at, UpdatedBy: "brian"}}
+		d.ONUs["o2"] = store.ONU{ID: "o2", Serial: "HWTC0000002", OUI: "00E0FC", Manufacturer: "Huawei", Root: store.RootTR181, LastInform: at}
+		d.ONUTasks["ot1"] = store.ONUTask{ID: "ot1", ONUID: "o1", SiteID: "s111111", AccountID: "a1", Kind: store.TaskWiFi, Status: store.TaskFailed, Fault: "9005 Invalid parameter name",
+			By: "brian", Attempts: 2, CreatedAt: at, StartedAt: at, FinishedAt: at}
 		d.Notes["n1"] = store.Note{ID: "n1", CustomerID: "c1", AccountID: "a1", SiteID: "s111111", EquipmentID: "e1", Text: "hello", Time: at}
 		d.Settings["wa.token"] = store.Setting{Key: "wa.token", Value: "c2VhbGVk", Enc: true, UpdatedAt: at}
 		d.Settings["wa.lang"] = store.Setting{Key: "wa.lang", Value: "sw", UpdatedAt: at}

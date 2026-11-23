@@ -131,6 +131,11 @@ type Site struct {
 	// AccessMode is always ipoe; empty is stored as ipoe.
 	AccessMode string `json:"access_mode,omitempty"`
 
+	// ONU management (TR-069). ONUMgmtN > 0 gives the router the management subnet 10.6.<n>.0/24 (unique per
+	// router, allocated like the tunnel address) on VLAN ONUMgmtVLAN (0 = 99) of the OLT port.
+	ONUMgmtN    int `json:"onu_mgmt_n,omitempty"`
+	ONUMgmtVLAN int `json:"onu_mgmt_vlan,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -581,6 +586,10 @@ type Data struct {
 
 	// Registrations are the captive page's self-registrations (pending, approved, rejected).
 	Registrations map[string]Registration `json:"registrations"`
+
+	// ONUs are the TR-069 devices the built-in ACS has met; ONUTasks their queued actions.
+	ONUs     map[string]ONU     `json:"onus"`
+	ONUTasks map[string]ONUTask `json:"onu_tasks"`
 }
 
 func (d *Data) init() {
@@ -611,6 +620,12 @@ func (d *Data) init() {
 	}
 	if d.Registrations == nil {
 		d.Registrations = map[string]Registration{}
+	}
+	if d.ONUs == nil {
+		d.ONUs = map[string]ONU{}
+	}
+	if d.ONUTasks == nil {
+		d.ONUTasks = map[string]ONUTask{}
 	}
 	if d.ClosedAccounts == nil {
 		d.ClosedAccounts = map[string]Account{}

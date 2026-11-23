@@ -3,6 +3,7 @@ package pgstore
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -259,20 +260,20 @@ var sitesC = (&codec[store.Site]{
 		"join_hash", "join_expires_at", "join_created_at", "join_used_at", "join_used_from", "joined_at", "wan_interface", "wan_list",
 		"olt_interface", "vlan_id", "customer_subnet", "wan_cap_mbps", "olt_cap_mbps", "fup_tb", "bench_port",
 		"pkg_overrides", "address", "lat", "lng", "go_live", "access_mode", "created_at",
-		"wan_mode", "wan_address", "wan_gateway", "wan_dns", "pppoe_user", "pppoe_pass_enc", "lan_ports", "lan_subnet", "customer_ports", "disabled_ports", "ports_policy", "enabled_ports"},
+		"wan_mode", "wan_address", "wan_gateway", "wan_dns", "pppoe_user", "pppoe_pass_enc", "lan_ports", "lan_subnet", "customer_ports", "disabled_ports", "ports_policy", "enabled_ports", "onu_mgmt_n", "onu_mgmt_vlan"},
 	args: func(v store.Site) []any {
 		return []any{v.ID, v.Name, v.Mode, v.Notes, v.SupportPhone, v.Disabled, v.Removed, v.TunnelIP, v.WGPublicKey, v.RESTUser, v.RESTPass, v.RESTPort,
 			v.Join.Hash, nt(v.Join.ExpiresAt), nt(v.Join.CreatedAt), nt(v.Join.UsedAt), v.Join.UsedFrom, nt(v.JoinedAt), v.WANInterface, v.WANList,
 			v.OLTInterface, v.VLANID, v.CustomerSubnet, v.WANCapMbps, v.OLTCapMbps, v.FUPTB, v.BenchPort,
 			overridesArg(v.PkgOverrides), v.Address, v.Lat, v.Lng, nt(v.GoLive), accessMode(v.AccessMode), tm(v.CreatedAt),
-			v.WANMode, v.WANAddress, v.WANGateway, v.WANDNS, v.PPPoEUser, v.PPPoEPassEnc, v.LANPorts, v.LANSubnet, v.CustomerPorts, v.DisabledPorts, v.PortsPolicy, v.EnabledPorts}
+			v.WANMode, v.WANAddress, v.WANGateway, v.WANDNS, v.PPPoEUser, v.PPPoEPassEnc, v.LANPorts, v.LANSubnet, v.CustomerPorts, v.DisabledPorts, v.PortsPolicy, v.EnabledPorts, v.ONUMgmtN, v.ONUMgmtVLAN}
 	},
 	dst: func(v *store.Site) []any {
 		return []any{&v.ID, &v.Name, &v.Mode, &v.Notes, &v.SupportPhone, &v.Disabled, &v.Removed, &v.TunnelIP, &v.WGPublicKey, &v.RESTUser, &v.RESTPass, &v.RESTPort,
 			&v.Join.Hash, t_(&v.Join.ExpiresAt), t_(&v.Join.CreatedAt), t_(&v.Join.UsedAt), &v.Join.UsedFrom, t_(&v.JoinedAt), &v.WANInterface, &v.WANList,
 			&v.OLTInterface, &v.VLANID, &v.CustomerSubnet, &v.WANCapMbps, &v.OLTCapMbps, &v.FUPTB, &v.BenchPort,
 			overridesDst{&v.PkgOverrides}, &v.Address, &v.Lat, &v.Lng, t_(&v.GoLive), &v.AccessMode, t_(&v.CreatedAt),
-			&v.WANMode, &v.WANAddress, &v.WANGateway, &v.WANDNS, &v.PPPoEUser, &v.PPPoEPassEnc, &v.LANPorts, &v.LANSubnet, &v.CustomerPorts, &v.DisabledPorts, &v.PortsPolicy, &v.EnabledPorts}
+			&v.WANMode, &v.WANAddress, &v.WANGateway, &v.WANDNS, &v.PPPoEUser, &v.PPPoEPassEnc, &v.LANPorts, &v.LANSubnet, &v.CustomerPorts, &v.DisabledPorts, &v.PortsPolicy, &v.EnabledPorts, &v.ONUMgmtN, &v.ONUMgmtVLAN}
 	},
 }).build()
 
@@ -434,6 +435,70 @@ var registrationsC = (&codec[store.Registration]{
 	},
 	dst: func(v *store.Registration) []any {
 		return []any{&v.ID, &v.SiteID, &v.ApartmentID, &v.Unit, &v.Name, &v.Phone, &v.Email, &v.MAC, &v.GuessMAC, &v.Status, t_(&v.ConsentAt), t_(&v.CreatedAt), t_(&v.DecidedAt), &v.DecidedBy, &v.AccountID, &v.DeviceName, &v.Building}
+	},
+}).build()
+
+// jsonArg stores a nested value as jsonb ("null" never reaches the column: a nil slice is "[]").
+func jsonArg(v any, empty string) any {
+	b, err := json.Marshal(v)
+	if err != nil || string(b) == "null" {
+		return empty
+	}
+	return string(b)
+}
+
+// jsonScan scans jsonb into *p.
+type jsonScan[T any] struct{ p *T }
+
+func (d jsonScan[T]) Scan(v any) error {
+	var raw []byte
+	switch x := v.(type) {
+	case nil:
+		var zero T
+		*d.p = zero
+		return nil
+	case string:
+		raw = []byte(x)
+	case []byte:
+		raw = x
+	default:
+		return fmt.Errorf("pgstore: cannot scan %T into jsonb", v)
+	}
+	var out T
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return err
+	}
+	if rv := reflect.ValueOf(&out).Elem(); rv.Kind() == reflect.Slice && rv.Len() == 0 {
+		rv.Set(reflect.Zero(rv.Type())) // an empty list is nil, as the JSON file reads it
+	}
+	*d.p = out
+	return nil
+}
+
+var onusC = (&codec[store.ONU]{
+	name: "onus", pk: []string{"id"}, key: func(v store.ONU) string { return v.ID },
+	cols: []string{"id", "serial", "oui", "manufacturer", "product_class", "sw_version", "hw_version", "root", "site_id", "mgmt_ip", "conn_req_url",
+		"cr_user_enc", "cr_pass_enc", "cr_applied", "first_seen", "last_inform", "last_events", "macs", "wifi", "profile", "account_id", "link", "desired"},
+	args: func(v store.ONU) []any {
+		return []any{v.ID, v.Serial, v.OUI, v.Manufacturer, v.ProductClass, v.SWVersion, v.HWVersion, v.Root, v.SiteID, v.MgmtIP, v.ConnReqURL,
+			v.ConnReqUserEnc, v.ConnReqPassEnc, v.CRApplied, nt(v.FirstSeen), nt(v.LastInform), v.LastEvents, jsonArg(v.MACs, "[]"), jsonArg(v.WiFi, "[]"),
+			jsonArg(v.Profile, "{}"), v.AccountID, v.Link, jsonArg(v.Desired, "{}")}
+	},
+	dst: func(v *store.ONU) []any {
+		return []any{&v.ID, &v.Serial, &v.OUI, &v.Manufacturer, &v.ProductClass, &v.SWVersion, &v.HWVersion, &v.Root, &v.SiteID, &v.MgmtIP, &v.ConnReqURL,
+			&v.ConnReqUserEnc, &v.ConnReqPassEnc, &v.CRApplied, t_(&v.FirstSeen), t_(&v.LastInform), &v.LastEvents, jsonScan[[]string]{&v.MACs}, jsonScan[[]store.ONUWiFi]{&v.WiFi},
+			jsonScan[store.ONUProfile]{&v.Profile}, &v.AccountID, &v.Link, jsonScan[store.WiFiDesired]{&v.Desired}}
+	},
+}).build()
+
+var onuTasksC = (&codec[store.ONUTask]{
+	name: "onu_tasks", pk: []string{"id"}, key: func(v store.ONUTask) string { return v.ID },
+	cols: []string{"id", "onu_id", "site_id", "account_id", "kind", "status", "fault", "by", "attempts", "created_at", "started_at", "finished_at"},
+	args: func(v store.ONUTask) []any {
+		return []any{v.ID, v.ONUID, v.SiteID, v.AccountID, v.Kind, v.Status, v.Fault, v.By, v.Attempts, tm(v.CreatedAt), nt(v.StartedAt), nt(v.FinishedAt)}
+	},
+	dst: func(v *store.ONUTask) []any {
+		return []any{&v.ID, &v.ONUID, &v.SiteID, &v.AccountID, &v.Kind, &v.Status, &v.Fault, &v.By, &v.Attempts, t_(&v.CreatedAt), t_(&v.StartedAt), t_(&v.FinishedAt)}
 	},
 }).build()
 
