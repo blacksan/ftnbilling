@@ -298,10 +298,20 @@ func TestACSDefaultsAndPublicRefusal(t *testing.T) {
 			t.Errorf("ACS_LISTEN=%q must be refused", bad)
 		}
 	}
-	for _, ok := range []string{"10.99.0.1:7547", "127.0.0.1:7547", "192.168.1.5:9000"} {
+	for _, ok := range []string{"10.99.0.1:7547", "127.0.0.1:7547"} {
 		if _, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true", "ACS_LISTEN": ok})); err != nil {
 			t.Errorf("ACS_LISTEN=%q: %v", ok, err)
 		}
+	}
+	// Another private address is refused unless the owner says so (L10).
+	if _, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true", "ACS_LISTEN": "192.168.1.5:9000"})); err == nil {
+		t.Error("a private address that is not the WireGuard address must be refused")
+	}
+	if _, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true", "ACS_LISTEN": "192.168.1.5:9000", "ACS_LISTEN_ALLOW_PRIVATE": "true"})); err != nil {
+		t.Errorf("the override must allow it: %v", err)
+	}
+	if c, _ := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true"})); c.ACSCompatAuth {
+		t.Error("compat auth must be off by default")
 	}
 	if _, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true", "ACS_TLS_CERT": "/x"})); err == nil {
 		t.Error("a certificate without a key must be refused")

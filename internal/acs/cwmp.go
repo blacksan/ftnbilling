@@ -33,11 +33,37 @@ type ParamFault struct {
 
 func (f *Fault) Error() string { return f.Text() }
 
-// Text is the fault as a short plain-words line for a task ("9005 Invalid parameter name"). It names parameters
-// only, never values.
-func (f *Fault) Text() string {
-	t := fmt.Sprintf("%d %s", f.Code, strings.TrimSpace(f.String))
-	if f.String == "" {
+// Text is the fault as a short plain-words line for a task or a log ("9005 Invalid parameter name"). It names
+// parameters only, never values: the device's own text is left out when the fault names a secret parameter (a vendor
+// that echoes the rejected value in its text would otherwise show a password).
+func (f *Fault) Text() string { return f.SafeText() }
+
+// SafeText is Text with every occurrence of the given secrets (a Wi-Fi password that was just sent) blanked, and without
+// the device's own text when the fault names a secret parameter or says the value was invalid.
+func (f *Fault) SafeText(secrets ...string) string {
+	str := strings.TrimSpace(f.String)
+	hide := f.Code == 9007
+	for _, p := range f.Params {
+		if Sensitive(p.Name) || p.Code == 9007 {
+			hide = true
+		}
+	}
+	if hide {
+		str = ""
+	}
+	for _, sec := range secrets {
+		if len(sec) >= 3 && str != "" {
+			str = redactAll(str, sec)
+		}
+	}
+	str = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, str)
+	t := fmt.Sprintf("%d %s", f.Code, str)
+	if str == "" {
 		t = fmt.Sprintf("%d %s", f.Code, faultName(f.Code))
 	}
 	if len(f.Params) > 0 {
@@ -55,6 +81,21 @@ func (f *Fault) Text() string {
 		t = t[:300]
 	}
 	return t
+}
+
+// redactAll replaces every case-insensitive occurrence of secret in s.
+func redactAll(s, secret string) string {
+	ls, lsec := strings.ToLower(s), strings.ToLower(secret)
+	var b strings.Builder
+	for {
+		i := strings.Index(ls, lsec)
+		if i < 0 {
+			b.WriteString(s)
+			return b.String()
+		}
+		b.WriteString(s[:i] + "***")
+		s, ls = s[i+len(secret):], ls[i+len(secret):]
+	}
 }
 
 var faultNames = map[int]string{

@@ -432,14 +432,32 @@ func (s *Service) ConnectionRequest(ctx context.Context, onuID string) error {
 	if err != nil {
 		s.setKick(onuID, Kick{At: s.now(), Err: err.Error()})
 		s.log.Info("connection request failed", "onu", o.ID, "err", err.Error())
+		if errors.Is(err, errCRRefused) {
+			// The box does not know our login any more (a reset, or it never took it): write it again at the next Inform.
+			_ = s.st.Update(func(d *store.Data) error {
+				cur, ok := d.ONUs[onuID]
+				if !ok || cur.State.CRReadOnly || cur.State.CRRefused {
+					return store.ErrNoChange
+				}
+				cur.State.CRRefused = true
+				d.ONUs[onuID] = cur
+				return nil
+			})
+		}
 		return err
 	}
 	s.setKick(onuID, Kick{At: s.now(), OK: true})
 	return nil
 }
 
+// errCRRefused: the ONU answered the connection request with 401 or 403 although it was given our login.
+var errCRRefused = errors.New("the ONU refused the connection-request login")
+
+// crTimeout: slow ONUs take 5 to 6 seconds to answer a connection request.
+const crTimeout = 9 * time.Second
+
 func (s *Service) doConnReq(ctx context.Context, target *url.URL, user, pass string, haveCR bool) error {
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, crTimeout)
 	defer cancel()
 	get := func(auth string) (*http.Response, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
@@ -471,7 +489,7 @@ func (s *Service) doConnReq(ctx context.Context, target *url.URL, user, pass str
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		return nil
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return errors.New("the ONU refused the connection-request login")
+		return errCRRefused
 	}
 	return fmt.Errorf("the ONU answered %d", resp.StatusCode)
 }

@@ -2,33 +2,33 @@ package acs
 
 import (
 	"context"
-	"errors"
-	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"ispbill/internal/store"
 )
 
-// program is what the server does in one session with one ONU, after the Inform:
+// program is what the server does in one session with one ONU, after the Inform and the trust decision (trust.go):
 //
-//  1. First contact, factory reset or boot: discover the Wi-Fi instances and WAN MACs (GetParameterNames, NextLevel).
-//  2. First contact or factory reset (0 BOOTSTRAP): set the per-device connection-request login and the
-//     periodic Inform.
-//  3. A factory-reset ONU that is linked to a house with a saved Wi-Fi choice gets that choice back.
-//  4. Run the queued tasks.
+//  1. First contact, factory reset, boot or a refresh request: discover the Wi-Fi instances and WAN MACs.
+//  2. A box that is not quarantined and not unverified is provisioned: its own ACS login, its connection-request
+//     login, the periodic Inform.
+//  3. A verified box linked to a house gets the house's Wi-Fi (admin lock, and the Wi-Fi itself) when it is new to the
+//     house, or when it has just come back from a factory reset.
+//  4. The queued tasks run.
 //
 // A boot (1 BOOT) only refreshes what the ONU reports; it never writes the Wi-Fi configuration (the owner of the
 // box may have changed it by hand).
-func (s *Service) program(ctx context.Context, ss *session, in Inform, onuID string, stable bool) {
+func (s *Service) program(ctx context.Context, ss *session, in Inform, onuID string, v verdict, ai authInfo) {
 	o, ok := s.loadONU(onuID)
 	if !ok {
 		return
 	}
 	bootstrap := in.HasEvent("0")
 	boot := in.HasEvent("1")
-	needDiscover := !o.Profile.Discovered || bootstrap || boot || len(o.WiFi) == 0 || hasTask(s, onuID, store.TaskRefresh)
+	reset := bootstrap || v.reset || s.keyShowsReset(o, in)
+	s.noteKey(onuID, in) // the key this Inform reports
+	needDiscover := !o.Profile.Discovered || reset || boot || (len(o.WiFi) == 0 && !o.State.NoWiFi) || hasTask(s, onuID, store.TaskRefresh)
 	if needDiscover && o.Root != "" {
 		if err := s.discover(ctx, ss, onuID); err != nil {
 			s.log.Info("ACS: discovery stopped", "onu", onuID, "err", err.Error())
@@ -37,15 +37,20 @@ func (s *Service) program(ctx context.Context, ss *session, in Inform, onuID str
 			}
 		}
 	}
-	if o.Root != "" && (!o.CRApplied || bootstrap) {
-		if err := s.maintain(ctx, ss, onuID); err != nil && ctx.Err() != nil {
+	if o.Root != "" {
+		if err := s.provision(ctx, ss, onuID, reset); err != nil && ctx.Err() != nil {
 			return
 		}
 	}
-	if bootstrap {
-		s.restoreWiFi(onuID)
+	if v.trust == trustFull {
+		if o.Root != "" {
+			if err := s.adminLock(ctx, ss, onuID, reset); err != nil && ctx.Err() != nil {
+				return
+			}
+		}
+		s.queueHomeWiFi(onuID, reset)
 	}
-	s.runTasks(ctx, ss, onuID, stable)
+	s.runTasks(ctx, ss, onuID, v.trust)
 }
 
 func (s *Service) loadONU(id string) (o store.ONU, ok bool) {
@@ -65,349 +70,323 @@ func hasTask(s *Service, onuID, kind string) bool {
 	return found
 }
 
-// restoreWiFi queues the saved Wi-Fi choice of a linked ONU that came back from a factory reset.
-func (s *Service) restoreWiFi(onuID string) {
+// ---- reset detection ----
+
+// keyShowsReset: the box reports a ParameterKey other than the ones this ACS wrote (or none), and it has been seen to
+// report them before: it forgot what was written, which is what a factory reset does. The 0 BOOTSTRAP event says the same
+// for boxes that send it; some send only 1 BOOT after a reset.
+func (s *Service) keyShowsReset(o store.ONU, in Inform) bool {
+	if o.Root == "" || o.State.LastKey == "" || !o.State.KeyWorks {
+		return false
+	}
+	rep, has := in.Param(o.Root + "ManagementServer.ParameterKey")
+	if !has {
+		return false
+	}
+	return rep == "" || (rep != o.State.LastKey && rep != o.State.PrevKey)
+}
+
+// noteKey learns that a box reports the key we wrote (so a later change of it can be trusted as a reset).
+func (s *Service) noteKey(onuID string, in Inform) {
 	_ = s.st.Update(func(d *store.Data) error {
 		o, ok := d.ONUs[onuID]
-		if !ok || o.AccountID == "" || !d.Accounts[o.AccountID].HomeWiFi.Set {
+		if !ok || o.Root == "" || o.State.LastKey == "" || o.State.KeyWorks {
 			return store.ErrNoChange
 		}
-		t := queue(d, o, store.TaskWiFi, "system", s.now())
-		if t.By == "system" {
-			s.audit(d, o, "system", "", "ONU "+o.Serial+" started again from factory settings: the saved Wi-Fi name and password are being restored")
+		if rep, has := in.Param(o.Root + "ManagementServer.ParameterKey"); has && rep == o.State.LastKey {
+			o.State.KeyWorks = true
+			d.ONUs[o.ID] = o
+			return nil
 		}
-		return nil
+		return store.ErrNoChange
 	})
 }
 
-// ---- discovery ----
-
-// instances lists the numbered children of an object ("...WLANConfiguration." -> ".1.", ".2.").
-func instances(ctx context.Context, ss *session, parent string) ([]string, error) {
-	names, f, err := ss.gpn(ctx, parent, true)
-	if err != nil {
-		return nil, err
+// spvKeyed is SetParameterValues with a fresh ParameterKey, remembered when the box accepts the change.
+func (s *Service) spvKeyed(ctx context.Context, ss *session, onuID string, ps []ParamValue) (int, *Fault, error) {
+	key := "ftn-" + randHex(4)
+	st, f, err := ss.spv(ctx, ps, key)
+	if err != nil || f != nil {
+		return st, f, err
 	}
-	if f != nil {
-		return nil, nil // no such object (9005): none
-	}
-	var out []string
-	for _, n := range names {
-		if !strings.HasPrefix(n.Name, parent) || n.Name == parent {
-			continue
-		}
-		rest := strings.TrimSuffix(strings.TrimPrefix(n.Name, parent), ".")
-		if rest == "" || strings.Contains(rest, ".") {
-			continue
-		}
-		if _, err := strconv.Atoi(rest); err != nil {
-			continue
-		}
-		out = append(out, parent+rest+".")
-	}
-	sort.Slice(out, func(i, j int) bool { return natLess(out[i], out[j]) })
-	if len(out) > 16 {
-		out = out[:16]
-	}
-	return out, nil
-}
-
-func natLess(a, b string) bool {
-	if len(a) != len(b) {
-		return len(a) < len(b)
-	}
-	return a < b
-}
-
-func leafSet(ctx context.Context, ss *session, obj string) (map[string]bool, error) {
-	names, f, err := ss.gpn(ctx, obj, true)
-	if err != nil {
-		return nil, err
-	}
-	set := map[string]bool{}
-	if f != nil {
-		return set, nil
-	}
-	for _, n := range names {
-		if strings.HasPrefix(n.Name, obj) && n.Name != obj {
-			set[strings.TrimSuffix(strings.TrimPrefix(n.Name, obj), ".")] = true
-		}
-	}
-	return set, nil
-}
-
-func valueOf(vs []ParamValue, name string) string {
-	for _, v := range vs {
-		if v.Name == name {
-			return v.Value
-		}
-	}
-	return ""
-}
-
-func isOn(v string) bool { return isTrue(v) }
-
-// discover reads the Wi-Fi instances and the WAN MACs of the ONU and saves them on its row.
-func (s *Service) discover(ctx context.Context, ss *session, onuID string) error {
-	o, ok := s.loadONU(onuID)
-	if !ok {
-		return nil
-	}
-	prof := pickProfile(o.Root, o.Manufacturer, o.OUI, o.ProductClass)
-	var wifi []store.ONUWiFi
-	var macs []string
-	var err error
-	if o.Root == store.RootTR181 {
-		wifi, macs, err = s.discover181(ctx, ss, o, prof)
-	} else {
-		wifi, macs, err = s.discover098(ctx, ss, o, prof)
-	}
-	if err != nil && len(wifi) == 0 && len(macs) == 0 {
-		return err
-	}
-	assignBands(wifi)
-	canon := map[string]bool{}
-	var cm []string
-	for _, m := range macs {
-		if c, ok := store.CanonMAC(m); ok && !canon[c] && c != "00:00:00:00:00:00" {
-			canon[c] = true
-			cm = append(cm, c)
-		}
-	}
-	sort.Strings(cm)
-	uerr := s.st.Update(func(d *store.Data) error {
-		cur, ok := d.ONUs[onuID]
+	_ = s.st.Update(func(d *store.Data) error {
+		o, ok := d.ONUs[onuID]
 		if !ok {
 			return store.ErrNoChange
 		}
-		cur.WiFi, cur.MACs = wifi, cm
-		cur.Profile.Root, cur.Profile.Vendor, cur.Profile.Discovered = cur.Root, prof.Name, true
-		cur.State.WiFiChanged = ssidDiffers(cur, homeWiFi(d, cur))
-		d.ONUs[onuID] = cur
-		autoLink(d, onuID, s.now())
+		o.State.PrevKey, o.State.LastKey = o.State.LastKey, key
+		d.ONUs[o.ID] = o
 		return nil
 	})
-	if uerr != nil && !errors.Is(uerr, store.ErrNoChange) {
-		return uerr
-	}
-	return err
+	return st, nil, nil
 }
 
-func (s *Service) discover098(ctx context.Context, ss *session, o store.ONU, prof Profile) (wifi []store.ONUWiFi, macs []string, err error) {
-	lans, err := instances(ctx, ss, o.Root+"LANDevice.")
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, lan := range lans {
-		wls, err := instances(ctx, ss, lan+"WLANConfiguration.")
+// setLoose writes a list of parameters the box may not all have: a name it refuses (9005, 9008, or a 9003 that names
+// it) is dropped and the rest is tried again; a refusal that names nothing is sorted out by writing one at a time.
+// It returns the names written and the names refused (with the fault code).
+func (s *Service) setLoose(ctx context.Context, ss *session, onuID string, ps []ParamValue) (applied []string, refused map[string]int, err error) {
+	refused = map[string]int{}
+	left := append([]ParamValue(nil), ps...)
+	for try := 0; try < 6 && len(left) > 0; try++ {
+		_, f, err := s.spvKeyed(ctx, ss, onuID, left)
 		if err != nil {
-			return wifi, macs, err
+			return applied, refused, err
 		}
-		for _, w := range wls {
-			leaves, err := leafSet(ctx, ss, w)
-			if err != nil {
-				return wifi, macs, err
+		if f == nil {
+			for _, p := range left {
+				applied = append(applied, p.Name)
 			}
-			want := []string{prof.SSID, prof.Enable, prof.Channel, prof.Standard}
-			want = append(want, prof.BandLeaves...)
-			var names []string
-			seen := map[string]bool{}
-			for _, l := range want {
-				if l == "" || seen[l] || (len(leaves) > 0 && !leaves[l]) {
-					continue
-				}
-				seen[l] = true
-				names = append(names, w+l)
-			}
-			vals, f, err := ss.gpv(ctx, names)
-			if err != nil {
-				return wifi, macs, err
-			}
-			if f != nil {
-				continue
-			}
-			inst := store.ONUWiFi{Path: w, SSID: valueOf(vals, w+prof.SSID), Enabled: isOn(valueOf(vals, w+prof.Enable))}
-			inst.Channel, _ = strconv.Atoi(valueOf(vals, w+prof.Channel))
-			freq := ""
-			for _, bl := range prof.BandLeaves {
-				if bl != prof.Standard {
-					if v := valueOf(vals, w+bl); v != "" {
-						freq = v
-					}
-				}
-			}
-			inst.Band = bandOf(freq, valueOf(vals, w+prof.Standard), inst.Channel)
-			wifi = append(wifi, inst)
+			return applied, refused, nil
 		}
-	}
-	// WAN MACs: WANDevice.N.WANConnectionDevice.M.(WANIPConnection|WANPPPConnection).K.MACAddress
-	wans, err := instances(ctx, ss, o.Root+"WANDevice.")
-	if err != nil {
-		return wifi, macs, err
-	}
-	for _, wan := range wans {
-		wcds, err := instances(ctx, ss, wan+"WANConnectionDevice.")
-		if err != nil {
-			return wifi, macs, err
+		named := map[string]int{}
+		for _, pf := range f.Params {
+			if pf.Name != "" {
+				named[pf.Name] = pf.Code
+			}
 		}
-		for _, wcd := range wcds {
-			for _, kind := range []string{"WANIPConnection.", "WANPPPConnection."} {
-				conns, err := instances(ctx, ss, wcd+kind)
+		if len(named) == 0 {
+			// Nothing named: one at a time.
+			for _, p := range left {
+				_, f1, err := s.spvKeyed(ctx, ss, onuID, []ParamValue{p})
 				if err != nil {
-					return wifi, macs, err
+					return applied, refused, err
 				}
-				for _, c := range conns {
-					vals, f, err := ss.gpv(ctx, []string{c + "MACAddress"})
-					if err != nil {
-						return wifi, macs, err
-					}
-					if f == nil {
-						macs = append(macs, valueOf(vals, c+"MACAddress"))
-					}
+				if f1 != nil {
+					refused[p.Name] = f1.Code
+				} else {
+					applied = append(applied, p.Name)
 				}
 			}
+			return applied, refused, nil
 		}
+		var next []ParamValue
+		for _, p := range left {
+			if c, bad := named[p.Name]; bad {
+				refused[p.Name] = c
+			} else {
+				next = append(next, p)
+			}
+		}
+		if len(next) == len(left) {
+			return applied, refused, nil // it named something that is not ours: give up on the rest
+		}
+		left = next
 	}
-	return wifi, macs, nil
+	return applied, refused, nil
 }
 
-func (s *Service) discover181(ctx context.Context, ss *session, o store.ONU, prof Profile) (wifi []store.ONUWiFi, macs []string, err error) {
-	radios, err := instances(ctx, ss, "Device.WiFi.Radio.")
-	if err != nil {
-		return nil, nil, err
-	}
-	band := map[string]string{}
-	for _, r := range radios {
-		vals, f, err := ss.gpv(ctx, []string{r + "OperatingFrequencyBand", r + "Channel"})
-		if err != nil {
-			return wifi, macs, err
-		}
-		if f == nil {
-			ch, _ := strconv.Atoi(valueOf(vals, r+"Channel"))
-			band[r] = bandOf(valueOf(vals, r+"OperatingFrequencyBand"), "", ch)
-		}
-	}
-	ssids, err := instances(ctx, ss, "Device.WiFi.SSID.")
-	if err != nil {
-		return wifi, macs, err
-	}
-	aps, err := instances(ctx, ss, "Device.WiFi.AccessPoint.")
-	if err != nil {
-		return wifi, macs, err
-	}
-	apOf := map[string]string{}
-	for _, ap := range aps {
-		vals, f, err := ss.gpv(ctx, []string{ap + "SSIDReference"})
-		if err != nil {
-			return wifi, macs, err
-		}
-		if f == nil {
-			ref := strings.TrimSuffix(valueOf(vals, ap+"SSIDReference"), ".") + "."
-			apOf[ref] = ap
-		}
-	}
-	for _, sp := range ssids {
-		vals, f, err := ss.gpv(ctx, []string{sp + "SSID", sp + "Enable", sp + "LowerLayers"})
-		if err != nil {
-			return wifi, macs, err
-		}
-		if f != nil {
-			continue
-		}
-		low := strings.TrimSuffix(valueOf(vals, sp+"LowerLayers"), ".") + "."
-		wifi = append(wifi, store.ONUWiFi{Path: sp, AP: apOf[sp], SSID: valueOf(vals, sp+"SSID"), Enabled: isOn(valueOf(vals, sp+"Enable")), Band: band[low]})
-	}
-	links, err := instances(ctx, ss, "Device.Ethernet.Link.")
-	if err != nil {
-		return wifi, macs, err
-	}
-	for _, l := range links {
-		vals, f, err := ss.gpv(ctx, []string{l + "MACAddress"})
-		if err != nil {
-			return wifi, macs, err
-		}
-		if f == nil {
-			macs = append(macs, valueOf(vals, l+"MACAddress"))
-		}
-	}
-	return wifi, macs, nil
-}
+// ---- provisioning: the box's own ACS login, its connection-request login, the periodic Inform ----
 
-// assignBands gives instances whose band could not be read one by elimination (first unknown = 2.4, next = 5).
-func assignBands(w []store.ONUWiFi) {
-	have := map[string]bool{}
-	for _, x := range w {
-		have[x.Band] = true
-	}
-	for i := range w {
-		if w[i].Band != "" {
-			continue
-		}
-		switch {
-		case !have["2.4"]:
-			w[i].Band, have["2.4"] = "2.4", true
-		case !have["5"]:
-			w[i].Band, have["5"] = "5", true
-		}
-	}
-}
-
-// ---- connection-request login and periodic inform ----
-
-func (s *Service) maintain(ctx context.Context, ss *session, onuID string) error {
+func (s *Service) provision(ctx context.Context, ss *session, onuID string, reset bool) error {
 	o, ok := s.loadONU(onuID)
 	if !ok {
 		return nil
 	}
-	user, pass, have := s.openCR(o)
-	if !have {
-		user, pass = "cr"+randHex(3), randAlnum(16)
-		eu, ep, err := s.sealCR(user, pass)
+	ms := o.Root + "ManagementServer."
+	// 1. The box's own ACS login (a refusal flags it as "shared login only").
+	if o.Sec.ACSCred == store.CredNone {
+		user := "ftn-" + o.ID
+		pass := randAlnum(24)
+		enc, err := s.sealDev(pass)
 		if err != nil {
 			return err
 		}
-		if err := s.st.Update(func(d *store.Data) error {
+		applied, refused, err := s.setLoose(ctx, ss, onuID, []ParamValue{{Name: ms + "Username", Value: user}, {Name: ms + "Password", Value: pass}})
+		if err != nil {
+			return err
+		}
+		state := store.CredShared
+		if len(applied) == 2 {
+			state = store.CredPending
+		}
+		_ = s.st.Update(func(d *store.Data) error {
 			cur, ok := d.ONUs[onuID]
 			if !ok {
 				return store.ErrNoChange
 			}
-			cur.ConnReqUserEnc, cur.ConnReqPassEnc, cur.CRApplied = eu, ep, false
-			d.ONUs[onuID] = cur
+			cur.Sec.ACSCred, cur.Sec.ACSTries = state, 0
+			if state == store.CredPending {
+				cur.Sec.ACSUser, cur.Sec.ACSPassEnc = user, enc
+			} else {
+				cur.Sec.ACSUser, cur.Sec.ACSPassEnc = "", ""
+				s.log.Info("ACS: the ONU keeps the shared ACS login", "onu", onuID, "refused", len(refused))
+				s.audit(d, cur, "system", "", "ONU "+cur.Serial+" refused its own ACS login: it logs in with the shared login only (weaker)")
+			}
+			d.ONUs[cur.ID] = cur
 			return nil
-		}); err != nil {
-			return err
-		}
+		})
 	}
-	ms := o.Root + "ManagementServer."
+	// 2. The connection-request login and the periodic Inform.
+	o, _ = s.loadONU(onuID)
+	crUser, crPass, have := s.openCR(o)
+	needCR := !o.State.CRReadOnly && (!have || !o.CRApplied || o.State.CRRefused || reset)
 	every := strconv.Itoa(int(s.informEvery() / time.Second))
-	ps := []ParamValue{
-		{Name: ms + "ConnectionRequestUsername", Value: user},
-		{Name: ms + "ConnectionRequestPassword", Value: pass},
-		{Name: ms + "PeriodicInformEnable", Value: "1", Type: "xsd:boolean"},
-		{Name: ms + "PeriodicInformInterval", Value: every, Type: "xsd:unsignedInt"},
+	var ps []ParamValue
+	if needCR {
+		if !have {
+			crUser, crPass = "cr"+randHex(3), randAlnum(16)
+			eu, ep, err := s.sealCR(crUser, crPass)
+			if err != nil {
+				return err
+			}
+			if err := s.st.Update(func(d *store.Data) error {
+				cur, ok := d.ONUs[onuID]
+				if !ok {
+					return store.ErrNoChange
+				}
+				cur.ConnReqUserEnc, cur.ConnReqPassEnc, cur.CRApplied = eu, ep, false
+				d.ONUs[onuID] = cur
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		ps = append(ps, ParamValue{Name: ms + "ConnectionRequestUsername", Value: crUser}, ParamValue{Name: ms + "ConnectionRequestPassword", Value: crPass})
 	}
-	_, f, err := ss.spv(ctx, ps, "ftn-mgmt")
+	if reset || needCR || !o.CRApplied {
+		ps = append(ps, ParamValue{Name: ms + "PeriodicInformEnable", Value: "1", Type: "xsd:boolean"},
+			ParamValue{Name: ms + "PeriodicInformInterval", Value: every, Type: "xsd:unsignedInt"})
+	}
+	if len(ps) == 0 {
+		return nil
+	}
+	applied, refused, err := s.setLoose(ctx, ss, onuID, ps)
 	if err != nil {
 		return err
 	}
-	if f != nil && f.Code == 9005 {
-		// Some builds have no settable periodic-inform parameters: set the login alone.
-		_, f, err = ss.spv(ctx, ps[:2], "ftn-mgmt")
+	wrote := map[string]bool{}
+	for _, n := range applied {
+		wrote[n] = true
+	}
+	_, userRefused := refused[ms+"ConnectionRequestUsername"]
+	_, passRefused := refused[ms+"ConnectionRequestPassword"]
+	return s.st.Update(func(d *store.Data) error {
+		cur, ok := d.ONUs[onuID]
+		if !ok {
+			return store.ErrNoChange
+		}
+		switch {
+		case wrote[ms+"ConnectionRequestUsername"] && wrote[ms+"ConnectionRequestPassword"]:
+			cur.CRApplied, cur.State.CRRefused, cur.State.CRReadOnly = true, false, false
+		case needCR && (userRefused || passRefused):
+			// A non-writable login: the box keeps what it has and the ACS goes on with that (no retry at every Inform).
+			cur.State.CRReadOnly, cur.State.CRRefused = true, false
+			cur.CRApplied = true
+			s.log.Info("ACS: the ONU does not take a connection-request login", "onu", onuID)
+		}
+		d.ONUs[onuID] = cur
+		return nil
+	})
+}
+
+// ---- the ONU's own web admin ----
+
+// adminCandidates are the places a web-admin password may live. None is bench-verified: the ACS tries them in order and
+// remembers when none takes (the box is then marked "unsupported" and nothing is claimed).
+func adminCandidates(root string) []struct{ parent, leaf string } {
+	if root == store.RootTR181 {
+		return []struct{ parent, leaf string }{{"Device.Users.User.", "Password"}}
+	}
+	return []struct{ parent, leaf string }{
+		{root + "UserInterface.X_HW_WebUserInfo.", "Password"}, // Huawei spelling (BENCH-CHECK)
+		{root + "User.", "Password"},                           // TR-098 Amendment 2 user table
+	}
+}
+
+// adminLock sets a random password on the ONU's own web admin, best effort, so a tenant cannot open it (and, from
+// there, bridge the management VLAN to a LAN port). It cannot read the password back: the state stays "unverified".
+func (s *Service) adminLock(ctx context.Context, ss *session, onuID string, reset bool) error {
+	o, ok := s.loadONU(onuID)
+	if !ok {
+		return nil
+	}
+	if o.Sec.AdminPass == store.AdminUnsupported && !reset {
+		return nil
+	}
+	if o.Sec.AdminPass == store.AdminUnverified && !reset {
+		return nil
+	}
+	pass := ""
+	if o.Sec.AdminPassEnc != "" {
+		pass, _ = s.openAdmin(o.Sec.AdminPassEnc)
+	}
+	if pass == "" {
+		pass = randAlnum(16)
+	}
+	done := false
+	for _, c := range adminCandidates(o.Root) {
+		insts, err := s.listInst(ctx, ss, c.parent, "")
 		if err != nil {
 			return err
 		}
+		if len(insts) == 0 {
+			continue
+		}
+		var ps []ParamValue
+		for _, in := range insts {
+			ps = append(ps, ParamValue{Name: in + c.leaf, Value: pass})
+		}
+		applied, _, err := s.setLoose(ctx, ss, onuID, ps)
+		if err != nil {
+			return err
+		}
+		if len(applied) > 0 {
+			done = true
+			break
+		}
 	}
-	if f != nil {
-		s.log.Info("ACS: could not set the connection-request login", "onu", onuID, "fault", f.Text())
-		return nil
+	enc := ""
+	if done {
+		var err error
+		if enc, err = s.sealAdmin(pass); err != nil {
+			return err
+		}
 	}
 	return s.st.Update(func(d *store.Data) error {
 		cur, ok := d.ONUs[onuID]
-		if !ok || cur.CRApplied {
+		if !ok {
 			return store.ErrNoChange
 		}
-		cur.CRApplied = true
+		if done {
+			cur.Sec.AdminPassEnc, cur.Sec.AdminPass = enc, store.AdminUnverified
+		} else {
+			cur.Sec.AdminPass = store.AdminUnsupported
+		}
 		d.ONUs[onuID] = cur
+		return nil
+	})
+}
+
+// ---- the house's Wi-Fi ----
+
+// queueHomeWiFi queues the house's Wi-Fi for a verified box that is linked to it: when the box has just been reset, and
+// when it has not yet received this version of the house's choice (a replacement box on its first verified session).
+// A box the house's choice was already applied to is left alone: its tenant may have changed the name by hand.
+func (s *Service) queueHomeWiFi(onuID string, reset bool) {
+	_ = s.st.Update(func(d *store.Data) error {
+		o, ok := d.ONUs[onuID]
+		if !ok || o.AccountID == "" || o.State.Returned {
+			return store.ErrNoChange
+		}
+		w := d.Accounts[o.AccountID].HomeWiFi
+		if !w.Set {
+			return store.ErrNoChange
+		}
+		have := o.State.AppliedFor == o.AccountID && o.State.AppliedAt.Equal(w.UpdatedAt)
+		if have && !reset {
+			return store.ErrNoChange
+		}
+		for _, t := range d.ONUTasksOf(o.ID) {
+			if t.Kind == store.TaskWiFi && t.Active() {
+				return store.ErrNoChange
+			}
+		}
+		queue(d, o, store.TaskWiFi, "system", s.now())
+		if reset {
+			s.audit(d, o, "system", "", "ONU "+o.Serial+" started again from factory settings: the house's Wi-Fi name and password are being restored")
+		} else {
+			s.audit(d, o, "system", "", "ONU "+o.Serial+" is new to this house: the house's Wi-Fi name and password are being set")
+		}
 		return nil
 	})
 }
@@ -454,18 +433,31 @@ func (s *Service) finish(id, fault string) {
 	})
 }
 
-func (s *Service) runTasks(ctx context.Context, ss *session, onuID string, stable bool) {
+// finishWiFi ends a Wi-Fi task: accepted by the box (never "done": only the owner confirms that it works), or failed.
+func (s *Service) finishWiFi(id string, r wifiResult) {
+	now := s.now()
+	s.setTask(id, func(t *store.ONUTask) {
+		t.FinishedAt = now
+		if r.fault != "" {
+			t.Status, t.Fault = store.TaskFailed, r.fault
+			return
+		}
+		t.Status, t.Fault, t.AfterReboot, t.PassLeaf = store.TaskAccepted, r.note, r.afterReboot, r.leaf
+	})
+}
+
+func (s *Service) runTasks(ctx context.Context, ss *session, onuID string, trust trustLevel) {
 	skipped := map[string]bool{}
 	for ctx.Err() == nil {
 		t, ok := s.nextTask(onuID, skipped)
 		if !ok {
 			return
 		}
-		if t.Kind == store.TaskWiFi && !stable {
-			// The password goes only to a box that has been seen at this address before: a new address may be
-			// another customer's box using a stolen serial number. The next Inform from the same address sends it.
+		if t.Kind == store.TaskWiFi && trust != trustFull {
+			// The password goes only to a box whose identity was verified in this session (its own login, or the
+			// shared login from the address the router leased to its MAC): a spoofed serial gets nothing.
 			skipped[t.ID] = true
-			s.log.Info("ACS: Wi-Fi change waits: the ONU's address is new", "onu", onuID)
+			s.log.Info("ACS: Wi-Fi change waits: the ONU is not verified yet", "onu", onuID)
 			continue
 		}
 		now := s.now()
@@ -474,11 +466,18 @@ func (s *Service) runTasks(ctx context.Context, ss *session, onuID string, stabl
 		var err error
 		switch t.Kind {
 		case store.TaskWiFi:
-			fault, err = s.doWiFi(ctx, ss, onuID, t)
+			var r wifiResult
+			r, err = s.doWiFi(ctx, ss, onuID, t)
+			if err == nil {
+				s.finishWiFi(t.ID, r)
+			}
 		case store.TaskReboot:
 			fault, err = s.doSimple(ctx, ss, func(id string) []byte { return rebootRPC(ss.ns, id, t.ID) }, "RebootResponse")
 		case store.TaskFactoryReset:
 			fault, err = s.doSimple(ctx, ss, func(id string) []byte { return factoryResetRPC(ss.ns, id) }, "FactoryResetResponse")
+			if err == nil && fault == "" {
+				s.forgetKeys(onuID)
+			}
 		case store.TaskRefresh:
 			err = s.refreshSSIDs(ctx, ss, onuID)
 		default:
@@ -488,13 +487,29 @@ func (s *Service) runTasks(ctx context.Context, ss *session, onuID string, stabl
 			if ctx.Err() != nil {
 				return // the session died: the task is picked up again at the next Inform
 			}
-			fault = "the ONU did not answer properly (" + err.Error() + ")"
+			s.finish(t.ID, "the ONU did not answer properly ("+err.Error()+")")
+		} else if t.Kind != store.TaskWiFi {
+			s.finish(t.ID, fault)
 		}
-		s.finish(t.ID, fault)
 		if t.Kind == store.TaskReboot || t.Kind == store.TaskFactoryReset {
 			return // the ONU restarts: nothing more in this session
 		}
 	}
+}
+
+// forgetKeys: after a factory reset the box has no key; what it reports next is not a surprise.
+func (s *Service) forgetKeys(onuID string) {
+	_ = s.st.Update(func(d *store.Data) error {
+		o, ok := d.ONUs[onuID]
+		if !ok {
+			return store.ErrNoChange
+		}
+		o.State.LastKey, o.State.PrevKey, o.State.KeyWorks = "", "", false
+		o.Sec.ACSCred = store.CredNone
+		o.State.AppliedFor, o.State.AppliedAt = "", time.Time{}
+		d.ONUs[onuID] = o
+		return nil
+	})
 }
 
 func (s *Service) doSimple(ctx context.Context, ss *session, build func(id string) []byte, want string) (string, error) {
@@ -503,124 +518,9 @@ func (s *Service) doSimple(ctx context.Context, ss *session, build func(id strin
 		return "", err
 	}
 	if f != nil {
-		return f.Text(), nil
+		return f.SafeText(), nil
 	}
 	return "", nil
-}
-
-// doWiFi writes the saved Wi-Fi choice of the ONU: the name and the WPA2 passphrase of the main instance of each
-// band. A name the device refuses (9005) moves to the next candidate of the profile; the one that works is remembered.
-func (s *Service) doWiFi(ctx context.Context, ss *session, onuID string, t store.ONUTask) (string, error) {
-	o, ok := s.loadONU(onuID)
-	if !ok {
-		return "the ONU is gone", nil
-	}
-	var want store.WiFiDesired
-	s.st.View(func(d *store.Data) { want = homeWiFi(d, o) })
-	if !want.Set {
-		return "no Wi-Fi name and password are saved for this house", nil
-	}
-	pass, err := s.openPass(want.PassEnc)
-	if err != nil {
-		return "the saved Wi-Fi password cannot be opened", nil
-	}
-	pass5, ssid5 := pass, want.SSID
-	if !want.Same {
-		ssid5 = want.SSID5
-		if pass5, err = s.openPass(want.Pass5Enc); err != nil {
-			return "the saved 5 GHz Wi-Fi password cannot be opened", nil
-		}
-	}
-	if len(o.WiFi) == 0 {
-		if err := s.discover(ctx, ss, onuID); err != nil && ctx.Err() != nil {
-			return "", err
-		}
-		if o, ok = s.loadONU(onuID); !ok {
-			return "the ONU is gone", nil
-		}
-	}
-	prof := pickProfile(o.Root, o.Manufacturer, o.OUI, o.ProductClass)
-	idx := 0
-	type target struct {
-		band, ssid, pass string
-	}
-	var faults []string
-	attempted := 0
-	for _, tg := range []target{{"2.4", want.SSID, pass}, {"5", ssid5, pass5}} {
-		w, ok := primary(o.WiFi, tg.band)
-		if !ok {
-			continue
-		}
-		attempted++
-		skip := map[string]bool{}
-		withSec := true
-		done := false
-		var last *Fault
-		for try := 0; try < 8 && !done; try++ {
-			ps := prof.wifiSettings(w, tg.ssid, tg.pass, idx, withSec, skip)
-			_, f, err := ss.spv(ctx, ps, t.ID)
-			if err != nil {
-				return "", err
-			}
-			if f == nil {
-				done = true
-				break
-			}
-			last = f
-			if !namingFault(f) {
-				break // not a naming problem: no candidate will help
-			}
-			// Drop what the device named, if it named something; else the security settings first, then the next passphrase name.
-			named := false
-			for _, pf := range f.Params {
-				if pf.Name != "" && !skip[pf.Name] {
-					skip[pf.Name] = true
-					named = true
-				}
-			}
-			if named {
-				if passRefused(prof, w, idx, skip) {
-					idx++ // what the device refused stays dropped; only the passphrase name changes
-				}
-			} else if withSec {
-				withSec = false
-			} else {
-				idx++
-			}
-			if idx >= len(prof.Pass) {
-				break
-			}
-		}
-		if !done {
-			text := "the ONU refused the Wi-Fi settings"
-			if last != nil {
-				text = last.Text()
-			}
-			faults = append(faults, tg.band+" GHz: "+text)
-		}
-	}
-	if attempted == 0 {
-		return "the ONU reports no Wi-Fi interface", nil
-	}
-	if len(faults) > 0 {
-		return strings.Join(faults, "; "), nil
-	}
-	_ = s.refreshSSIDs(ctx, ss, onuID)
-	_ = s.st.Update(func(d *store.Data) error {
-		cur, ok := d.ONUs[onuID]
-		if !ok || !cur.State.WiFiChanged {
-			return store.ErrNoChange
-		}
-		cur.State.WiFiChanged = ssidDiffers(cur, homeWiFi(d, cur))
-		d.ONUs[onuID] = cur
-		return nil
-	})
-	return "", nil
-}
-
-// passRefused: the device named the passphrase parameter of the current candidate as refused.
-func passRefused(p Profile, w store.ONUWiFi, idx int, skip map[string]bool) bool {
-	return idx < len(p.Pass) && skip[apPath(w)+p.Pass[idx]]
 }
 
 // refreshSSIDs reads the Wi-Fi names the ONU has now.
@@ -656,19 +556,4 @@ func (s *Service) refreshSSIDs(ctx context.Context, ss *session, onuID string) e
 		})
 	}
 	return nil
-}
-
-// namingFault: the device says a name is unknown (9005-9008), either as the fault itself or, as many do, as the
-// per-parameter detail of a 9003 "Invalid arguments".
-func namingFault(f *Fault) bool {
-	is := func(c int) bool { return c >= 9005 && c <= 9008 }
-	if is(f.Code) {
-		return true
-	}
-	for _, pf := range f.Params {
-		if is(pf.Code) {
-			return true
-		}
-	}
-	return false
 }

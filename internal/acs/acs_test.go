@@ -146,7 +146,7 @@ func TestChangeWiFiEndToEnd(t *testing.T) {
 				t.Fatalf("status %s", task.Status)
 			}
 			f.svc.Wait()
-			eventually(t, "task applied", func() bool { return f.lastTask(f.onuBySerial(c.Serial).ID).Status == store.TaskDone })
+			eventually(t, "task applied", func() bool { return f.lastTask(f.onuBySerial(c.Serial).ID).Status == store.TaskAccepted })
 			if c.hits() == 0 {
 				t.Fatal("no connection request received")
 			}
@@ -167,7 +167,7 @@ func TestChangeWiFiEndToEnd(t *testing.T) {
 				t.Fatalf("expected both bands set, got ssids=%d passes=%d: %v", ssids, passes, set)
 			}
 			tv, ok := f.svc.TaskStatus("a1")
-			if !ok || tv.Status != "applied" {
+			if !ok || tv.Status != "accepted" {
 				t.Fatalf("status %+v", tv)
 			}
 			if strings.Contains(f.logs.String(), "s3cretpass!") {
@@ -199,7 +199,7 @@ func Test9005FallbackToNextCandidate(t *testing.T) {
 	if _, err := f.svc.SetWiFi("owner", "", "a1", WiFiInput{SSID: "Net9005", Pass: "password99", Same: true}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "applied", func() bool { return f.lastTask(f.onuBySerial(c.Serial).ID).Status == store.TaskDone })
+	eventually(t, "accepted", func() bool { return f.lastTask(f.onuBySerial(c.Serial).ID).Status == store.TaskAccepted })
 	if got := c.get(c.wlan("1") + "KeyPassphrase"); got != "password99" {
 		t.Fatalf("fallback path not used, value %q", got)
 	}
@@ -215,7 +215,7 @@ func TestFactoryResetRestoresAndBootDoesNot(t *testing.T) {
 	if _, err := f.svc.SetWiFi("owner", "", "a1", WiFiInput{SSID: "Mine", Pass: "mypassword1", Same: true}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "applied", func() bool { return f.lastTask(f.onuBySerial(c.Serial).ID).Status == store.TaskDone })
+	eventually(t, "accepted", func() bool { return f.lastTask(f.onuBySerial(c.Serial).ID).Status == store.TaskAccepted })
 	// factory reset: the box forgets everything
 	c.mu.Lock()
 	for _, w := range []string{"1", "5"} {
@@ -389,7 +389,7 @@ func TestValueChangeMarksDesiredChanged(t *testing.T) {
 	if _, err := f.svc.SetWiFi("owner", "", "a1", WiFiInput{SSID: "Wanted", Pass: "wantedpass1", Same: true}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "applied", func() bool { return f.lastTask(f.onuBySerial(c.Serial).ID).Status == store.TaskDone })
+	eventually(t, "accepted", func() bool { return f.lastTask(f.onuBySerial(c.Serial).ID).Status == store.TaskAccepted })
 	c.mu.Lock()
 	c.params[c.wlan("1")+"SSID"] = "Tenant renamed"
 	c.mu.Unlock()
@@ -438,8 +438,18 @@ func TestInventorySerialLinksBeforeMAC(t *testing.T) {
 		t.Fatalf("link %q %q", o.AccountID, o.Link)
 	}
 	v, ok := f.svc.OfAccount("a2")
-	if !ok || !v.InInventory || len(v.Warnings) == 0 || len(v.UseMACs) == 0 {
-		t.Fatalf("expected a MAC mismatch warning with a fix: %+v", v)
+	if !ok || !v.InInventory || len(v.Warnings) == 0 {
+		t.Fatalf("expected a MAC mismatch warning: %+v", v)
+	}
+	// The one-click fix is offered only once the report came from a box that logged in with its own login.
+	if len(v.UseMACs) != 0 || f.svc.CanUseMAC("a2", "AA:BB:CC:00:11:22") {
+		t.Fatalf("a first-contact report was offered as a fix: %+v", v.UseMACs)
+	}
+	if err := c.session("2 PERIODIC"); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ = f.svc.OfAccount("a2"); len(v.UseMACs) == 0 || !f.svc.CanUseMAC("a2", "aa:bb:cc:00:11:22") || f.svc.CanUseMAC("a2", "AA:BB:CC:01:01:01") {
+		t.Fatalf("expected the fix after the box logged in with its own login: %+v", v)
 	}
 	// the account MAC was not touched
 	f.st.View(func(d *store.Data) {

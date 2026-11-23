@@ -101,6 +101,8 @@ type ONUProfile struct {
 	// PassLeaf is the passphrase parameter (relative to the Wi-Fi instance) the owner confirmed on this box
 	// ("It works"); it is tried first. A change the box merely accepted is not remembered here.
 	PassLeaf string `json:"pass_leaf,omitempty"`
+	// BadLeaves are passphrase names the owner said did not change the Wi-Fi although the box accepted them.
+	BadLeaves []string `json:"bad_leaves,omitempty"`
 	// Vendor is the quirk set applied (profile name, e.g. "tr098", "tr098-huawei", "tr181").
 	Vendor string `json:"vendor,omitempty"`
 	// Names are the top-level object names found by GetParameterNames NextLevel (for diagnostics).
@@ -146,8 +148,9 @@ type ONUSec struct {
 	ACSTries   int    `json:"acs_tries,omitempty"`
 	// MgmtMAC is the MAC the router's management DHCP server leased the ONU's management address to. It is
 	// hardware: it survives a factory reset.
-	MgmtMAC    string        `json:"mgmt_mac,omitempty"`
-	Blocked    bool          `json:"blocked,omitempty"`
+	MgmtMAC string `json:"mgmt_mac,omitempty"`
+	// BlockedFrom lists the places the owner blocked for this serial: "mac:AA:BB:CC:DD:EE:FF" or "ip:<site>/<address>".
+	BlockedFrom []string      `json:"blocked_from,omitempty"`
 	Quarantine ONUQuarantine `json:"quarantine"`
 	FlapCount  int           `json:"flap_count,omitempty"`
 	FlapSince  time.Time     `json:"flap_since,omitempty"`
@@ -162,6 +165,13 @@ type ONUState struct {
 	// (or an empty) key says the box forgot what we wrote: a factory reset.
 	LastKey string `json:"last_key,omitempty"`
 	PrevKey string `json:"prev_key,omitempty"`
+	// KeyWorks: this box has been seen to report the ParameterKey we wrote, so a different (or empty) key later means
+	// it forgot our settings. Boxes that never report the key are left to the 0 BOOTSTRAP event.
+	KeyWorks bool `json:"key_works,omitempty"`
+	// CRReadOnly: the box refused to take a connection-request login (non-writable); the ACS keeps using what it has.
+	CRReadOnly bool `json:"cr_read_only,omitempty"`
+	// CRRefused: a connection request was answered 401/403 with the stored login: it is written again at the next Inform.
+	CRRefused bool `json:"cr_refused,omitempty"`
 	// NoWiFi: discovery found no Wi-Fi on this box (an SFU or bridge): it is not discovered again every Inform.
 	NoWiFi bool `json:"no_wifi,omitempty"`
 	// AppliedFor and AppliedAt: the house and the Wi-Fi version (Account.HomeWiFi.UpdatedAt) this box accepted last.
@@ -224,6 +234,12 @@ func (x ONU) norm() ONU {
 	if len(x.WiFi) == 0 {
 		x.WiFi = nil
 	}
+	if len(x.Sec.BlockedFrom) == 0 {
+		x.Sec.BlockedFrom = nil
+	}
+	if len(x.Profile.BadLeaves) == 0 {
+		x.Profile.BadLeaves = nil
+	}
 	return x
 }
 
@@ -233,6 +249,14 @@ func (x ONU) Norm() ONU { return x.norm() }
 func cloneONU(o ONU) ONU {
 	o.MACs = append([]string(nil), o.MACs...)
 	o.WiFi = append([]ONUWiFi(nil), o.WiFi...)
+	o.Sec.BlockedFrom = append([]string(nil), o.Sec.BlockedFrom...)
+	if len(o.Sec.BlockedFrom) == 0 {
+		o.Sec.BlockedFrom = nil
+	}
+	o.Profile.BadLeaves = append([]string(nil), o.Profile.BadLeaves...)
+	if len(o.Profile.BadLeaves) == 0 {
+		o.Profile.BadLeaves = nil
+	}
 	if o.LegacyDesired != nil {
 		c := *o.LegacyDesired
 		o.LegacyDesired = &c

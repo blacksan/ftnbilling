@@ -54,31 +54,46 @@ func (a *digestAuth) mac(body string) string {
 	return hex.EncodeToString(h.Sum(nil)[:12])
 }
 
-// nonceOK checks the HMAC and the age of a nonce.
-func (a *digestAuth) nonceOK(n string) bool {
+// Nonce states.
+const (
+	nonceBad     = 0 // not ours (bad HMAC, malformed)
+	nonceFresh   = 1
+	nonceExpired = 2 // ours, but too old: the CPE is told stale=true and retries with the same login
+)
+
+// nonceState checks the HMAC and the age of a nonce.
+func (a *digestAuth) nonceState(n string) int {
 	raw, err := base64.RawURLEncoding.DecodeString(n)
 	if err != nil {
-		return false
+		return nonceBad
 	}
 	parts := strings.Split(string(raw), ".")
 	if len(parts) != 3 {
-		return false
+		return nonceBad
 	}
 	body := parts[0] + "." + parts[1]
 	if subtle.ConstantTimeCompare([]byte(a.mac(body)), []byte(parts[2])) != 1 {
-		return false
+		return nonceBad
 	}
 	ts, err := strconv.ParseInt(parts[0], 16, 64)
 	if err != nil {
-		return false
+		return nonceBad
 	}
 	age := a.now().Sub(time.Unix(ts, 0))
-	return age >= -time.Minute && age <= nonceLife
+	if age >= -time.Minute && age <= nonceLife {
+		return nonceFresh
+	}
+	return nonceExpired
 }
 
-// challenge writes the 401 with a fresh nonce.
-func (a *digestAuth) challenge(w http.ResponseWriter) {
-	w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Digest realm="%s", qop="auth", algorithm=MD5, nonce="%s", opaque="%s"`, realm, a.nonce(), opaqueText))
+// challenge writes the 401 with a fresh nonce. stale=true tells a CPE whose nonce merely expired to retry with the
+// same login instead of asking its user again.
+func (a *digestAuth) challenge(w http.ResponseWriter, stale bool) {
+	st := ""
+	if stale {
+		st = ", stale=true"
+	}
+	w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Digest realm="%s", qop="auth", algorithm=MD5, nonce="%s", opaque="%s"%s`, realm, a.nonce(), opaqueText, st))
 	http.Error(w, "authentication required", http.StatusUnauthorized)
 }
 
@@ -144,50 +159,62 @@ func digestResponse(user, pass, method, uri, nonce, nc, cnonce, qop string) stri
 	return md5hex(ha1 + ":" + nonce + ":" + nc + ":" + cnonce + ":" + qop + ":" + ha2)
 }
 
-// verify checks the Authorization header of r against user/pass. A header with a stale nonce says stale.
-func (a *digestAuth) verify(r *http.Request, user, pass string) (ok bool) {
+// Results of verify.
+const (
+	dgOK    = iota // the login is right
+	dgBad          // wrong login, malformed or replayed
+	dgStale        // right login on a nonce that expired: challenge again with stale=true
+)
+
+// verify checks the Authorization header of r against user/pass. qop=auth is required (RFC 2069 digests have no
+// replay protection); compat accepts them for CPEs that cannot do better.
+func (a *digestAuth) verify(r *http.Request, user, pass string, compat bool) int {
 	f := parseDigest(r.Header.Get("Authorization"))
 	if f == nil || user == "" {
-		return false
+		return dgBad
 	}
 	if f["realm"] != realm || (f["algorithm"] != "" && !strings.EqualFold(f["algorithm"], "MD5")) {
-		return false
+		return dgBad
 	}
-	if !a.nonceOK(f["nonce"]) {
-		return false
+	ns := a.nonceState(f["nonce"])
+	if ns == nonceBad {
+		return dgBad
 	}
 	// The URI in the header must be the URI of the request (an Authorization header cannot be replayed on another path).
 	if f["uri"] != r.RequestURI && f["uri"] != r.URL.Path && f["uri"] != r.URL.String() {
-		return false
+		return dgBad
 	}
 	qop := f["qop"]
-	if qop != "" && qop != "auth" {
-		return false
+	if qop != "auth" && !(qop == "" && compat) {
+		return dgBad
 	}
 	want := digestResponse(user, pass, r.Method, f["uri"], f["nonce"], f["nc"], f["cnonce"], qop)
 	userOK := subtle.ConstantTimeCompare([]byte(f["username"]), []byte(user)) == 1
 	respOK := subtle.ConstantTimeCompare([]byte(strings.ToLower(f["response"])), []byte(want)) == 1
 	if !userOK || !respOK {
-		return false
+		return dgBad
+	}
+	if ns == nonceExpired {
+		return dgStale
 	}
 	if qop == "auth" {
 		// nc must go up for a nonce (replay of a captured request is refused). CPEs that send nc=00000001 on every
 		// request after a new challenge are fine: each challenge makes a new nonce.
 		nc, err := strconv.ParseInt(f["nc"], 16, 64)
 		if err != nil || nc < 1 {
-			return false
+			return dgBad
 		}
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		if last, seen := a.counts[f["nonce"]]; seen && nc <= last {
-			return false
+			return dgBad
 		}
 		if len(a.counts) >= maxNonces {
 			a.counts = map[string]int64{} // a flood of nonces: forget them all (a replay then needs a fresh nonce window)
 		}
 		a.counts[f["nonce"]] = nc
 	}
-	return true
+	return dgOK
 }
 
 // clientDigest answers a WWW-Authenticate: Digest challenge for a GET (connection requests to a CPE).

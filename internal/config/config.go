@@ -93,6 +93,16 @@ type Config struct {
 	ACSInformInterval int   // seconds, PeriodicInformInterval set on the devices
 	ACSCRPorts        []int // tcp ports the server may connect to on an ONU (connection requests)
 	ACSMaxPerRouter   int   // most ONUs the ACS keeps per router
+	// ACSCompatAuth lets CPEs that cannot do HTTP digest with qop=auth log in (RFC 2069 digest, HTTP Basic). Off by
+	// default: those logins have no replay protection or send the password in the clear on the management VLAN.
+	ACSCompatAuth bool
+	// ACSResetCreds makes a new ACS login when the stored one cannot be opened (DATA_KEY lost). Off: ONU management
+	// refuses to start instead of silently cutting every ONU off.
+	ACSResetCreds bool
+	// ACSAllowPrivate lets ACS_LISTEN be a private address that is neither the server's WireGuard address nor
+	// loopback (ACS_LISTEN_ALLOW_PRIVATE=true). Off by default: a private NIC that is 1:1 NATed to a public address
+	// would expose the ACS.
+	ACSAllowPrivate bool
 
 	// Metrics / QoE collector.
 	WANInterface    string
@@ -512,6 +522,9 @@ func (c *Config) loadACS(get func(k, def string) string, errs *[]error) {
 			c.ACSMaxPerRouter = n
 		}
 	}
+	c.ACSCompatAuth = parseBool(get("ACS_COMPAT_AUTH", ""))
+	c.ACSAllowPrivate = parseBool(get("ACS_LISTEN_ALLOW_PRIVATE", ""))
+	c.ACSResetCreds = parseBool(get("ACS_RESET_CREDENTIALS", ""))
 	c.ACSCRPorts = []int{7547, 30005}
 	if v := get("ACS_CR_PORTS", ""); v != "" {
 		var ports []int
@@ -528,7 +541,7 @@ func (c *Config) loadACS(get func(k, def string) string, errs *[]error) {
 		}
 	}
 	if c.ACSListen != "" && !strings.EqualFold(c.ACSListen, "off") {
-		if err := CheckACSListen(c.ACSListen); err != nil {
+		if err := c.CheckACSListenAddr(); err != nil {
 			*errs = append(*errs, err)
 		}
 	}
@@ -537,6 +550,27 @@ func (c *Config) loadACS(get func(k, def string) string, errs *[]error) {
 // ACSEnabled says whether the ACS listener is on.
 func (c Config) ACSEnabled() bool {
 	return c.ACSListen != "" && !strings.EqualFold(c.ACSListen, "off")
+}
+
+// CheckACSListenAddr is CheckACSListen plus the rule that the address is the server's WireGuard address (the first
+// host of WG_SUBNET) or loopback, unless ACS_LISTEN_ALLOW_PRIVATE is set.
+func (c Config) CheckACSListenAddr() error {
+	if err := CheckACSListen(c.ACSListen); err != nil {
+		return err
+	}
+	host, _, _ := net.SplitHostPort(c.ACSListen)
+	ip, _ := netip.ParseAddr(host)
+	if ip.IsLoopback() || c.ACSAllowPrivate {
+		return nil
+	}
+	sub := c.WGSubnet
+	if sub == "" {
+		sub = "10.99.0.0/22"
+	}
+	if p, err := netip.ParsePrefix(sub); err == nil && p.Addr().Is4() && p.Masked().Addr().Next() == ip {
+		return nil
+	}
+	return fmt.Errorf("ACS_LISTEN %s is not the server's WireGuard address nor loopback: another private address can be reachable from outside (a private NIC with a public 1:1 NAT). Use the WireGuard address, or set ACS_LISTEN_ALLOW_PRIVATE=true if you know this address is only reachable from the router tunnels", ip)
 }
 
 // CheckACSListen refuses an ACS address that is not private: the ACS must never be reachable from the internet.

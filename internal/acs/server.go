@@ -2,6 +2,7 @@ package acs
 
 import (
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -12,13 +13,13 @@ import (
 	"strings"
 	"time"
 
-	"ispbill/internal/config"
 	"ispbill/internal/store"
 )
 
 const (
 	cookieName     = "ftn-acs"
-	sessionIdle    = 45 * time.Second // a session with no request for this long is dropped
+	sessionIdle    = 60 * time.Second // a session with no request for this long is dropped (slow CPEs)
+	ipFallbackTTL  = 30 * time.Second // a CPE that drops the cookie is matched to its session by source address for this long
 	sessionMax     = 5 * time.Minute
 	maxSessions    = 600
 	perIPActive    = 6   // concurrent requests from one address
@@ -123,18 +124,10 @@ func (s *Service) serve(w http.ResponseWriter, r *http.Request) {
 	defer leave()
 
 	sess := s.cookieSession(r, ip)
+	var ai authInfo
 	if sess == nil {
-		user, pass, err := s.Credentials()
-		if err != nil {
-			s.log.Error("ACS: login unavailable", "err", err.Error())
-			http.Error(w, "unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		if !s.da.verify(r, user, pass) {
-			if r.Header.Get("Authorization") != "" {
-				s.authFailed(ip)
-			}
-			s.da.challenge(w)
+		var ok bool
+		if ai, ok = s.authenticate(w, r, ip); !ok {
 			return
 		}
 	}
@@ -146,8 +139,12 @@ func (s *Service) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(strings.TrimSpace(string(body))) == 0 {
 		if sess == nil {
-			w.WriteHeader(http.StatusNoContent)
-			return
+			// A CPE that does not keep the cookie logs in again for every request: the one live session of
+			// its address, opened with the same login, is the one it means.
+			if sess = s.ipSession(ip, ai); sess == nil {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
 		}
 		s.step(w, sess, nil)
 		return
@@ -159,18 +156,127 @@ func (s *Service) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	switch msg.Method {
 	case "Inform":
-		s.handleInform(w, r, site, ip, msg)
+		s.handleInform(w, r, site, ip, msg, ai)
 	case "GetRPCMethods":
 		writeXML(w, getRPCMethodsResponse(msg.NS, msg.ID))
 	case "TransferComplete", "AutonomousTransferComplete", "Kicked", "RequestDownload", "AutonomousDUStateChangeComplete", "DUStateChangeComplete":
 		writeXML(w, simpleResponse(msg.NS, msg.ID, msg.Method))
 	default:
 		if sess == nil {
+			sess = s.ipSession(ip, ai)
+		}
+		if sess == nil {
 			http.Error(w, "no session", http.StatusBadRequest)
 			return
 		}
 		s.step(w, sess, msg)
 	}
+}
+
+// authInfo says how a request logged in.
+type authInfo struct {
+	kind  int    // authShared | authDevice
+	onuID string // the device whose own login was used (authDevice)
+}
+
+const (
+	authShared = iota // the login every ONU is given by the OLT profile
+	authDevice        // the ONU's own login, set by this ACS
+)
+
+// authenticate checks the request's login: the shared one, or a device's own. It answers the 401 itself when the
+// request is not (yet) authenticated.
+func (s *Service) authenticate(w http.ResponseWriter, r *http.Request, ip netip.Addr) (authInfo, bool) {
+	hdr := r.Header.Get("Authorization")
+	if hdr == "" {
+		s.da.challenge(w, false)
+		return authInfo{}, false
+	}
+	gUser, gPass, err := s.Credentials()
+	if err != nil {
+		s.log.Error("ACS: login unavailable", "err", err.Error())
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		return authInfo{}, false
+	}
+	user := ""
+	f := parseDigest(hdr)
+	if f != nil {
+		user = f["username"]
+	} else if s.cfg.ACSCompatAuth {
+		user, _, _ = r.BasicAuth()
+	}
+	ai := authInfo{kind: authShared}
+	pass := gPass
+	if user != "" && user != gUser {
+		if id, p, ok := s.deviceLogin(user); ok {
+			ai, pass = authInfo{kind: authDevice, onuID: id}, p
+		}
+	}
+	res := dgBad
+	switch {
+	case f != nil:
+		wantUser := gUser
+		if ai.kind == authDevice {
+			wantUser = user
+		}
+		res = s.da.verify(r, wantUser, pass, s.cfg.ACSCompatAuth)
+	case s.cfg.ACSCompatAuth:
+		if u, p, ok := r.BasicAuth(); ok && subtle.ConstantTimeCompare([]byte(u), []byte(map[bool]string{true: user, false: gUser}[ai.kind == authDevice])) == 1 &&
+			subtle.ConstantTimeCompare([]byte(p), []byte(pass)) == 1 {
+			res = dgOK
+		}
+	}
+	switch res {
+	case dgOK:
+		return ai, true
+	case dgStale:
+		s.da.challenge(w, true)
+	default:
+		s.authFailed(ip)
+		s.da.challenge(w, false)
+	}
+	return authInfo{}, false
+}
+
+// deviceLogin finds the ONU whose own ACS user name is user and opens its password.
+func (s *Service) deviceLogin(user string) (id, pass string, ok bool) {
+	var enc string
+	s.st.View(func(d *store.Data) {
+		for _, o := range d.ONUs {
+			if o.Sec.ACSUser == user && o.Sec.ACSPassEnc != "" {
+				id, enc = o.ID, o.Sec.ACSPassEnc
+				return
+			}
+		}
+	})
+	if id == "" {
+		return "", "", false
+	}
+	p, err := s.box.OpenAAD(enc, []byte("acs.dev"))
+	if err != nil {
+		return "", "", false
+	}
+	return id, p, true
+}
+
+// ipSession is the one live session of an address that was opened with the same login (M3: a CPE that drops the
+// cookie). With two candidates it answers nothing: it cannot tell them apart.
+func (s *Service) ipSession(ip netip.Addr, ai authInfo) *session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var found *session
+	n := 0
+	now := s.now()
+	for _, ss := range s.sessions {
+		if ss.ip == ip && ss.auth.kind == ai.kind && ss.auth.onuID == ai.onuID && now.Sub(ss.last()) <= ipFallbackTTL {
+			found = ss
+			n++
+		}
+	}
+	if n != 1 {
+		return nil
+	}
+	return found
 }
 
 func writeXML(w http.ResponseWriter, b []byte) {
@@ -205,6 +311,7 @@ func (s *Service) step(w http.ResponseWriter, ss *session, msg *message) {
 	}
 	timer := time.NewTimer(25 * time.Second)
 	defer timer.Stop()
+	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: ss.id, Path: "/", HttpOnly: true}) // on every response
 	select {
 	case req := <-ss.out:
 		ss.touch(s.now())
@@ -253,7 +360,7 @@ func (s *Service) Run(ctx context.Context) error {
 	if !s.cfg.ACSEnabled() {
 		return nil
 	}
-	if err := config.CheckACSListen(s.cfg.ACSListen); err != nil {
+	if err := s.cfg.CheckACSListenAddr(); err != nil {
 		return fmt.Errorf("%w: %v", ErrPublicListen, err)
 	}
 	go s.reapLoop(ctx)
@@ -274,12 +381,16 @@ func (s *Service) Run(ctx context.Context) error {
 func (s *Service) reapLoop(ctx context.Context) {
 	t := time.NewTicker(15 * time.Second)
 	defer t.Stop()
+	n := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 			s.reap()
+			if n++; n%4 == 0 { // once a minute
+				s.Upkeep()
+			}
 		}
 	}
 }

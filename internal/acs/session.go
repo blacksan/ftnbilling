@@ -31,6 +31,7 @@ type session struct {
 
 	mu     sync.Mutex
 	lastAt time.Time
+	auth   authInfo
 	n      int // requests made
 	seq    int
 }
@@ -38,7 +39,7 @@ type session struct {
 func (ss *session) touch(t time.Time) { ss.mu.Lock(); ss.lastAt = t; ss.mu.Unlock() }
 func (ss *session) last() time.Time   { ss.mu.Lock(); defer ss.mu.Unlock(); return ss.lastAt }
 
-const maxRPCs = 80
+const maxRPCs = 150
 
 var errSessionLimit = errors.New("too many requests in one session")
 
@@ -135,73 +136,49 @@ func (ss *session) simple(ctx context.Context, build func(id string) []byte, wan
 
 // ---- Inform ----
 
-func (s *Service) handleInform(w http.ResponseWriter, r *http.Request, site store.Site, ip netip.Addr, msg *message) {
+func (s *Service) handleInform(w http.ResponseWriter, r *http.Request, site store.Site, ip netip.Addr, msg *message, ai authInfo) {
 	in, err := parseInform(msg.Body)
 	if err != nil {
 		http.Error(w, "bad Inform", http.StatusBadRequest)
 		return
 	}
+	if in.OUI == "" {
+		s.log.Warn("ACS: an Inform without an OUI was accepted", "from", ip.String())
+	}
 	now := s.now()
-	var o store.ONU
-	var isNew, capped bool
-	var prevIP string
-	err = s.st.Update(func(d *store.Data) error {
+	// The router's lease table says which MAC holds the address the Inform came from. It is read (from the sweep's
+	// copy) only when the answer matters: a new serial, a shared login on a known serial, or a changed address.
+	var needLease bool
+	s.st.View(func(d *store.Data) {
 		cur, found := d.ONUBySerial(in.OUI, in.Serial)
-		if !found {
-			n := 0
-			for _, x := range d.ONUs {
-				if x.SiteID == site.ID {
-					n++
-				}
-			}
-			if n >= s.cfg.ACSMaxPerRouter {
-				capped = true
-				return store.ErrNoChange
-			}
-			cur = store.ONU{ID: newONUID(), Serial: in.Serial, OUI: in.OUI, FirstSeen: now}
-			isNew = true
+		needLease = s.needLease(cur, found, site.ID, ip.String(), ai)
+	})
+	var lease leaseResult
+	if needLease {
+		lease = s.lookupLease(r.Context(), site.ID, ip.String())
+	}
+	var o store.ONU
+	var v verdict
+	err = s.st.Update(func(d *store.Data) error {
+		var cur store.ONU
+		cur, v = s.decide(d, in, site, ip, ai, lease, now)
+		switch v.state {
+		case stBlocked, stBadAuth, stCapped:
+			return store.ErrNoChange
 		}
-		prevIP = cur.MgmtIP
-		cur.Manufacturer, cur.ProductClass = nonEmpty(in.Manufacturer, cur.Manufacturer), nonEmpty(in.ProductClass, cur.ProductClass)
-		if cur.OUI == "" {
-			cur.OUI = in.OUI
-		}
-		cur.SiteID, cur.MgmtIP, cur.LastInform, cur.LastEvents = site.ID, ip.String(), now, strings.Join(in.Events, ",")
-		if root := rootOf(in.Params); root != "" {
-			if cur.Root != root {
-				cur.Profile = store.ONUProfile{Root: root}
-			}
-			cur.Root = root
-		}
-		if cur.Root != "" {
-			if v, ok := in.Param(cur.Root + "ManagementServer.ConnectionRequestURL"); ok && len(v) < 300 {
-				cur.ConnReqURL = v
-			}
-			if v, ok := in.Param(cur.Root + "DeviceInfo.SoftwareVersion"); ok && len(v) < 100 {
-				cur.SWVersion = v
-			}
-			if v, ok := in.Param(cur.Root + "DeviceInfo.HardwareVersion"); ok && len(v) < 100 {
-				cur.HWVersion = v
-			}
-		}
-		applyReported(&cur, in.Params, homeWiFi(d, cur))
-		// A task that was running when the session died goes back in the queue (three tries).
-		for _, t := range d.ONUTasksOf(cur.ID) {
-			if t.Status == store.TaskRunning && now.Sub(t.StartedAt) > 2*time.Minute {
-				if t.Attempts >= 3 {
-					t.Status, t.Fault, t.FinishedAt = store.TaskFailed, "the ONU did not finish the session three times", now
-				} else {
-					t.Status = store.TaskPending
-				}
-				d.ONUTasks[t.ID] = t
-			}
-		}
-		d.ONUs[cur.ID] = cur
-		autoLink(d, cur.ID, now)
-		o = d.ONUs[cur.ID]
+		o = cur
 		return nil
 	})
-	if capped {
+	switch v.state {
+	case stBadAuth:
+		s.authFailed(ip)
+		s.log.Warn("ACS: an Inform used the login of another device", "from", ip.String())
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	case stBlocked:
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	case stCapped:
 		s.capNote(site)
 		http.Error(w, "this router has the most ONUs the server accepts", http.StatusServiceUnavailable)
 		return
@@ -210,6 +187,9 @@ func (s *Service) handleInform(w http.ResponseWriter, r *http.Request, site stor
 		s.log.Error("ACS: could not record an Inform", "err", err.Error())
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
+	}
+	if v.alert != "" && s.alert != nil {
+		s.alert("ONU management", v.alert)
 	}
 	s.mu.Lock()
 	if len(s.sessions) >= maxSessions {
@@ -224,23 +204,28 @@ func (s *Service) handleInform(w http.ResponseWriter, r *http.Request, site stor
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	ss := &session{id: randHex(16), ip: ip, onuID: o.ID, ns: msg.NS, started: now, lastAt: now, cancel: cancel,
+	ss := &session{id: randHex(16), ip: ip, onuID: o.ID, ns: msg.NS, started: now, lastAt: now, cancel: cancel, auth: ai,
 		out: make(chan []byte), in: make(chan *message, 1), done: make(chan struct{})}
 	s.sessions[ss.id] = ss
 	s.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: ss.id, Path: "/", HttpOnly: true})
-	s.log.Info("ACS: Inform", "onu", o.ID, "serial", o.Serial, "events", strings.Join(in.Events, ","), "from", ip.String())
-	stable := !isNew && prevIP == ip.String()
-	go func() {
-		defer close(ss.done)
-		defer cancel()
-		defer func() {
-			if rec := recover(); rec != nil {
-				s.log.Error("ACS: a session failed", "onu", o.ID, "panic", fmt.Sprint(rec))
-			}
+	s.log.Info("ACS: Inform", "onu", o.ID, "serial", o.Serial, "events", strings.Join(in.Events, ","), "from", ip.String(), "state", v.state)
+	if v.trust == trustNone {
+		// Quarantined or not yet verified: the box gets its answer and nothing else (no secret, no task).
+		close(ss.done)
+		cancel()
+	} else {
+		go func() {
+			defer close(ss.done)
+			defer cancel()
+			defer func() {
+				if rec := recover(); rec != nil {
+					s.log.Error("ACS: a session failed", "onu", o.ID, "panic", fmt.Sprint(rec))
+				}
+			}()
+			s.program(ctx, ss, in, o.ID, v, ai)
 		}()
-		s.program(ctx, ss, in, o.ID, stable)
-	}()
+	}
 	writeXML(w, informResponse(msg.NS, msg.ID))
 }
 

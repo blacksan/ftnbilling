@@ -35,6 +35,11 @@ type Options struct {
 	HTTPClient *http.Client
 	// ClientIP finds the source address of a request; nil = the TCP peer address (the ACS has no proxy in front).
 	ClientIP func(*http.Request) (netip.Addr, bool)
+	// Lease says which MAC the router leased a management address to (the router sweep's copy of its DHCP leases).
+	// Nil = unknown: a known serial that logs in with the shared login is then answered with nothing.
+	Lease LeaseFunc
+	// Alert tells the owners something needs a look (WhatsApp and e-mail). Nil = the audit trail only.
+	Alert func(subject, msg string)
 }
 
 // Service is the ACS: the HTTP handler the ONUs talk to, and the operations the admin pages and the app use.
@@ -47,6 +52,8 @@ type Service struct {
 	da     *digestAuth
 	client *http.Client
 	ipOf   func(*http.Request) (netip.Addr, bool)
+	lease  LeaseFunc
+	alert  func(subject, msg string)
 
 	mu       sync.Mutex
 	sessions map[string]*session
@@ -62,7 +69,7 @@ func New(o Options) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ONU management needs DATA_KEY: %w", err)
 	}
-	s := &Service{st: o.Store, cfg: o.Cfg, log: o.Log, box: box, now: o.Now, client: o.HTTPClient, ipOf: o.ClientIP,
+	s := &Service{st: o.Store, cfg: o.Cfg, log: o.Log, box: box, now: o.Now, client: o.HTTPClient, ipOf: o.ClientIP, lease: o.Lease, alert: o.Alert,
 		sessions: map[string]*session{}, ips: map[netip.Addr]*ipState{}, kicks: map[string]Kick{}, capLog: map[string]time.Time{}}
 	if s.log == nil {
 		s.log = slog.Default()
@@ -74,7 +81,7 @@ func New(o Options) (*Service, error) {
 		s.ipOf = peerAddr
 	}
 	if s.client == nil {
-		s.client = &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		s.client = &http.Client{Timeout: crTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	s.da = newDigestAuth(s.now)
 	if err := s.EnsureCredentials(); err != nil {
@@ -129,16 +136,32 @@ func randAlnum(n int) string {
 
 // ---- the global ACS login ----
 
-// EnsureCredentials makes the global ACS user and password on first run and keeps them (sealed) in settings.
+// ErrCredsUnreadable: the stored ACS password cannot be opened (DATA_KEY changed). Making a new one silently would
+// cut every ONU off without a word, so ONU management refuses to start instead.
+var ErrCredsUnreadable = errors.New("the stored ACS password cannot be opened, so ONU management (TR-069) stays off: DATA_KEY has probably changed. " +
+	"Restore the previous DATA_KEY. If it is lost for good, start once with ACS_RESET_CREDENTIALS=true to make a new ACS login " +
+	"(then every ONU profile on the OLT must be updated with it, and every box needs a factory reset or a visit)")
+
+// EnsureCredentials makes the global ACS user and password on first run and keeps them (sealed) in settings. A
+// stored password that cannot be opened is never replaced by itself (L5): New fails with ErrCredsUnreadable unless
+// ACS_RESET_CREDENTIALS is set.
 func (s *Service) EnsureCredentials() error {
-	return s.st.Update(func(d *store.Data) error {
+	err := s.st.Update(func(d *store.Data) error {
 		if d.Settings[KeyUser].Value != "" && d.Settings[KeyPass].Value != "" {
 			if _, err := s.box.OpenAAD(d.Settings[KeyPass].Value, []byte(KeyPass)); err == nil {
 				return store.ErrNoChange
 			}
+			if !s.cfg.ACSResetCreds {
+				return ErrCredsUnreadable
+			}
+			s.log.Warn("ACS: the stored ACS login could not be opened; a new one is made because ACS_RESET_CREDENTIALS is set")
 		}
 		return s.writeCreds(d, "ftn-"+randHex(3), randAlnum(20))
 	})
+	if errors.Is(err, ErrCredsUnreadable) {
+		s.log.Error("ACS: " + err.Error())
+	}
+	return err
 }
 
 func (s *Service) writeCreds(d *store.Data, user, pass string) error {
@@ -209,6 +232,14 @@ func (s *Service) openCR(o store.ONU) (user, pass string, ok bool) {
 	return u, p, err1 == nil && err2 == nil
 }
 
+func (s *Service) sealDev(p string) (string, error) { return s.box.SealAAD(p, []byte("acs.dev")) }
+
+func (s *Service) sealAdmin(p string) (string, error) { return s.box.SealAAD(p, []byte("onu.admin")) }
+
+func (s *Service) openAdmin(enc string) (string, error) {
+	return s.box.OpenAAD(enc, []byte("onu.admin"))
+}
+
 func (s *Service) sealPass(p string) (string, error) {
 	if p == "" {
 		return "", nil
@@ -246,14 +277,31 @@ type DesiredView struct {
 
 // TaskView is a task in words for the screens.
 type TaskView struct {
-	ID         string    `json:"id"`
-	Kind       string    `json:"kind"`
-	Status     string    `json:"status"`      // queued | applied | failed
-	StatusText string    `json:"status_text"` // "Queued", "Applied", "Failed: <fault>"
-	Fault      string    `json:"fault,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	FinishedAt time.Time `json:"finished_at,omitempty"`
-	By         string    `json:"by,omitempty"`
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	Status string `json:"status"` // queued | sending | accepted | confirmed | failed | expired | done
+	// StatusText: "Queued", "Sent to the ONU", "Accepted by the ONU", "Accepted: applies after the ONU restarts",
+	// "Confirmed working", "Failed: <fault>", "Expired: ...", "Done".
+	StatusText  string    `json:"status_text"`
+	Fault       string    `json:"fault,omitempty"` // the failure, or the caution of an accepted change
+	AfterReboot bool      `json:"after_reboot,omitempty"`
+	CanConfirm  bool      `json:"can_confirm,omitempty"` // an accepted Wi-Fi change the owner can confirm ("It works")
+	CanCancel   bool      `json:"can_cancel,omitempty"`  // queued: not sent yet
+	CreatedAt   time.Time `json:"created_at"`
+	FinishedAt  time.Time `json:"finished_at,omitempty"`
+	By          string    `json:"by,omitempty"`
+}
+
+// QuarantineView says why an ONU's check-in was held back.
+type QuarantineView struct {
+	Reason   string    `json:"reason"`
+	Since    time.Time `json:"since"`
+	LastAt   time.Time `json:"last_at"`
+	Count    int       `json:"count"`
+	IP       string    `json:"ip,omitempty"`
+	MAC      string    `json:"mac,omitempty"`
+	SiteID   string    `json:"site_id,omitempty"`
+	SiteName string    `json:"site_name,omitempty"`
 }
 
 // ONUView is a device for the lists and the account card.
@@ -280,6 +328,16 @@ type ONUView struct {
 	LastTask     *TaskView   `json:"last_task,omitempty"`
 	CRApplied    bool        `json:"cr_applied"`
 	Kick         string      `json:"kick,omitempty"` // what the last "contact the ONU now" did
+	// Security. Quarantine is set while a check-in from an unexpected place waits for the owner (Approve / Block).
+	// Login says how the ONU logs in: "own" (its own login), "shared" (it refused one: weaker), "pending" or "".
+	Quarantine *QuarantineView `json:"quarantine,omitempty"`
+	Login      string          `json:"login,omitempty"`
+	SharedOnly bool            `json:"shared_login_only,omitempty"` // flag for the list: weaker identity
+	AdminLock  string          `json:"admin_lock,omitempty"`        // "unverified" | "unsupported" | ""
+	HasAdminPW bool            `json:"has_admin_password,omitempty"`
+	Returned   bool            `json:"returned,omitempty"` // left a house: reset queued, never gets a house's Wi-Fi
+	Blocked    bool            `json:"blocked,omitempty"`  // places are blocked for this serial
+	ResetTask  string          `json:"reset_task,omitempty"`
 	// The equipment register: InInventory says the serial is registered; InventoryID/Status/MAC are its pair.
 	InInventory bool     `json:"in_inventory"`
 	InventoryID string   `json:"inventory_id,omitempty"`
@@ -289,19 +347,30 @@ type ONUView struct {
 	UseMACs     []string `json:"use_macs,omitempty"` // reported MACs the house can be switched to in one click
 }
 
-// StatusOf is the words of a task's status.
 func taskView(t store.ONUTask) TaskView {
-	v := TaskView{ID: t.ID, Kind: t.Kind, Fault: t.Fault, CreatedAt: t.CreatedAt, FinishedAt: t.FinishedAt, By: t.By}
+	v := TaskView{ID: t.ID, Kind: t.Kind, Fault: t.Fault, CreatedAt: t.CreatedAt, FinishedAt: t.FinishedAt, By: t.By, AfterReboot: t.AfterReboot}
 	switch t.Status {
 	case store.TaskDone:
-		v.Status, v.StatusText = "applied", "Applied"
+		v.Status, v.StatusText = "done", "Done"
+	case store.TaskAccepted:
+		v.Status, v.StatusText = "accepted", "Accepted by the ONU"
+		if t.AfterReboot {
+			v.StatusText = "Accepted: applies after the ONU restarts"
+		}
+		v.CanConfirm = t.Kind == store.TaskWiFi
+	case store.TaskConfirmed:
+		v.Status, v.StatusText = "confirmed", "Confirmed working"
 	case store.TaskFailed:
 		v.Status, v.StatusText = "failed", "Failed"
 		if t.Fault != "" {
 			v.StatusText = "Failed: " + t.Fault
 		}
+	case store.TaskExpired:
+		v.Status, v.StatusText = "expired", "Expired: the ONU did not check in in time"
+	case store.TaskRunning:
+		v.Status, v.StatusText = "sending", "Sent to the ONU"
 	default:
-		v.Status, v.StatusText = "queued", "Queued"
+		v.Status, v.StatusText, v.CanCancel = "queued", "Queued", true
 	}
 	return v
 }
@@ -326,6 +395,24 @@ func (s *Service) view(d *store.Data, o store.ONU) ONUView {
 	}
 	for _, w := range o.WiFi {
 		v.WiFi = append(v.WiFi, WiFiView{Band: w.Band, SSID: w.SSID, Enabled: w.Enabled})
+	}
+	if q := o.Sec.Quarantine; q.Active {
+		v.Quarantine = &QuarantineView{Reason: q.Reason, Since: q.Since, LastAt: q.LastAt, Count: q.Count, IP: q.IP, MAC: q.MAC, SiteID: q.SiteID, SiteName: d.Sites[q.SiteID].Name}
+	}
+	switch o.Sec.ACSCred {
+	case store.CredDevice:
+		v.Login = "own"
+	case store.CredShared:
+		v.Login, v.SharedOnly = "shared", true
+	case store.CredPending:
+		v.Login = "pending"
+	}
+	v.AdminLock, v.HasAdminPW = o.Sec.AdminPass, o.Sec.AdminPassEnc != ""
+	v.Returned, v.Blocked = o.State.Returned && o.AccountID == "", len(o.Sec.BlockedFrom) > 0
+	for _, t := range d.ONUTasksOf(o.ID) {
+		if t.Kind == store.TaskFactoryReset && t.Status == store.TaskPending {
+			v.ResetTask = t.ID
+		}
 	}
 	ds := homeWiFi(d, o)
 	v.Desired = DesiredView{Set: ds.Set, Same: ds.Same, SSID: ds.SSID, SSID5: ds.SSID5, HasPass: ds.PassEnc != "", UpdatedAt: ds.UpdatedAt, UpdatedBy: ds.UpdatedBy, Changed: o.State.WiFiChanged && ds.Set}
@@ -412,7 +499,7 @@ func (s *Service) inventoryView(d *store.Data, o store.ONU, v *ONUView) {
 	v.InInventory, v.InventoryID, v.InvStatus, v.InvMAC = true, inv.ID, inv.Status, inv.MAC
 	if m, ok := store.CanonMAC(inv.MAC); ok && len(o.MACs) > 0 && !containsMAC(o.MACs, m) {
 		v.Warnings = append(v.Warnings, "The WAN MAC this ONU reports ("+strings.Join(o.MACs, ", ")+") is not the one in the register ("+m+"). The label's MAC is often the LAN MAC: check which one the router sees.")
-		if inv.AccountID != "" {
+		if inv.AccountID != "" && verifiedReports(o) {
 			v.UseMACs = append(v.UseMACs, o.MACs...)
 		}
 	}
@@ -426,4 +513,29 @@ func (s *Service) inventoryView(d *store.Data, o store.ONU, v *ONUView) {
 	if inv.Status != store.EqInstalled && v.Online {
 		v.Warnings = append(v.Warnings, "This ONU is online but the register says it is "+strings.ReplaceAll(inv.Status, "_", " ")+".")
 	}
+}
+
+// verifiedReports: what the ONU reports (its WAN MACs) comes from a box that is not quarantined, is bound to a management
+// MAC, and has been seen logging in with its own ACS login (or, when it refuses one, from the place the router leased to
+// its MAC). Only then may the owner switch a house's MAC to a reported one in one click.
+func verifiedReports(o store.ONU) bool {
+	if o.Sec.Quarantine.Active || o.Sec.MgmtMAC == "" {
+		return false
+	}
+	return o.Sec.ACSCred == store.CredDevice || o.Sec.ACSCred == store.CredShared
+}
+
+// CanUseMAC says whether the owner may switch the house of an ONU to the MAC it reported (checked again by the screens
+// and the API at the moment of the click).
+func (s *Service) CanUseMAC(accountID, mac string) bool {
+	ok := false
+	s.st.View(func(d *store.Data) {
+		o, found := d.ONUOfAccount(accountID)
+		if !found || !verifiedReports(o) {
+			return
+		}
+		m, good := store.CanonMAC(mac)
+		ok = good && containsMAC(o.MACs, m)
+	})
+	return ok
 }

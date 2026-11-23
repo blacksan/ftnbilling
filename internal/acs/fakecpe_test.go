@@ -37,6 +37,11 @@ type fixture struct {
 	now   time.Time
 	mu    sync.Mutex
 	crSrv *httptest.Server
+
+	// the router's DHCP leases of the management VLAN (ip -> MAC); leaseDown makes the lookup fail
+	leases    map[string]string
+	leaseDown bool
+	alerts    []string
 }
 
 type syncBuf struct {
@@ -51,7 +56,7 @@ const testAccountMAC = "AA:BB:CC:00:11:22"
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	f := &fixture{t: t, logs: &syncBuf{}, now: time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)}
+	f := &fixture{t: t, logs: &syncBuf{}, now: time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC), leases: map[string]string{}}
 	st, err := storetest.Open(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +77,16 @@ func newFixture(t *testing.T) *fixture {
 		ClientIP: func(r *http.Request) (netip.Addr, bool) {
 			a, err := netip.ParseAddr(r.Header.Get("X-Test-IP"))
 			return a, err == nil
-		}})
+		},
+		Lease: func(_ context.Context, _, ip string) (string, bool) {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if f.leaseDown {
+				return "", false
+			}
+			return f.leases[ip], true
+		},
+		Alert: func(_, msg string) { f.mu.Lock(); f.alerts = append(f.alerts, msg); f.mu.Unlock() }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +104,21 @@ func newFixture(t *testing.T) *fixture {
 	t.Cleanup(func() { f.acs.Close(); svc.Wait() })
 	return f
 }
+
+// mgmtMACOf is the MAC the router leased an address to in the tests (derived from the address).
+func mgmtMACOf(ip string) string {
+	parts := strings.Split(ip, ".")
+	if len(parts) != 4 {
+		return "02:00:00:00:00:01"
+	}
+	return fmt.Sprintf("02:00:0A:%02X:%02X:%02X", atoiT(parts[1]), atoiT(parts[2]), atoiT(parts[3]))
+}
+
+func atoiT(s string) int { n := 0; fmt.Sscan(s, &n); return n }
+
+func (f *fixture) setLease(ip, mac string) { f.mu.Lock(); f.leases[ip] = mac; f.mu.Unlock() }
+
+func (f *fixture) alertCount() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.alerts) }
 
 func (f *fixture) advance(d time.Duration) { f.mu.Lock(); f.now = f.now.Add(d); f.mu.Unlock() }
 
@@ -134,6 +163,20 @@ type cpe struct {
 	crSrv            *httptest.Server
 	crEvents         []string // events sent in the session a connection request starts
 
+	factory            map[string]string // the data model as it left the factory (a reset restores it)
+	nextUser, nextPass string            // the login the ACS wrote: used from the next session on
+	noPartial          bool              // GetParameterValues refuses a partial path
+	noGPN              bool              // GetParameterNames is not implemented
+	noCookie           bool              // does not keep the cookie
+	noKey              bool              // never reports a ParameterKey
+	mgmtMAC            string
+	status1            bool                // answers SetParameterValues with status 1
+	tried              []map[string]string // every SetParameterValues the ACS sent, accepted or not
+	refuseCode         int                 // fault code of a refused name (default 9005)
+	echoValue          bool                // a refusal's text echoes the value that was sent
+	crFromParams       bool                // the connection-request login is whatever the data model holds now
+	crEarly            bool                // starts its session before it answers the connection request
+
 	rpcs  []string            // the RPCs the ACS sent, by name
 	sets  []map[string]string // each SetParameterValues the ACS sent
 	setID []string
@@ -171,7 +214,33 @@ func newZTE(t *testing.T, f *fixture, serial, ip string) *cpe {
 	}
 	c.set(r+"WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.MACAddress", testAccountMAC)
 	c.set(r+"WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.MACAddress", "AA:BB:CC:00:99:99")
+	c.set(r+"ManagementServer.ParameterKey", "")
+	c.set(r+"ManagementServer.Username", "")
+	c.set(r+"ManagementServer.Password", "")
+	c.finish(f, ip)
 	return c
+}
+
+// finish records the factory state and the management lease of a new fake box.
+func (c *cpe) finish(f *fixture, ip string) {
+	c.mgmtMAC = mgmtMACOf(ip)
+	f.setLease(ip, c.mgmtMAC)
+	c.factory = map[string]string{}
+	for k, v := range c.params {
+		c.factory[k] = v
+	}
+}
+
+// factoryReset puts the box back as it left the factory: its own settings, no ACS login of its own (the OLT profile
+// gives the shared one back), no parameter key.
+func (c *cpe) factoryReset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.params = map[string]string{}
+	for k, v := range c.factory {
+		c.params[k] = v
+	}
+	c.acsUser, c.acsPass, c.nextUser, c.nextPass = "", "", "", ""
 }
 
 func newTR181(t *testing.T, f *fixture, serial, ip string) *cpe {
@@ -198,6 +267,10 @@ func newTR181(t *testing.T, f *fixture, serial, ip string) *cpe {
 	}
 	c.set("Device.Ethernet.Link.1.MACAddress", testAccountMAC)
 	c.set("Device.Ethernet.Link.2.MACAddress", "AA:BB:CC:00:99:98")
+	c.set("Device.ManagementServer.ParameterKey", "")
+	c.set("Device.ManagementServer.Username", "")
+	c.set("Device.ManagementServer.Password", "")
+	c.finish(f, ip)
 	return c
 }
 
@@ -215,6 +288,7 @@ func newHuawei(t *testing.T, f *fixture, serial, ip string) *cpe {
 		c.set(p+"X_HW_KeyPassphrase", "factorypass")
 		delete(c.params, p+"IEEE11iEncryptionModes")
 	}
+	c.finish(f, ip)
 	return c
 }
 
@@ -263,7 +337,11 @@ func (c *cpe) inform(events ...string) []byte {
 		_ = code
 	}
 	var pl strings.Builder
-	for _, n := range []string{"DeviceInfo.SoftwareVersion", "DeviceInfo.HardwareVersion", "ManagementServer.ConnectionRequestURL"} {
+	infoNames := []string{"DeviceInfo.SoftwareVersion", "DeviceInfo.HardwareVersion", "ManagementServer.ConnectionRequestURL"}
+	if !c.noKey {
+		infoNames = append(infoNames, "ManagementServer.ParameterKey")
+	}
+	for _, n := range infoNames {
 		if v, ok := c.params[c.root+n]; ok {
 			pl.WriteString(`<ParameterValueStruct><Name>` + c.root + n + `</Name><Value xsi:type="xsd:string">` + esc(v) + `</Value></ParameterValueStruct>`)
 		}
@@ -296,6 +374,9 @@ func (c *cpe) handle(m *message) []byte {
 	c.rpcs = append(c.rpcs, m.Method)
 	switch m.Method {
 	case "GetParameterNames":
+		if c.noGPN {
+			return c.faultXML(m.ID, 9000, "Method not supported", nil)
+		}
 		path := m.Body.childText("ParameterPath")
 		nl := isTrue(m.Body.childText("NextLevel"))
 		if !nl {
@@ -314,6 +395,25 @@ func (c *cpe) handle(m *message) []byte {
 		var b strings.Builder
 		for _, n := range m.Body.child("ParameterNames").all("string") {
 			name := strings.TrimSpace(n.Text)
+			if strings.HasSuffix(name, ".") { // a partial path: every parameter below it
+				if c.noPartial {
+					return c.faultXML(m.ID, 9005, "Invalid parameter name", nil)
+				}
+				var keys []string
+				for k := range c.params {
+					if strings.HasPrefix(k, name) {
+						keys = append(keys, k)
+					}
+				}
+				if len(keys) == 0 {
+					return c.faultXML(m.ID, 9005, "Invalid parameter name", nil)
+				}
+				sort.Strings(keys)
+				for _, k := range keys {
+					b.WriteString(`<ParameterValueStruct><Name>` + k + `</Name><Value xsi:type="xsd:string">` + esc(c.params[k]) + `</Value></ParameterValueStruct>`)
+				}
+				continue
+			}
 			v, ok := c.params[name]
 			if !ok {
 				return c.faultXML(m.ID, 9005, "Invalid parameter name", nil)
@@ -325,6 +425,7 @@ func (c *cpe) handle(m *message) []byte {
 		got := map[string]string{}
 		var bad []ParamFault
 		var order []string
+		echo := ""
 		for _, pv := range m.Body.child("ParameterList").all("ParameterValueStruct") {
 			name := pv.childText("Name")
 			val := ""
@@ -333,22 +434,50 @@ func (c *cpe) handle(m *message) []byte {
 			}
 			got[name] = val
 			order = append(order, name)
-			if _, ok := c.params[name]; !ok || (c.refuse != nil && c.refuse(name)) {
-				bad = append(bad, ParamFault{Name: name, Code: 9005, String: "Invalid parameter name"})
+			if c.echoValue && strings.Contains(strings.ToLower(name), "passphrase") {
+				echo = val
+			}
+			if c.readonly[name] {
+				bad = append(bad, ParamFault{Name: name, Code: 9008, String: "Attempt to set a non-writable parameter"})
+			} else if _, ok := c.params[name]; !ok || (c.refuse != nil && c.refuse(name)) {
+				code := 9005
+				if c.refuseCode != 0 {
+					code = c.refuseCode
+				}
+				bad = append(bad, ParamFault{Name: name, Code: code, String: "Invalid parameter name"})
 			}
 		}
+		c.tried = append(c.tried, got)
 		if len(bad) > 0 {
 			if !c.detailed {
 				bad = nil
 			}
-			return c.faultXML(m.ID, 9003, "Invalid arguments", bad)
+			text := "Invalid arguments"
+			if echo != "" {
+				text = "Invalid value " + echo
+				for i := range bad {
+					bad[i].String = "bad value " + echo
+				}
+			}
+			return c.faultXML(m.ID, 9003, text, bad)
 		}
 		c.sets = append(c.sets, got) // only what the device accepted
 		c.setID = append(c.setID, m.Body.childText("ParameterKey"))
 		for k, v := range got {
 			c.params[k] = v
+			if strings.HasSuffix(k, "ManagementServer.Username") {
+				c.nextUser = v
+			}
+			if strings.HasSuffix(k, "ManagementServer.Password") {
+				c.nextPass = v
+			}
 		}
-		return c.env(m.ID, `<cwmp:SetParameterValuesResponse><Status>0</Status></cwmp:SetParameterValuesResponse>`)
+		c.params[c.root+"ManagementServer.ParameterKey"] = m.Body.childText("ParameterKey")
+		st := 0
+		if c.status1 {
+			st = 1
+		}
+		return c.env(m.ID, fmt.Sprintf(`<cwmp:SetParameterValuesResponse><Status>%d</Status></cwmp:SetParameterValuesResponse>`, st))
 	case "Reboot":
 		return c.env(m.ID, `<cwmp:RebootResponse/>`)
 	case "FactoryReset":
@@ -361,6 +490,14 @@ func (c *cpe) handle(m *message) []byte {
 func (c *cpe) session(events ...string) error {
 	jar, _ := cookiejar.New(nil)
 	hc := &http.Client{Jar: jar, Timeout: 10 * time.Second}
+	if c.noCookie {
+		hc.Jar = nil
+	}
+	c.mu.Lock()
+	if c.nextUser != "" { // the login the ACS wrote is used from this session on
+		c.acsUser, c.acsPass = c.nextUser, c.nextPass
+	}
+	c.mu.Unlock()
 	post := func(body []byte) (*http.Response, []byte, error) {
 		do := func(auth string) (*http.Response, []byte, error) {
 			req, _ := http.NewRequest("POST", c.f.acs.URL+"/", bytes.NewReader(body))
@@ -427,6 +564,10 @@ func (c *cpe) listen() {
 	c.crSrv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c.mu.Lock()
 		user, pass := c.crUser, c.crPass
+		if c.crFromParams {
+			user, pass = c.params[c.root+"ManagementServer.ConnectionRequestUsername"], c.params[c.root+"ManagementServer.ConnectionRequestPassword"]
+		}
+		early := c.crEarly
 		c.mu.Unlock()
 		if user != "" {
 			f := parseDigest(r.Header.Get("Authorization"))
@@ -446,10 +587,17 @@ func (c *cpe) listen() {
 		c.crHits++
 		ev := c.crEvents
 		c.mu.Unlock()
-		w.WriteHeader(200)
 		if ev == nil {
 			ev = []string{"6 CONNECTION REQUEST"}
 		}
+		if early { // the box opens its session before it answers the request
+			if err := c.session(ev...); err != nil {
+				c.t.Errorf("early session: %v", err)
+			}
+			w.WriteHeader(200)
+			return
+		}
+		w.WriteHeader(200)
 		c.crWG.Add(1)
 		go func() {
 			defer c.crWG.Done()
@@ -518,3 +666,39 @@ func (c *cpe) allSets() map[string]string {
 }
 
 var dbg = func() string { return "" }
+
+// newVSOL is a V-SOL-like TR-098 box: no OperatingFrequencyBand, the band only shows in the standards and the channels,
+// and the 5 GHz network is not the second instance. swap numbers the radios the other way round (5 GHz first).
+func newVSOL(t *testing.T, f *fixture, serial, ip string, swap bool) *cpe {
+	c := &cpe{t: t, f: f, ip: ip, root: store.RootTR098, Manufacturer: "V-SOL", OUI: "A0B1C2", ProductClass: "V2802-RWZ", Serial: serial,
+		params: map[string]string{}, readonly: map[string]bool{}, crPort: 7547, detailed: true}
+	r := c.root
+	c.set(r+"DeviceInfo.SoftwareVersion", "V1.2.3")
+	c.set(r+"ManagementServer.ConnectionRequestURL", "http://"+ip+":7547/cr")
+	c.set(r+"ManagementServer.ConnectionRequestUsername", "")
+	c.set(r+"ManagementServer.ConnectionRequestPassword", "")
+	c.set(r+"ManagementServer.PeriodicInformEnable", "0")
+	c.set(r+"ManagementServer.PeriodicInformInterval", "86400")
+	c.set(r+"ManagementServer.ParameterKey", "")
+	c.set(r+"ManagementServer.Username", "")
+	c.set(r+"ManagementServer.Password", "")
+	two, five := "1", "5"
+	if swap {
+		two, five = "5", "1"
+	}
+	for _, w := range []struct{ n, std, poss, ssid string }{{two, "b,g,n", "1-13", "VSOL-2G"}, {five, "a,n,ac", "36,40,44,48", "VSOL-5G"}} {
+		p := r + "LANDevice.1.WLANConfiguration." + w.n + "."
+		c.set(p+"SSID", w.ssid)
+		c.set(p+"Enable", "1")
+		c.set(p+"Channel", "0")
+		c.set(p+"Standard", w.std)
+		c.set(p+"PossibleChannels", w.poss)
+		c.set(p+"BeaconType", "None")
+		c.set(p+"IEEE11iAuthenticationMode", "None")
+		c.set(p+"IEEE11iEncryptionModes", "None")
+		c.set(p+"PreSharedKey.1.KeyPassphrase", "factorypass")
+	}
+	c.set(r+"WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.MACAddress", testAccountMAC)
+	c.finish(f, ip)
+	return c
+}
