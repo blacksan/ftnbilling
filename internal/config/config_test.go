@@ -324,3 +324,22 @@ func TestACSDefaultsAndPublicRefusal(t *testing.T) {
 		t.Fatalf("cr ports %v", c.ACSCRPorts)
 	}
 }
+
+func TestMACVendorLookupSettings(t *testing.T) {
+	base := map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "1"}
+	c, err := Load(env(base))
+	if err != nil || c.MACVendorLookup != "online" || c.MACVendorDaily != 500 {
+		t.Fatalf("defaults: %+v %v", c, err)
+	}
+	base["MAC_VENDOR_LOOKUP"], base["MAC_VENDOR_DAILY"] = "OFF", "40"
+	c, err = Load(env(base))
+	if err != nil || c.MACVendorLookup != "off" || c.MACVendorDaily != 40 {
+		t.Fatalf("set: %+v %v", c, err)
+	}
+	for k, v := range map[string]string{"MAC_VENDOR_LOOKUP": "maybe", "MAC_VENDOR_DAILY": "0"} {
+		bad := map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "1", k: v}
+		if _, err := Load(env(bad)); err == nil {
+			t.Errorf("%s=%s must be refused", k, v)
+		}
+	}
+}

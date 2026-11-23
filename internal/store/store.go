@@ -618,6 +618,9 @@ type Data struct {
 	// ONUs are the TR-069 devices the built-in ACS has met; ONUTasks their queued actions.
 	ONUs     map[string]ONU     `json:"onus"`
 	ONUTasks map[string]ONUTask `json:"onu_tasks"`
+
+	// OUICache holds the answers of the online MAC-vendor lookup (key: the OUI "AA:BB:CC").
+	OUICache map[string]OUIEntry `json:"oui_cache"`
 }
 
 func (d *Data) init() {
@@ -654,6 +657,9 @@ func (d *Data) init() {
 	}
 	if d.ONUTasks == nil {
 		d.ONUTasks = map[string]ONUTask{}
+	}
+	if d.OUICache == nil {
+		d.OUICache = map[string]OUIEntry{}
 	}
 	if d.ClosedAccounts == nil {
 		d.ClosedAccounts = map[string]Account{}

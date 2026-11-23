@@ -56,25 +56,38 @@ func init() {
 	}
 }
 
-// PrivateAddress is shown for a randomised (locally administered) MAC, which
-// phones use per network: it is not an ONT's WAN address.
-const PrivateAddress = "Private address (random)"
-
-// Vendor names the maker of a MAC address from its prefix: "" when unknown.
-// A locally administered address (second-lowest bit of the first byte set)
-// is a randomised one and is reported as PrivateAddress.
+// Vendor names the maker of a MAC address from its prefix: "" when unknown. The order is: a randomised
+// (locally administered) address is PrivateAddress; then the stored answers of the online lookup; then the
+// bundled tables; and for a prefix none of them knows, the online lookup is asked in the background (never here:
+// Vendor only notes the prefix) and the name shows on a later call.
 func Vendor(mac string) string {
 	m, ok := store.CanonMAC(mac)
 	if !ok {
 		return ""
 	}
-	if first := hexNibble(m[1]); first&2 != 0 {
+	if randomisedMAC(m) {
 		return PrivateAddress
 	}
-	if v := ouiVendors[m[:8]]; v != "" {
+	p := ouiPrefix(m)
+	h := vendorHook.Load()
+	if h != nil {
+		if full, ok := h.cached(p); ok {
+			if short := VendorAlias(full); short != "" {
+				return short
+			}
+			return full
+		}
+	}
+	if v := ouiVendors[p]; v != "" {
 		return v
 	}
-	return ieeeOUI[m[:8]]
+	if v := ieeeOUI[p]; v != "" {
+		return v
+	}
+	if h != nil {
+		h.want(p)
+	}
+	return ""
 }
 
 func hexNibble(c byte) int {

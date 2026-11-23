@@ -508,6 +508,13 @@ var onuTasksC = (&codec[store.ONUTask]{
 	},
 }).build()
 
+var ouiCacheC = (&codec[store.OUIEntry]{
+	name: "oui_cache", pk: []string{"prefix"}, key: func(v store.OUIEntry) string { return v.Prefix },
+	cols: []string{"prefix", "vendor", "found", "checked_at"},
+	args: func(v store.OUIEntry) []any { return []any{v.Prefix, v.Vendor, v.Found, tm(v.CheckedAt)} },
+	dst:  func(v *store.OUIEntry) []any { return []any{&v.Prefix, &v.Vendor, &v.Found, t_(&v.CheckedAt)} },
+}).build()
+
 var eqEventsC = (&codec[store.EquipmentEvent]{
 	name: "equipment_events", pk: []string{"id"}, key: func(v store.EquipmentEvent) string { return v.ID },
 	cols: []string{"id", "equipment_id", "time", "kind", "from_status", "to_status", "site_id", "account_id", "customer_id", "note"},

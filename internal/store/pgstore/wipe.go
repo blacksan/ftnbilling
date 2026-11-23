@@ -48,6 +48,7 @@ var KeptTables = map[string]string{
 	"admin_users":       "staff accounts: passwords, authenticator secrets and recovery codes are access, not business data",
 	"settings":          "configuration (M-Pesa credentials, branding, alerts, admin password hash); only the per-router rows 'site.%' are deleted",
 	"meta":              "import bookkeeping (imported_at): deleting it would let an old ispbill.json import again",
+	"oui_cache":         "answers of the MAC-vendor lookup: public registry data, no customer information",
 	"schema_migrations": "the schema version: the app must still start on the wiped database",
 }
 

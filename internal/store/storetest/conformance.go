@@ -88,6 +88,8 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 		d.ONUs["o2"] = store.ONU{ID: "o2", Serial: "HWTC0000002", OUI: "00E0FC", Manufacturer: "Huawei", Root: store.RootTR181, LastInform: at}
 		d.ONUTasks["ot1"] = store.ONUTask{ID: "ot1", ONUID: "o1", SiteID: "s111111", AccountID: "a1", Kind: store.TaskWiFi, Status: store.TaskFailed, Fault: "9005 Invalid parameter name",
 			By: "brian", Attempts: 2, CreatedAt: at, StartedAt: at, FinishedAt: at, AfterReboot: true, PassLeaf: "PreSharedKey.1.KeyPassphrase", ConfirmedAt: at, ConfirmedBy: "brian"}
+		d.OUICache["00:25:9E"] = store.OUIEntry{Prefix: "00:25:9E", Vendor: "Example Maker Ltd", Found: true, CheckedAt: at}
+		d.OUICache["AC:DE:48"] = store.OUIEntry{Prefix: "AC:DE:48", Found: false, CheckedAt: at}
 		d.Notes["n1"] = store.Note{ID: "n1", CustomerID: "c1", AccountID: "a1", SiteID: "s111111", EquipmentID: "e1", Text: "hello", Time: at}
 		d.Settings["wa.token"] = store.Setting{Key: "wa.token", Value: "c2VhbGVk", Enc: true, UpdatedAt: at}
 		d.Settings["wa.lang"] = store.Setting{Key: "wa.lang", Value: "sw", UpdatedAt: at}

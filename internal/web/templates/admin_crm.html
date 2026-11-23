@@ -112,7 +112,7 @@
 <label>Port<input name="port" type="number" min="0" max="128" value="{{if $A.SplitterPort}}{{$A.SplitterPort}}{{end}}" style="width:70px"></label><button>Save</button></form></div></div>
 <div class="card"><b>Devices on this account</b>
 {{with .Data.AcctDev}}<div class="mt-2 tw"><table id="acct-device"><tr><th>MAC</th><th>Vendor</th><th>State</th><th>Last seen</th><th>Port</th></tr>
-<tr><td class="mono" style="font-family:var(--f-mono)">{{.MAC}} <span class="muted">account MAC</span></td><td>{{if .Vendor}}{{.Vendor}}{{else}}<span class="muted">unknown</span>{{end}}</td>
+<tr><td class="mono" style="font-family:var(--f-mono)">{{.MAC}} <span class="muted">account MAC</span></td><td>{{if .Vendor}}<span{{with vendorTip .MAC}} title="{{.}}"{{end}}>{{.Vendor}}</span>{{else}}<span class="muted">unknown</span>{{end}}</td>
 <td><span class="pill {{if .Online}}online{{else}}offline{{end}}">{{if .Online}}online{{else}}offline{{end}}</span></td>
 <td>{{if .LastSeen.IsZero}}<span class="muted">not seen yet</span>{{else}}{{eats .LastSeen}}{{end}}</td>
 <td>{{if .Port}}{{.Port}}{{else}}<span class="muted">unknown</span>{{end}}</td></tr></table></div>{{else}}<p class="muted" style="margin:4px 0">No MAC address is bound to this account yet.</p>{{end}}

@@ -104,6 +104,12 @@ type Config struct {
 	// would expose the ACS.
 	ACSAllowPrivate bool
 
+	// MACVendorLookup is "online" (default) or "off": whether an OUI that the bundled table does not know is looked
+	// up at api.macvendors.com in the background. Only the first three bytes of a MAC ever leave the server.
+	// MACVendorDaily is the most online requests a day (MAC_VENDOR_DAILY, default 500).
+	MACVendorLookup string
+	MACVendorDaily  int
+
 	// Metrics / QoE collector.
 	WANInterface    string
 	OLTInterface    string
@@ -254,6 +260,7 @@ func Load(getenv func(string) string) (Config, error) {
 	// pages are public and protected by sign-in, so old env lines are ignored.
 	c.WGDumpPath = get("WG_DUMP_PATH", "/run/ftnbilling/wg0.dump")
 	c.loadACS(get, &errs)
+	c.loadMACVendor(get, &errs)
 	c.JoinTokenTTL = dur("JOIN_TOKEN_TTL", 30*time.Minute)
 	c.AllowInsecureJoin = parseBool(getenv("ALLOW_INSECURE_JOIN"))
 	c.JoinRequireMikrotikUA = get("JOIN_REQUIRE_MIKROTIK_UA", "true") != "false"
@@ -591,4 +598,23 @@ func CheckACSListen(addr string) error {
 		return fmt.Errorf("ACS_LISTEN %s is not a private address: the ACS must never be reachable from the internet (use the WireGuard address, e.g. 10.99.0.1:7547)", ip)
 	}
 	return nil
+}
+
+// loadMACVendor reads MAC_VENDOR_LOOKUP (online|off) and MAC_VENDOR_DAILY (1..100000).
+func (c *Config) loadMACVendor(get func(k, def string) string, errs *[]error) {
+	c.MACVendorLookup, c.MACVendorDaily = "online", 500
+	switch v := strings.ToLower(get("MAC_VENDOR_LOOKUP", "online")); v {
+	case "online", "off":
+		c.MACVendorLookup = v
+	default:
+		*errs = append(*errs, errors.New("MAC_VENDOR_LOOKUP must be online or off"))
+	}
+	if v := get("MAC_VENDOR_DAILY", ""); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 100000 {
+			*errs = append(*errs, errors.New("MAC_VENDOR_DAILY must be a number from 1 to 100000"))
+		} else {
+			c.MACVendorDaily = n
+		}
+	}
 }

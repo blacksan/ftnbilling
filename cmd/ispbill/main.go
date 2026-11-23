@@ -138,6 +138,13 @@ func run(log *slog.Logger) error {
 	// Reconcile every runnable building in the background, so one unreachable
 	// router does not delay start-up. The sweeper retries.
 	svc.ResyncAll()
+	if cfg.MACVendorLookup == "online" {
+		// Vendors the bundled table lacks are asked of api.macvendors.com by this one worker, OUI only, never from a request.
+		vl := billing.NewVendorLookup(st, log, billing.VendorOptions{Daily: cfg.MACVendorDaily})
+		billing.SetVendorLookup(vl)
+		wg.Add(1)
+		go func() { defer wg.Done(); vl.Run(ctx) }()
+	}
 	wg.Add(1)
 	go func() { defer wg.Done(); svc.RunSweeper(ctx, 60*time.Second) }()
 
