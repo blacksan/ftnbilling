@@ -99,6 +99,9 @@ func (s *Service) UseReportedMAC(ctx context.Context, accountID, rawMAC string) 
 		if !ok {
 			return ErrNotFound
 		}
+		if err := oltMACLocked(d, mac); err != nil {
+			return err
+		}
 		for _, o := range d.Equipment {
 			if o.Status != store.EqRetired && strings.EqualFold(o.MAC, mac) && !(o.Kind == store.KindONT && o.AccountID == accountID) {
 				return fmt.Errorf("%w (%s %s)", ErrDuplicateEquipmentMAC, o.Kind, o.Serial)

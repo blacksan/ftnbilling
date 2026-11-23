@@ -16,6 +16,10 @@ type EquipmentInput struct {
 	ID, Kind, Serial, MAC, Model, Firmware, SiteID, Notes string
 	// GPONSerial is the OLT-side serial of an ONT when it differs from Serial (the TR-069 serial).
 	GPONSerial string
+	// SetPlacement applies OLTID and PONPort to an ONT (optional OLT and PON port); without it they are left as they are.
+	SetPlacement bool
+	OLTID        string
+	PONPort      int
 }
 
 var equipKinds = map[string]bool{store.KindONT: true, store.KindRouter: true, store.KindOLT: true, store.KindSplitter: true, store.KindSwitch: true, store.KindOther: true}
@@ -104,6 +108,20 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 				e.Status, e.InstalledAt = store.EqInstalled, now
 			}
 		}
+		if kind == store.KindOLT && mac != "" && e.Status != store.EqRetired {
+			if a, ok := d.AccountByMAC(mac); ok {
+				return fmt.Errorf("that MAC is already the ONT of house %s (%s)", a.Unit, a.Code)
+			}
+		}
+		if in.SetPlacement && kind == store.KindONT {
+			if err := checkPlacementLocked(d, in.OLTID, in.PONPort); err != nil {
+				return err
+			}
+			e.OLTID, e.PONPort = in.OLTID, in.PONPort
+		}
+		if kind != store.KindONT {
+			e.OLTID, e.PONPort = "", 0
+		}
 		if mac != "" && e.Status != store.EqRetired {
 			for _, o := range d.Equipment {
 				if o.ID != e.ID && o.Status != store.EqRetired && strings.EqualFold(o.MAC, mac) {
@@ -138,6 +156,9 @@ func (s *Service) changeMACLocked(d *store.Data, id, mac string) error {
 	a, ok := d.Accounts[id]
 	if !ok {
 		return ErrNotFound
+	}
+	if err := oltMACLocked(d, mac); err != nil {
+		return err
 	}
 	if other, ok := d.AccountByMAC(mac); ok && other.ID != id {
 		return duplicateMAC(d, other, a.ApartmentID)
@@ -230,8 +251,8 @@ func returnLocked(d *store.Data, key string, e store.Equipment, status, note str
 		}
 	}
 	e.AccountID, e.Status, e.UpdatedAt = "", status, now
-	if status != store.EqInstalled {
-		e.SiteID = ""
+	if status != store.EqInstalled && !(e.Kind == store.KindOLT && status == store.EqFaulty) {
+		e.SiteID = "" // a faulty OLT stays under its router (its ONUs still hang off it)
 	}
 	d.Equipment[key] = e
 	for k, a := range d.Accounts {

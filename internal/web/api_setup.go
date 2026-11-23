@@ -514,7 +514,7 @@ func (s *Server) apiBenchTestFlat(w http.ResponseWriter, r *http.Request, c *api
 		}
 		id = existing.ID
 	} else {
-		a, _, err := s.svc.CreateCustomer(r.Context(), billing.AddCustomerInput{SiteID: st.ID, Flat: benchFlat, MAC: mac, PackageID: req.PackageID, Activate: true, Note: "bench test"})
+		a, _, err := s.svc.CreateCustomer(r.Context(), billing.AddCustomerInput{SiteID: st.ID, Flat: benchFlat, MAC: mac, PackageID: req.PackageID, Activate: true, Note: "bench test", ConfirmNoAddress: true})
 		if err != nil {
 			s.billingErr(w, err, mac)
 			return
