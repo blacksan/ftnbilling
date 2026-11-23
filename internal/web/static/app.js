@@ -515,7 +515,7 @@
         td("Link", p.link || "");
         td("State", pill(p));
         td("Receive", rate(p.rx_bps), "n"); td("Send", rate(p.tx_bps), "n"); td("MAC", p.mac || "", "mono");
-        var act = el("td"); act.setAttribute("data-label", "Actions");
+        var act = el("td", "pact"); act.setAttribute("data-label", "Actions");
         if (p.locked) { act.appendChild(el("span", "muted", "locked: set in the router's network settings")); }
         else if (!p.can_change) { act.appendChild(el("span", "muted", p.needs_owner ? "owner only" : "")); }
         else {

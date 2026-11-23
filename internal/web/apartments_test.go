@@ -453,3 +453,23 @@ func TestGeolocationPolicyOnlyOnApartmentForm(t *testing.T) {
 		}
 	}
 }
+
+// The subscribers list leads with the customer name (the link); the building, the
+// house number and the code sit below it, smaller.
+func TestAdminAccountsNameOnTopPlaceBelow(t *testing.T) {
+	m := newMulti(t)
+	A := m.addSite(t, "Alpha")
+	apt, err := m.svc.CreateApartment(billing.ApartmentInput{Name: "MG One Central"}, []string{A.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := m.svc.CreateAccount(billing.AccountInput{ApartmentID: apt.ID, SiteID: A.ID, Unit: "A-1", Tenant: "Wanjiru", MAC: "AA:BB:CC:00:D1:02"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := m.adminGet(t, "/admin/accounts")
+	want := `<td class="who"><b><a href="/admin/accounts/view?code=` + a.Code + `">Wanjiru</a></b><span>MG One Central &middot; House A-1 &middot; <code>` + a.Code + `</code></span></td>`
+	if !strings.Contains(page, want) {
+		t.Errorf("subscribers cell: want %s", want)
+	}
+}

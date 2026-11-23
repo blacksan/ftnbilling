@@ -207,6 +207,7 @@ type acctRow struct {
 	Pkg       store.Package
 	State     string
 	Router    string
+	Apartment string // building name
 	Seen      string
 	Sync      string
 	SyncCls   string
@@ -237,7 +238,7 @@ func (s *Server) adminAccounts(w http.ResponseWriter, r *http.Request) {
 			if !sc.Has(a.SiteID) {
 				continue
 			}
-			row := acctRow{A: a, Pkg: d.Packages[a.PackageID], State: billing.AccountState(a, now), Router: names[a.SiteID], Online: live[a.SiteID+"/"+a.Code]}
+			row := acctRow{A: a, Pkg: d.Packages[a.PackageID], State: billing.AccountState(a, now), Router: names[a.SiteID], Apartment: d.Apartments[a.ApartmentID].Name, Online: live[a.SiteID+"/"+a.Code]}
 			row.New = now.Sub(a.CreatedAt) < 7*24*time.Hour
 			row.Expiring7 = row.State == billing.StateActive && a.ExpiresAt.Sub(now) <= 7*24*time.Hour
 			all = append(all, row)

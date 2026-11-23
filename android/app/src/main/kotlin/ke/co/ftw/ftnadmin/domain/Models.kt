@@ -119,6 +119,15 @@ data class Account(
     val routerKey: String get() = routerId.ifBlank { siteId }
     val routerLabel: String get() = routerName.ifBlank { siteName }
     val unitLabel: String get() = unit.ifBlank { flat }
+    /** List headline: the customer name, or the house number when the house has no name. */
+    val headline: String get() = tenant.trim().ifBlank { unitLabel }
+    /** List supporting line: "Apartment · House N · CODE", leaving out whatever is empty. */
+    val placeLine: String
+        get() = listOfNotNull(
+            apartment?.name?.trim()?.takeIf { it.isNotEmpty() },
+            unitLabel.trim().takeIf { it.isNotEmpty() }?.let { "House $it" },
+            code.trim().takeIf { it.isNotEmpty() },
+        ).joinToString("  \u00B7  ")
     val title: String get() = listOf(unitLabel, tenant).filter { it.isNotBlank() }.joinToString(" - ").ifBlank { code }
 }
 
