@@ -114,4 +114,8 @@ data class RegisterItem(
     val status: String = "",
     @SerialName("account_id") val accountId: String = "",
     @SerialName("site_id") val siteId: String = "",
+    @SerialName("olt_id") val oltId: String = "",
+    @SerialName("olt_name") val oltName: String = "",
+    @SerialName("pon_port") val ponPort: Int = 0,
+    val warnings: List<String> = emptyList(),
 )

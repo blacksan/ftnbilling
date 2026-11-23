@@ -38,6 +38,10 @@ class NewDevicesRepository(private val api: ApiClient) {
         tenant: String?,
         phone: String?,
         packageId: String?,
+        /** The ONU of the register this device is (class "onu"): the customer is created with it. */
+        equipmentId: String? = null,
+        /** The operator said yes to a device that never asked for an address (after a 409 confirm_required). */
+        confirmNoAddress: Boolean = false,
     ): Account =
         api.post(
             "unregistered", "create",
@@ -50,6 +54,8 @@ class NewDevicesRepository(private val api: ApiClient) {
                 putIfNotBlank("tenant", tenant)
                 putIfNotBlank("phone", phone)
                 putIfNotBlank("package_id", packageId)
+                putIfNotBlank("equipment_id", equipmentId)
+                if (confirmNoAddress) put("confirm_no_address", true)
             },
         )
 

@@ -415,6 +415,29 @@ data class PendingRegistration(
     val unassigned: Boolean = false,
 )
 
+/** The kind of a New devices row (`class` of GET /unregistered). An OLT is dismiss-only: it is equipment, not a customer. */
+@Serializable
+data class DeviceClassInfo(
+    val kind: String = KIND_UNKNOWN,
+    val label: String = "",
+    @SerialName("equipment_id") val equipmentId: String = "",
+    val creatable: Boolean = true,
+    val attachable: Boolean = true,
+    /** Seen only at layer 2: it never asked for an address, so a customer needs an explicit confirmation. */
+    @SerialName("never_asked") val neverAsked: Boolean = false,
+    /** An ONU: the apartments its PON port serves (a preselection for Create account). */
+    @SerialName("apartment_ids") val apartmentIds: List<String> = emptyList(),
+) {
+    val isOlt: Boolean get() = kind == KIND_OLT
+    val isOnu: Boolean get() = kind == KIND_ONU
+
+    companion object {
+        const val KIND_OLT = "olt"
+        const val KIND_ONU = "onu"
+        const val KIND_UNKNOWN = "unknown"
+    }
+}
+
 /** A MAC that is connected to a router's network but not configured on any account. */
 @Serializable
 data class NewDevice(
@@ -438,6 +461,8 @@ data class NewDevice(
     @SerialName("suggested_account") val suggestedAccount: SuggestedAccount? = null,
     /** Set when the MAC belongs to a customer of another apartment: not provisioned here. */
     @SerialName("belongs_to") val belongsTo: BelongsTo? = null,
+    /** Where the device sits in the equipment hierarchy: an OLT, an ONU of the register, or unknown. */
+    @SerialName("class") val deviceClass: DeviceClassInfo = DeviceClassInfo(),
 ) {
     val routerKey: String get() = routerId.ifBlank { siteId }
     val routerLabel: String get() = routerName.ifBlank { siteName }

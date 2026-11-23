@@ -11,7 +11,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
+import androidx.compose.ui.text.input.KeyboardType
+import ke.co.ftw.ftnadmin.ui.common.ChipLabel
+import ke.co.ftw.ftnadmin.ui.common.ChipRow
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -48,7 +53,7 @@ import ke.co.ftw.ftnadmin.ui.common.vmFactory
 @Composable
 fun RegisterScreen(user: UserInfo, onBack: () -> Unit) {
     val container = LocalContainer.current
-    val vm: RegisterViewModel = viewModel(key = "onu-register", factory = vmFactory { RegisterViewModel(container.onu) })
+    val vm: RegisterViewModel = viewModel(key = "onu-register", factory = vmFactory { RegisterViewModel(container.onu, container.equipment) })
     val ui by vm.state.collectAsStateWithLifecycle()
     val snack = remember { SnackbarHostState() }
     LaunchedEffect(ui.info) {
@@ -101,6 +106,20 @@ fun RegisterScreen(user: UserInfo, onBack: () -> Unit) {
                     isError = f.errors["mac"] != null, supportingText = { f.errors["mac"]?.let { Text(it) } }, modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(f.model, vm::onModel, label = { Text("Model") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                if (ui.olts.isNotEmpty()) {
+                    Text("OLT (optional)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    ChipRow(horizontalPadding = 0.dp) {
+                        ui.olts.forEach { o -> FilterChip(f.oltId == o.id, { vm.onOlt(o.id) }, label = { ChipLabel(o.name.ifBlank { o.mac }) }) }
+                    }
+                    if (f.oltId.isNotBlank()) {
+                        OutlinedTextField(
+                            f.ponPort, vm::onPonPort, label = { Text("PON port") }, singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            isError = f.errors["pon_port"] != null, supportingText = { f.errors["pon_port"]?.let { Text(it) } },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
                 ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
                 Button(onClick = vm::save, enabled = !ui.busy, modifier = Modifier.fillMaxWidth()) { Text(if (ui.busy) "Saving..." else "Save") }
                 TextButton(onClick = vm::closeAdd, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
@@ -117,6 +136,7 @@ private fun RegisterCard(e: RegisterItem) {
             StatusChip(registerStatusLabel(e.status), registerTone(e.status))
         }
         LabeledValue("WAN MAC", e.mac)
+        if (e.oltId.isNotBlank()) LabeledValue("OLT", if (e.ponPort > 0) "${e.oltName.ifBlank { e.oltId }}, PON ${e.ponPort}" else e.oltName.ifBlank { e.oltId })
         if (e.gponSerial.isNotBlank()) LabeledValue("GPON serial", e.gponSerial)
         LabeledValue("Model", e.model)
     }

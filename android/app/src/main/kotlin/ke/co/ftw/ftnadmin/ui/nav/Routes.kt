@@ -46,5 +46,11 @@ import kotlinx.serialization.Serializable
 /** The ONUs (TR-069) of one router. */
 @Serializable data class OnusRoute(val routerId: String)
 
+/** The equipment hierarchy: router, OLT, PON port, ONU, house. */
+@Serializable data object EquipmentRoute
+
+/** Add (id = null) or edit an OLT; [routerId] preselects the router when added from a router's page. */
+@Serializable data class OltFormRoute(val id: String? = null, val routerId: String? = null)
+
 /** The ONU register: serial and WAN MAC pairs. */
 @Serializable data object OnuRegisterRoute

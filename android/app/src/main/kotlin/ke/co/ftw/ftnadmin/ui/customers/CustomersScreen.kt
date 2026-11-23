@@ -64,7 +64,7 @@ fun accountStateLabel(a: Account): String = when {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CustomersScreen(user: UserInfo, onAlerts: () -> Unit, onOpen: (String) -> Unit, onAdd: () -> Unit, onApartments: () -> Unit = {}) {
+fun CustomersScreen(user: UserInfo, onAlerts: () -> Unit, onOpen: (String) -> Unit, onAdd: () -> Unit, onApartments: () -> Unit = {}, onEquipment: () -> Unit = {}) {
     val container = LocalContainer.current
     val vm: CustomersViewModel = viewModel(
         factory = vmFactory { CustomersViewModel(container.accounts, selection = container.routerContext.selection) },
@@ -109,6 +109,7 @@ fun CustomersScreen(user: UserInfo, onAlerts: () -> Unit, onOpen: (String) -> Un
             )
             ChipRow {
                 FilterChip(selected = false, onClick = onApartments, label = { ChipLabel("Apartments") })
+                FilterChip(selected = false, onClick = onEquipment, label = { ChipLabel("Equipment") })
                 FilterChip(selected = ui.stateFilter == null, onClick = { vm.onStateFilter(null) }, label = { ChipLabel("All") })
                 ACCOUNT_STATES.forEach { st ->
                     FilterChip(

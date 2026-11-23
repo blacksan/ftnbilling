@@ -134,6 +134,25 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
                 onOpen = openAccount,
                 onAdd = { nav.navigate(AddCustomerRoute()) },
                 onApartments = { nav.navigate(ApartmentsRoute) },
+                onEquipment = { nav.navigate(EquipmentRoute) },
+            )
+        }
+        composable<EquipmentRoute> {
+            ke.co.ftw.ftnadmin.ui.equipment.EquipmentScreen(
+                user = user,
+                onBack = { nav.popBackStack() },
+                onOpenAccount = openAccount,
+                onAddOlt = { nav.navigate(OltFormRoute(routerId = it)) },
+                onEditOlt = { nav.navigate(OltFormRoute(id = it)) },
+            )
+        }
+        composable<OltFormRoute> { e ->
+            val r = e.toRoute<OltFormRoute>()
+            ke.co.ftw.ftnadmin.ui.equipment.OltFormScreen(
+                oltId = r.id,
+                initialSiteId = r.routerId,
+                onBack = { nav.popBackStack() },
+                onSaved = { nav.popBackStack() },
             )
         }
         composable<PaymentsRoute> { e ->

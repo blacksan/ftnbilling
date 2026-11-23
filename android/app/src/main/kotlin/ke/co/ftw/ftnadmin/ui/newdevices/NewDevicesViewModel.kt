@@ -25,6 +25,15 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /** Online first, then most recently seen. ISO-8601 UTC strings sort chronologically. */
+/**
+ * The apartment Create account starts on: for an ONU of the register the one apartment its PON port serves, else the
+ * router's only apartment. Several candidates leave the choice to the operator.
+ */
+internal fun preselectApartment(d: NewDevice, apartments: List<Apartment>): String? {
+    val served = apartments.filter { it.id in d.deviceClass.apartmentIds }
+    return served.singleOrNull()?.id ?: apartments.singleOrNull()?.id
+}
+
 internal fun sortDevices(list: List<NewDevice>): List<NewDevice> =
     list.sortedWith(compareByDescending<NewDevice> { it.online }.thenByDescending { it.lastSeen.orEmpty() })
 
@@ -52,6 +61,8 @@ data class DeviceSheet(
     /** "Move customer here": the apartment to move into (when the router serves several) and the confirm step. */
     val moveApartmentId: String? = null,
     val confirmMove: Boolean = false,
+    /** 409 confirm_required: the device never asked for an address; the operator must say yes before the account is made. */
+    val confirmNoAddress: Boolean = false,
 )
 
 data class NewDevicesUiState(
@@ -216,7 +227,7 @@ class NewDevicesViewModel(
             _state.update { s ->
                 val sh = s.sheet ?: return@update s
                 if (sh.device.mac != d.mac) return@update s
-                s.copy(sheet = sh.copy(apartments = l, apartmentId = sh.apartmentId ?: l.singleOrNull()?.id))
+                s.copy(sheet = sh.copy(apartments = l, apartmentId = sh.apartmentId ?: preselectApartment(d, l)))
             }
         }
     }
@@ -275,14 +286,28 @@ class NewDevicesViewModel(
         run(sh, "MAC attached to house ${acc.flat}") { repo.attach(sh.device.routerKey, sh.device.mac, acc.id) }
     }
 
-    fun create() {
+    fun create(confirmed: Boolean = false) {
         val sh = _state.value.sheet ?: return
         val apt = sh.apartmentId ?: return
         if (sh.flat.isBlank()) return
+        // An OLT is equipment: it never becomes a customer.
+        if (!sh.device.deviceClass.creatable || sh.device.deviceClass.isOlt) return
+        val eq = sh.device.deviceClass.equipmentId.takeIf { sh.device.deviceClass.isOnu }
         run(sh, "${sh.flat.trim()} created") {
-            repo.create(sh.device.routerKey, apt, sh.device.mac, sh.flat.trim(), sh.tenant.trim(), sh.phone.trim(), sh.packageId)
+            repo.create(
+                sh.device.routerKey, apt, sh.device.mac, sh.flat.trim(), sh.tenant.trim(), sh.phone.trim(), sh.packageId,
+                equipmentId = eq, confirmNoAddress = confirmed,
+            )
         }
     }
+
+    /** "Create anyway" on the no-address prompt: sends the same request with the confirmation. */
+    fun confirmCreateWithoutAddress() {
+        _state.update { s -> s.sheet?.let { s.copy(sheet = it.copy(confirmNoAddress = false)) } ?: s }
+        create(confirmed = true)
+    }
+
+    fun cancelConfirmNoAddress() = _state.update { s -> s.sheet?.let { s.copy(sheet = it.copy(confirmNoAddress = false)) } ?: s }
 
     fun dismissDevice() {
         val sh = _state.value.sheet ?: return
@@ -300,7 +325,7 @@ class NewDevicesViewModel(
     }
 
     private fun run(sh: DeviceSheet, done: String, block: suspend () -> Account) {
-        _state.update { it.copy(sheet = sh.copy(busy = true, error = null, macOwner = null, macOther = null)) }
+        _state.update { it.copy(sheet = sh.copy(busy = true, error = null, macOwner = null, macOther = null, confirmNoAddress = false)) }
         viewModelScope.launch {
             val r = apiResult(block)
             r.fold(
@@ -314,9 +339,11 @@ class NewDevicesViewModel(
                         it.copy(
                             sheet = sh.copy(
                                 busy = false,
+                                confirmNoAddress = api?.code == ErrorCode.CONFIRM_REQUIRED,
                                 macOwner = if (api?.code == ErrorCode.MAC_IN_USE) api.macOwner else null,
                                 macOther = if (api?.code == ErrorCode.MAC_OTHER_BUILDING) api.macOtherBuilding else null,
                                 error = when {
+                                    api?.code == ErrorCode.CONFIRM_REQUIRED -> null
                                     api?.code == ErrorCode.MAC_IN_USE && api.macOwner != null -> null
                                     api?.code == ErrorCode.MAC_OTHER_BUILDING && api.macOtherBuilding != null -> null
                                     api?.code == ErrorCode.UNIT_IN_USE -> "House number ${sh.flat.trim()} is already used in this apartment. Use Attach instead."

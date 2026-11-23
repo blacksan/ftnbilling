@@ -283,6 +283,9 @@ private fun DeviceRow(d: NewDevice, onClick: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (d.deviceClass.label.isNotBlank() && !d.deviceClass.kind.equals("unknown", true)) {
+                    Text(d.deviceClass.label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                }
                 d.belongsTo?.let { b ->
                     Text(
                         b.text,
@@ -318,7 +321,16 @@ private fun DeviceSheetContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             val belongs = d.belongsTo
-            if (belongs != null) {
+            if (d.deviceClass.label.isNotBlank()) {
+                Text(d.deviceClass.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            }
+            if (d.deviceClass.isOlt) {
+                Text(
+                    "This is an OLT of the equipment register, not a customer. It can only be dismissed from this list.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else if (belongs != null) {
                 BelongsToSection(sheet, belongs, vm)
             } else {
             ChipRow(horizontalPadding = 0.dp) {
@@ -391,6 +403,20 @@ private fun DeviceSheetContent(
             },
             confirmButton = { TextButton(onClick = vm::moveHere) { Text("Move") } },
             dismissButton = { TextButton(onClick = vm::cancelMove) { Text("Cancel") } },
+        )
+    }
+    if (sheet.confirmNoAddress) {
+        AlertDialog(
+            onDismissRequest = vm::cancelConfirmNoAddress,
+            title = { Text("No address yet") },
+            text = {
+                Text(
+                    "${d.mac} was only seen at layer 2 and has not asked the router for an address. " +
+                        "It may be a bridge-only ONU or an OLT. Create the customer anyway?",
+                )
+            },
+            confirmButton = { TextButton(onClick = vm::confirmCreateWithoutAddress) { Text("Create anyway") } },
+            dismissButton = { TextButton(onClick = vm::cancelConfirmNoAddress) { Text("Cancel") } },
         )
     }
     if (sheet.confirmDismiss) {
