@@ -524,3 +524,31 @@ func TestReturnedBoxKeepsItsRecordAndItsReset(t *testing.T) {
 		t.Fatal("the returned box was not reset when it came back")
 	}
 }
+
+// Approve must not drop the login a box is using: a box held back while it logged in with its own login (its new
+// address was still leased to another MAC in the router's snapshot) is approved, and must then still get in.
+func TestApproveKeepsTheOwnLoginTheBoxUses(t *testing.T) {
+	f := newFixture(t)
+	c := linkedWithOwnLogin(t, f, "SNOWN", "10.6.3.20")
+	o := f.onuBySerial("SNOWN")
+	c.ip = "10.6.3.30"
+	f.setLease("10.6.3.30", "AA:BB:CC:00:77:77") // a stale snapshot: the address's previous holder
+	if err := c.session("2 PERIODIC"); err != nil {
+		t.Fatal(err)
+	}
+	if !f.onuBySerial("SNOWN").Sec.Quarantine.Active {
+		t.Fatal("not quarantined")
+	}
+	if err := f.svc.ApproveONU("owner", "", o.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.session("2 PERIODIC"); err != nil {
+		t.Fatalf("the approved box was locked out: %v", err)
+	}
+	if err := c.session("2 PERIODIC"); err != nil { // it now uses the fresh login written in the last session
+		t.Fatalf("the fresh login does not work: %v", err)
+	}
+	if g := f.onuBySerial("SNOWN"); g.Sec.ACSCred != store.CredDevice {
+		t.Fatalf("%+v", g.Sec)
+	}
+}

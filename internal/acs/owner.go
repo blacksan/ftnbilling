@@ -141,7 +141,11 @@ func (s *Service) ApproveONU(by, ip, onuID string) error {
 		o.MgmtIP, o.Sec.MgmtMAC = q.IP, q.MAC
 		o.Sec.Quarantine = store.ONUQuarantine{}
 		o.Sec.FlapCount, o.Sec.FlapSince = 0, time.Time{}
-		o.Sec.ACSCred, o.Sec.ACSUser, o.Sec.ACSPassEnc, o.Sec.ACSTries = store.CredNone, "", "", 0
+		// A fresh own login is written at the next verified session. The current one is kept until then: a box that
+		// was held back while it used its own login (an address the lease snapshot still gave to another MAC) still
+		// logs in with it, and dropping it would lock that box out for good. Whoever else may know it is still bound
+		// by the place check, and the rewrite ends it.
+		o.Sec.ACSCred, o.Sec.ACSTries = store.CredNone, 0
 		d.ONUs[o.ID] = o
 		s.audit(d, o, by, ip, "ONU "+o.Serial+": the check-in from "+q.IP+" was approved; the ONU is bound to its new place")
 		return nil
