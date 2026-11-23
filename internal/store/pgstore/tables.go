@@ -304,12 +304,15 @@ var customersC = (&codec[store.Customer]{
 
 var equipmentC = (&codec[store.Equipment]{
 	name: "equipment", pk: []string{"id"}, key: func(v store.Equipment) string { return v.ID },
-	cols: []string{"id", "kind", "serial", "mac", "model", "firmware", "status", "site_id", "account_id", "installed_at", "notes", "created_at", "updated_at", "gpon_serial"},
+	cols: []string{"id", "kind", "serial", "mac", "model", "firmware", "status", "site_id", "account_id", "installed_at", "notes", "created_at", "updated_at", "gpon_serial",
+		"name", "router_port", "pon_ports", "pon_apartments", "mgmt_ip", "mgmt_user", "mgmt_pass", "olt_id", "pon_port"},
 	args: func(v store.Equipment) []any {
-		return []any{v.ID, v.Kind, v.Serial, v.MAC, v.Model, v.Firmware, v.Status, fk(v.SiteID), fk(v.AccountID), nt(v.InstalledAt), v.Notes, tm(v.CreatedAt), nt(v.UpdatedAt), v.GPONSerial}
+		return []any{v.ID, v.Kind, v.Serial, v.MAC, v.Model, v.Firmware, v.Status, fk(v.SiteID), fk(v.AccountID), nt(v.InstalledAt), v.Notes, tm(v.CreatedAt), nt(v.UpdatedAt), v.GPONSerial,
+			v.Name, v.RouterPort, v.PONPorts, jsonArg(v.PONApartments, "{}"), v.MgmtIP, v.MgmtUser, v.MgmtPass, v.OLTID, v.PONPort}
 	},
 	dst: func(v *store.Equipment) []any {
-		return []any{&v.ID, &v.Kind, &v.Serial, &v.MAC, &v.Model, &v.Firmware, &v.Status, s_(&v.SiteID), s_(&v.AccountID), t_(&v.InstalledAt), &v.Notes, t_(&v.CreatedAt), t_(&v.UpdatedAt), &v.GPONSerial}
+		return []any{&v.ID, &v.Kind, &v.Serial, &v.MAC, &v.Model, &v.Firmware, &v.Status, s_(&v.SiteID), s_(&v.AccountID), t_(&v.InstalledAt), &v.Notes, t_(&v.CreatedAt), t_(&v.UpdatedAt), &v.GPONSerial,
+			&v.Name, &v.RouterPort, &v.PONPorts, jsonScan[map[string][]string]{&v.PONApartments}, &v.MgmtIP, &v.MgmtUser, &v.MgmtPass, &v.OLTID, &v.PONPort}
 	},
 }).build()
 
@@ -468,8 +471,8 @@ func (d jsonScan[T]) Scan(v any) error {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return err
 	}
-	if rv := reflect.ValueOf(&out).Elem(); rv.Kind() == reflect.Slice && rv.Len() == 0 {
-		rv.Set(reflect.Zero(rv.Type())) // an empty list is nil, as the JSON file reads it
+	if rv := reflect.ValueOf(&out).Elem(); (rv.Kind() == reflect.Slice || rv.Kind() == reflect.Map) && rv.Len() == 0 {
+		rv.Set(reflect.Zero(rv.Type())) // an empty list or map is nil, as the JSON file reads it
 	}
 	*d.p = out
 	return nil

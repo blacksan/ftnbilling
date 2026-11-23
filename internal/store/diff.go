@@ -36,6 +36,9 @@ func (x Equipment) norm() Equipment {
 	if m, ok := CanonMAC(x.MAC); ok {
 		x.MAC = m
 	}
+	if len(x.PONApartments) == 0 {
+		x.PONApartments = nil
+	}
 	return x
 }
 func (x Account) norm() Account {
@@ -247,6 +250,17 @@ func cloneApartment(a Apartment) Apartment {
 	return a
 }
 
+func cloneEquipment(e Equipment) Equipment {
+	if e.PONApartments != nil {
+		m := make(map[string][]string, len(e.PONApartments))
+		for k, v := range e.PONApartments {
+			m[k] = append([]string(nil), v...)
+		}
+		e.PONApartments = m
+	}
+	return e
+}
+
 func cloneAdminUser(u AdminUser) AdminUser {
 	if u.RecoveryCodes != nil {
 		u.RecoveryCodes = append([]string(nil), u.RecoveryCodes...)
@@ -264,7 +278,7 @@ var tables = []table{
 	tbl[Customer]{func(d *Data) *map[string]Customer { return &d.Customers }, func(c *ChangeSet) *Delta[Customer] { return &c.Customers },
 		eqc[Customer], Customer.norm, func(v Customer) string { return v.ID }, nil},
 	tbl[Equipment]{func(d *Data) *map[string]Equipment { return &d.Equipment }, func(c *ChangeSet) *Delta[Equipment] { return &c.Equipment },
-		eqc[Equipment], Equipment.norm, func(v Equipment) string { return v.ID }, nil},
+		eqDeep[Equipment], Equipment.norm, func(v Equipment) string { return v.ID }, cloneEquipment},
 	tbl[Tenancy]{func(d *Data) *map[string]Tenancy { return &d.Tenancies }, func(c *ChangeSet) *Delta[Tenancy] { return &c.Tenancies },
 		eqc[Tenancy], Tenancy.norm, func(v Tenancy) string { return v.ID }, nil},
 	tbl[Apartment]{func(d *Data) *map[string]Apartment { return &d.Apartments }, func(c *ChangeSet) *Delta[Apartment] { return &c.Apartments },

@@ -214,6 +214,21 @@ func Validate(d *Data) []string {
 		if e.AccountID != "" && e.Status != EqInstalled {
 			add("Equipment %s is assigned to a house but its status is %q, not installed.", e.ID, e.Status)
 		}
+		if e.OLTID != "" {
+			if o, ok := d.Equipment[e.OLTID]; !ok || o.Kind != KindOLT {
+				add("Equipment %s names an OLT that does not exist (%s).", e.ID, e.OLTID)
+			}
+		}
+		if e.PONPort < 0 || e.PONPorts < 0 {
+			add("Equipment %s has a negative PON port number.", e.ID)
+		}
+		for port, ids := range e.PONApartments {
+			for _, id := range ids {
+				if _, ok := d.Apartments[id]; !ok {
+					add("OLT %s maps PON port %s to an apartment that does not exist (%s).", e.ID, port, id)
+				}
+			}
+		}
 		if e.Serial != "" {
 			k := e.Kind + "|" + strings.ToUpper(e.Serial)
 			if o, ok := serials[k]; ok {
