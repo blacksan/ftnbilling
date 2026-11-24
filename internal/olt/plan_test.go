@@ -228,8 +228,8 @@ func TestAutoLearnFindingAndStep(t *testing.T) {
 	}
 }
 
-// The OLT prints the serial in lower-case hex; the inventory has upper case. The line is sent in the inventory's case, and
-// reading it back matches.
+// The OLT prints the serial in lower-case hex; the inventory has upper case. The line is sent in the OLT's own form
+// (vendor letters upper case, hex lower case), and reading it back matches the inventory.
 func TestSerialCaseRoundTrip(t *testing.T) {
 	e := newEnv(t)
 	_ = e.st.Update(func(d *store.Data) error {
@@ -253,8 +253,8 @@ func TestSerialCaseRoundTrip(t *testing.T) {
 		t.Fatalf("%v %v", err, res.Remaining)
 	}
 	joined := strings.Join(e.f.Lines(), "\n")
-	if !strings.Contains(joined, "onu add 1 profile default sn VSOL00127E0F") {
-		t.Fatalf("not sent in the inventory's case:\n%s", joined)
+	if !strings.Contains(joined, "onu add 1 profile default sn VSOL00127e0f") {
+		t.Fatalf("not sent in the OLT's form:\n%s", joined)
 	}
 	if !strings.Contains(e.f.Running(), "sn VSOL00127e0f") {
 		t.Fatalf("the fake does not print the serial like the bench OLT:\n%s", e.f.Running())
@@ -296,5 +296,63 @@ func TestPollUsesBenchModes(t *testing.T) {
 				t.Fatalf("%q was sent outside a PON interface: %v", l, lines)
 			}
 		}
+	}
+}
+
+// A default route the OLT already has is never doubled or replaced by the plan; it is a warning instead.
+func TestPlanKeepsAnExistingDefaultRoute(t *testing.T) {
+	d := VSOL()
+	want := Desired{InternetVLAN: 100, MgmtVLAN: 98, MgmtIP: "10.7.3.2", MgmtMask: "255.255.255.248", MgmtGateway: "10.7.3.1"}
+	for _, tc := range []struct {
+		run   string
+		route bool
+	}{
+		{"vlan 1\nexit\n", true},
+		{"ip route 0.0.0.0/0 10.7.3.1\n", false},
+		{"ip route 0.0.0.0/0 192.168.8.1\n", false},
+		{"ip route 0.0.0.0 0.0.0.0 192.168.8.1\n", false},
+	} {
+		p := d.BuildPlan(want, ParseRunning(tc.run))
+		got := strings.Contains(strings.Join(p.Commands(), "\n"), "ip route 0.0.0.0/0 10.7.3.1")
+		if got != tc.route {
+			t.Errorf("%q: default route planned %v, want %v", tc.run, got, tc.route)
+		}
+		if strings.Contains(tc.run, "192.168.8.1") && !strings.Contains(strings.Join(p.Warnings, " "), "already has a default route (via 192.168.8.1)") {
+			t.Errorf("%q: no warning: %v", tc.run, p.Warnings)
+		}
+	}
+}
+
+// A batch that stopped right after "onu 1 pri wan_adv add route" leaves a WAN with no index lines: the next plan
+// configures that WAN (index 2) instead of adding a third one.
+func TestPlanReusesAHalfMadeWAN(t *testing.T) {
+	d := VSOL()
+	acs := &ACS{URL: "http://10.99.0.1:7547/", User: testACSUser, Pass: testACSPass, InformSeconds: 300}
+	want := Desired{InternetVLAN: 100, TR069VLAN: 99, ACS: acs, ONUs: []DesiredONU{{PON: 1, ID: 1, Serial: "VSOL00127E0F"}}, OnlyONUs: true}
+	base := "interface gpon 0/1\nonu add 1 profile default sn VSOL00127e0f\nonu 1 pri wan_adv add route\nonu 1 pri wan_adv index 1 route mode internet mtu 1500\n"
+	for _, tc := range []struct {
+		extra string
+		add   bool
+	}{{"", true}, {"onu 1 pri wan_adv add route\n", false}} {
+		cmds := strings.Join(d.BuildPlan(want, ParseRunning(base+tc.extra+"exit\n")).Commands(), "\n")
+		if strings.Contains(cmds, "onu 1 pri wan_adv add route") != tc.add || !strings.Contains(cmds, "onu 1 pri wan_adv index 2 route mode tr069") {
+			t.Errorf("%q:\n%s", tc.extra, Redact(cmds))
+		}
+	}
+}
+
+// A Pri profile on the OLT that lacks lines (made by hand, or a batch that stopped half way) is a warning, never edited.
+func TestPlanWarnsAboutAHalfMadePriProfile(t *testing.T) {
+	d := VSOL()
+	acs := &ACS{URL: "http://10.99.0.1:7547/", User: testACSUser, Pass: testACSPass, InformSeconds: 300}
+	want := Desired{InternetVLAN: 100, TR069VLAN: 99, PriProfile: d.DefaultPri, ACS: acs}
+	full := strings.Join(d.PriProfileLines(d.DefaultPri, 100, 99, &ACS{URL: acs.URL, User: "x", Pass: "y", InformSeconds: 300}), "\n")
+	if w := d.BuildPlan(want, ParseRunning(full+"\n")).Warnings; len(w) != 0 {
+		t.Errorf("a complete profile (other login) warned: %v", w)
+	}
+	half := "profile pri name ftn_pri\nwan_adv add route\nwan_adv index 1 route mode internet mtu 1500\nexit\n"
+	p := d.BuildPlan(want, ParseRunning(half))
+	if !strings.Contains(strings.Join(p.Warnings, " "), "Pri profile ftn_pri on the OLT does not show") || strings.Contains(strings.Join(p.Commands(), "\n"), "profile pri") {
+		t.Errorf("%v\n%s", p.Warnings, Redact(strings.Join(p.Commands(), "\n")))
 	}
 }

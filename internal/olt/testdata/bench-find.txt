@@ -1,0 +1,658 @@
+# The bench OLT's own 'find' output (V1600GS-R, V1.0.5): find onu/profile/tr069/wan/auto/vlan/user/password/snmp-server community/sshd/ip route.
+# Grammar lines only, as '(mode)  syntax'. Used by grammar_test.go.
+  (Alarm profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp>
+  (Alarm profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> id (1-128)
+  (Alarm profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> name WORD
+  (Alarm profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> running-config
+  (DBA profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp>
+  (DBA profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> id (1-128)
+  (DBA profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> name WORD
+  (DBA profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> running-config
+  (Format profile)  <circuit_id|remote_id> index (1-22) <cvlan|devtype|acnoid|slotno|ponno|onuno|onutype|onusn|onudesc|end>
+  (Format profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp>
+  (Format profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> id (1-128)
+  (Format profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> name WORD
+  (Format profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> running-config
+  (Igmp profile)  <upstream|downstream> vlan (0-4094) pcp (0-16)
+  (Igmp profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp>
+  (Igmp profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> id (1-128)
+  (Igmp profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> name WORD
+  (Igmp profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> running-config
+  (Igmp profile)  upstream-tag-control <transparent|add_vlan_tag|replace_vlan_tag|replace_vlan_id>
+  (Line profile)  mvlan VLAN_LIST
+  (Line profile)  no mvlan <all|VLAN_LIST>
+  (Line profile)  service WORD gemport (1-255) <tag|vlan> VLAN_LIST [iphost (1-255)] [ethuni (1-32)]
+  (Line profile)  service-port (1-128) gemport (1-128) uservlan (1-4093) [to (1-4093)] transparent
+  (Line profile)  service-port (1-128) gemport (1-128) uservlan (1-4093) vlan (1-4093)
+  (Line profile)  service-port (1-128) gemport (1-128) uservlan untag vlan (1-4093)
+  (Line profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp>
+  (Line profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> id (1-128)
+  (Line profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> name WORD
+  (Line profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> running-config
+  (Line profile)  tcont (1-255) [name WORD] [dba WORD] [profile_dba_id (0-128)]
+  (Onu profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp>
+  (Onu profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> id (1-128)
+  (Onu profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> name WORD
+  (Onu profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> running-config
+  (Pri profile)  acl <telnet|ftp|http|https|tftp|ping|ssh> control enable lan <enable|disable> wan disable [port (0-65535)]
+  (Pri profile)  acl <telnet|ftp|http|https|tftp|ping|ssh> control enable lan <enable|disable> wan enable ipv4_control disable ipv6_control disable [port (0-65535)]
+  (Pri profile)  acl <telnet|ftp|http|https|tftp|ping|ssh> control enable lan <enable|disable> wan enable ipv4_control disable ipv6_control enable X:X::X:X/M [port (0-65535)]
+  (Pri profile)  acl <telnet|ftp|http|https|tftp|ping|ssh> control enable lan <enable|disable> wan enable ipv4_control enable A.B.C.D A.B.C.D ipv6_control disable [port (0-65535)]
+  (Pri profile)  acl <telnet|ftp|http|https|tftp|ping|ssh> control enable lan <enable|disable> wan enable ipv4_control enable A.B.C.D A.B.C.D ipv6_control enable X:X::X:X/M [port (0-65535)]
+  (Pri profile)  ap enable [vlan (0-4095)]
+  (Pri profile)  dhcp_server ipv6 X:X::X:X [prefix_mode static X:X::X:X/M] server enable preference (0-4294967295) valid (0-4294967295) HHHH:HHHH:HHHH:HHHH HHHH:HHHH:HHHH:HHHH <pc|camera|stb|ip_phone> wanconnection (1-8) gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (Pri profile)  dhcp_server ipv6 X:X::X:X prefix_mode auto server disable [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (Pri profile)  dhcp_server ipv6 X:X::X:X prefix_mode auto server enable preference (0-4294967295) valid (0-4294967295) HHHH:HHHH:HHHH:HHHH HHHH:HHHH:HHHH:HHHH <pc|camera|stb|ip_phone> [dns X:X::X:X X:X::X:X] gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (Pri profile)  dhcp_server ipv6 X:X::X:X prefix_mode auto server enable preference (0-4294967295) valid (0-4294967295) HHHH:HHHH:HHHH:HHHH HHHH:HHHH:HHHH:HHHH <pc|camera|stb|ip_phone> hgwproxy gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (Pri profile)  dhcp_server ipv6 X:X::X:X prefix_mode auto server enable preference (0-4294967295) valid (0-4294967295) HHHH:HHHH:HHHH:HHHH HHHH:HHHH:HHHH:HHHH <pc|camera|stb|ip_phone> wanconnection (1-8) gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (Pri profile)  dhcp_server ipv6 X:X::X:X prefix_mode auto server relay X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (Pri profile)  dhcp_server ipv6 X:X::X:X prefix_mode wan_delegated (1-8) server disable [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (Pri profile)  dhcp_server ipv6 X:X::X:X prefix_mode wan_delegated (1-8) server enable preference (0-4294967295) valid (0-4294967295) HHHH:HHHH:HHHH:HHHH HHHH:HHHH:HHHH:HHHH <pc|camera|stb|ip_phone> [dns X:X::X:X X:X::X:X] gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (Pri profile)  dhcp_server ipv6 X:X::X:X prefix_mode wan_delegated (1-8) server enable preference (0-4294967295) valid (0-4294967295) HHHH:HHHH:HHHH:HHHH HHHH:HHHH:HHHH:HHHH <pc|camera|stb|ip_phone> hgwproxy gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (Pri profile)  dhcp_server ipv6 X:X::X:X prefix_mode wan_delegated (1-8) server enable preference (0-4294967295) valid (0-4294967295) HHHH:HHHH:HHHH:HHHH HHHH:HHHH:HHHH:HHHH <pc|camera|stb|ip_phone> wanconnection (1-8) gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (Pri profile)  dhcp_server ipv6 X:X::X:X prefix_mode wan_delegated (1-8) server relay X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (Pri profile)  lan_bind_mode port (1-255) mode vlan lanVlan0 (1-4094) wanVlan0 (1-4094) [lanVlan1 (1-4094) wanVlan1 (1-4094)] [lanVlan2 (1-4094) wanVlan2 (1-4094)] [lanVlan3 (1-4094) wanVlan3 (1-4094)]
+  (Pri profile)  loopback_detect <enable|disable> [loopcheck_interval (1-60000)] [recover_interval (1-1800)] [ethernet_type WORD] [vlan (1-4094)] [dest_mac_type <broadcast_address|bpdu_address>] [port_closing_time (1-1800)] [alarm <enable|disable>] [portdislooped <enable|disable>]
+  (Pri profile)  no <dhcp_server|username|firewall|loopback_detect|tr069_mng|tr069_stun|nat_type|upnp|sip_global_param|mqtt|reset_button|ap>
+  (Pri profile)  pots <(1-255)|all> sip_user_config active disable
+  (Pri profile)  pots <(1-255)|all> sip_user_config active enable account WORD name NAME pwd WORD
+  (Pri profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp>
+  (Pri profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> id (1-128)
+  (Pri profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> name WORD
+  (Pri profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> running-config
+  (Pri profile)  tr069_mng disable
+  (Pri profile)  tr069_mng enable acs_server url WORD username WORD password WORD certificate <enable|disable> inform disable reverse_connection username WORD password WORD [ID]
+  (Pri profile)  tr069_mng enable acs_server url WORD username WORD password WORD certificate <enable|disable> inform enable inform_interval (0-4294967295) reverse_connection username WORD password WORD [ID]
+  (Pri profile)  tr069_stun disable
+  (Pri profile)  tr069_stun enable server WORD port (1-65535) [username NAME password WORD]
+  (Pri profile)  upnp status enable wan_index (1-8)
+  (Pri profile)  username admin_control disable user_control enable WORD WORD
+  (Pri profile)  username admin_control enable WORD WORD user_control disable
+  (Pri profile)  username admin_control enable WORD WORD user_control enable WORD WORD
+  (Pri profile)  wan_adv add <bridge|route>
+  (Pri profile)  wan_adv index (1-8) bind lan [lan1] [lan2] [lan3] [lan4] [lan5] [lan6] [lan7] [lan8]
+  (Pri profile)  wan_adv index (1-8) bind ssid [ssid1] [ssid2] [ssid3] [ssid4] [ssid5] [ssid6] [ssid7] [ssid8] [ssid9] [ssid10]
+  (Pri profile)  wan_adv index (1-8) bridge <internet|other> [mtu (576-1500)] [<ipv4|ipv6|both>]
+  (Pri profile)  wan_adv index (1-8) delete
+  (Pri profile)  wan_adv index (1-8) route both client_address <enable|disable> client_prifix <enable|disable>
+  (Pri profile)  wan_adv index (1-8) route both dhcp [dns-v4 primary A.B.C.D secondary A.B.C.D] [nat <enable|disable>] [nat66 <enable|disable>] [dns-v6 primary X:X::X:X secondary X:X::X:X] [slaac <enable|disable>]
+  (Pri profile)  wan_adv index (1-8) route both pppoe proxy <enable|disable> user NAME pwd WORD [server NAME] mode <auto|payload> [nat <enable|disable>] [nat66 <enable|disable>] [slaac <enable|disable>]
+  (Pri profile)  wan_adv index (1-8) route both static ipv4 A.B.C.D mask A.B.C.D gw A.B.C.D dns primary A.B.C.D secondary A.B.C.D [nat <enable|disable>] [nat66 <enable|disable>] ipv6 X:X::X:X/M gw X:X::X:X dns primary X:X::X:X secondary X:X::X:X
+  (Pri profile)  wan_adv index (1-8) route ipv4 dhcp [dns primary A.B.C.D secondary A.B.C.D] [nat <enable|disable>]
+  (Pri profile)  wan_adv index (1-8) route ipv4 pppoe proxy <enable|disable> user NAME pwd WORD [server NAME] mode <auto|payload> [nat <enable|disable>]
+  (Pri profile)  wan_adv index (1-8) route ipv4 static ip A.B.C.D mask A.B.C.D gw A.B.C.D dns primary A.B.C.D secondary A.B.C.D [nat <enable|disable>]
+  (Pri profile)  wan_adv index (1-8) route ipv6 client_address <enable|disable> client_prifix <enable|disable> ds_lite disable
+  (Pri profile)  wan_adv index (1-8) route ipv6 client_address <enable|disable> client_prifix <enable|disable> ds_lite enable aftr_mode dhcpv6
+  (Pri profile)  wan_adv index (1-8) route ipv6 client_address <enable|disable> client_prifix <enable|disable> ds_lite enable aftr_mode manual address_type <ipv6|dns> WORD
+  (Pri profile)  wan_adv index (1-8) route ipv6 dhcp [dns primary X:X::X:X secondary X:X::X:X] [nat66 <enable|disable>] [slaac <enable|disable>]
+  (Pri profile)  wan_adv index (1-8) route ipv6 pppoe proxy <enable|disable> user NAME pwd WORD [server NAME] mode <auto|payload> [nat66 <enable|disable>] [slaac <enable|disable>]
+  (Pri profile)  wan_adv index (1-8) route ipv6 static [nat66 <enable|disable>] ip X:X::X:X/M gw X:X::X:X dns primary X:X::X:X secondary X:X::X:X
+  (Pri profile)  wan_adv index (1-8) route mode <internet|multicast|tr069|tr069_internet|tr069_voip|voip_internet|tr069_voip_internet|voip|other> [mtu (576-1500)]
+  (Pri profile)  wan_adv index (1-8) vlan disable [qos <enable|disable>]
+  (Pri profile)  wan_adv index (1-8) vlan tag [wan_vlan (1-4095) (0-7)] [qinq tpid (1-65534) vlan (1-4095) cos (0-7)] [qos <enable|disable>]
+  (Pri profile)  wan_adv index (1-8) vlan transparent [wan_vlan (1-4095) (0-7)] [tranlation (1-4095) (0-7)] [qinq tpid (1-65534) vlan (1-4095) cos (0-7)] [qos <enable|disable>]
+  (Pri profile)  wan_conn add <bridge|route> [qos <enable|disable>]
+  (Pri profile)  wan_conn index (1-8) bridge <internet|other> [bind_lan (0-255)] [bind_ssid (0-255)] [qos <enable|disable>]
+  (Pri profile)  wan_conn index (1-8) delete
+  (Pri profile)  wan_conn index (1-8) route <internet|multicast|tr069|tr069_internet|tr069_voip|voip_internet|tr069_voip_internet|voip|other> [bind_lan (0-255)] [bind_ssid (0-255)] [qos <enable|disable>] [nat <enable|disable>] [mtu (576-1500)] dhcp
+  (Pri profile)  wan_conn index (1-8) route <internet|multicast|tr069|tr069_internet|tr069_voip|voip_internet|tr069_voip_internet|voip|other> [bind_lan (0-255)] [bind_ssid (0-255)] [qos <enable|disable>] [nat <enable|disable>] [mtu (576-1500)] pppoe proxy <enable|disable> user NAME pwd WORD mode <auto|payload> [server NAME]
+  (Pri profile)  wan_conn index (1-8) route <internet|multicast|tr069|tr069_internet|tr069_voip|voip_internet|tr069_voip_internet|voip|other> [bind_lan (0-255)] [bind_ssid (0-255)] [qos <enable|disable>] [nat <enable|disable>] [mtu (576-1500)] static ip A.B.C.D mask A.B.C.D gw A.B.C.D dns primary A.B.C.D secondary A.B.C.D
+  (Pri profile)  wan_conn index (1-8) vlan disable
+  (Pri profile)  wan_conn index (1-8) vlan enable vid (1-4094) pri (0-7)
+  (Pri profile)  wifi_ssid (1-8) name WORD hide <enable|disable> auth_mode <open|shared|wepauto> encrypt_type wep encryptionlevel <el64|el128> keyindex (1-4) key1 WORD key2 WORD key3 WORD key4 WORD
+  (Pri profile)  wifi_switch (1-2) enable<fcc|etsi|ic|spain|france|mkk|isreal|mkk2|mkk3|russian|cn|global|world-wide|mkk1|ncc|united_arab_emirates|albania|armenia|argentina|austria|australia|azerbaijan|bangladesh|belgium|bulgaria|bahrain|brunei|bolivia|brazil|belarus|belize|canada|switzerland|chile|colombia|costa_rica|curacao|cyprus|czech_republic|germany|denmark|dominican_republic|ecuador|estonia|egypt|finland|united_kingdom|georgia|greece|guatemala|hong_kong|honduras|croatia|hungary|indonesia|ireland|india|iraq|iran|iceland|italy|jordan|japan|kenya|north_korea|south_korea|kuwait|kazakhstan|laos|lebanon|liechtenstein|sri_lanka|lithuania|luxembourg|latvia|morocco|monaco|moldova|north_macedonia|macao|malta|mexico|malaysia|nigeria|netherlands|norway|nepal|new_zealand|oman|panama|peru|papua_new_guinea|philippines|pakistan|poland|puerto_rico|palestine|portugal|paraguay|qatar|romania|serbia|saudi_arabia|seychelles|sweden|singapore|slovenia|slovakia|senegal|south_sudan|el_salvador|syria|chad|thailand|tajikistan|tunisia|turkey|trinidad_and_tobago|taiwan|tanzania|ukraine|united_states|uruguay|uzbekistan|venezuela|vietnam|yemen|south_africa|zambia|zimbabwe|cuba|algeria|saint_lucia|uganda|rwanda|republic_of_the_congo|democratic_republic_of_the_congo|madagascar|malawi|niger|gabon|ghana>(0-14) <80211b|80211g|80211bg|80211n|80211bgn|80211ax|80211bgnax|80211gn> (0-30) [<cw20|cw40|cw20_40>]
+  (Pri profile)  wifi_switch (1-2) enable<fcc|etsi|ic|spain|france|mkk|isreal|mkk2|mkk3|russian|cn|global|world-wide|mkk1|ncc|united_arab_emirates|albania|armenia|argentina|austria|australia|azerbaijan|bangladesh|belgium|bulgaria|bahrain|brunei|bolivia|brazil|belarus|belize|canada|switzerland|chile|colombia|costa_rica|curacao|cyprus|czech_republic|germany|denmark|dominican_republic|ecuador|estonia|egypt|finland|united_kingdom|georgia|greece|guatemala|hong_kong|honduras|croatia|hungary|indonesia|ireland|india|iraq|iran|iceland|italy|jordan|japan|kenya|north_korea|south_korea|kuwait|kazakhstan|laos|lebanon|liechtenstein|sri_lanka|lithuania|luxembourg|latvia|morocco|monaco|moldova|north_macedonia|macao|malta|mexico|malaysia|nigeria|netherlands|norway|nepal|new_zealand|oman|panama|peru|papua_new_guinea|philippines|pakistan|poland|puerto_rico|palestine|portugal|paraguay|qatar|romania|serbia|saudi_arabia|seychelles|sweden|singapore|slovenia|slovakia|senegal|south_sudan|el_salvador|syria|chad|thailand|tajikistan|tunisia|turkey|trinidad_and_tobago|taiwan|tanzania|ukraine|united_states|uruguay|uzbekistan|venezuela|vietnam|yemen|south_africa|zambia|zimbabwe|cuba|algeria|saint_lucia|uganda|rwanda|republic_of_the_congo|democratic_republic_of_the_congo|madagascar|malawi|niger|gabon|ghana><auto|channel_34|channel_36|channel_38|channel_40|channel_42|channel_44|channel_46|channel_48|channel_52|channel_56|channel_60|channel_64|channel_100|channel_104|channel_108|channel_112|channel_116|channel_120|channel_124|channel_128|channel_132|channel_136|channel_140|channel_144|channel_149|channel_153|channel_157|channel_161|channel_165><80211ac0|80211acA|80211acN|80211acAN|80211acNAC|80211acANAC|80211acax|80211acanacax> (0-30) [<cw20|cw40|cw80|cw20_40|cw20_40_80|cw160>] [easy_mesh <enable|disable>]
+  (Srv profile)  [no] mvlan tag-strip eth (1-32)
+  (Srv profile)  eth (1-32) [state <disable|enable>] [pause-time (0-65535)] [speed <auto|full-10|full-100|full-1000|half-10|half-100|half-1000|full-10g|full-2_5g|full-5g|full-25g|full-40g>]
+  (Srv profile)  iphost (1-255) vlan (0-4094) [priority (1-15)]
+  (Srv profile)  iphost vlan (0-4094) [priority (1-15)]
+  (Srv profile)  no portvlan <eth|wifi|veip> (1-32) <mode|vlan VLAN_LIST>
+  (Srv profile)  portvlan <eth|wifi|veip> (1-32) mode <transparent|trunk|tag vlan (1-4094) [pri (0-7)]|hybrid def_vlan (1-4094) [def_pri (0-7)]>
+  (Srv profile)  portvlan <eth|wifi|veip> (1-32) vlan VLAN_LIST
+  (Srv profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp>
+  (Srv profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> id (1-128)
+  (Srv profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> name WORD
+  (Srv profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> running-config
+  (Srv profile)  tr069-mgnt (1-8) state <unlock|lock> [acs NAME] [username NAME password NAME] [tag vlan (1-4094) pri (0-7)]
+  (bfd)  profile BFDPROF
+  (config)  [no] ipv6 mld snooping vlan (1-4094) static X:X::X:X interface gigabitethernet <S/P>
+  (config)  [no] ipv6 mld snooping vlan (1-4094) static X:X::X:X interface gpon <S/P>
+  (config)  add onu application (1-128) name WORD desc APPLICATION_DESC port <S/P> priority (0-7) rules <vendor_id|fuzzy_equid|exact_equid> WORD preset-profile (1-128)
+  (config)  add onu application (1-128) name WORD desc APPLICATION_DESC port <S/P> priority (0-7) rules any preset-profile (1-128)
+  (config)  add onu application (1-128) name WORD desc APPLICATION_DESC port <S/P> priority (0-7) rules onu_id WORD [force] preset-profile (1-128)
+  (config)  add onu application (1-128) name WORD desc APPLICATION_DESC port <S/P> priority (0-7) rules sn BEGIN_SN END_SN preset-profile (1-128)
+  (config)  add onu preset-profile (1-128) WORD
+  (config)  alarm <download-file-failed|upload-file-failed|upgrade-file-failed|pon-disable|onu-om-lao-detect|onu-om-lol-detect|dhcp-sn-illegal-server|onu-vlan-pool|onu-number-limit|onu-time-limit|onu-sn-conflict|onu-offline-timeout|mac-flapping|port-link-flap|dhcp-sn-over-rate-limit> <print|record|trap|remote|all> <enable|disable>
+  (config)  alarm <onu-deregister|onu-link-lost|onu-illegal-register|onu-auth-failed|onu-mac-conflict|onu-loid-conflict|onu-critical-event|onu-dying-gasp|onu-link-fault|onu-link-event|onu-event-notific|onu-pon-rxpower-high|onu-pon-rxpower-low|onu-pon-txpower-high|onu-pon-txpower-low|onu-pon-txbias-high|onu-pon-txbias-low|onu-pon-vcc-high|onu-pon-vcc-low|onu-pon-temp-high|onu-pon-temp-low|onu-port-autoneg-failure|onu-port-los|onu-port-failure|onu-port-loopback|onu-pots-failure|onu-port-uplink|rogue-onu|onu-port-no-loopback> <print|record|trap|remote|all> <enable|disable>
+  (config)  alarm <onu-pon-rxpower-no-high|onu-pon-rxpower-no-low|onu-pon-txpower-no-high|onu-pon-txpower-no-low> <print|record|trap|remote|all> <enable|disable>
+  (config)  arp table add A.B.C.D X:X:X:X:X:X <dynamic|static> vlan (1-4094)
+  (config)  arp table add A.B.C.D X:X:X:X:X:X <dynamic|static> wan
+  (config)  auto-backup running-config startup-config <disable>
+  (config)  auto-backup running-config startup-config <enable> fix-time day (1-31) hour (0-23) minute (0-59) tftp-serverip A.B.C.D
+  (config)  auto-backup running-config startup-config <enable> fix-time day (1-31) hour (0-23) minute (0-59) tftp-serverip X:X::X:X
+  (config)  auto-backup running-config startup-config <enable> timeout (60-2678400) tftp-serverip A.B.C.D
+  (config)  auto-backup running-config startup-config <enable> timeout (60-2678400) tftp-serverip X:X::X:X
+  (config)  auto-backup running-config startup-config <enable> week_day mon <enable|disable> tues <enable|disable> wed <enable|disable> thur <enable|disable> fri <enable|disable> sat <enable|disable> sun <enable|disable> hour (0-23) minute (0-59) tftp-serverip A.B.C.D
+  (config)  auto-backup running-config startup-config <enable> week_day mon <enable|disable> tues <enable|disable> wed <enable|disable> thur <enable|disable> fri <enable|disable> sat <enable|disable> sun <enable|disable> hour (0-23) minute (0-59) tftp-serverip X:X::X:X
+  (config)  auto-copy running-config startup-config disable
+  (config)  auto-copy running-config startup-config enable fix-time day (1-31) hour (0-24) minute (0-60)
+  (config)  auto-copy running-config startup-config enable timeout (60-2678400)
+  (config)  auto-copy running-config startup-config enable week_day mon <enable|disable> tues <enable|disable> wed <enable|disable> thur <enable|disable> fri <enable|disable> sat <enable|disable> sun <enable|disable> hour (0-23) minute (0-59)
+  (config)  auto-upgrade clean completed onu [equipment_id WORD]
+  (config)  auto-upgrade onu equipment_id WORD version WORD image FILENAME [tftp A.B.C.D] [task_name WORD] [task_desc WORD]
+  (config)  auto-upgrade onu equipment_id WORD version WORD image FILENAME ftp A.B.C.D USERNAME PASSWORD [task_name WORD] [task_desc WORD]
+  (config)  auto-upgrade onu equipment_id WORD version WORD image FILENAME ftp X:X::X:X USERNAME PASSWORD [task_name WORD] [task_desc WORD]
+  (config)  auto-upgrade onu equipment_id WORD version WORD image FILENAME tftp X:X::X:X [task_name WORD] [task_desc WORD]
+  (config)  auto-upgrade onu special-onu-equid WORD
+  (config)  del onu application (1-128)
+  (config)  del onu preset-profile (1-128)
+  (config)  dhcp-server interface vlan WORD
+  (config)  dhcp-snooping binding X:X:X:X:X:X vlan (1-4094) A.B.C.D interface gigabitEthernet <S/P> lease (60-1000000)
+  (config)  dhcp-snooping binding X:X:X:X:X:X vlan (1-4094) A.B.C.D interface gpon <S/P> lease (60-1000000)
+  (config)  dhcp-snooping vlan (1-4094)
+  (config)  dhcp-snooping vlan (1-4094) to (1-4094)
+  (config)  enable password [(8-8)] LINE
+  (config)  event <config-save|config-erase|download-file-success|upload-file-success|upgrade-file-success|pon-enable|onu-upgrade-over|time-change|user-login|user-logout> <print|record|trap|remote|all> <enable|disable>
+  (config)  event <onu-register|onu-link-discover|onu-auth-success|onu-deauth-success|onu-finish|onu-vlan-pool> <print|record|trap|remote|all> <enable|disable>
+  (config)  interface vlan (1-4094)
+  (config)  interface wan
+  (config)  ip igmp snooping forward vlan (1-4094) mode <flood|forward|strict-forward>
+  (config)  ip igmp snooping group-vlan A.B.C.D vlan (1-4094)
+  (config)  ip igmp snooping group-vlan default vlan (1-4094)
+  (config)  ip igmp snooping mrouter vlan (1-4094) interface gigabitEthernet <S/P>
+  (config)  ip igmp snooping static vlan (1-4094) A.B.C.D interface gigabitEthernet <S/P>
+  (config)  ip igmp snooping static vlan (1-4094) A.B.C.D interface gpon <S/P>
+  (config)  ip route A.B.C.D A.B.C.D A.B.C.D
+  (config)  ip route A.B.C.D A.B.C.D A.B.C.D (1-255)
+  (config)  ip route A.B.C.D/M A.B.C.D
+  (config)  ip route A.B.C.D/M A.B.C.D (1-255)
+  (config)  ip router-id A.B.C.D
+  (config)  ip router-id A.B.C.D vrf NAME
+  (config)  ip-dscp set <(0-63)|auto>
+  (config)  ipv6 gateway X:X::X:X [vlan (1-4094)]
+  (config)  ipv6 mld snooping vlan (1-4094) mroute interface gigabitethernet <S/P>
+  (config)  lldp vlan (1-4094)
+  (config)  log facility <kern|user|mail|daemon|auth|syslog|lpr|news|uucp|cron|local0|local1|local2|local3|local4|local5|local6|local7>
+  (config)  loopback mode <only-alarm|auto-recovery|manual-recovery>
+  (config)  loopback packet-send <port-base|vlan-base> (1-360)
+  (config)  mac address-table <static|dynamic> vlan (1-4094) X:X:X:X:X:X interface gigabitEthernet <S/P>
+  (config)  mac address-table <static|dynamic> vlan (1-4094) X:X:X:X:X:X interface gpon <S/P>
+  (config)  mac address-table pon <add|clear> mac X:X:X:X:X:X vlan (1-4094) [flow (145-4095)] [<static|dynamic>]
+  (config)  no arp table A.B.C.D vlan (1-4094)
+  (config)  no arp table A.B.C.D wan
+  (config)  no auto-upgrade onu equipment_id WORD
+  (config)  no auto-upgrade onu special-onu-equid
+  (config)  no dhcp-snooping vlan (1-4094)
+  (config)  no dhcp-snooping vlan (1-4094) to (1-4094)
+  (config)  no enable password
+  (config)  no ip igmp snooping forward vlan (1-4094) mode
+  (config)  no ip igmp snooping group-vlan A.B.C.D
+  (config)  no ip igmp snooping group-vlan default vlan
+  (config)  no ip igmp snooping mrouter vlan (1-4094) interface gigabitEthernet <S/P>
+  (config)  no ip igmp snooping static vlan (1-4094) A.B.C.D interface gigabitEthernet <S/P>
+  (config)  no ip igmp snooping static vlan (1-4094) A.B.C.D interface gpon <S/P>
+  (config)  no ip igmp snooping vlan (1-4096)
+  (config)  no ip igmp snooping vlan all
+  (config)  no ip route A.B.C.D A.B.C.D A.B.C.D
+  (config)  no ip route A.B.C.D A.B.C.D A.B.C.D (1-255)
+  (config)  no ip route A.B.C.D/M A.B.C.D
+  (config)  no ip route A.B.C.D/M A.B.C.D (1-255)
+  (config)  no ip router-id [A.B.C.D vrf NAME]
+  (config)  no ip router-id [A.B.C.D]
+  (config)  no ipv6 mld snooping vlan (1-4094) mroute interface gigabitethernet <S/P>
+  (config)  no lldp vlan
+  (config)  no log facility [<kern|user|mail|daemon|auth|syslog|lpr|news|uucp|cron|local0|local1|local2|local3|local4|local5|local6|local7>]
+  (config)  no log syslog [<kern|user|mail|daemon|auth|syslog|lpr|news|uucp|cron|local0|local1|local2|local3|local4|local5|local6|local7>] [<emergencies|alerts|critical|errors|warnings|notifications|informational|debugging>]
+  (config)  no mac address-table vlan (1-4094) X:X:X:X:X:X
+  (config)  no onu allowlist sn-auth
+  (config)  no onu allowlist sn-auth WORD
+  (config)  no onu allowlist sn-auth WORD WORD
+  (config)  no onu auto-learn bind <onu-profile|line-profile|srv-profile|alarm-profile|pri-profile|format-profile> WORD
+  (config)  no onu locking allowlist sn-auth
+  (config)  no onu locking allowlist sn-auth SN
+  (config)  no onu locking allowlist sn-auth SN ENDSN
+  (config)  no password
+  (config)  no profile <onu|dba|line|srv|alarm|pri|format|igmp> id (1-128)
+  (config)  no profile <onu|dba|line|srv|alarm|pri|format|igmp> name WORD
+  (config)  no service password-encryption
+  (config)  no snmp-server community WORD
+  (config)  no snmp-server notify profile WORD
+  (config)  no snmp-server user WORD
+  (config)  no vlan (1-4094)
+  (config)  no vlan (1-4094) to (1-4094)
+  (config)  onu allowlist sn-auth WORD [WORD]
+  (config)  onu application (1-128) <enable|disable>
+  (config)  onu auto-delete <enable|disable>
+  (config)  onu auto-delete timeout <(5-44640)|default>
+  (config)  onu auto-learn bind <onu-profile|line-profile|srv-profile|alarm-profile|pri-profile|format-profile> WORD WORD
+  (config)  onu auto-learn bind matching-type <exact|fuzzy>
+  (config)  onu auto-learn default-onu-profile <profile_name WORD|profile_id (0-128)>
+  (config)  onu bip8_alarm_threshold (1-255)
+  (config)  onu optical threshold-custom rx <enable|disable>
+  (config)  onu optical threshold-custom rx-bad WORD
+  (config)  onu optical threshold-custom rx-good WORD
+  (config)  onu optical threshold-custom tx <enable|disable>
+  (config)  onu optical threshold-custom tx-bad WORD
+  (config)  onu optical threshold-custom tx-good WORD
+  (config)  onu search KEY_STRING [by <sn|sn_pw|loid|loid_pw|desc>]
+  (config)  onu statistics monitor <enable|disable>
+  (config)  onu statistics monitor interval (15-3600)
+  (config)  onu-schedule-reboot <enable|disable>
+  (config)  password [(8-8)] LINE
+  (config)  preset-profile (1-128) iphost del
+  (config)  preset-profile (1-128) iphost vlan (0-4094) dhcp [dns1 A.B.C.D [dns2 A.B.C.D]]
+  (config)  preset-profile (1-128) iphost vlan (0-4094) static-ip A.B.C.D A.B.C.D [A.B.C.D] [dns1 A.B.C.D [dns2 A.B.C.D]]
+  (config)  preset-profile (1-128) mvlan add VLAN_LIST
+  (config)  preset-profile (1-128) mvlan add tag-strip eth (1-32)
+  (config)  preset-profile (1-128) mvlan del
+  (config)  preset-profile (1-128) service (1-5) bind lan [lan1] [lan2] [lan3] [lan4] [lan5] [lan6] [lan7] [lan8]
+  (config)  preset-profile (1-128) service (1-5) bind ssid [ssid1] [ssid2] [ssid3] [ssid4] [ssid5] [ssid6] [ssid7] [ssid8]
+  (config)  preset-profile (1-128) service (1-5) bridge <internet|other> vlan (1-4093) <tag|untag>
+  (config)  preset-profile (1-128) service (1-5) route <internet|voip|multicast|tr069|other> vlan (1-4093) <tag|untag> dhcp
+  (config)  preset-profile (1-128) service (1-5) route <internet|voip|multicast|tr069|other> vlan (1-4093) <tag|untag> pppoe user NAME pwd WORD [server NAME]
+  (config)  preset-profile (1-128) service (1-5) route <internet|voip|multicast|tr069|other> vlan (1-4093) <tag|untag> static ip A.B.C.D mask A.B.C.D gw A.B.C.D dns primary A.B.C.D secondary A.B.C.D
+  (config)  preset-profile (1-128) service del
+  (config)  preset-profile (1-128) ssid (1-8) name SSID_NAME [{pwd PASSWD}] [{hide}]
+  (config)  preset-profile (1-128) ssid del
+  (config)  profile alarm [id (1-128)] [name WORD]
+  (config)  profile dba [id (1-128)] [name WORD]
+  (config)  profile format [id (1-128)] [name WORD]
+  (config)  profile igmp [id (1-128)] [name WORD]
+  (config)  profile line [id (1-128)] [name WORD]
+  (config)  profile onu [id (1-128)] [name WORD]
+  (config)  profile pri [id (1-128)] [name WORD]
+  (config)  profile srv [id (1-128)] [name WORD]
+  (config)  remote server <ip A.B.C.D|ADDRESS> [secondary-server ADDRESS] [username USERNAME password PASSWORD]
+  (config)  remove pre-config-onu all
+  (config)  rogue-onu-detect disable
+  (config)  rogue-onu-detect enable auto-shutdown <enable|disable>
+  (config)  service password-encryption
+  (config)  set onu locking allowlist sn-auth KEY SN [ENDSN]
+  (config)  set vlan max-count (0-4095)
+  (config)  show auto-backup running-config startup-config
+  (config)  show auto-copy running-config startup-config
+  (config)  show auto-upgrade <status|config>
+  (config)  show ip igmp snooping group-vlan
+  (config)  show ip igmp snooping mrouter vlan (1-4096)
+  (config)  show ip igmp snooping mrouter vlan all
+  (config)  show ip igmp snooping user-vlan
+  (config)  show ip igmp snooping vlan (1-4096)
+  (config)  show ip igmp snooping vlan all
+  (config)  show ipv6 dhcp interface vlan (1-4094)
+  (config)  show ipv6 mld snooping user-vlan
+  (config)  show mac address-table vlan (1-4094)
+  (config)  show mac address-table vlan (1-4094) mac X:X:X:X:X:X
+  (config)  show mmap profile table
+  (config)  show onu allowlist
+  (config)  show onu application (1-128)
+  (config)  show onu auto-delete
+  (config)  show onu auto-learn bind [onu-profile|line-profile|srv-profile|alarm-profile|pri-profile|format-profile|matching-type]
+  (config)  show onu auto-learn default-onu-profile
+  (config)  show onu locking allowlist
+  (config)  show onu optical threshold-config
+  (config)  show onu preset-profile [{(1-128)}]
+  (config)  show onu statistics monitor status
+  (config)  show onu upgrade task detail
+  (config)  show onu-schedule-reboot
+  (config)  show pre-config-onu
+  (config)  show profile <onu|dba|line|srv|alarm|pri|format|igmp>
+  (config)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> id (1-128)
+  (config)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> name WORD
+  (config)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> running-config
+  (config)  show rogue-onu-detect config
+  (config)  show rogue-onu-detect info [pon 1]
+  (config)  show snmp-server community
+  (config)  show snmp-server notify profile
+  (config)  show snmp-server user [WORD]
+  (config)  show syslog autosave period
+  (config)  show upgrade onu-firmware
+  (config)  show upgrade onu_max
+  (config)  show vlan
+  (config)  show vlan (1-4094)
+  (config)  show vlan count
+  (config)  show vlan dot1q-tunnel information
+  (config)  show vlan dot1q-tunnel vlan-mapping
+  (config)  show vlan dot1q-tunnel vlan-mapping interface gigabitethernet <S/P>
+  (config)  show vlan max-count
+  (config)  show vlan mode
+  (config)  snmp-server community WORD <ro|rw> [A.B.C.D]
+  (config)  snmp-server host A.B.C.D [udp-port (1-65535)] version 3 [<trap|inform>] user WORD <noauth|authnopriv|authpriv> [timeout (1-400000000)] [retries (1-100)]
+  (config)  snmp-server host X:X::X:X [udp-port (1-65535)] version 3 [<trap|inform>] user WORD <noauth|authnopriv|authpriv> [timeout (1-400000000)] [retries (1-100)]
+  (config)  snmp-server notify profile WORD WORD
+  (config)  snmp-server user WORD WORD v3
+  (config)  snmp-server user WORD WORD v3 auth <md5|sha> WORD [encrypt des WORD]
+  (config)  sshd
+  (config)  syslog autosave <minutes|hours|days> (0-65535)
+  (config)  syslog autosave close
+  (config)  syslog autosave seconds (11-65535)
+  (config)  upgrade onu_max (1-64)
+  (config)  upgrade select pon 1 onu <all|WORD>
+  (config)  user manager
+  (config)  vlan (1-4094)
+  (config)  vlan (1-4094) to (1-4094)
+  (config)  vlan dot1q-tunnel tpid XXXX
+  (config)  web minimalist-language <auto|english|chinese|portuguese|spanish|indonesian>
+  (debug-mode)  debug vlan-cfg [enable|disable]
+  (debug-mode)  debug wan dhcp <on|off>
+  (debug-mode)  debug wan pppoe <on|off>
+  (debug-mode)  get variable_vlan
+  (debug-mode)  no cust super_onu UBOOTKEY
+  (debug-mode)  onu upgrade debug <on|off>
+  (debug-mode)  set cust super_onu UBOOTKEY [unlock_onu_max (1-2048)]
+  (debug-mode)  set license key CREDITKEY onu-limit (1-2048)
+  (debug-mode)  set license key CREDITKEY time-limit (0-7776000) [onu-limit (1-2048)]
+  (debug-mode)  set variable_vlan disable
+  (debug-mode)  set variable_vlan enable <1-3582>
+  (debug-mode)  show cust super_onu UBOOTKEY
+  (debug-mode)  show ip route list
+  (enable)  show evpn access-vlan [(1-4094)|detail] [json]
+  (enable)  show ip igmp snooping mrouter vlan (1-4096)
+  (enable)  show ip igmp snooping vlan (1-4096)
+  (gpon debug)  gponapp debug <socket_packet|onu_reg_sync|onu_auth|pon_cfg|pon_api|omci_cfg|psg|ploam|bcm68621|mutex|onu_reg|onu_upgrade> <on|off>
+  (gpon debug)  gponapp show <all|pon|onu|ver|mgmt_rec|psg|profile|memory|rogue> [dest <console|file>]
+  (gpon debug)  onu rapid-deployment debug <on|off>
+  (interface)  ipv6 nd prefix X:X::X:X/M [<(0-4294967295)|infinite> <(0-4294967295)|infinite>] [<router-address|off-link [no-autoconfig]|no-autoconfig [off-link]>]
+  (interface)  no ipv6 nd prefix X:X::X:X/M [<(0-4294967295)|infinite> <(0-4294967295)|infinite>] [<router-address|off-link [no-autoconfig]|no-autoconfig [off-link]>]
+  (port interface config)  dot1q-tunnel vlan-mapping (1-4094) any (1-4094) any <db-tagged|one-tagged>
+  (port interface config)  ip igmp snooping user-vlan (1-4094) group-vlan (1-4094) <tagged|untagged>
+  (port interface config)  ipv6 mld snooping user-vlan (1-4094) group-vlan (1-4094)
+  (port interface config)  no dot1q-tunnel vlan-mapping (1-4094) (1-4094)
+  (port interface config)  no ip igmp snooping group-vlan (1-4094)
+  (port interface config)  no ipv6 mld snooping user-vlan (1-4094) group-vlan (1-4094)
+  (port interface config)  no switchport <access|hybrid|trunk> vlan (1-4094)
+  (port interface config)  no switchport <access|hybrid|trunk> vlan (1-4094) to (1-4094)
+  (port interface config)  nway <force|auto>
+  (port interface config)  spanning-tree cost <auto|(1-200000000)>
+  (port interface config)  spanning-tree point-to-point auto
+  (port interface config)  speed <10000|1000|100|10|auto>
+  (port interface config)  switchport access vlan (1-4094)
+  (port interface config)  switchport hybrid pvid vlan (1-4094)
+  (port interface config)  switchport hybrid vlan (1-4094) <tagged|untagged>
+  (port interface config)  switchport hybrid vlan (1-4094) to (1-4094) <tagged|untagged>
+  (port interface config)  switchport trunk pvid vlan (1-4094)
+  (port interface config)  switchport trunk vlan (1-4094)
+  (port interface config)  switchport trunk vlan (1-4094) to (1-4094)
+  (slot_pon)  [no] onu (1-64) tcont (1-255) [name WORD] [dba WORD]
+  (slot_pon)  [no] onu <all|WORD> gemport (1-255) tcont (1-255) [gemport_name NAME] [portid (129-4095)]
+  (slot_pon)  [no] onu ONU_LIST mvlan tag-strip eth (1-32)
+  (slot_pon)  als restart mode <auto|manual>
+  (slot_pon)  clear alarm oamlog onu (1-64)
+  (slot_pon)  ip igmp snooping user-vlan (1-4094) group-vlan (1-4094) <tagged|untagged>
+  (slot_pon)  ipv6 mld snooping user-vlan (1-4094) group-vlan (1-4094)
+  (slot_pon)  no ip igmp snooping group-vlan (1-4094)
+  (slot_pon)  no ipv6 mld snooping user-vlan (1-4094) group-vlan (1-4094)
+  (slot_pon)  no onu (1-64)
+  (slot_pon)  no onu (1-64) igmp <eth|veip> (1-32) bandwidth
+  (slot_pon)  no onu (1-64) igmp <eth|veip> (1-32) max-group
+  (slot_pon)  no onu (1-64) igmp <eth|veip> (1-32) profile NAME
+  (slot_pon)  no onu (1-64) pri <nat_type|upnp>
+  (slot_pon)  no onu (1-64) pri <onu_selfdiag_alarm|onu_selfdiagnosis|onu_selfdiag_capture>
+  (slot_pon)  no onu (1-64) pri <tr069_mng|tr069_stun>
+  (slot_pon)  no onu (1-64) pri ap
+  (slot_pon)  no onu (1-64) pri dhcp_server
+  (slot_pon)  no onu (1-64) pri dhcp_server_ipv6
+  (slot_pon)  no onu (1-64) pri mqtt
+  (slot_pon)  no onu (1-64) pri onu_mode
+  (slot_pon)  no onu (1-64) pri pots <(1-255)|all> <h248_user_tid|sip_user_config|port_manage>
+  (slot_pon)  no onu (1-64) pri pots <(1-255)|all> parameter
+  (slot_pon)  no onu (1-64) pri reset_button
+  (slot_pon)  no onu (1-64) pri sip_global_param
+  (slot_pon)  no onu (1-64) pri username
+  (slot_pon)  no onu (1-64) pri voip_global_param
+  (slot_pon)  no onu (1-64) pri voip_timer
+  (slot_pon)  no onu (1-64) pri wifi_ssid (1-8)
+  (slot_pon)  no onu (1-64) pri wifi_switch (1-2)
+  (slot_pon)  no onu <all|ONU_LIST> desc
+  (slot_pon)  no onu <all|ONU_LIST> iphost (1-255)
+  (slot_pon)  no onu <all|ONU_LIST> profile
+  (slot_pon)  no onu <all|WORD> portvlan <eth|veip|wifi> (1-32) <mode|vlan VLAN_LIST>
+  (slot_pon)  no onu <all|WORD> service NAME gemport (1-255)
+  (slot_pon)  no onu ONU_LIST mvlan <all|VLAN_LIST>
+  (slot_pon)  no onu WORD
+  (slot_pon)  no onu WORD service-port (1-128) gemport (1-128)
+  (slot_pon)  no onu auto-learn [<line-profile|srv-profile|alarm-profile|pri-profile|format-profile>]
+  (slot_pon)  no onu offline
+  (slot_pon)  no onu-schedule-reboot onu ONU_LIST
+  (slot_pon)  onu (1-64) eth (1-32) [state <disable|enable>] [pause-time (0-65535)] [speed <auto|full-10|full-100|full-1000|half-10|half-100|half-1000|full-10g|full-2_5g|full-5g|full-25g|full-40g>]
+  (slot_pon)  onu (1-64) igmp <eth|veip> (1-32) bandwidth (1-4294967295) enforce <enable|disable>
+  (slot_pon)  onu (1-64) igmp <eth|veip> (1-32) max-group (1-65535)
+  (slot_pon)  onu (1-64) igmp <eth|veip> (1-32) profile WORD
+  (slot_pon)  onu (1-64) max-mac-learn (0-128) gemport (1-255)
+  (slot_pon)  onu (1-64) pri <factory_reset|mac_clean|save_config>
+  (slot_pon)  onu (1-64) pri <port_isolate|spanning_tree|catv|igmp> <enable|disable>
+  (slot_pon)  onu (1-64) pri acl <telnet|ftp|http|https|tftp|ping|ssh> control disable
+  (slot_pon)  onu (1-64) pri acl <telnet|ftp|http|https|tftp|ping|ssh> control enable lan <enable|disable> wan disable [port (0-65535)]
+  (slot_pon)  onu (1-64) pri acl <telnet|ftp|http|https|tftp|ping|ssh> control enable lan <enable|disable> wan enable ipv4_control disable ipv6_control disable [port (0-65535)]
+  (slot_pon)  onu (1-64) pri acl <telnet|ftp|http|https|tftp|ping|ssh> control enable lan <enable|disable> wan enable ipv4_control disable ipv6_control enable X:X::X:X/M [port (0-65535)]
+  (slot_pon)  onu (1-64) pri acl <telnet|ftp|http|https|tftp|ping|ssh> control enable lan <enable|disable> wan enable ipv4_control enable A.B.C.D A.B.C.D ipv6_control disable [port (0-65535)]
+  (slot_pon)  onu (1-64) pri acl <telnet|ftp|http|https|tftp|ping|ssh> control enable lan <enable|disable> wan enable ipv4_control enable A.B.C.D A.B.C.D ipv6_control enable X:X::X:X/M [port (0-65535)]
+  (slot_pon)  onu (1-64) pri acl show
+  (slot_pon)  onu (1-64) pri ap disable
+  (slot_pon)  onu (1-64) pri ap enable [vlan (0-4095)]
+  (slot_pon)  onu (1-64) pri dhcp_server A.B.C.D A.B.C.D disable
+  (slot_pon)  onu (1-64) pri dhcp_server A.B.C.D A.B.C.D enable (0-4294967295) A.B.C.D A.B.C.D <pc|camera|stb|ip_phone> <fromisp|hgwproxy> A.B.C.D
+  (slot_pon)  onu (1-64) pri dhcp_server A.B.C.D A.B.C.D enable (0-4294967295) A.B.C.D A.B.C.D <pc|camera|stb|ip_phone> A.B.C.D A.B.C.D A.B.C.D
+  (slot_pon)  onu (1-64) pri dhcp_server A.B.C.D A.B.C.D relay A.B.C.D
+  (slot_pon)  onu (1-64) pri dhcp_server ipv6 X:X::X:X [prefix_mode static X:X::X:X/M] server disable [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server ipv6 X:X::X:X [prefix_mode static X:X::X:X/M] server enable preference (0-4294967295) valid (0-4294967295) HHHH:HHHH:HHHH:HHHH HHHH:HHHH:HHHH:HHHH <pc|camera|stb|ip_phone> [dns X:X::X:X X:X::X:X] gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server ipv6 X:X::X:X [prefix_mode static X:X::X:X/M] server enable preference (0-4294967295) valid (0-4294967295) HHHH:HHHH:HHHH:HHHH HHHH:HHHH:HHHH:HHHH <pc|camera|stb|ip_phone> hgwproxy gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server ipv6 X:X::X:X [prefix_mode static X:X::X:X/M] server enable preference (0-4294967295) valid (0-4294967295) HHHH:HHHH:HHHH:HHHH HHHH:HHHH:HHHH:HHHH <pc|camera|stb|ip_phone> wanconnection (1-8) gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server ipv6 X:X::X:X [prefix_mode static X:X::X:X/M] server relay X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server ipv6 X:X::X:X prefix_mode auto server disable [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server ipv6 X:X::X:X prefix_mode auto server enable preference (0-4294967295) valid (0-4294967295) HHHH:HHHH:HHHH:HHHH HHHH:HHHH:HHHH:HHHH <pc|camera|stb|ip_phone> [dns X:X::X:X X:X::X:X] gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server ipv6 X:X::X:X prefix_mode auto server enable preference (0-4294967295) valid (0-4294967295) HHHH:HHHH:HHHH:HHHH HHHH:HHHH:HHHH:HHHH <pc|camera|stb|ip_phone> hgwproxy gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server ipv6 X:X::X:X prefix_mode auto server enable preference (0-4294967295) valid (0-4294967295) HHHH:HHHH:HHHH:HHHH HHHH:HHHH:HHHH:HHHH <pc|camera|stb|ip_phone> wanconnection (1-8) gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server ipv6 X:X::X:X prefix_mode auto server relay X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server ipv6 X:X::X:X prefix_mode wan_delegated (1-8) server disable [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server ipv6 X:X::X:X prefix_mode wan_delegated (1-8) server enable preference (0-4294967295) valid (0-4294967295) HHHH:HHHH:HHHH:HHHH HHHH:HHHH:HHHH:HHHH <pc|camera|stb|ip_phone> [dns X:X::X:X X:X::X:X] gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server ipv6 X:X::X:X prefix_mode wan_delegated (1-8) server enable preference (0-4294967295) valid (0-4294967295) HHHH:HHHH:HHHH:HHHH HHHH:HHHH:HHHH:HHHH <pc|camera|stb|ip_phone> hgwproxy gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server ipv6 X:X::X:X prefix_mode wan_delegated (1-8) server enable preference (0-4294967295) valid (0-4294967295) HHHH:HHHH:HHHH:HHHH HHHH:HHHH:HHHH:HHHH <pc|camera|stb|ip_phone> wanconnection (1-8) gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server ipv6 X:X::X:X prefix_mode wan_delegated (1-8) server relay X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server_ipv6 X:X::X:X [prefix_mode static X:X::X:X/M] server disable [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server_ipv6 X:X::X:X [prefix_mode static X:X::X:X/M] server enable preference (0-4294967295) valid (0-4294967295) WORD WORD <pc|camera|stb|ip_phone> [dns X:X::X:X X:X::X:X] gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server_ipv6 X:X::X:X [prefix_mode static X:X::X:X/M] server enable preference (0-4294967295) valid (0-4294967295) WORD WORD <pc|camera|stb|ip_phone> hgwproxy gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server_ipv6 X:X::X:X [prefix_mode static X:X::X:X/M] server enable preference (0-4294967295) valid (0-4294967295) WORD WORD <pc|camera|stb|ip_phone> wanconnection (1-8) gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server_ipv6 X:X::X:X [prefix_mode static X:X::X:X/M] server relay X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server_ipv6 X:X::X:X prefix_mode auto server disable [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server_ipv6 X:X::X:X prefix_mode auto server enable preference (0-4294967295) valid (0-4294967295) WORD WORD <pc|camera|stb|ip_phone> [dns X:X::X:X X:X::X:X] gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server_ipv6 X:X::X:X prefix_mode auto server enable preference (0-4294967295) valid (0-4294967295) WORD WORD <pc|camera|stb|ip_phone> hgwproxy gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server_ipv6 X:X::X:X prefix_mode auto server enable preference (0-4294967295) valid (0-4294967295) WORD WORD <pc|camera|stb|ip_phone> wanconnection (1-8) gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server_ipv6 X:X::X:X prefix_mode auto server relay X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server_ipv6 X:X::X:X prefix_mode wan_delegated (1-8) server disable [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server_ipv6 X:X::X:X prefix_mode wan_delegated (1-8) server enable preference (0-4294967295) valid (0-4294967295) WORD WORD <pc|camera|stb|ip_phone> [dns X:X::X:X X:X::X:X] gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server_ipv6 X:X::X:X prefix_mode wan_delegated (1-8) server enable preference (0-4294967295) valid (0-4294967295) WORD WORD <pc|camera|stb|ip_phone> hgwproxy gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server_ipv6 X:X::X:X prefix_mode wan_delegated (1-8) server enable preference (0-4294967295) valid (0-4294967295) WORD WORD <pc|camera|stb|ip_phone> wanconnection (1-8) gw X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri dhcp_server_ipv6 X:X::X:X prefix_mode wan_delegated (1-8) server relay X:X::X:X [ra manage <enable|disable> other <enable|disable> max_interval (1-1800) min_interval (1-1800)]
+  (slot_pon)  onu (1-64) pri equid WORD
+  (slot_pon)  onu (1-64) pri firewall level <disable|low|middle|high>
+  (slot_pon)  onu (1-64) pri h248_param_config heartbeat mode <disable|h248> cycle (1-65535) count (1-65535)
+  (slot_pon)  onu (1-64) pri h248_param_config mg_port (1-65535) mgc_ip A.B.C.D mgc_port (1-65535) [bak_mgc_ip A.B.C.D bak_mgc_port (1-65535)]
+  (slot_pon)  onu (1-64) pri h248_param_config reg_mode <realm_name|device_name> mid WORD
+  (slot_pon)  onu (1-64) pri h248_param_config reg_mode ip_addr
+  (slot_pon)  onu (1-64) pri lan_bind_mode port (1-255) mode port
+  (slot_pon)  onu (1-64) pri lan_bind_mode port (1-255) mode vlan lanVlan0 (1-4094) wanVlan0 (1-4094) [lanVlan1 (1-4094) wanVlan1 (1-4094)] [lanVlan2 (1-4094) wanVlan2 (1-4094)] [lanVlan3 (1-4094) wanVlan3 (1-4094)]
+  (slot_pon)  onu (1-64) pri loopback_detect <enable|disable> [loopcheck_interval (1-60000)] [recover_interval (1-1800)] [ethernet_type WORD] [vlan (1-4094)] [dest_mac_type <broadcast_address|bpdu_address>] [port_closing_time (1-1800)] [alarm <enable|disable>] [portdislooped <enable|disable>]
+  (slot_pon)  onu (1-64) pri mac_aging_time (0-65535)
+  (slot_pon)  onu (1-64) pri mac_limit pon (0-65535) lan (0-65535)
+  (slot_pon)  onu (1-64) pri mqtt status disable
+  (slot_pon)  onu (1-64) pri mqtt status enable ADDRESS USERNAME PASSWORD [ID]
+  (slot_pon)  onu (1-64) pri nat_type <nat1|nat2|nat3|nat4-napt>
+  (slot_pon)  onu (1-64) pri onu_mode status disable
+  (slot_pon)  onu (1-64) pri onu_mode status enable mode <sfu|hgu|auto>
+  (slot_pon)  onu (1-64) pri onu_selfdiag_alarm <general_err_warning|critical_err_warning|disable>
+  (slot_pon)  onu (1-64) pri onu_selfdiag_capture session_id (1-255) transport_protocol <ftp|tftp> capture_mode <counting|circulation> capture_interface <any|(1-8)> action <stop_capturing|start_capturing|upload_log> upload_url WORD use_wan (1-8)
+  (slot_pon)  onu (1-64) pri onu_selfdiagnosis session_id (1-255) transport_protocol <ftp|tftp> diagnostic_method <all|port_status|pon_status|wan_status|sys_status|wan_params|dns_status|dhcp_config|pppoe_status|route_status> diagnostic_action <action_diag|action_fix> action <perform_diagnostic|upload_log> upload_url WORD use_wan (1-8)
+  (slot_pon)  onu (1-64) pri pots <(1-255)|all> action <register|unregister>
+  (slot_pon)  onu (1-64) pri pots <(1-255)|all> h248_user_tid WORD
+  (slot_pon)  onu (1-64) pri pots <(1-255)|all> parameter vad <enable|disable> echo_cancel <enable|disable> input_gain WORD output_gain WORD dtmf_mode <transparent|rfc2833|rfc2833_redundancy|outband>
+  (slot_pon)  onu (1-64) pri pots <(1-255)|all> sip_user_config active disable
+  (slot_pon)  onu (1-64) pri pots <(1-255)|all> sip_user_config active enable account WORD name WORD pwd WORD
+  (slot_pon)  onu (1-64) pri reset_button <enable|disable>
+  (slot_pon)  onu (1-64) pri sip_digit_map WORD
+  (slot_pon)  onu (1-64) pri sip_global_param mg_port (0-65535) proxy_serv WORD (0-65535) [backup_proxy_serv WORD (0-65535)] reg_serv WORD (0-65535) [backup_reg_serv WORD (0-65535)] out_bound_serv WORD (0-65535) reg_interval (0-10000000) heartbeat disable
+  (slot_pon)  onu (1-64) pri sip_global_param mg_port (0-65535) proxy_serv WORD (0-65535) [backup_proxy_serv WORD (0-65535)] reg_serv WORD (0-65535) [backup_reg_serv WORD (0-65535)] out_bound_serv WORD (0-65535) reg_interval (1-10000000) heartbeat <active|passive> (1-65535) (1-65535)
+  (slot_pon)  onu (1-64) pri speed_limit us (1-1244000) ds (1-2488000)
+  (slot_pon)  onu (1-64) pri tr069_mng disable
+  (slot_pon)  onu (1-64) pri tr069_mng enable acs_server url WORD username WORD password WORD certificate <enable|disable> inform disable reverse_connection username WORD password WORD [ID]
+  (slot_pon)  onu (1-64) pri tr069_mng enable acs_server url WORD username WORD password WORD certificate <enable|disable> inform enable inform_interval (0-4294967295) reverse_connection username WORD password WORD [ID]
+  (slot_pon)  onu (1-64) pri tr069_stun disable
+  (slot_pon)  onu (1-64) pri tr069_stun enable server WORD port (1-65535) [username WORD password WORD]
+  (slot_pon)  onu (1-64) pri type (1024-4096)
+  (slot_pon)  onu (1-64) pri upnp status disable
+  (slot_pon)  onu (1-64) pri upnp status enable wan_index (1-8)
+  (slot_pon)  onu (1-64) pri username admin_control disable user_control enable WORD WORD
+  (slot_pon)  onu (1-64) pri username admin_control enable WORD WORD user_control disable
+  (slot_pon)  onu (1-64) pri username admin_control enable WORD WORD user_control enable WORD WORD
+  (slot_pon)  onu (1-64) pri voip_global_param ip_mode dhcp option60 disable [svlan WORD (0-4095) (0-7)] [cvlan WORD (0-4095) (0-7)] [rtp_svlan WORD (0-4095) (0-7)] [rtp_cvlan WORD (0-4095) (0-7)]
+  (slot_pon)  onu (1-64) pri voip_global_param ip_mode dhcp option60 enable base WORD value WORD [svlan WORD (0-4095) (0-7)] [cvlan WORD (0-4095) (0-7)] [rtp_svlan WORD (0-4095) (0-7)] [rtp_cvlan WORD (0-4095) (0-7)]
+  (slot_pon)  onu (1-64) pri voip_global_param ip_mode pppoe <auto|chap|pap> username WORD password WORD [svlan WORD (0-4095) (0-7)] [cvlan WORD (0-4095) (0-7)] [rtp_svlan WORD (0-4095) (0-7)] [rtp_cvlan WORD (0-4095) (0-7)]
+  (slot_pon)  onu (1-64) pri voip_global_param ip_mode static ip A.B.C.D mask A.B.C.D gw A.B.C.D [rtp_ip A.B.C.D mask A.B.C.D gw A.B.C.D] dns primary A.B.C.D [secondary A.B.C.D] [svlan WORD (0-4095) (0-7)] [cvlan WORD (0-4095) (0-7)] [rtp_svlan WORD (0-4095) (0-7)] [rtp_cvlan WORD (0-4095) (0-7)]
+  (slot_pon)  onu (1-64) pri voip_timer max_waiting_timer (0-254) start_timer (1-65535) long_timer (1-65535) short_timer (1-65535) digitmap_notify <enable|disable>
+  (slot_pon)  onu (1-64) pri wan_adv <commit|show>
+  (slot_pon)  onu (1-64) pri wan_adv add <bridge|route>
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) bind lan [lan1] [lan2] [lan3] [lan4] [lan5] [lan6] [lan7] [lan8]
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) bind ssid [ssid1] [ssid2] [ssid3] [ssid4] [ssid5] [ssid6] [ssid7] [ssid8] [ssid9] [ssid10]
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) bridge <internet|other> [mtu (576-1500)] [<ipv4|ipv6|both>]
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) delete
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) route both client_address <enable|disable> client_prifix <enable|disable>
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) route both dhcp [dns-v4 primary A.B.C.D secondary A.B.C.D] [nat <enable|disable>] [nat66 <enable|disable>] [dns-v6 primary X:X::X:X secondary X:X::X:X] [slaac <enable|disable>]
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) route both pppoe proxy <enable|disable> user WORD pwd WORD [server WORD] mode <auto|payload> [nat <enable|disable>] [nat66 <enable|disable>] [slaac <enable|disable>]
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) route both static ipv4 A.B.C.D mask A.B.C.D gw A.B.C.D dns primary A.B.C.D secondary A.B.C.D [nat <enable|disable>] [nat66 <enable|disable>] ipv6 X:X::X:X/M gw X:X::X:X dns primary X:X::X:X secondary X:X::X:X
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) route ipv4 dhcp [dns primary A.B.C.D secondary A.B.C.D] [nat <enable|disable>]
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) route ipv4 pppoe proxy <enable|disable> user WORD pwd WORD [server WORD] mode <auto|payload> [nat <enable|disable>]
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) route ipv4 static ip A.B.C.D mask A.B.C.D gw A.B.C.D dns primary A.B.C.D secondary A.B.C.D [nat <enable|disable>]
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) route ipv6 client_address <enable|disable> client_prifix <enable|disable> ds_lite disable
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) route ipv6 client_address <enable|disable> client_prifix <enable|disable> ds_lite enable aftr_mode dhcpv6
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) route ipv6 client_address <enable|disable> client_prifix <enable|disable> ds_lite enable aftr_mode manual address_type <ipv6|dns> WORD
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) route ipv6 dhcp [dns primary X:X::X:X secondary X:X::X:X] [nat66 <enable|disable>] [slaac <enable|disable>]
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) route ipv6 pppoe proxy <enable|disable> user WORD pwd WORD [server WORD] mode <auto|payload> [nat66 <enable|disable>] [slaac <enable|disable>]
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) route ipv6 static [nat66 <enable|disable>] ip X:X::X:X/M gw X:X::X:X dns primary X:X::X:X secondary X:X::X:X
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) route mode <internet|multicast|tr069|tr069_internet|tr069_voip|voip_internet|tr069_voip_internet|voip|other> [mtu (576-1500)]
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) vlan disable [qos <enable|disable>]
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) vlan tag [wan_vlan (1-4095) (0-7)] [qinq tpid (1-65534) vlan (1-4095) cos (0-7)] [qos <enable|disable>]
+  (slot_pon)  onu (1-64) pri wan_adv index (1-8) vlan transparent [wan_vlan (1-4095) (0-7)] [tranlation (1-4095) (0-7)] [qinq tpid (1-65534) vlan (1-4095) cos (0-7)] [qos <enable|disable>]
+  (slot_pon)  onu (1-64) pri wan_conn <commit|show>
+  (slot_pon)  onu (1-64) pri wan_conn add <bridge|route> [qos <enable|disable>]
+  (slot_pon)  onu (1-64) pri wan_conn index (1-8) bridge <internet|other> [bind_lan (0-255)] [bind_ssid (0-255)] [qos <enable|disable>]
+  (slot_pon)  onu (1-64) pri wan_conn index (1-8) delete
+  (slot_pon)  onu (1-64) pri wan_conn index (1-8) route <internet|multicast|tr069|tr069_internet|tr069_voip|voip_internet|tr069_voip_internet|voip|other> [bind_lan (0-255)] [bind_ssid (0-255)] [qos <enable|disable>] [nat <enable|disable>] [mtu (576-1500)] dhcp
+  (slot_pon)  onu (1-64) pri wan_conn index (1-8) route <internet|multicast|tr069|tr069_internet|tr069_voip|voip_internet|tr069_voip_internet|voip|other> [bind_lan (0-255)] [bind_ssid (0-255)] [qos <enable|disable>] [nat <enable|disable>] [mtu (576-1500)] pppoe proxy <enable|disable> user WORD pwd WORD mode <auto|payload> [server WORD]
+  (slot_pon)  onu (1-64) pri wan_conn index (1-8) route <internet|multicast|tr069|tr069_internet|tr069_voip|voip_internet|tr069_voip_internet|voip|other> [bind_lan (0-255)] [bind_ssid (0-255)] [qos <enable|disable>] [nat <enable|disable>] [mtu (576-1500)] static ip A.B.C.D mask A.B.C.D gw A.B.C.D dns primary A.B.C.D secondary A.B.C.D
+  (slot_pon)  onu (1-64) pri wan_conn index (1-8) vlan disable
+  (slot_pon)  onu (1-64) pri wan_conn index (1-8) vlan enable vid (1-4094) pri (0-7)
+  (slot_pon)  onu (1-64) pri wifi_ssid (1-8) disable name WORD
+  (slot_pon)  onu (1-64) pri wifi_ssid (1-8) name WORD hide <enable|disable> auth_mode <open|shared|wepauto> encrypt_type wep encryptionlevel <el64|el128> keyindex (1-4) key1 WORD key2 WORD key3 WORD key4 WORD
+  (slot_pon)  onu (1-64) pri wifi_ssid (1-8) name WORD hide <enable|disable> auth_mode <wpapsk|wpa2psk|wpapsk_wpa2psk|wpa3psk|wpa2psk_wpa3psk> encrypt_type <tkip|aes|tkipaes> shared_key WORD rekey_interval (0-4194303)
+  (slot_pon)  onu (1-64) pri wifi_ssid (1-8) name WORD hide <enable|disable> auth_mode <wpa|wpa2|wpa_wpa2> encrypt_type <tkip|aes|tkipaes> radius serverip_type <ipv4|ipv6|ipv4z|ipv6z|dns> serverip WORD serverip_prefixlen (0-255) port (0-65535) key WORD
+  (slot_pon)  onu (1-64) pri wifi_ssid (1-8) name WORD hide <enable|disable> auth_mode open encrypt_type none
+  (slot_pon)  onu (1-64) pri wifi_switch (1-2) disable
+  (slot_pon)  onu (1-64) pri wifi_switch (1-2) enable<fcc|etsi|ic|spain|france|mkk|isreal|mkk2|mkk3|russian|cn|global|world-wide|mkk1|ncc|united_arab_emirates|albania|armenia|argentina|austria|australia|azerbaijan|bangladesh|belgium|bulgaria|bahrain|brunei|bolivia|brazil|belarus|belize|canada|switzerland|chile|colombia|costa_rica|curacao|cyprus|czech_republic|germany|denmark|dominican_republic|ecuador|estonia|egypt|finland|united_kingdom|georgia|greece|guatemala|hong_kong|honduras|croatia|hungary|indonesia|ireland|india|iraq|iran|iceland|italy|jordan|japan|kenya|north_korea|south_korea|kuwait|kazakhstan|laos|lebanon|liechtenstein|sri_lanka|lithuania|luxembourg|latvia|morocco|monaco|moldova|north_macedonia|macao|malta|mexico|malaysia|nigeria|netherlands|norway|nepal|new_zealand|oman|panama|peru|papua_new_guinea|philippines|pakistan|poland|puerto_rico|palestine|portugal|paraguay|qatar|romania|serbia|saudi_arabia|seychelles|sweden|singapore|slovenia|slovakia|senegal|south_sudan|el_salvador|syria|chad|thailand|tajikistan|tunisia|turkey|trinidad_and_tobago|taiwan|tanzania|ukraine|united_states|uruguay|uzbekistan|venezuela|vietnam|yemen|south_africa|zambia|zimbabwe|cuba|algeria|saint_lucia|uganda|rwanda|republic_of_the_congo|democratic_republic_of_the_congo|madagascar|malawi|niger|gabon|ghana><auto|chl_34|chl_36|chl_38|chl_40|chl_42|chl_44|chl_46|chl_48|chl_52|chl_56|chl_60|chl_64|chl_100|chl_104|chl_108|chl_112|chl_116|chl_120|chl_124|chl_128|chl_132|chl_136|chl_140|chl_144|chl_149|chl_153|chl_157|chl_161|chl_165><80211ac0|80211acA|80211acN|80211acAN|80211acNAC|80211acANAC|80211acax|80211acanacax> (0-30) [<cw20|cw40|cw80|cw20_40|cw20_40_80|cw160>] [easy_mesh <enable|disable>]
+  (slot_pon)  onu (1-64) pri wifi_switch (1-2) enable<fcc|etsi|ic|spain|france|mkk|isreal|mkk2|mkk3|russian|cn|global|world-wide|mkk1|ncc|united_arab_emirates|albania|armenia|argentina|austria|australia|azerbaijan|bangladesh|belgium|bulgaria|bahrain|brunei|bolivia|brazil|belarus|belize|canada|switzerland|chile|colombia|costa_rica|curacao|cyprus|czech_republic|germany|denmark|dominican_republic|ecuador|estonia|egypt|finland|united_kingdom|georgia|greece|guatemala|hong_kong|honduras|croatia|hungary|indonesia|ireland|india|iraq|iran|iceland|italy|jordan|japan|kenya|north_korea|south_korea|kuwait|kazakhstan|laos|lebanon|liechtenstein|sri_lanka|lithuania|luxembourg|latvia|morocco|monaco|moldova|north_macedonia|macao|malta|mexico|malaysia|nigeria|netherlands|norway|nepal|new_zealand|oman|panama|peru|papua_new_guinea|philippines|pakistan|poland|puerto_rico|palestine|portugal|paraguay|qatar|romania|serbia|saudi_arabia|seychelles|sweden|singapore|slovenia|slovakia|senegal|south_sudan|el_salvador|syria|chad|thailand|tajikistan|tunisia|turkey|trinidad_and_tobago|taiwan|tanzania|ukraine|united_states|uruguay|uzbekistan|venezuela|vietnam|yemen|south_africa|zambia|zimbabwe|cuba|algeria|saint_lucia|uganda|rwanda|republic_of_the_congo|democratic_republic_of_the_congo|madagascar|malawi|niger|gabon|ghana>channel (0-14) <80211b|80211g|80211bg|80211n|80211bgn|80211ax|80211bgnax|80211gn> (0-30) [<cw20|cw40|cw20_40>]
+  (slot_pon)  onu <all|ONU_LIST> <activate|deactivate|enable|disable|standy>
+  (slot_pon)  onu <all|ONU_LIST> desc WORD
+  (slot_pon)  onu <all|ONU_LIST> iphost (1-255) dhcp [ping-response <enable|disable>] [traceroute <enable|disable>] [ipstack <enable|disable>]
+  (slot_pon)  onu <all|ONU_LIST> iphost (1-255) id WORD
+  (slot_pon)  onu <all|ONU_LIST> iphost (1-255) primary-dns A.B.C.D [second-dns A.B.C.D]
+  (slot_pon)  onu <all|ONU_LIST> iphost (1-255) static-ip A.B.C.D A.B.C.D [A.B.C.D]
+  (slot_pon)  onu <all|ONU_LIST> iphost (1-255) vlan (0-4094) [priority (1-15)]
+  (slot_pon)  onu <all|ONU_LIST> iphost vlan (0-4094) [priority (1-15)]
+  (slot_pon)  onu <all|ONU_LIST> profile <line|srv|alarm|pri|format> <id (1-128)|name WORD>
+  (slot_pon)  onu <all|WORD> gemport (1-255) downstream-rate-limit cir (0-4294967295) [pir (0-4294967295)]
+  (slot_pon)  onu <all|WORD> gemport (1-255) downstream-rate-limit kbps_cir (0-33554431) [kbps_pir (0-33554431)]
+  (slot_pon)  onu <all|WORD> gemport (1-255) encrypt <enable|disable>
+  (slot_pon)  onu <all|WORD> gemport (1-255) upstream-rate-limit cir (0-4294967295) [pir (0-4294967295)]
+  (slot_pon)  onu <all|WORD> gemport (1-255) upstream-rate-limit kbps_cir (0-33554431) [kbps_pir (0-33554431)]
+  (slot_pon)  onu <all|WORD> portvlan <eth|veip|wifi> (1-32) mode <trunk|transparent>
+  (slot_pon)  onu <all|WORD> portvlan <eth|veip|wifi> (1-32) mode hybrid def_vlan (1-4094) [def_pri (0-7)]
+  (slot_pon)  onu <all|WORD> portvlan <eth|veip|wifi> (1-32) mode tag vlan (1-4094) [pri (0-7)]
+  (slot_pon)  onu <all|WORD> portvlan <eth|veip|wifi> (1-32) vlan VLAN_LIST
+  (slot_pon)  onu <all|WORD> reboot
+  (slot_pon)  onu <all|WORD> service NAME gemport (1-255) untag [iphost (1-255)] [eth (1-32)]
+  (slot_pon)  onu <all|WORD> service NAME gemport (1-255) vlan <0|VLAN_LIST> [iphost (1-255)] [eth (1-32)]
+  (slot_pon)  onu ONU_LIST eth (1-32) downstream-rate-limit <cir> (0-33554431) [<pir> (0-33554431)]
+  (slot_pon)  onu ONU_LIST eth (1-32) loopdetect <enable|disable>
+  (slot_pon)  onu ONU_LIST eth (1-32) mac_limit (0-255)
+  (slot_pon)  onu ONU_LIST eth (1-32) upstream-rate-limit <cir> (0-33554431) [<pir> (0-33554431)]
+  (slot_pon)  onu ONU_LIST fec <enable|disable>
+  (slot_pon)  onu ONU_LIST mac_limit (0-255)
+  (slot_pon)  onu ONU_LIST modify onu-profile <id (1-128)|name WORD|default>
+  (slot_pon)  onu ONU_LIST mvlan VLAN_LIST
+  (slot_pon)  onu ONU_LIST service-port (1-128) description WORD
+  (slot_pon)  onu ONU_LIST service-port (1-128) gemport (1-128) uservlan (1-4093) [to (1-4093)] transparent
+  (slot_pon)  onu ONU_LIST service-port (1-128) gemport (1-128) uservlan (1-4093) vlan (1-4093)
+  (slot_pon)  onu ONU_LIST service-port (1-128) gemport (1-128) uservlan untag vlan (1-4093)
+  (slot_pon)  onu ONU_LIST tr069-mgnt (1-8) state <unlock|lock> [acs NAME] [username NAME password NAME] [tag vlan (1-4094) pri (0-7)]
+  (slot_pon)  onu ONU_LIST video (0-255) slot (0-255) state <lock|unlock> [power <enable|disable>]
+  (slot_pon)  onu ONU_LIST video state <lock|unlock> [power <enable|disable>]
+  (slot_pon)  onu add (1-64) profile NAME <sn|loid|loid+pw> WORD [WORD]
+  (slot_pon)  onu auto-find aging-time (60-3600)
+  (slot_pon)  onu auto-learn [<line-profile|srv-profile|alarm-profile|pri-profile|format-profile> <name WORD|id (1-128)>]
+  (slot_pon)  onu confirm [auth-mode <sn|loid>] [onu-profile WORD] [line-profile WORD] [srv-profile WORD] [alarm-profile WORD] [pri-profile WORD] [format-profile WORD]
+  (slot_pon)  onu-schedule-reboot onu ONU_LIST at day (1-31) hour (0-23) minute (0-59)
+  (slot_pon)  onu-schedule-reboot onu ONU_LIST week_day mon <enable|disable> tues <enable|disable> wed <enable|disable> thur <enable|disable> fri <enable|disable> sat <enable|disable> sun <enable|disable> hour (0-23) minute (0-59)
+  (slot_pon)  plug_and_play <enable|disable> [vlan (1-4094)]
+  (slot_pon)  pre-config-onu ONU_LIST <onu-profile|line-profile|srv-profile|alarm-profile|pri-profile|format-profile> id (0-128)
+  (slot_pon)  pre-config-onu ONU_LIST <onu-profile|line-profile|srv-profile|alarm-profile|pri-profile|format-profile> name PROFILE_NAME
+  (slot_pon)  remove pre-config-onu ONU_LIST [<onu-profile|line-profile|srv-profile|alarm-profile|pri-profile|format-profile>]
+  (slot_pon)  show alarm oamlog onu (1-64)
+  (slot_pon)  show onu (1-64) igmp <eth|veip> (1-32)
+  (slot_pon)  show onu (1-64) pri <catv_status|igmp_status|wifi_switch|wan_conn|lan_bind_mode|dhcp_server|voip_timer|voip_global_param|sip_global_param|mac_addr_table|sip_digit_map|username|firewall|acl|loopback_detect|tr069_mng|tr069_stun|onu_selfdiag_alarm|onu_selfdiagnosis|onu_selfdiag_capture|nat_type|upnp|onu_mode|mqtt|reset_button|basic_info|ap>
+  (slot_pon)  show onu (1-64) pri <wan_adv|dhcp_server_ipv6>
+  (slot_pon)  show onu (1-64) pri pots <(1-255)|all> <h248_user_tid|sip_user_config|pots_status|port_manage>
+  (slot_pon)  show onu (1-64) pri pots <(1-255)|all> parameter
+  (slot_pon)  show onu (1-64) pri router (1-8)
+  (slot_pon)  show onu (1-64) pri type
+  (slot_pon)  show onu (1-64) pri wifi_ssid (1-8)
+  (slot_pon)  show onu <all|ONU_LIST> profile
+  (slot_pon)  show onu <state|info|detail-info|desc|distance|optical-info|rx-power|tx-power|time-stamp|version|capability|statistics|all-statistics> [WORD]
+  (slot_pon)  show onu ONU_LIST <video|video_ani> [(0-255) slot (0-255)]
+  (slot_pon)  show onu ONU_LIST ber
+  (slot_pon)  show onu ONU_LIST eth (1-255) mac-address-table
+  (slot_pon)  show onu ONU_LIST eth [(1-32)]
+  (slot_pon)  show onu application
+  (slot_pon)  show onu auto-find [detail-info]
+  (slot_pon)  show onu auto-find aging-time
+  (slot_pon)  show onu auto-learn
+  (slot_pon)  show onu monitor daily [ONU_LIST]
+  (slot_pon)  show onu monitor monthly [ONU_LIST]
+  (slot_pon)  show onu monitor statistics [ONU_LIST]
+  (slot_pon)  show pre-config-onu
+  (slot_pon)  show profile <onu|dba|line|srv|alarm|pri|format|igmp>
+  (slot_pon)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> id (1-128)
+  (slot_pon)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> name WORD
+  (slot_pon)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> running-config
+  (slot_pon)  show running-config onu [(1-64)]
+  (sshd)  sshd <enable|disable|reload|status>
+  (user_manager)  user add USERNAME login-password LOGIN_PASSWD
+  (user_manager)  user delete USERNAME
+  (user_manager)  user enable-password USERNAME ENABLE_PASSWD
+  (user_manager)  user list
+  (user_manager)  user login-password USERNAME LOGIN_PASSWD
+  (user_manager)  user role USERNAME admin enable-password ENABLE_PASSWD
+  (user_manager)  user role USERNAME normal
+  (view)  show evpn access-vlan [(1-4094)|detail] [json]
+  (vlan_cfg)  [no] vlan direct-forward
+  (vlan_cfg)  [no] vlan learn disable
+  (vlan_interface)  ipv6 nd prefix X:X::X:X/M [<(0-4294967295)|infinite> <(0-4294967295)|infinite>] [off-link] [no-autoconfig] [router-address]
+  (vlan_interface)  no option82 format profile
+  (vlan_interface)  option82 format profile id (1-128)
+  (vlan_interface)  option82 format profile name NAME
+  (vrf)  ip router-id A.B.C.D
+  (vrf)  no ip router-id [A.B.C.D]
+  (wan config)  no wan ip gateway
+  (wan config)  pppoe user name WORD password WORD
+  (wan config)  show wan ip
+  (wan config)  show wan mode
+  (wan config)  show wan mtu
+  (wan config)  show wan vlan
+  (wan config)  wan <startup|stop>
+  (wan config)  wan ip address A.B.C.D/M
+  (wan config)  wan ip gateway A.B.C.D
+  (wan config)  wan ipv6 address X:X::X:X/M
+  (wan config)  wan ipv6 dhcp prefix-delegation <enable|disable>
+  (wan config)  wan ipv6 gateway X:X::X:X
+  (wan config)  wan ipversion <ipv4|ipv6|both>
+  (wan config)  wan mode <static|dhcp|pppoe>
+  (wan config)  wan mtu (576-1500)
+  (wan config)  wan pppoe server WORD
+  (wan config)  wan vlan <(1-4094)|default>

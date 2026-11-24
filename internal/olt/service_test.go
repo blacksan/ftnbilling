@@ -132,6 +132,11 @@ profile line id 10 name line_hgu
   commit
 profile pri id 1 name ftn_pri
   wan_adv add route
+  wan_adv index 1 route mode internet mtu 1500
+  wan_adv index 1 route ipv4 dhcp nat enable
+  wan_adv index 1 vlan tag wan_vlan 100 0 qos enable
+  wan_adv index 1 bind lan lan1 lan2 lan3 lan4
+  wan_adv index 1 bind ssid ssid1
   commit
 `
 

@@ -187,6 +187,24 @@ func TestDenylistBlocksBeforeSending(t *testing.T) {
 	}
 }
 
+// The "service" exception of a sub-mode needs the OLT's prompt to agree: if a line left the profile by itself, the
+// tracking still says "sub-mode" but the prompt does not, and the top-level word is refused.
+func TestSubModeExceptionFollowsThePrompt(t *testing.T) {
+	s := &Session{d: VSOL(), mode: ModeConfig, cs: cstate{sub: true}}
+	for prompt, ok := range map[string]bool{
+		"gpon-olt(config)#":              false,
+		"gpon-olt(config-line-profile)#": true,
+		"gpon-olt(config-pon-0/1)#":      true,
+		"gpon-olt#":                      false,
+	} {
+		s.prompt = prompt
+		err := s.check("service internet gemport 1 tag 100")
+		if (err == nil) != ok {
+			t.Errorf("prompt %q: %v", prompt, err)
+		}
+	}
+}
+
 // Every command of the bench grammar that must never be sent, in the shapes the CLI accepts them.
 func TestDenylistBenchGrammar(t *testing.T) {
 	d := VSOL()
@@ -210,6 +228,11 @@ func TestDenylistBenchGrammar(t *testing.T) {
 		"key chain x", "monitor session 1", "service integrated-vtysh-config", "snmp x", "snmp-server community public ro", "web x", "ip route 10.0.0.0/8 1.2.3.4",
 		"ip address 1.2.3.4/24 extra", "ip ssh", "interface wan", "interface wan 1", "int wan", "hostname x", "domainname x", "del onu application 1", "del onu preset-profile 1",
 		"remove x", "enable password x", "enable", "en",
+		// Undoing a denied command, taking VLANs off ports, port mode changes, several ONUs at once.
+		"no login-access-list deny telnet 0.0.0.0 0.0.0.0", "no login-access-list enable", "no snmp-server community private", "no sshd", "no ssh",
+		"no service integrated-vtysh-config", "no telnet", "no tacacs", "no hostname", "no ntp x", "no web", "no time", "no line vty",
+		"no vlan 100", "no vlan 99", "no vlan 98", "no vl 100", "no switchport hybrid vlan 98", "no swi hybrid vlan 99", "switchport mode access",
+		"switchport access vlan 5", "switchport trunk vlan 5", "no onu 1-64", "no onu 1,2", "no onu 1-64 profile", "no shutdown",
 	} {
 		cs := cstate{config: true}
 		if err := s.checkIn(c, cs); !errors.Is(err, ErrDenied) {

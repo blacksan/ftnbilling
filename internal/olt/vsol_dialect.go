@@ -21,7 +21,7 @@ import (
 //   - Profiles (dba, line, srv, pri, onu) are entered from configuration mode with `profile <kind> [id N] [name WORD]`,
 //     filled, then `commit` and `exit`.
 //   - ONU serials are printed with lower-case hex ("VSOL00127e0f"); inventory holds upper case. Matching is case
-//     insensitive and the server sends the serial in the inventory's case (checked by reading it back).
+//     insensitive and the server sends the serial in the OLT's own form (checked by reading it back).
 //   - The OLT web UI is not needed for TR-069: the ACS URL and login go in a Pri profile (`tr069_mng`).
 //   - Descriptions cannot contain spaces; GE0/1 needs its PVID set before it leaves VLAN 1.
 
@@ -254,9 +254,10 @@ func maskBits(mask string) int {
 }
 
 // DBALines creates a DBA profile of one maximum rate (kbit/s). Bench: `profile dba id 10 name dba_1g` holds
-// `type 4 maximum 1000000`.
+// `type 4 maximum 1000000` and, unlike the line, srv and onu profiles, no `commit` (the running configuration is what
+// the OLT replays at boot, so the DBA profile mode takes none).
 func (d *Dialect) DBALines(name string, maximum int) []string {
-	return []string{"profile dba name " + name, fmt.Sprintf("type 4 maximum %d", maximum), "commit", "exit"}
+	return []string{"profile dba name " + name, fmt.Sprintf("type 4 maximum %d", maximum), "exit"}
 }
 
 // LineProfileLines creates a line profile like the bench's line_hgu: a T-CONT on the DBA profile, one gemport, one
@@ -345,10 +346,22 @@ func (d *Dialect) PriProfileLines(name string, inetVLAN, mgmtVLAN int, acs *ACS)
 	return append(l, "commit", "exit")
 }
 
-// ONUAddLine authorises an ONU by serial inside the PON interface. The serial is sent as the inventory has it (upper
-// case); the OLT prints it back in lower case, so every comparison is case insensitive.
+// ONUAddLine authorises an ONU by serial inside the PON interface. The serial is sent in the OLT's own form: vendor
+// letters upper case, the 8 hex digits lower case ("VSOL00127e0f"), which is how the bench prints it in `show onu info`
+// and keeps it in the running configuration it replays at boot. That form is known to be accepted; upper-case hex is
+// not. Every comparison on the server side stays case insensitive.
 func (d *Dialect) ONUAddLine(id int, profile, serial string) string {
-	return fmt.Sprintf("onu add %d profile %s sn %s", id, profile, serial)
+	return fmt.Sprintf("onu add %d profile %s sn %s", id, profile, oltSerial(serial))
+}
+
+var gponSNFormRE = regexp.MustCompile(`^[A-Za-z]{4}[0-9A-Fa-f]{8}$`)
+
+// oltSerial is a GPON serial in the form the OLT prints it; anything else is returned unchanged.
+func oltSerial(s string) string {
+	if !gponSNFormRE.MatchString(s) {
+		return s
+	}
+	return strings.ToUpper(s[:4]) + strings.ToLower(s[4:])
 }
 
 // ONURemoveLine removes an authorised ONU (inside the PON interface).

@@ -157,6 +157,11 @@ func (d *Dialect) BuildPlan(want Desired, run *Running) Plan {
 	}
 	if want.PriProfile != "" && !run.HasBlock("profile pri name "+want.PriProfile) {
 		add("Pri profile "+want.PriProfile+" (WAN, TR-069)", d.PriProfileLines(want.PriProfile, want.InternetVLAN, want.TR069VLAN, want.ACS))
+	} else if want.PriProfile != "" {
+		// A profile is never edited, so one that a stopped batch left half made would stay so: say what it lacks.
+		if miss := missingProfileLines(run, d.PriProfileLines(want.PriProfile, want.InternetVLAN, want.TR069VLAN, want.ACS)); miss > 0 {
+			p.Warnings = append(p.Warnings, fmt.Sprintf("The Pri profile %s on the OLT does not show %d of the lines the server makes it with (a change that stopped half way, or made by hand). New ONUs bound to it get what it has. Check it with \"show profile pri name %s\"; to have the server make it again, remove it on the OLT console first.", want.PriProfile, miss, want.PriProfile))
+		}
 	}
 	// Uplink tagging and PVID.
 	if want.Uplink != "" {
@@ -196,9 +201,16 @@ func (d *Dialect) BuildPlan(want Desired, run *Running) Plan {
 			add("Management address", append(append([]string{hdr}, miss...), "exit"))
 		}
 		for _, l := range lines[len(blk)+2:] { // global lines after the block (the default route)
-			if !run.Has("", l) {
-				add("Management route", []string{l})
+			if run.Has("", l) {
+				continue
 			}
+			// A second default route next to one the OLT already has would split (or take over) the way back to
+			// whoever manages it now: it is left to the owner.
+			if gw := defaultRouteOf(run); gw != "" && strings.HasPrefix(Norm(l), "ip route 0.0.0.0/0 ") {
+				p.Warnings = append(p.Warnings, fmt.Sprintf("The OLT already has a default route (via %s); the plan does not add one via %s. Change it on the OLT console if it is wrong.", gw, want.MgmtGateway))
+				continue
+			}
+			add("Management route", []string{l})
 		}
 	}
 	// The OLT's own auto-learn authorises any ONU that plugs in, which defeats "never add an unknown ONU".
@@ -229,6 +241,48 @@ func (d *Dialect) BuildPlan(want Desired, run *Running) Plan {
 		p.Notes = append(p.Notes, "This router has no ONU management network (VLAN 99) yet: the ONUs get no TR-069 service until it is set up on the router's ONUs tab.")
 	}
 	return p
+}
+
+// missingProfileLines counts the lines of a profile (header ... commit, exit) its block in the running configuration
+// lacks. The TR-069 login line is compared without its values (the running configuration may hide them).
+func missingProfileLines(run *Running, lines []string) int {
+	if len(lines) == 0 {
+		return 0
+	}
+	have := run.Blocks[Norm(lines[0])]
+	n := 0
+	for _, l := range lines[1:] {
+		nl := Norm(l)
+		if nl == "commit" || nl == "exit" {
+			continue
+		}
+		found := false
+		for _, h := range have {
+			if h == nl || strings.HasPrefix(nl, "tr069_mng enable ") && strings.HasPrefix(h, "tr069_mng enable ") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			n++
+		}
+	}
+	return n
+}
+
+// defaultRouteOf is the gateway of a default route in the running configuration ("" when there is none), in either
+// form the grammar has: "ip route 0.0.0.0/0 GW" or "ip route 0.0.0.0 0.0.0.0 GW".
+func defaultRouteOf(run *Running) string {
+	for _, l := range run.Global {
+		f := strings.Fields(l)
+		switch {
+		case len(f) >= 4 && f[0] == "ip" && f[1] == "route" && f[2] == "0.0.0.0/0":
+			return f[3]
+		case len(f) >= 5 && f[0] == "ip" && f[1] == "route" && f[2] == "0.0.0.0" && f[3] == "0.0.0.0":
+			return f[4]
+		}
+	}
+	return ""
 }
 
 // missingBlock returns the block (header ... exit) with only the lines the running config lacks, or nil.
@@ -352,8 +406,11 @@ func (d *Dialect) existingONUTR069(id int, run *Running, pon int, want Desired) 
 			lines = e.Lines
 		}
 	}
-	hasWAN, hasMng, top := false, false, 0
+	hasWAN, hasMng, top, adds := false, false, 0, 0
 	for _, l := range lines {
+		if l == fmt.Sprintf("onu %d pri wan_adv add route", id) || l == fmt.Sprintf("onu %d pri wan_adv add bridge", id) {
+			adds++
+		}
 		if strings.HasPrefix(l, fmt.Sprintf("onu %d profile pri ", id)) {
 			return nil // bound to a Pri profile: the profile has the TR-069 WAN
 		}
@@ -375,6 +432,10 @@ func (d *Dialect) existingONUTR069(id int, run *Running, pon int, want Desired) 
 		return nil
 	case hasWAN: // the WAN is there, the login is not: the last line
 		return all[len(all)-1:]
+	case adds > top:
+		// A WAN was added but never given an index line (a batch that stopped right after "wan_adv add"): that WAN is
+		// index top+1, so it is configured instead of adding another one.
+		return all[1:]
 	}
 	return all
 }

@@ -366,7 +366,22 @@ type cstate struct{ mgmt, sub, config bool }
 func (s *Session) check(line string) error {
 	cs := s.cs
 	cs.config = s.mode == ModeConfig
+	// The sub-mode exceptions ("service" inside a line profile) also need the OLT's own prompt to say it is in a
+	// sub-mode: a line that left the sub-mode by itself (or a prompt the tracking did not expect) must not let a top-level
+	// word through.
+	cs.sub = cs.sub && promptInSubMode(s.prompt)
 	return s.checkIn(line, cs)
+}
+
+// promptInSubMode reports whether a configuration prompt names a sub-mode: "gpon-olt(config-pon-0/1)#", not
+// "gpon-olt(config)#".
+func promptInSubMode(p string) bool {
+	i, j := strings.IndexByte(p, '('), strings.LastIndexByte(p, ')')
+	if i < 0 || j <= i {
+		return false
+	}
+	in := strings.ToLower(p[i+1 : j])
+	return in != "config" && in != "cfg"
 }
 
 func (s *Session) checkIn(line string, cs cstate) error {
@@ -430,6 +445,11 @@ func (s *Session) checkIn(line string, cs cstate) error {
 	if f[0] == "onu" && len(f) > 2 && prefixOfAny(f[2], []string{"deactivate", "disable", "standy"}, 3) {
 		return &DeniedError{Line: line, Why: "taking an ONU out of service"}
 	}
+	// The plan only ever uses hybrid ports and adds VLANs to them: a port mode change or a VLAN taken off a port (the
+	// uplink carries the management VLAN) is never sent.
+	if isPrefix(f[0], "switchport", 3) && len(f) > 1 && !isPrefix(f[1], "hybrid", 1) {
+		return &DeniedError{Line: line, Why: "a port mode change"}
+	}
 	if f[0] == "no" && len(f) > 1 {
 		switch {
 		case prefixOfAny(f[1], s.d.DenyAfterNo, 1):
@@ -438,6 +458,16 @@ func (s *Session) checkIn(line string, cs cstate) error {
 			return &DeniedError{Line: line, Why: "removal of the management address or route"}
 		case isPrefix(f[1], "interface", 2) && len(f) > 2 && prefixOfAny(f[2], []string{"vlan", "vlanif"}, 1):
 			return &DeniedError{Line: line, Why: "removal of a VLAN interface"}
+		// "no login-access-list ...", "no snmp-server ...", "no sshd", "no service ...": undoing a denied top-level
+		// command is as denied as the command.
+		case prefixOfAny(f[1], s.d.DenyVerbs, 1):
+			return &DeniedError{Line: line, Why: "removal of a system, login or access setting"}
+		// A plan never removes a VLAN or takes one off a port.
+		case isPrefix(f[1], "vlan", 2), isPrefix(f[1], "switchport", 3):
+			return &DeniedError{Line: line, Why: "removal of a VLAN"}
+		// "no onu 1-64", "no onu 1,2,3": one ONU at a time only.
+		case f[1] == "onu" && len(f) > 2 && onuListRE.MatchString(f[2]):
+			return &DeniedError{Line: line, Why: "removal of several ONUs at once"}
 		}
 	}
 	if s.Protect > 0 {
@@ -450,6 +480,9 @@ func (s *Session) checkIn(line string, cs cstate) error {
 	}
 	return nil
 }
+
+// onuListRE is an ONU list of more than one ONU ("1-64", "1,2", "3,5-9").
+var onuListRE = regexp.MustCompile(`^\d+([,-]\d*)+$`)
 
 // onuTarget is the ONU list word of "onu <list> ..." or "no onu <list> ..." ("" for other lines).
 func onuTarget(f []string) string {
@@ -676,6 +709,7 @@ func (s *Session) ConfigN(ctx context.Context, lines []string) (int, error) {
 	in := s.cs
 	in.config = true
 	for _, l := range lines {
+		in.config = true
 		if err := s.checkIn(l, in); err != nil {
 			return 0, err
 		}
