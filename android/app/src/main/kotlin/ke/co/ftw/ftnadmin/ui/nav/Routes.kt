@@ -14,7 +14,8 @@ import kotlinx.serialization.Serializable
 
 @Serializable data object MoreRoute
 
-@Serializable data class CustomerRoute(val id: String)
+/** [editMac] opens the customer with the Edit MAC dialog already up (from the Network "Change MAC" action). */
+@Serializable data class CustomerRoute(val id: String, val editMac: Boolean = false)
 
 @Serializable data class AddCustomerRoute(val routerId: String? = null, val mac: String? = null)
 

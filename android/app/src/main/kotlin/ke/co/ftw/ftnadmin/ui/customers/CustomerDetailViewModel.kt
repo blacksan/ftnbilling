@@ -30,6 +30,9 @@ sealed interface DetailDialog {
 
     data object EditMac : DetailDialog
 
+    /** Tenant name, phone, WhatsApp and notes. The house number is not here: it changes only through [Move]. */
+    data object EditDetails : DetailDialog
+
     /** The customer moves house: new apartment, unit and (when it has several) router. */
     data object Move : DetailDialog
 
@@ -49,7 +52,7 @@ data class DetailUiState(
     val info: String? = null,
     val macInput: String = "",
     val macFieldError: String? = null,
-    /** Set on a 409 mac_in_use: names the flat and building that own the MAC. */
+    /** Set on a 409 mac_in_use: names the house and building that own the MAC. */
     val macOwner: MacOwner? = null,
     /** Apartments to move to, loaded when the Move dialog opens. */
     val apartments: Loadable<List<Apartment>> = Loadable.Loading,
@@ -128,7 +131,12 @@ class CustomerDetailViewModel(
         repo.extend(id, packageId, note, force)
     }
 
-    fun changePackage(packageId: String, keepTime: Boolean) = act("Package changed") {
+    /** Saves the Details form. Blank WhatsApp with [samePhone] off clears it, like the web. */
+    fun saveDetails(tenant: String, phone: String, whatsapp: String, samePhone: Boolean, notes: String) = act("Details saved") {
+        repo.updateDetails(id, tenant, phone, whatsapp, samePhone, notes)
+    }
+
+    fun changePackage(packageId: String, keepTime: Boolean) = act("Plan changed") {
         repo.changePackage(id, packageId, keepTime)
     }
 

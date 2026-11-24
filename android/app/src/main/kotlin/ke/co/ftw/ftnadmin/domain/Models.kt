@@ -98,6 +98,8 @@ data class Account(
     val whatsapp: String = "",
     /** The WhatsApp number is the phone number and follows it (the "same as the phone" box). */
     @SerialName("wa_same_phone") val waSamePhone: Boolean = false,
+    /** Free-text notes on the account (the web's Details form edits them too). */
+    val notes: String = "",
     val state: String = "new",
     val suspended: Boolean = false,
     @SerialName("package") val pkg: PackageRef? = null,
