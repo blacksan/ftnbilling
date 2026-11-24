@@ -2,7 +2,9 @@ package ke.co.ftw.ftnadmin.ui.common
 
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
@@ -61,5 +63,14 @@ fun RadioRow(selected: Boolean, onSelect: () -> Unit, modifier: Modifier = Modif
         RadioButton(selected = selected, onClick = null)
         Spacer(Modifier.width(12.dp))
         content()
+    }
+}
+
+/** A status dot centred on the first line of text beside it, whatever the font scale (the line height scales with it). */
+@Composable
+fun FirstLineDot(color: androidx.compose.ui.graphics.Color, modifier: Modifier = Modifier, style: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.bodyMedium) {
+    val h = with(androidx.compose.ui.platform.LocalDensity.current) { style.lineHeight.toDp() }
+    androidx.compose.foundation.layout.Box(modifier.heightIn(min = h).height(h), contentAlignment = Alignment.Center) {
+        androidx.compose.material3.Surface(Modifier.size(12.dp), shape = androidx.compose.foundation.shape.CircleShape, color = color) {}
     }
 }

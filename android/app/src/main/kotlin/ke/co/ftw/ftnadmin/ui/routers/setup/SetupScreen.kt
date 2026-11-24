@@ -33,7 +33,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material3.Icon
 import androidx.compose.ui.Modifier
+import ke.co.ftw.ftnadmin.ui.common.FirstLineDot
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -214,7 +220,11 @@ internal fun CommandBox(text: String, modifier: Modifier = Modifier) {
 @Composable
 internal fun CopyButton(label: String, text: String, modifier: Modifier = Modifier) {
     val clipboard = LocalClipboardManager.current
-    OutlinedButton(onClick = { clipboard.setText(AnnotatedString(text)) }, modifier = modifier.fillMaxWidth()) { Text(label) }
+    OutlinedButton(onClick = { clipboard.setText(AnnotatedString(text)) }, modifier = modifier.fillMaxWidth()) {
+        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(label)
+    }
 }
 
 internal fun expiryText(expiresAt: String, now: Instant = Instant.now()): String {
@@ -239,7 +249,7 @@ private fun CheckCard(item: CheckItem, user: UserInfo, busy: Boolean, onFix: () 
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.Top) {
-                Surface(Modifier.padding(top = 6.dp).size(12.dp), shape = CircleShape, color = statusColor(item.status)) {}
+                FirstLineDot(statusColor(item.status), style = MaterialTheme.typography.titleSmall)
                 Text(
                     item.title.ifBlank { item.id },
                     style = MaterialTheme.typography.titleSmall,
@@ -311,7 +321,7 @@ internal fun StepList(steps: List<Step>) {
                     "running" -> MaterialTheme.colorScheme.primary
                     else -> MaterialTheme.colorScheme.outline
                 }
-                Surface(Modifier.padding(top = 6.dp).size(12.dp), shape = CircleShape, color = color) {}
+                FirstLineDot(color)
                 Column(Modifier.weight(1f).padding(start = 10.dp)) {
                     Text("${s.n}. ${s.title.ifBlank { s.key }}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
                     Text(
