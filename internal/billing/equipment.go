@@ -367,8 +367,12 @@ func (s *Service) ImportEquipment(text string) (ImportResult, error) {
 		if i == 0 && strings.EqualFold(get(0), "kind") {
 			continue // header line
 		}
-		in := EquipmentInput{Kind: get(0), Serial: get(1), MAC: get(2), Model: get(3)}
-		if !equipKinds[strings.ToLower(get(0))] {
+		kind := get(0)
+		if strings.EqualFold(kind, "onu") { // the team says ONU; the register's key is "ont"
+			kind = store.KindONT
+		}
+		in := EquipmentInput{Kind: kind, Serial: get(1), MAC: get(2), Model: get(3), GPONSerial: get(4)}
+		if !equipKinds[strings.ToLower(kind)] {
 			// "serial,mac,model[,gpon serial]": the ONU shorthand
 			if i == 0 && strings.EqualFold(get(0), "serial") {
 				continue

@@ -37,14 +37,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.stringResource
+import androidx.compose.material.icons.filled.Lan
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
-import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import ke.co.ftw.ftnadmin.R
 import ke.co.ftw.ftnadmin.core.network.UserInfo
+import ke.co.ftw.ftnadmin.ui.common.onlineStateRes
 import ke.co.ftw.ftnadmin.data.routers.Overview
 import ke.co.ftw.ftnadmin.data.routers.RouterLive
 import ke.co.ftw.ftnadmin.data.sites.SetupState
@@ -219,7 +224,7 @@ private fun LazyGridScope.routerCards(
             "Throughput", down.first, Cardmod,
             unit = down.second,
             sub = "Up ${splitBps(l.wan.upBps).let { "${it.first} ${it.second}" }}",
-            tone = CardTone.Brand, icon = Icons.Default.Share,
+            tone = CardTone.Brand, icon = Icons.Default.Speed,
             spark = l.throughput.downBps.map { it.toDouble() },
         )
     }
@@ -244,7 +249,7 @@ private fun LazyGridScope.routerCards(
     card {
         StatCard(
             "Uptime", formatUptime(l.system.uptimeS), Cardmod,
-            sub = l.system.tempC?.let { String.format(Locale.US, "%.0f C", it) }.orEmpty(),
+            sub = l.system.tempC?.let { String.format(Locale.US, "%.0f \u00B0C", it) }.orEmpty(),
             tone = CardTone.Neutral, icon = Icons.Default.DateRange,
         )
     }
@@ -252,7 +257,7 @@ private fun LazyGridScope.routerCards(
         StatCard(
             "RouterOS", l.system.version.ifBlank { "-" }, Cardmod,
             sub = listOf(l.system.board, l.system.model).filter { it.isNotBlank() }.distinct().joinToString(" "),
-            tone = CardTone.Neutral, icon = Icons.Default.Refresh,
+            tone = CardTone.Neutral, icon = Icons.Default.Memory,
         )
     }
     card {
@@ -263,7 +268,7 @@ private fun LazyGridScope.routerCards(
                 append(formatPct(l.wan.utilPct)).append("% used")
                 if (l.wan.capMbps > 0) append(" of ").append(l.wan.capMbps).append(" Mbps")
             },
-            tone = if (l.wan.running) CardTone.Good else CardTone.Bad, icon = Icons.Default.Place,
+            tone = if (l.wan.running) CardTone.Good else CardTone.Bad, icon = Icons.Default.Router,
         )
     }
     card {
@@ -274,7 +279,7 @@ private fun LazyGridScope.routerCards(
                 l.tunnel.handshakeAgeS?.let { "handshake $it s ago" },
                 l.tunnel.lossPct?.let { "loss ${formatPct(it)}%" },
             ).joinToString(", "),
-            tone = CardTone.Info, icon = Icons.Default.Share,
+            tone = CardTone.Info, icon = Icons.Default.Lan,
         )
     }
     card {
@@ -351,8 +356,8 @@ private fun LazyGridScope.fleetCards(
     card {
         StatCard("Month revenue", formatKes(o.revenue.monthKes).removePrefix("KES "), Cardmod, unit = "KES", tone = CardTone.Good, icon = Icons.Default.AccountBox)
     }
-    card { StatCard("Active", o.active.toString(), Cardmod, unit = "flats", tone = CardTone.Brand, icon = Icons.Default.Person) }
-    card { StatCard("Online now", o.onlineNow.toString(), Cardmod, unit = "devices", tone = CardTone.Teal, icon = Icons.Default.Share) }
+    card { StatCard("Active", o.active.toString(), Cardmod, unit = "houses", tone = CardTone.Brand, icon = Icons.Default.Person) }
+    card { StatCard("Online now", o.onlineNow.toString(), Cardmod, unit = "devices", tone = CardTone.Teal, icon = Icons.Default.Lan) }
     card {
         StatCard(
             "Routers online", "${o.routers.online}", Cardmod,
@@ -383,6 +388,7 @@ private fun LazyGridScope.fleetCards(
                     n.text.ifBlank { n.kind }, n.count.toString(), Modifier.fillMaxWidth(),
                     tone = if (n.count > 0) CardTone.Warn else CardTone.Neutral,
                     icon = Icons.Default.Warning, onClick = action,
+                    labelMaxLines = 3,
                 )
             }
         }
@@ -400,7 +406,7 @@ private fun LazyGridScope.fleetCards(
                     b.name.ifBlank { b.routerId }, down.first, Modifier.fillMaxWidth(),
                     unit = down.second,
                     sub = "${formatPct(b.utilPct)}% of uplink, ${b.online} houses online",
-                    tone = CardTone.Info, icon = Icons.Default.Share,
+                    tone = CardTone.Info, icon = Icons.Default.Speed,
                     onClick = { onPick(b.routerId) },
                 )
             }
@@ -413,7 +419,6 @@ private fun SectionTitle(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.titleLarge,
-        fontWeight = FontWeight.ExtraBold,
         color = MaterialTheme.colorScheme.onBackground,
         modifier = Modifier.padding(top = 8.dp),
     )
@@ -427,9 +432,11 @@ private fun RouterRow(r: Site, onClick: () -> Unit, onOpen: () -> Unit) {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
     ) {
         Row(Modifier.padding(14.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            StatusDot(r.online, size = 12.dp)
+            StatusDot(r.online, size = 12.dp, describe = false)
             Column(Modifier.weight(1f)) {
-                Text(r.label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(r.label, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                // The state in words as well as the dot's colour.
+                Text(stringResource(onlineStateRes(r.online)), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
                     "${r.accounts.active} active, ${r.accounts.total} houses" + if (r.openAlerts > 0) ", ${r.openAlerts} alerts" else "",
                     style = MaterialTheme.typography.bodySmall,
@@ -437,7 +444,7 @@ private fun RouterRow(r: Site, onClick: () -> Unit, onOpen: () -> Unit) {
                     maxLines = 2,
                 )
             }
-            TextButton(onClick = onOpen) { Text("Details", maxLines = 1, softWrap = false) }
+            TextButton(onClick = onOpen) { Text(stringResource(R.string.details), maxLines = 1) }
         }
     }
 }

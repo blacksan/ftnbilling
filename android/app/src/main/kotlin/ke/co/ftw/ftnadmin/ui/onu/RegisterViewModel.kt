@@ -37,6 +37,8 @@ data class RegisterUiState(
     val busy: Boolean = false,
     val error: String? = null,
     val info: String? = null,
+    /** Pull to refresh is running (the list stays on screen). */
+    val refreshing: Boolean = false,
 )
 
 /** The ONU register: the serial + WAN MAC pairs of the ONUs the owner supplies. */
@@ -51,13 +53,19 @@ class RegisterViewModel(
         load()
     }
 
+    /** Pull to refresh: reloads without replacing the list by a spinner. */
+    fun refresh() {
+        _state.update { it.copy(refreshing = true) }
+        load()
+    }
+
     fun load() {
         viewModelScope.launch {
             val r = apiResult { repo.register() }
             _state.update { cur ->
                 r.fold(
-                    { l -> cur.copy(items = Loadable.Ready(l)) },
-                    { e -> cur.copy(items = Loadable.Failed(e.userMessage())) },
+                    { l -> cur.copy(items = Loadable.Ready(l), refreshing = false) },
+                    { e -> cur.copy(items = Loadable.Failed(e.userMessage()), refreshing = false) },
                 )
             }
         }

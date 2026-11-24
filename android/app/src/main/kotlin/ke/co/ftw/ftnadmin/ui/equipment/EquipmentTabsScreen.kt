@@ -32,11 +32,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.res.pluralStringResource
+import ke.co.ftw.ftnadmin.R
 import ke.co.ftw.ftnadmin.core.network.UserInfo
+import ke.co.ftw.ftnadmin.ui.common.MonoText
 import ke.co.ftw.ftnadmin.data.onu.RegisterItem
 import ke.co.ftw.ftnadmin.ui.common.AppTopBar
 import ke.co.ftw.ftnadmin.ui.common.CenteredLoading
@@ -102,13 +106,13 @@ fun EquipmentTabsScreen(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             Column {
-                AppTopBar("Equipment", onBack = onBack, actions = { TextButton(onClick = onTree) { Text("Tree") } })
+                AppTopBar(stringResource(R.string.equipment), onBack = onBack, actions = { TextButton(onClick = onTree) { Text(stringResource(R.string.tree)) } })
                 PrimaryTabRow(selectedTabIndex = ui.tab.ordinal) {
                     EquipmentTab.entries.forEach { t ->
                         Tab(
                             selected = ui.tab == t,
                             onClick = { tabsVm.selectTab(t) },
-                            text = { Text(tabTitle(t, counts), maxLines = 1, softWrap = false) },
+                            text = { Text(tabTitle(t, counts), maxLines = 2, overflow = TextOverflow.Ellipsis) },
                         )
                     }
                 }
@@ -116,16 +120,16 @@ fun EquipmentTabsScreen(
         },
         floatingActionButton = {
             val add: Pair<String, () -> Unit>? = when (ui.tab) {
-                EquipmentTab.Routers -> if (user.isOwner) "Add router" to onAddRouter else null
-                EquipmentTab.Olt -> if (user.canWrite) "Add OLT" to { onAddOlt(null) } else null
-                EquipmentTab.Onu -> if (user.canWrite) "Add ONU" to onAddOnu else null
+                EquipmentTab.Routers -> if (user.isOwner) stringResource(R.string.add_router) to onAddRouter else null
+                EquipmentTab.Olt -> if (user.canWrite) stringResource(R.string.add_olt) to { onAddOlt(null) } else null
+                EquipmentTab.Onu -> if (user.canWrite) stringResource(R.string.add_onu) to onAddOnu else null
                 EquipmentTab.Other -> null
             }
             if (add != null) {
                 ExtendedFloatingActionButton(
                     onClick = add.second,
                     icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                    text = { Text(add.first, fontWeight = FontWeight.ExtraBold, maxLines = 1, softWrap = false) },
+                    text = { Text(add.first, maxLines = 1, softWrap = false) },
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
@@ -139,7 +143,7 @@ fun EquipmentTabsScreen(
             EquipmentTab.Olt -> TreeBacked(treeUi.tree, treeVm::load, body) { t ->
                 val rows = t.oltRows()
                 if (rows.isEmpty()) {
-                    EmptyState("No OLTs yet. An OLT is the box the ONUs hang off.")
+                    EmptyState(stringResource(R.string.no_olts_yet))
                 } else {
                     LazyColumn(Modifier.fillMaxSize(), contentPadding = LIST_PADDING, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         items(rows, key = { it.olt.id }) { r -> OltTabRow(r) { onEditOlt(r.olt.id) } }
@@ -152,7 +156,7 @@ fun EquipmentTabsScreen(
                 LazyColumn(Modifier.fillMaxSize(), contentPadding = LIST_PADDING, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     item {
                         OutlinedTextField(
-                            ui.onuQuery, tabsVm::setOnuQuery, label = { Text("Serial, MAC, model or house") }, singleLine = true,
+                            ui.onuQuery, tabsVm::setOnuQuery, label = { Text(stringResource(R.string.search_onus)) }, supportingText = { Text(stringResource(R.string.search_onus_hint)) }, singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
@@ -168,7 +172,7 @@ fun EquipmentTabsScreen(
                             }
                         }
                     }
-                    if (rows.isEmpty()) item { Text(if (all.isEmpty()) "No ONUs yet. Add one to the register." else "No ONU matches.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    if (rows.isEmpty()) item { Text(stringResource(if (all.isEmpty()) R.string.no_onus_yet else R.string.no_onu_matches), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     items(rows, key = { it.onu.id }) { r ->
                         OnuNode(r.onu, user.canWrite, treeVm::startMove, onOpenAccount, placement = onuPlacement(r))
                     }
@@ -182,12 +186,12 @@ fun EquipmentTabsScreen(
                     LazyColumn(Modifier.padding(inner).fillMaxSize(), contentPadding = LIST_PADDING, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         item {
                             OutlinedTextField(
-                                ui.otherQuery, tabsVm::setOtherQuery, label = { Text("Serial, MAC or model") }, singleLine = true,
+                                ui.otherQuery, tabsVm::setOtherQuery, label = { Text(stringResource(R.string.search_other)) }, singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
                         if (rows.isEmpty()) {
-                            item { Text(if (o.value.isEmpty()) "No other equipment. Switches, access points, splitters and UPS units are listed here." else "Nothing matches.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                            item { Text(stringResource(if (o.value.isEmpty()) R.string.no_other_equipment else R.string.nothing_matches), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                         }
                         items(rows, key = { it.id }) { OtherRow(it) }
                     }
@@ -227,19 +231,16 @@ private fun OltTabRow(r: OltRow, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(o.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+            if (o.model.isNotBlank()) Text(o.model, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (o.mac.isNotBlank()) MonoText(o.mac, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(
-                listOf(o.model, o.mac).filter { it.isNotBlank() }.joinToString("  |  "),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                (if (r.routerName.isBlank()) "Not on a router" else r.routerName + if (o.routerPort.isNotBlank()) ", port ${o.routerPort}" else "") +
-                    "  |  ${o.ponPorts} PON ports",
+                (if (r.routerName.isBlank()) stringResource(R.string.not_on_a_router) else r.routerName + if (o.routerPort.isNotBlank()) ", " + stringResource(R.string.port_n, o.routerPort) else "") +
+                    "  |  " + pluralStringResource(R.plurals.pon_port_count_n, o.ponPorts, o.ponPorts),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                StatusChip("${o.onlineCount} of ${o.onuCount} ONUs online", if (o.warningCount > 0) Tone.Warn else Tone.Good)
+                StatusChip(stringResource(R.string.onus_online_of, o.onlineCount, o.onuCount), if (o.warningCount > 0) Tone.Warn else Tone.Good)
                 if (o.status.isNotBlank()) StatusChip(onuStatusLabel(o.status), Tone.Neutral)
             }
         }
@@ -250,12 +251,13 @@ private fun OltTabRow(r: OltRow, onClick: () -> Unit) {
 private fun OtherRow(i: RegisterItem) {
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(i.serial.ifBlank { i.mac.ifBlank { "(no serial)" } }, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+            MonoText(i.serial.ifBlank { i.mac.ifBlank { stringResource(R.string.no_serial) } }, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
             Text(
-                listOf(i.kind, i.model, i.mac).filter { it.isNotBlank() }.joinToString("  |  "),
+                listOf(i.kind, i.model).filter { it.isNotBlank() }.joinToString("  |  "),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (i.mac.isNotBlank() && i.serial.isNotBlank()) MonoText(i.mac, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (i.status.isNotBlank()) StatusChip(onuStatusLabel(i.status), Tone.Neutral)
         }
     }

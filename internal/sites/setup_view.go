@@ -230,7 +230,7 @@ func (m *Manager) SetupView(_ context.Context, siteID string) (Setup, bool) {
 		t := cs.GeneratedAt
 		s4.Status, s4.At = "ok", &t
 	case joined && tunnel && haveChecks:
-		s4.Status, s4.Detail = "failed", checksDetail(out)
+		s4.Status, s4.Detail = "failed", checksDetail(out, cs)
 	case joined && tunnel:
 		s4.Status, s4.Detail = "running", "Checking the router."
 	}
@@ -275,9 +275,46 @@ func firstLine(l []string) string {
 	return l[0]
 }
 
-func checksDetail(s Setup) string {
+// checkTitles writes check ids as the titles the team reads on the Checks list
+// (an id the list does not know is shown with its dots and underscores as spaces).
+func checkTitles(cs Checks, ids []string) string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		t := ""
+		for _, it := range cs.Items {
+			if it.ID == id {
+				t = it.Title
+				break
+			}
+		}
+		if t == "" {
+			t = strings.NewReplacer(".", " ", "_", " ").Replace(id)
+		}
+		out = append(out, t)
+	}
+	return strings.Join(out, ", ")
+}
+
+// StateLabel is a set-up state in words ("waiting_router" -> "Waiting for the router").
+func StateLabel(state string) string {
+	switch state {
+	case StateNotStarted:
+		return "Not started"
+	case StateWaitingRouter:
+		return "Waiting for the router"
+	case StateStalled:
+		return "Stalled"
+	case StateOnline:
+		return "Online, checks pending"
+	case StateReady:
+		return "Ready"
+	}
+	return strings.ReplaceAll(state, "_", " ")
+}
+
+func checksDetail(s Setup, cs Checks) string {
 	if len(s.Blockers) > 0 {
-		return "Fix this first: " + strings.Join(s.Blockers, ", ")
+		return "Fix this first: " + checkTitles(cs, s.Blockers)
 	}
 	return "Some checks fail."
 }
@@ -304,7 +341,7 @@ func nextAction(s Setup, site store.Site, cs Checks, haveChecks bool) SetupNext 
 			if id == CheckLayout {
 				return SetupNext{Kind: "paste_line", Text: RebuildText, CheckID: id}
 			}
-			return SetupNext{Kind: "fix", Text: "Fix this first: " + id, CheckID: id}
+			return SetupNext{Kind: "fix", Text: "Fix this first: " + checkTitles(cs, []string{id}), CheckID: id}
 		}
 		for _, it := range cs.Items {
 			if it.Status == StatusFail {

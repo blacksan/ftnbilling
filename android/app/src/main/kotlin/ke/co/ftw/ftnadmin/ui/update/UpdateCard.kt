@@ -8,7 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -46,18 +46,17 @@ fun UpdateCard(state: UpdateState, manager: UpdateManager, modifier: Modifier = 
     val uriHandler = LocalUriHandler.current
     Card(
         modifier = modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.extraLarge,
+        shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer),
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Surface(shape = CircleShape, color = scheme.primary, contentColor = scheme.onPrimary, modifier = Modifier.size(40.dp)) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.padding(9.dp))
+                    Icon(Icons.Default.SystemUpdate, contentDescription = null, modifier = Modifier.padding(9.dp))
                 }
                 Text(
                     "Update available: v${update.version}",
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.ExtraBold,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -89,7 +88,7 @@ fun UpdateCard(state: UpdateState, manager: UpdateManager, modifier: Modifier = 
                 else -> {
                     state.error?.let {
                         Surface(shape = MaterialTheme.shapes.small, color = scheme.errorContainer, contentColor = scheme.onErrorContainer) {
-                            Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(10.dp))
+                            Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(10.dp))
                         }
                     }
                     state.manualUrl?.let { link ->

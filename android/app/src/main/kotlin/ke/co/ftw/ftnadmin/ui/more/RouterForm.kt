@@ -2,16 +2,17 @@ package ke.co.ftw.ftnadmin.ui.more
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Checkbox
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -22,8 +23,9 @@ import ke.co.ftw.ftnadmin.data.routers.NetInterface
 import ke.co.ftw.ftnadmin.data.routers.RouterInput
 import ke.co.ftw.ftnadmin.data.routers.WanMode
 import ke.co.ftw.ftnadmin.domain.Site
-import ke.co.ftw.ftnadmin.ui.common.ChipLabel
-import ke.co.ftw.ftnadmin.ui.common.ChipRow
+import ke.co.ftw.ftnadmin.R
+import ke.co.ftw.ftnadmin.ui.common.CheckRow
+import ke.co.ftw.ftnadmin.ui.common.LabeledValue
 import ke.co.ftw.ftnadmin.ui.common.SectionCard
 import ke.co.ftw.ftnadmin.ui.common.userMessage
 
@@ -171,6 +173,7 @@ fun Throwable.toFormFailure(): FormFailure {
  * The router fields. [errors] maps server field names to messages and is shown under each input.
  * [onEdit] gets the server field name being edited (so its error clears) and the change to apply.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun RouterFormFields(
     form: RouterForm,
@@ -179,6 +182,9 @@ fun RouterFormFields(
     includeName: Boolean = true,
     /** The router's real ports, when it is joined; empty means typed entry only. */
     ports: List<String> = emptyList(),
+    /** Editing an existing router: the OLT and customer ports are shown, not edited. The Ports screen is the one place to change them. */
+    portsReadOnly: Boolean = false,
+    onOpenPorts: (() -> Unit)? = null,
 ) {
     @Composable
     fun field(
@@ -204,18 +210,18 @@ fun RouterFormFields(
 
     SectionCard("Router") {
         if (includeName) field(RouterField.NAME, "Router name", form.name) { copy(name = it) }
-        field(RouterField.SUPPORT_PHONE, "Support phone (shown on the payment page)", form.supportPhone, KeyboardType.Phone) { copy(supportPhone = it) }
+        field(RouterField.SUPPORT_PHONE, "Support phone", form.supportPhone, KeyboardType.Phone, hint = "Shown on the payment page") { copy(supportPhone = it) }
     }
 
     SectionCard("Internet (WAN)") {
         field(RouterField.WAN_INTERFACE, "WAN port", form.wanInterface, hint = "Default ether1") { copy(wanInterface = it) }
         Text("How the router gets internet", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        ChipRow(horizontalPadding = 0.dp) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             WanMode.all.forEach { m ->
                 FilterChip(
                     selected = form.wanMode == m,
                     onClick = { onEdit(RouterField.WAN_MODE) { it.copy(wanMode = m) } },
-                    label = { ChipLabel(WanMode.label(m)) },
+                    label = { Text(WanMode.label(m)) },
                 )
             }
         }
@@ -244,23 +250,43 @@ fun RouterFormFields(
     }
 
     SectionCard("Customers") {
-        field(RouterField.OLT_INTERFACE, RouterFormCopy.OLT_LABEL, form.oltInterface, hint = RouterFormCopy.OLT_HINT) { copy(oltInterface = it) }
-        PortPicker(ports, listOf(form.oltInterface)) { p -> onEdit(RouterField.OLT_INTERFACE) { it.copy(oltInterface = p) } }
+        if (portsReadOnly) {
+            // One owner for port roles: the Ports screen (it confirms before it changes anything). Here they are only shown.
+            LabeledValue(RouterFormCopy.OLT_LABEL, form.oltInterface.ifBlank { RouterFormCopy.DEFAULT_OLT }, mono = true)
+            LabeledValue(RouterFormCopy.CUSTOMER_PORT_LABEL, form.customerPorts.ifBlank { "-" }, mono = true)
+            Text(stringResource(R.string.ports_change_in_ports), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (onOpenPorts != null) TextButton(onClick = onOpenPorts) { Text(stringResource(R.string.open_ports)) }
+        } else if (ports.isEmpty()) {
+            // The router has not reported its ports (a new router): type them.
+            field(RouterField.OLT_INTERFACE, RouterFormCopy.OLT_LABEL, form.oltInterface, hint = RouterFormCopy.OLT_HINT) { copy(oltInterface = it) }
+        } else {
+            Text(RouterFormCopy.OLT_LABEL, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            PortPicker(ports, listOf(form.oltInterface)) { p -> onEdit(RouterField.OLT_INTERFACE) { it.copy(oltInterface = p) } }
+            Text(RouterFormCopy.OLT_HINT, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         field(RouterField.VLAN_ID, "VLAN (0 = untagged)", form.vlan, KeyboardType.Number) { copy(vlan = it.filter(Char::isDigit)) }
         field(RouterField.CUSTOMER_SUBNET, "Customer subnet", form.customerSubnet, hint = "Default 10.5.50.0/24") { copy(customerSubnet = it) }
-        field(RouterField.CUSTOMER_PORTS, RouterFormCopy.CUSTOMER_PORT_LABEL, form.customerPorts, hint = RouterFormCopy.CUSTOMER_PORT_HINT) { copy(customerPorts = it) }
-        PortPicker(ports.filter { it != form.wanInterface }, portList(form.customerPorts)) { p -> onEdit(RouterField.CUSTOMER_PORTS) { it.copy(customerPorts = togglePort(it.customerPorts, p)) } }
+        if (!portsReadOnly) {
+            if (ports.isEmpty()) {
+                field(RouterField.CUSTOMER_PORTS, RouterFormCopy.CUSTOMER_PORT_LABEL, form.customerPorts, hint = RouterFormCopy.CUSTOMER_PORT_HINT) { copy(customerPorts = it) }
+            } else {
+                Text(RouterFormCopy.CUSTOMER_PORT_LABEL, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                PortPicker(ports.filter { it != form.wanInterface }, portList(form.customerPorts)) { p -> onEdit(RouterField.CUSTOMER_PORTS) { it.copy(customerPorts = togglePort(it.customerPorts, p)) } }
+                Text(RouterFormCopy.CUSTOMER_PORT_HINT, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         field(RouterField.WAN_CAP_MBPS, "WAN capacity (Mbps)", form.wanCap, KeyboardType.Number) { copy(wanCap = it.filter(Char::isDigit)) }
     }
 }
 
-/** Chips of the router's own ports under a port field; nothing when the router has not answered. */
+/** Chips of the router's own ports; nothing when the router has not answered. They wrap, so every port is in view. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PortPicker(ports: List<String>, selected: List<String>, onPick: (String) -> Unit) {
     if (ports.isEmpty()) return
-    ChipRow(horizontalPadding = 0.dp) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         ports.forEach { p ->
-            FilterChip(selected = p in selected, onClick = { onPick(p) }, label = { ChipLabel(p) })
+            FilterChip(selected = p in selected, onClick = { onPick(p) }, label = { Text(p) })
         }
     }
 }
@@ -275,22 +301,20 @@ private fun PppoePasswordField(form: RouterForm, error: String?, onEdit: (String
         OutlinedTextField(
             value = form.pppoePass,
             onValueChange = { v -> onEdit(RouterField.PPPOE_PASS) { it.copy(pppoePass = v, pppoePassClear = false) } },
-            label = { Text(if (form.pppoePassSet) "New PPPoE password (leave empty to keep)" else "PPPoE password") },
+            label = { Text(if (form.pppoePassSet) "New PPPoE password" else "PPPoE password") },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             isError = error != null,
-            supportingText = error?.let { t -> { Text(t) } },
+            supportingText = (error ?: if (form.pppoePassSet) "Leave empty to keep the saved password." else null)?.let { t -> { Text(t) } },
             modifier = Modifier.fillMaxWidth(),
         )
         if (form.pppoePassSet) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(
-                    checked = form.pppoePassClear,
-                    onCheckedChange = { c -> onEdit(RouterField.PPPOE_PASS) { it.copy(pppoePassClear = c, pppoePass = if (c) "" else it.pppoePass) } },
-                )
-                Text("Remove the saved password", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-            }
+            CheckRow(
+                checked = form.pppoePassClear,
+                onChange = { c -> onEdit(RouterField.PPPOE_PASS) { it.copy(pppoePassClear = c, pppoePass = if (c) "" else it.pppoePass) } },
+                label = "Remove the saved password",
+            )
         }
     }
 }

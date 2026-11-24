@@ -368,7 +368,7 @@ func TestRegistrationsAreDecidedInNewDevicesAndCounted(t *testing.T) {
 	c.register(t, c.regForm(t, "Reject Me", "0722000666", "C4"))
 	adm := func(path string, v url.Values) *http.Response { return c.br.Do(c.cl, c.ts.URL, "POST", path, v) }
 	page := body(t, c.br.Do(c.cl, c.ts.URL, "GET", "/admin/devices", nil))
-	for _, want := range []string{"Waiting for approval", "Wanjiku Ngugi", "254722000555", "house number C3", "00:E0:4C:68:01:02", "Approve", "Reject"} {
+	for _, want := range []string{"Waiting for approval", "Wanjiku Ngugi", "0722 000 555", "House C3", "00:E0:4C:68:01:02", "Approve", "Reject"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("New devices lacks %q", want)
 		}

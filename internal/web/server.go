@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -98,21 +99,43 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 	s.refreshRL = newLimiter(30, time.Minute)
 	s.searchRL = newLimiter(searchPerMinute, time.Minute)
 	funcs := template.FuncMap{
-		"kes":    func(n int) string { return "KES " + itoa(n) },
-		"dur":    billing.DescribeMinutes,
-		"eat":    func(t time.Time) string { return t.In(billing.EAT).Format("Mon 2 Jan 2006, 15:04") + " EAT" },
-		"eats":   func(t time.Time) string { return t.In(billing.EAT).Format("2 Jan 2006, 15:04") },
-		"left":   func(t time.Time) string { return billing.Remaining(t, svc.Now()) },
-		"pkgOf":  func(m map[string]store.Package, id string) store.Package { return m[id] },
-		"acctOf": func(m map[string]store.Account, id string) store.Account { return m[id] },
-		"state":  func(a store.Account) string { return billing.AccountState(a, svc.Now()) },
-		"f1":     func(v float64) string { return fmt.Sprintf("%.1f", v) },
-		"f0":     func(v float64) string { return fmt.Sprintf("%.0f", v) },
-		"f2":     func(v float64) string { return fmt.Sprintf("%.2f", v) },
-		"eatNow": func() string { return svc.Now().In(billing.EAT).Format("2006-01-02T15:04") },
-		"inc":    func(i int) int { return i + 1 },
-		"day":    day,
-		"stat":   func(v string) string { return strings.ReplaceAll(v, "_", " ") },
+		"kes":        func(n int) string { return "KES " + groupInt(n) },
+		"num":        groupInt,
+		"setupState": sites.StateLabel,
+		"house":      houseLabel,
+		"houseno":    houseNo,
+		"kindName":   kindName,
+		"aptName": func(id string) string {
+			var n string
+			st.View(func(d *store.Data) { n = d.Apartments[id].Name })
+			return n
+		},
+		// acctWhere: "Apartment · House N" for an account.
+		"acctWhere": func(a store.Account) string {
+			var n string
+			st.View(func(d *store.Data) { n = d.Apartments[a.ApartmentID].Name })
+			return aptHouse(n, a)
+		},
+		"endsSoon": func(t time.Time) bool { return !t.IsZero() && t.Before(svc.Now().Add(72*time.Hour)) },
+		"phone":    displayPhone,
+		"method":   payMethodName,
+		"dur":      billing.DescribeMinutes,
+		"eat":      func(t time.Time) string { return t.In(billing.EAT).Format("Mon 2 Jan 2006, 15:04") + " EAT" },
+		"eats":     func(t time.Time) string { return t.In(billing.EAT).Format("2 Jan 2006, 15:04") },
+		"left":     func(t time.Time) string { return billing.Remaining(t, svc.Now()) },
+		"pkgOf":    func(m map[string]store.Package, id string) store.Package { return m[id] },
+		"acctOf":   func(m map[string]store.Account, id string) store.Account { return m[id] },
+		"state":    func(a store.Account) string { return billing.AccountState(a, svc.Now()) },
+		"f1":       func(v float64) string { return fmt.Sprintf("%.1f", v) },
+		"f0":       func(v float64) string { return fmt.Sprintf("%.0f", v) },
+		"f2":       func(v float64) string { return fmt.Sprintf("%.2f", v) },
+		"eatNow":   func() string { return svc.Now().In(billing.EAT).Format("2006-01-02T15:04") },
+		"inc":      func(i int) int { return i + 1 },
+		"day":      day,
+		"stat":     func(v string) string { return strings.ReplaceAll(v, "_", " ") },
+		"kesc":     func(n int) string { return "KES " + commas(n) }, // customer pages: KES 12,500
+		"nb":       nbMpesa,                                          // escapes, and keeps "M-Pesa" in one piece
+		"eatd":     func(t time.Time) string { return nbsp(t.In(billing.EAT).Format("Mon 2 Jan 2006")) },
 		"eqStat": func(v string) string {
 			if v == store.EqInstalled {
 				return "deployed"
@@ -195,6 +218,65 @@ func (s *Server) live() config.Config {
 }
 
 func itoa(n int) string { b, _ := json.Marshal(n); return string(b) }
+
+// groupInt writes n with thousands separators: 115448 -> "115,448".
+func groupInt(n int) string {
+	s := strconv.Itoa(n)
+	neg := strings.HasPrefix(s, "-")
+	if neg {
+		s = s[1:]
+	}
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	if neg {
+		s = "-" + s
+	}
+	return s
+}
+
+// displayPhone shows a Kenyan number as "0712 345 678" whatever way it is
+// stored (254712345678, +254712345678, 0712345678). Anything else comes back
+// unchanged. Stored values are never rewritten.
+func displayPhone(p string) string {
+	d := strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, p)
+	switch {
+	case len(d) == 12 && strings.HasPrefix(d, "254"):
+		d = "0" + d[3:]
+	case len(d) == 9 && (d[0] == '7' || d[0] == '1'):
+		d = "0" + d
+	}
+	if len(d) != 10 || d[0] != '0' {
+		return p
+	}
+	return d[:4] + " " + d[4:7] + " " + d[7:]
+}
+
+// payMethodName turns a payment method code into the words the team uses.
+func payMethodName(m string) string {
+	switch m {
+	case "mpesa-c2b":
+		return "M-Pesa Paybill"
+	case "mpesa-stk":
+		return "M-Pesa prompt"
+	case "mpesa-manual":
+		return "M-Pesa (recorded by hand)"
+	case "mpesa":
+		return "M-Pesa"
+	case "cash":
+		return "Cash"
+	case "voucher":
+		return "Voucher"
+	case "":
+		return ""
+	}
+	return strings.ToUpper(m[:1]) + strings.ReplaceAll(m[1:], "-", " ")
+}
 
 // Handler returns the full HTTP handler with middleware applied.
 func (s *Server) Handler() http.Handler {

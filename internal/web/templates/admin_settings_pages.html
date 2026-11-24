@@ -66,12 +66,11 @@
 {{template "afoot" .}}{{end}}
 
 {{define "admin_settings_equipment"}}{{template "ahead" .}}{{template "set_tabs" .}}
-<div class="card"><b>Import ONT list</b><p class="muted">One per line: <code>kind,serial,mac,model</code> (for example <code>ont,ZTEG12345678,AA:BB:CC:DD:EE:FF,F601</code>).</p>
-<form method="post" action="/admin/equipment/import"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="next" value="/admin/settings/equipment"><textarea name="lines" rows="4" style="width:100%" placeholder="ont,ZTEG12345678,AA:BB:CC:DD:EE:FF,F601"></textarea><div class="mt-2"><button>Import</button></div></form></div>
+<p class="muted">Importing equipment lists is done on the <a href="/admin/equipment?tab=onu">Equipment page</a>.</p>
 <div class="card"><b>Find a MAC address</b><p class="muted">Asks every connected router's router: its DHCP leases. Each router gets 5 seconds.</p>
 <form method="get" action="/admin/settings/equipment/find" class="row"><label>MAC address<input name="mac" value="{{.Data.MAC}}" placeholder="AA:BB:CC:DD:EE:FF" autocomplete="off"></label><button>Find</button></form>
 {{if .Data.Searched}}{{if .Data.Found}}<table class="mt-2"><tr><th>Router</th><th>IP</th><th>Name</th><th>State</th><th>Seen in</th></tr>{{range .Data.Found}}<tr><td>{{.Site}}</td><td>{{.IP}}</td><td>{{.Host}}</td><td>{{.State}}</td><td>{{.Source}}</td></tr>{{end}}</table>{{else}}<p class="muted">Not seen on any router.{{if .Data.FindNote}} {{.Data.FindNote}}{{end}}</p>{{end}}{{end}}</div>
-<div class="card"><b>Unassigned ONTs with a MAC address</b>{{if .Data.Rows}}<table><tr><th>MAC</th><th>Serial</th><th>Model</th><th>Router</th><th>Status</th></tr>{{range .Data.Rows}}<tr><td><a href="/admin/settings/equipment/find?mac={{.E.MAC}}">{{.E.MAC}}</a></td><td>{{.E.Serial}}</td><td>{{.E.Model}}</td><td>{{.Site}}</td><td>{{.E.Status}}</td></tr>{{end}}</table>{{else}}<p class="muted">None.</p>{{end}}</div>
+<div class="card"><b>ONUs in stock with a MAC address</b>{{if .Data.Rows}}<div class="tw" style="border:0"><table><tr><th>MAC</th><th>Serial</th><th>Model</th><th>Router</th><th>Status</th></tr>{{range .Data.Rows}}<tr><td><a href="/admin/settings/equipment/find?mac={{.E.MAC}}">{{.E.MAC}}</a></td><td>{{.E.Serial}}</td><td>{{.E.Model}}</td><td>{{.Site}}</td><td>{{eqStat .E.Status}}</td></tr>{{end}}</table></div>{{else}}<p class="muted">None.</p>{{end}}</div>
 {{template "afoot" .}}{{end}}
 
 {{define "admin_tools"}}{{template "ahead" .}}{{template "set_tabs" .}}
@@ -94,7 +93,7 @@
 {{template "afoot" .}}{{end}}
 
 {{define "admin_settings_support"}}{{template "ahead" .}}{{template "set_tabs" .}}
-<p class="muted">The contacts on every page a walled device sees (the payment, waiting, receipt and registration pages). Changes apply at once. Leave a box empty to hide that contact.</p>
+<p class="muted">The contacts on every page a walled device sees (the payment, waiting, receipt and registration pages). Changes apply at once.{{if not .Data.NoManager}} Leave a box empty to hide that contact.{{end}}</p>
 {{template "set_form" (dict "P" . "Fields" .Data.Fields "Action" "/admin/settings/support")}}
 <div class="card"><b>What visitors see</b>
 <table><tr><td>Call</td><td>{{if .Data.Phone}}{{.Data.Phone}}{{else}}<span class="muted">hidden</span>{{end}}</td></tr>

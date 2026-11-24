@@ -69,6 +69,21 @@ class AccountsRepository(private val api: ApiClient) {
         },
     )
 
+    /**
+     * Saves the Details form: tenant, phone, WhatsApp and notes (`PATCH /accounts/{id}`). The house number is deliberately not sent:
+     * it changes only through Move. With [samePhone] the WhatsApp number follows the phone and [whatsapp] is not sent.
+     */
+    suspend fun updateDetails(id: String, tenant: String, phone: String, whatsapp: String?, samePhone: Boolean, notes: String): Account = api.patch(
+        "accounts", id,
+        body = buildJsonObject {
+            put("tenant", tenant.trim())
+            put("phone", phone.trim())
+            put("notes", notes.trim())
+            put("wa_same_phone", samePhone)
+            if (!samePhone) put("whatsapp", whatsapp?.trim().orEmpty())
+        },
+    )
+
     suspend fun suspendAccount(id: String): Account = api.post("accounts", id, "suspend")
 
     suspend fun unsuspendAccount(id: String): Account = api.post("accounts", id, "unsuspend")

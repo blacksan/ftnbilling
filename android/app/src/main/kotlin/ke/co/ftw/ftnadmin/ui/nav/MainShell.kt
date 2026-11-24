@@ -1,13 +1,15 @@
 package ke.co.ftw.ftnadmin.ui.nav
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBox
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -19,7 +21,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -29,6 +32,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import ke.co.ftw.ftnadmin.R
 import ke.co.ftw.ftnadmin.core.network.UserInfo
 import ke.co.ftw.ftnadmin.ui.alerts.AlertsScreen
 import ke.co.ftw.ftnadmin.ui.apartments.ApartmentDetailScreen
@@ -52,12 +56,12 @@ import ke.co.ftw.ftnadmin.ui.routers.setup.SetupScreen
 import ke.co.ftw.ftnadmin.ui.settings.SettingsScreen
 import kotlin.reflect.KClass
 
-private enum class Tab(val route: Any, val type: KClass<*>, val label: String, val icon: ImageVector) {
-    Home(HomeRoute, HomeRoute::class, "Home", Icons.Default.Home),
-    Network(NetworkRoute, NetworkRoute::class, "Network", Icons.Default.Share),
-    Customers(CustomersRoute, CustomersRoute::class, "Customers", Icons.Default.Person),
-    Payments(PaymentsRoute(), PaymentsRoute::class, "Payments", Icons.Default.AccountBox),
-    More(MoreRoute, MoreRoute::class, "More", Icons.Default.Menu),
+private enum class Tab(val route: Any, val type: KClass<*>, @StringRes val label: Int, val icon: ImageVector) {
+    Home(HomeRoute, HomeRoute::class, R.string.tab_home, Icons.Default.Home),
+    Network(NetworkRoute, NetworkRoute::class, R.string.tab_network, Icons.Default.Lan),
+    Customers(CustomersRoute, CustomersRoute::class, R.string.tab_customers, Icons.Default.Person),
+    Payments(PaymentsRoute(), PaymentsRoute::class, R.string.tab_payments, Icons.Default.AccountBox),
+    More(MoreRoute, MoreRoute::class, R.string.tab_more, Icons.Default.Menu),
 }
 
 /** Adaptive shell: NavigationSuiteScaffold gives a bottom bar on phones and a rail from 600 dp wide. */
@@ -92,14 +96,17 @@ fun MainShell(user: UserInfo) {
                     selected = selected,
                     onClick = { go(t) },
                     icon = { Icon(t.icon, contentDescription = null) },
-                    label = { Text(t.label, fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium, maxLines = 1) },
+                    // One weight for every state, so the label does not change width when the tab is selected; the indicator shows selection.
+                    label = { Text(stringResource(t.label), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 )
             }
         },
         layoutType = layout,
         containerColor = MaterialTheme.colorScheme.background,
     ) {
-        Box(Modifier.fillMaxSize()) { Destinations(nav, user) }
+        // The navigation bar takes the bottom inset itself; the rail does not, so content keeps clear of the gesture bar.
+        val bottomInset = if (layout == NavigationSuiteType.NavigationRail) Modifier.navigationBarsPadding() else Modifier
+        Box(Modifier.fillMaxSize().then(bottomInset)) { Destinations(nav, user) }
     }
 }
 
@@ -124,6 +131,7 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
                 user = user,
                 onAlerts = openAlerts,
                 onOpenCustomer = openAccount,
+                onChangeMac = { id -> nav.navigate(CustomerRoute(id, editMac = true)) },
                 onCreateCustomer = { routerId, mac -> nav.navigate(AddCustomerRoute(routerId, mac)) },
                 links = NetworkLinks(
                     onApartment = { nav.navigate(ApartmentRoute(it)) },
@@ -197,6 +205,7 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
         composable<CustomerRoute> { e ->
             CustomerDetailScreen(
                 id = e.toRoute<CustomerRoute>().id,
+                openEditMac = e.toRoute<CustomerRoute>().editMac,
                 user = user,
                 onBack = { nav.popBackStack() },
                 onOpenOther = openAccount,
@@ -249,7 +258,8 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
             ke.co.ftw.ftnadmin.ui.routers.ports.PortsScreen(r.id, r.name, onBack = { nav.popBackStack() })
         }
         composable<EditRouterRoute> { e ->
-            EditRouterScreen(e.toRoute<EditRouterRoute>().id, onBack = { nav.popBackStack() })
+            val routerId = e.toRoute<EditRouterRoute>().id
+            EditRouterScreen(routerId, onBack = { nav.popBackStack() }, onOpenPorts = { name -> nav.navigate(PortsRoute(routerId, name)) })
         }
         composable<NewDevicesRoute> { e ->
             NewDevicesScreen(

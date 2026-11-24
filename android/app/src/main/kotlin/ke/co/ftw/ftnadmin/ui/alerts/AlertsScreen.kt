@@ -24,6 +24,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import ke.co.ftw.ftnadmin.R
+import ke.co.ftw.ftnadmin.ui.common.alertStateLabel
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -68,22 +71,22 @@ fun AlertsScreen(user: UserInfo, onBack: () -> Unit) {
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    item { Text("Active", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground) }
+                    item { Text(stringResource(R.string.active), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground) }
                     if (a.value.active.isEmpty()) {
-                        item { Text("Nothing is wrong right now.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        item { Text(stringResource(R.string.nothing_wrong), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     }
                     items(a.value.active, key = { "a-" + it.key }) { al ->
                         AlertCard(al, muted = a.value.mutes.any { it.routerKey == al.routerKey }, canMute = user.canWrite) { vm.openMute(al.routerKey, al.routerLabel) }
                     }
                     if (a.value.mutes.isNotEmpty()) {
-                        item { Text("Muted routers", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground) }
+                        item { Text(stringResource(R.string.muted_routers), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground) }
                         val names = (a.value.active + a.value.history).associate { it.routerKey to it.routerLabel }
                         items(a.value.mutes, key = { "m-" + it.routerKey }) { m ->
                             MuteRow(m, names[m.routerKey]?.ifBlank { null } ?: m.routerKey, user.canWrite) { vm.mute(m.routerKey, 0) }
                         }
                     }
                     if (a.value.history.isNotEmpty()) {
-                        item { Text("Recent history", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground) }
+                        item { Text(stringResource(R.string.recent_history), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground) }
                         items(a.value.history, key = { "h-" + it.key + it.since }) { al -> AlertCard(al, muted = false, canMute = false) {} }
                     }
                 }
@@ -94,7 +97,7 @@ fun AlertsScreen(user: UserInfo, onBack: () -> Unit) {
     ui.muteSite?.let { (siteId, name) ->
         AlertDialog(
             onDismissRequest = vm::dismissMute,
-            title = { Text("Mute alerts for ${name.ifBlank { "this router" }}") },
+            title = { Text(stringResource(R.string.mute_alerts_for, name.ifBlank { stringResource(R.string.this_router) })) },
             text = {
                 Column {
                     MUTE_CHOICES.forEach { (min, label) ->
@@ -103,7 +106,7 @@ fun AlertsScreen(user: UserInfo, onBack: () -> Unit) {
                 }
             },
             confirmButton = {},
-            dismissButton = { TextButton(onClick = vm::dismissMute) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = vm::dismissMute) { Text(stringResource(R.string.action_cancel)) } },
         )
     }
 }
@@ -112,14 +115,14 @@ fun AlertsScreen(user: UserInfo, onBack: () -> Unit) {
 private fun AlertCard(a: Alert, muted: Boolean, canMute: Boolean, onMute: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(a.label.ifBlank { a.rule }, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f).padding(end = 8.dp))
-                if (muted) StatusChip("Muted", Tone.Neutral) else StatusChip(a.state.ifBlank { "open" }, Tone.Warn)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = androidx.compose.ui.Alignment.Top) {
+                Text(a.label.ifBlank { a.rule }, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                if (muted) StatusChip(stringResource(R.string.muted), Tone.Neutral, Modifier.weight(1f, fill = false)) else StatusChip(alertStateLabel(a.state.ifBlank { "open" }), Tone.Warn, Modifier.weight(1f, fill = false))
             }
             if (a.routerLabel.isNotBlank()) Text(a.routerLabel, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
             if (a.detail.isNotBlank()) Text(a.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("Since ${formatDateTime(a.since)} (${formatAge(a.since)})", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (canMute && a.routerKey.isNotBlank() && !muted) TextButton(onClick = onMute) { Text("Mute this router") }
+            Text(stringResource(R.string.since_age, formatDateTime(a.since), formatAge(a.since)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (canMute && a.routerKey.isNotBlank() && !muted) TextButton(onClick = onMute) { Text(stringResource(R.string.mute_this_router)) }
         }
     }
 }
@@ -127,7 +130,13 @@ private fun AlertCard(a: Alert, muted: Boolean, canMute: Boolean, onMute: () -> 
 @Composable
 private fun MuteRow(m: AlertMute, name: String, canUnmute: Boolean, onUnmute: () -> Unit) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-        Text("$name until ${formatDateTime(m.until)}", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium)
-        if (canUnmute) TextButton(onClick = onUnmute) { Text("Unmute") }
+        // The text takes the room the button leaves, so Unmute is never squeezed out by a long router name.
+        Text(
+            "$name until ${formatDateTime(m.until)}",
+            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f).padding(end = 8.dp),
+        )
+        if (canUnmute) TextButton(onClick = onUnmute) { Text(stringResource(R.string.unmute)) }
     }
 }

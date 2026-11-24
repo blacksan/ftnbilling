@@ -1,23 +1,16 @@
 package ke.co.ftw.ftnadmin.ui.common
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import ke.co.ftw.ftnadmin.R
 import ke.co.ftw.ftnadmin.domain.ServicePackage
 
-/** Radio list of packages: name, speed, price. */
+/** Radio list of plans: name, speed, price. The surface around it scrolls; the whole row selects (48 dp). */
 @Composable
 fun PackagePicker(
     packages: List<ServicePackage>,
@@ -26,17 +19,13 @@ fun PackagePicker(
     modifier: Modifier = Modifier,
 ) {
     if (packages.isEmpty()) {
-        Text("No packages available.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+        Text(stringResource(R.string.no_plans_available), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
         return
     }
-    Column(modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
+    Column(modifier.selectableGroup()) {
         packages.forEach { p ->
-            Row(
-                Modifier.fillMaxWidth().clickable { onSelect(p.id) }.padding(vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                RadioButton(selected = p.id == selectedId, onClick = null)
-                Column(Modifier.padding(start = 12.dp)) {
+            RadioRow(selected = p.id == selectedId, onSelect = { onSelect(p.id) }) {
+                Column(Modifier.weight(1f)) {
                     Text(p.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
                     Text(
                         "${p.speedMbps} Mbps  |  ${formatKes(p.priceKes)}  |  ${formatDuration(p.durationMin)}",

@@ -17,7 +17,6 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -57,6 +56,28 @@ import ke.co.ftw.ftnadmin.core.network.UserInfo
 import ke.co.ftw.ftnadmin.domain.NewDevice
 import ke.co.ftw.ftnadmin.domain.PendingRegistration
 import ke.co.ftw.ftnadmin.ui.common.AccountPicker
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.style.TextOverflow
+import ke.co.ftw.ftnadmin.R
+import ke.co.ftw.ftnadmin.ui.common.ApartmentField
+import ke.co.ftw.ftnadmin.ui.common.ApartmentPickerSheet
+import ke.co.ftw.ftnadmin.ui.common.FormSheet
+import ke.co.ftw.ftnadmin.ui.common.MonoText
+import ke.co.ftw.ftnadmin.ui.common.RadioRow
+import ke.co.ftw.ftnadmin.ui.common.StatusDot
+import ke.co.ftw.ftnadmin.ui.common.houseText
+import ke.co.ftw.ftnadmin.ui.theme.GeistMono
 import ke.co.ftw.ftnadmin.ui.common.AppTopBar
 import ke.co.ftw.ftnadmin.ui.common.CenteredLoading
 import ke.co.ftw.ftnadmin.ui.common.ChipLabel
@@ -70,7 +91,7 @@ import ke.co.ftw.ftnadmin.ui.common.formatAge
 import ke.co.ftw.ftnadmin.ui.common.vmFactory
 import ke.co.ftw.ftnadmin.ui.customers.MacConflictNotice
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun NewDevicesScreen(siteId: String?, user: UserInfo, onBack: () -> Unit, onOpenAccount: (String) -> Unit) {
     val container = LocalContainer.current
@@ -89,7 +110,7 @@ fun NewDevicesScreen(siteId: String?, user: UserInfo, onBack: () -> Unit, onOpen
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        topBar = { AppTopBar("New devices", onBack = onBack) },
+        topBar = { AppTopBar(stringResource(R.string.new_devices), onBack = onBack) },
         snackbarHost = { SnackbarHost(snack) },
     ) { inner ->
         when (val d = ui.devices) {
@@ -99,7 +120,7 @@ fun NewDevicesScreen(siteId: String?, user: UserInfo, onBack: () -> Unit, onOpen
                 if (d.value.isEmpty() && ui.registrations.isEmpty()) {
                     // Scrollable so pull-to-refresh still works on an empty list.
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                        EmptyState("No unconfigured devices. Everything connected has an account.\nPull down to check the routers again.")
+                        EmptyState(stringResource(R.string.no_new_devices), body = stringResource(R.string.pull_to_recheck))
                     }
                 } else {
                     LazyColumn(
@@ -110,16 +131,16 @@ fun NewDevicesScreen(siteId: String?, user: UserInfo, onBack: () -> Unit, onOpen
                         if (ui.registrations.isNotEmpty()) {
                             item(key = "regs-title") {
                                 Text(
-                                    "Waiting for approval",
+                                    stringResource(R.string.waiting_for_approval),
                                     style = MaterialTheme.typography.titleMedium,
                                     color = MaterialTheme.colorScheme.onSurface,
                                 )
                             }
                             if (user.canWrite) {
                                 item(key = "regs-rejectall") {
-                                    ChipRow(horizontalPadding = 0.dp) {
+                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                         rejectAllTargets(ui.registrations).forEach { t ->
-                                            OutlinedButton(onClick = { vm.askRejectAll(t) }) { Text("Reject all ${t.count} for ${t.label}", maxLines = 1) }
+                                            OutlinedButton(onClick = { vm.askRejectAll(t) }) { Text(stringResource(R.string.reject_all_for, t.count, t.label)) }
                                         }
                                     }
                                 }
@@ -129,7 +150,7 @@ fun NewDevicesScreen(siteId: String?, user: UserInfo, onBack: () -> Unit, onOpen
                             }
                             item(key = "devices-title") {
                                 Text(
-                                    "Devices not on an account",
+                                    stringResource(R.string.devices_not_on_account),
                                     style = MaterialTheme.typography.titleMedium,
                                     color = MaterialTheme.colorScheme.onSurface,
                                 )
@@ -165,14 +186,15 @@ fun NewDevicesScreen(siteId: String?, user: UserInfo, onBack: () -> Unit, onOpen
 }
 
 /** One person who registered on the captive page. Approve asks which device is theirs. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RegistrationRow(r: PendingRegistration, canDecide: Boolean, onApprove: () -> Unit, onReject: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(r.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
             Text(
-                if (r.unassigned) listOf(r.building, "house ${r.unit}", "no router yet").filter { it.isNotBlank() }.joinToString("  |  ")
-                else listOf(r.apartmentName, "house ${r.unit}", r.siteName).filter { it.isNotBlank() }.joinToString("  |  "),
+                if (r.unassigned) listOf(r.building, houseText(r.unit), "no router yet").filter { it.isNotBlank() }.joinToString("  |  ")
+                else listOf(r.apartmentName, houseText(r.unit), r.siteName).filter { it.isNotBlank() }.joinToString("  |  "),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
             )
@@ -182,7 +204,7 @@ private fun RegistrationRow(r: PendingRegistration, canDecide: Boolean, onApprov
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
             )
             if (r.deviceName.isNotBlank()) {
-                Text("Device name given: ${r.deviceName}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                Text(stringResource(R.string.device_name_given, r.deviceName), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
             }
             if (r.unassigned) {
                 Text(
@@ -192,9 +214,9 @@ private fun RegistrationRow(r: PendingRegistration, canDecide: Boolean, onApprov
                 )
             }
             if (canDecide) {
-                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onApprove, enabled = !r.unassigned) { Text("Approve", maxLines = 1) }
-                    OutlinedButton(onClick = onReject) { Text("Reject", maxLines = 1) }
+                FlowRow(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Button(onClick = onApprove, enabled = !r.unassigned) { Text(stringResource(R.string.approve)) }
+                    OutlinedButton(onClick = onReject) { Text(stringResource(R.string.reject)) }
                 }
             }
         }
@@ -205,81 +227,79 @@ private fun RegistrationRow(r: PendingRegistration, canDecide: Boolean, onApprov
  * The server cannot see the visitor's MAC, so the owner names the device: one of the router's unconfigured devices
  * (the likely one is preselected) or a MAC typed in.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ApproveDialog(r: PendingRegistration, mac: String, busy: Boolean, vm: NewDevicesViewModel) {
-    AlertDialog(
-        onDismissRequest = vm::cancelApprove,
-        title = { Text("Approve ${r.name}?") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("House ${r.unit} gets an account on the device you pick. It comes online on the next router check.", style = MaterialTheme.typography.bodyMedium)
-                if (r.deviceName.isNotBlank()) {
-                    Text("Device name given: ${r.deviceName}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                }
-                if (r.candidates.isEmpty()) {
-                    Text("No unknown device has been seen on this router yet. Type the MAC below.", style = MaterialTheme.typography.bodySmall)
-                } else {
-                    Text(
-                        "Devices on this router, first seen closest to the request first. One is ticked only when it is the only device first seen within 10 minutes of the request.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Column(Modifier.selectableGroup()) {
-                        r.candidates.forEach { c ->
-                            val picked = mac.equals(c.mac, ignoreCase = true)
-                            Row(
-                                Modifier.fillMaxWidth().selectable(selected = picked, onClick = { vm.setApproveMac(c.mac) }, role = Role.RadioButton).padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.Top,
-                            ) {
-                                RadioButton(selected = picked, onClick = null, modifier = Modifier.padding(top = 2.dp, end = 8.dp))
-                                Column {
-                                    Text(
-                                        listOf(c.hostName.ifBlank { "no host name" }, c.vendor.ifBlank { "unknown vendor" }, c.port.takeIf { it.isNotBlank() }?.let { "port $it" }).filterNotNull().joinToString("  |  "),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = if (c.nameMatch) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (c.nameMatch) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                    )
-                                    Text(
-                                        listOf(c.mac, "first seen ${formatAge(c.firstSeen)}", "last seen ${formatAge(c.lastSeen)}", if (c.online) "online" else null)
-                                            .filterNotNull().joinToString("  |  "),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                    val notes = listOfNotNull(if (c.nameMatch) "matches the name given" else null, if (c.likely) "likely" else null)
-                                    if (notes.isNotEmpty()) {
-                                        Text(notes.joinToString(", "), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                                    }
-                                }
+    // A scrolling sheet: the candidate list and the MAC field stay reachable at large fonts and above the keyboard.
+    FormSheet(
+        title = stringResource(R.string.approve_title, r.name),
+        onDismiss = vm::cancelApprove,
+        confirmLabel = stringResource(if (busy) R.string.approving else R.string.approve),
+        onConfirm = vm::approve,
+        confirmEnabled = mac.isNotBlank() && !busy,
+    ) {
+        Text(stringResource(R.string.approve_body, houseText(r.unit)), style = MaterialTheme.typography.bodyMedium)
+        if (r.deviceName.isNotBlank()) {
+            Text(stringResource(R.string.device_name_given, r.deviceName), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+        }
+        if (r.candidates.isEmpty()) {
+            Text(stringResource(R.string.no_unknown_device), style = MaterialTheme.typography.bodyMedium)
+        } else {
+            Text(
+                stringResource(R.string.candidates_hint),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Column(Modifier.selectableGroup()) {
+                r.candidates.forEach { c ->
+                    val picked = mac.equals(c.mac, ignoreCase = true)
+                    RadioRow(selected = picked, onSelect = { vm.setApproveMac(c.mac) }) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                listOf(c.hostName.ifBlank { "no host name" }, c.vendor.ifBlank { "unknown vendor" }, c.port.takeIf { it.isNotBlank() }?.let { "port $it" }).filterNotNull().joinToString("  |  "),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (c.nameMatch) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (c.nameMatch) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            )
+                            MonoText(c.mac, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                listOf("first seen ${formatAge(c.firstSeen)}", "last seen ${formatAge(c.lastSeen)}", if (c.online) "online" else null).filterNotNull().joinToString("  |  "),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            val notes = listOfNotNull(if (c.nameMatch) "matches the name given" else null, if (c.likely) "likely" else null)
+                            if (notes.isNotEmpty()) {
+                                Text(notes.joinToString(", "), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                             }
                         }
                     }
                 }
-                OutlinedTextField(mac, vm::setApproveMac, label = { Text("Device MAC") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             }
-        },
-        confirmButton = { TextButton(onClick = vm::approve, enabled = mac.isNotBlank() && !busy) { Text(if (busy) "Approving..." else "Approve") } },
-        dismissButton = { TextButton(onClick = vm::cancelApprove) { Text("Cancel") } },
-    )
+        }
+        OutlinedTextField(
+            mac, vm::setApproveMac, label = { Text(stringResource(R.string.device_mac)) }, singleLine = true,
+            textStyle = LocalTextStyle.current.copy(fontFamily = GeistMono),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, capitalization = KeyboardCapitalization.Characters),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
 }
 
 @Composable
 private fun DeviceRow(d: NewDevice, onClick: () -> Unit) {
     val clipboard = LocalClipboardManager.current
-    val good = MaterialTheme.colorScheme.tertiary
-    val off = MaterialTheme.colorScheme.outline
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(10.dp).background(if (d.online) good else off, CircleShape))
+            // The same dot as everywhere else (green online); the line below says "online" or when it was last seen.
+            StatusDot(if (d.online) true else null, describe = false)
             Column(Modifier.weight(1f).padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(d.mac, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                MonoText(d.mac, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                 Text(
                     listOf(d.vendor.ifBlank { "Unknown vendor" }, d.hostName, d.ip.ifBlank { d.addressNote }).filter { it.isNotBlank() }.joinToString("  |  "),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                    listOf(d.routerLabel, if (d.online) "online" else "seen ${formatAge(d.lastSeen)}", d.suggestedAccount?.let { "looks like house ${it.flat}" }).filterNotNull().filter { it.isNotBlank() }.joinToString("  |  "),
+                    listOf(d.routerLabel, if (d.online) "online" else "seen ${formatAge(d.lastSeen)}", d.suggestedAccount?.let { "looks like ${houseText(it.flat).lowercase()}" }).filterNotNull().filter { it.isNotBlank() }.joinToString("  |  "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -290,12 +310,12 @@ private fun DeviceRow(d: NewDevice, onClick: () -> Unit) {
                     Text(
                         b.text,
                         style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
             }
-            IconButton(onClick = { clipboard.setText(AnnotatedString(d.mac)) }) { Icon(Icons.Default.Share, contentDescription = "Copy MAC") }
+            IconButton(onClick = { clipboard.setText(AnnotatedString(d.mac)) }) { Icon(Icons.Default.ContentCopy, contentDescription = stringResource(R.string.copy_mac)) }
         }
     }
 }
@@ -311,10 +331,10 @@ private fun DeviceSheetContent(
     val d = sheet.device
     ModalBottomSheet(onDismissRequest = vm::closeSheet, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
-            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+            Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(d.mac, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+            MonoText(d.mac, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
             Text(
                 listOf(d.vendor, d.hostName, d.ip.ifBlank { d.addressNote }, d.routerLabel).filter { it.isNotBlank() }.joinToString("  |  "),
                 style = MaterialTheme.typography.bodyMedium,
@@ -333,9 +353,17 @@ private fun DeviceSheetContent(
             } else if (belongs != null) {
                 BelongsToSection(sheet, belongs, vm)
             } else {
-            ChipRow(horizontalPadding = 0.dp) {
-                FilterChip(sheet.tab == SheetTab.Attach, { vm.setTab(SheetTab.Attach) }, label = { ChipLabel("Attach to account") })
-                FilterChip(sheet.tab == SheetTab.Create, { vm.setTab(SheetTab.Create) }, label = { ChipLabel("Create account") })
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                SegmentedButton(
+                    selected = sheet.tab == SheetTab.Attach,
+                    onClick = { vm.setTab(SheetTab.Attach) },
+                    shape = SegmentedButtonDefaults.itemShape(0, 2),
+                ) { Text(stringResource(R.string.attach_to_account), maxLines = 2, overflow = TextOverflow.Ellipsis) }
+                SegmentedButton(
+                    selected = sheet.tab == SheetTab.Create,
+                    onClick = { vm.setTab(SheetTab.Create) },
+                    shape = SegmentedButtonDefaults.itemShape(1, 2),
+                ) { Text(stringResource(R.string.create_account), maxLines = 2, overflow = TextOverflow.Ellipsis) }
             }
             when (sheet.tab) {
                 SheetTab.Attach -> {
@@ -343,36 +371,42 @@ private fun DeviceSheetContent(
                         selectedId = sheet.selected?.id,
                         onSelect = vm::select,
                         search = vm::searchAccounts,
-                        suggested = d.suggestedAccount?.let { ke.co.ftw.ftnadmin.domain.Account(id = it.id, code = it.code, flat = it.flat, siteId = d.routerKey) },
+                        suggested = d.suggestedAccount?.let { ke.co.ftw.ftnadmin.domain.Account(id = it.id, code = it.code, flat = it.flat, unit = it.flat, siteId = d.routerKey) },
                     )
                     Button(onClick = vm::attach, enabled = sheet.selected != null && !sheet.busy, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (sheet.busy) "Attaching..." else "Attach to house ${sheet.selected?.flat.orEmpty()}".trim())
+                        Text(if (sheet.busy) stringResource(R.string.attaching) else stringResource(R.string.attach_to_house, sheet.selected?.unitLabel.orEmpty()).trim())
                     }
                 }
                 SheetTab.Create -> {
-                    Text("Apartment", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (sheet.apartments.isEmpty()) {
                         Text(
-                            "This router serves no apartment yet. Link it to one on the Apartments page first.",
-                            style = MaterialTheme.typography.bodySmall,
+                            stringResource(R.string.router_no_apartment),
+                            style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.error,
                         )
-                    }
-                    ChipRow(horizontalPadding = 0.dp) {
-                        sheet.apartments.forEach { a ->
-                            FilterChip(sheet.apartmentId == a.id, { vm.setApartment(a.id) }, label = { ChipLabel(a.name) })
+                    } else {
+                        // The same apartment picker as Add customer and Move.
+                        var pickingApartment by remember { mutableStateOf(false) }
+                        ApartmentField(selected = sheet.apartments.firstOrNull { it.id == sheet.apartmentId }, onClick = { pickingApartment = true })
+                        if (pickingApartment) {
+                            ApartmentPickerSheet(
+                                apartments = sheet.apartments,
+                                selectedId = sheet.apartmentId,
+                                onSelect = { a -> vm.setApartment(a.id); pickingApartment = false },
+                                onDismiss = { pickingApartment = false },
+                            )
                         }
                     }
-                    OutlinedTextField(sheet.flat, vm::setFlat, label = { Text("House number") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(sheet.tenant, vm::setTenant, label = { Text("Tenant (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(sheet.flat, vm::setFlat, label = { Text(stringResource(R.string.house_number)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(sheet.tenant, vm::setTenant, label = { Text(stringResource(R.string.tenant_optional)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(
-                        sheet.phone, vm::setPhone, label = { Text("Phone (optional)") }, singleLine = true,
+                        sheet.phone, vm::setPhone, label = { Text(stringResource(R.string.phone_optional)) }, singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone), modifier = Modifier.fillMaxWidth(),
                     )
-                    Text("Package (optional)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.plan_optional), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     PackagePicker(packages, sheet.packageId, vm::setPackage)
                     Button(onClick = vm::create, enabled = sheet.flat.isNotBlank() && sheet.apartmentId != null && !sheet.busy, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (sheet.busy) "Creating..." else "Create account")
+                        Text(stringResource(if (sheet.busy) R.string.creating else R.string.create_account))
                     }
                 }
             }
@@ -386,8 +420,7 @@ private fun DeviceSheetContent(
             }
             sheet.macOwner?.let { MacConflictNotice(it, onOpen = { id -> vm.closeSheet(); onOpenAccount(id) }) }
             sheet.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
-            OutlinedButton(onClick = vm::askDismiss, enabled = !sheet.busy, modifier = Modifier.fillMaxWidth()) { Text("Dismiss this device") }
-            Box(Modifier.size(16.dp))
+            OutlinedButton(onClick = vm::askDismiss, enabled = !sheet.busy, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.dismiss_device)) }
         }
     }
     if (sheet.confirmMove) {
@@ -434,26 +467,23 @@ private fun DeviceSheetContent(
  * The MAC belongs to a customer of another apartment, so it is never provisioned here. Attach and Create are
  * disabled; the owner or an operator can move the customer to this router after a confirm.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun BelongsToSection(sheet: DeviceSheet, b: ke.co.ftw.ftnadmin.domain.BelongsTo, vm: NewDevicesViewModel) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(b.text, style = MaterialTheme.typography.titleSmall)
             Text(
-                "It stays unregistered on this router. A MAC of one apartment is never set up in another.",
+                "It stays unregistered on this router. A MAC of one apartment is never set up in another. Attach and Create are not offered.",
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
     }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = {}, enabled = false) { Text("Attach", maxLines = 1) }
-        OutlinedButton(onClick = {}, enabled = false) { Text("Create account", maxLines = 1) }
-    }
     if (!b.sameApartment && b.moveToChoices.size > 1) {
         Text("Move into apartment", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        ChipRow(horizontalPadding = 0.dp) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             b.moveToChoices.forEach { c ->
-                FilterChip(sheet.moveApartmentId == c.id, { vm.setMoveApartment(c.id) }, label = { ChipLabel(c.name) })
+                FilterChip(sheet.moveApartmentId == c.id, { vm.setMoveApartment(c.id) }, label = { Text(c.name) })
             }
         }
     }
