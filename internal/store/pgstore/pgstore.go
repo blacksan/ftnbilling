@@ -328,6 +328,8 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	do(err)
 	ouic, err := queryAll(ctx, tx, ouiCacheC, "")
 	do(err)
+	oltst, err := queryAll(ctx, tx, oltStatesC, "")
+	do(err)
 	eqe, err := queryAll(ctx, tx, eqEventsC, "")
 	do(err)
 	nts, err := queryAll(ctx, tx, notesC, "")
@@ -361,6 +363,7 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	d.Registrations = map[string]store.Registration{}
 	d.ONUs, d.ONUTasks = map[string]store.ONU{}, map[string]store.ONUTask{}
 	d.OUICache = map[string]store.OUIEntry{}
+	d.OLTStates = map[string]store.OLTState{}
 	d.AdminUsers, d.AdminSessions, d.APIDevices = map[string]store.AdminUser{}, map[string]store.AdminSession{}, map[string]store.APIDevice{}
 	fill(d.Sites, sites, sitesC)
 	fill(d.Packages, pk, packagesC)
@@ -384,6 +387,7 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	fill(d.ONUs, onus, onusC)
 	fill(d.ONUTasks, onut, onuTasksC)
 	fill(d.OUICache, ouic, ouiCacheC)
+	fill(d.OLTStates, oltst, oltStatesC)
 	fill(d.Tasks, tsk, tasksC)
 	fill(d.EquipmentEvents, eqe, eqEventsC)
 	fill(d.Notes, nts, notesC)
@@ -427,6 +431,7 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	devicesC.queueDeletes(batch, cs.Devices.Delete)
 	registrationsC.queueDeletes(batch, cs.Registrations.Delete)
 	ouiCacheC.queueDeletes(batch, cs.OUICache.Delete)
+	oltStatesC.queueDeletes(batch, cs.OLTStates.Delete)
 	onuTasksC.queueDeletes(batch, cs.ONUTasks.Delete)
 	onusC.queueDeletes(batch, cs.ONUs.Delete)
 	tasksC.queueDeletes(batch, cs.Tasks.Delete)
@@ -471,6 +476,8 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	mark("onu_tasks")
 	ouiCacheC.queueUpserts(batch, cs.OUICache)
 	mark("oui_cache")
+	oltStatesC.queueUpserts(batch, cs.OLTStates)
+	mark("olt_states")
 	tasksC.queueUpserts(batch, cs.Tasks)
 	mark("tasks")
 	eqEventsC.queueUpserts(batch, cs.EquipmentEvents)

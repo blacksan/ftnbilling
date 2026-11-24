@@ -35,6 +35,7 @@ var WipeTables = []string{
 	"registrations",    // captive-page self-registrations (names and phone numbers)
 	"onus",             // TR-069 devices (serials, MACs, Wi-Fi names, sealed passphrases)
 	"onu_tasks",        // TR-069 task queue
+	"olt_states",       // OLT management state (sealed enable passwords and saved configurations)
 	"tasks",            // router task and retry queue
 	"equipment_events", // equipment history
 	"notes",            // CRM notes
@@ -65,7 +66,7 @@ var wipeCounts = []struct{ kind, sql string }{
 	{store.WipeCustomers, "SELECT count(*) FROM customers"},
 	{store.WipeAccounts, "SELECT count(*) FROM accounts"},
 	{store.WipeTenancies, "SELECT count(*) FROM tenancies"},
-	{store.WipeEquipment, "SELECT count(*) FROM equipment"},
+	{store.WipeEquipment, "SELECT (SELECT count(*) FROM equipment) + (SELECT count(*) FROM olt_states)"},
 	{store.WipeEquipmentEvents, "SELECT count(*) FROM equipment_events"},
 	{store.WipeApartments, "SELECT (SELECT count(*) FROM apartments) + (SELECT count(*) FROM apartment_sites)"},
 	{store.WipeOrders, "SELECT count(*) FROM orders"},

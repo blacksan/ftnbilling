@@ -621,6 +621,9 @@ type Data struct {
 
 	// OUICache holds the answers of the online MAC-vendor lookup (key: the OUI "AA:BB:CC").
 	OUICache map[string]OUIEntry `json:"oui_cache"`
+
+	// OLTStates is the server-side management state of the OLTs (key: the OLT equipment ID).
+	OLTStates map[string]OLTState `json:"olt_states"`
 }
 
 func (d *Data) init() {
@@ -660,6 +663,9 @@ func (d *Data) init() {
 	}
 	if d.OUICache == nil {
 		d.OUICache = map[string]OUIEntry{}
+	}
+	if d.OLTStates == nil {
+		d.OLTStates = map[string]OLTState{}
 	}
 	if d.ClosedAccounts == nil {
 		d.ClosedAccounts = map[string]Account{}

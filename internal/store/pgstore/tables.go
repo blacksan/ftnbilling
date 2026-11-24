@@ -515,6 +515,18 @@ var ouiCacheC = (&codec[store.OUIEntry]{
 	dst:  func(v *store.OUIEntry) []any { return []any{&v.Prefix, &v.Vendor, &v.Found, t_(&v.CheckedAt)} },
 }).build()
 
+var oltStatesC = (&codec[store.OLTState]{
+	name: "olt_states", pk: []string{"id"}, key: func(v store.OLTState) string { return v.ID },
+	cols: []string{"id", "settings", "status", "found", "backups", "updated"},
+	args: func(v store.OLTState) []any {
+		return []any{v.ID, jsonArg(v.Settings, "{}"), jsonArg(v.Status, "{}"), jsonArg(v.Found, "[]"), jsonArg(v.Backups, "[]"), nt(v.Updated)}
+	},
+	dst: func(v *store.OLTState) []any {
+		return []any{&v.ID, jsonScan[store.OLTSettings]{&v.Settings}, jsonScan[store.OLTStatus]{&v.Status}, jsonScan[[]store.OLTFound]{&v.Found},
+			jsonScan[[]store.OLTBackup]{&v.Backups}, t_(&v.Updated)}
+	},
+}).build()
+
 var eqEventsC = (&codec[store.EquipmentEvent]{
 	name: "equipment_events", pk: []string{"id"}, key: func(v store.EquipmentEvent) string { return v.ID },
 	cols: []string{"id", "equipment_id", "time", "kind", "from_status", "to_status", "site_id", "account_id", "customer_id", "note"},
