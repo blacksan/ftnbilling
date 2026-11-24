@@ -180,7 +180,8 @@ func (s *Server) payRoutes(mux *http.ServeMux) {
 }
 
 // payAgain is "Try again" after a payment that failed or timed out: the package step of the same account with the
-// same package chosen and the same paying number (the order id is the visitor's own receipt of that attempt).
+// same package chosen and, unless it was the number on file, the same paying number (the order id is the visitor's
+// own receipt of that attempt).
 func (s *Server) payAgain(w http.ResponseWriter, r *http.Request) {
 	p := s.payBase(r)
 	o, ok := s.svc.GetOrder(r.FormValue("order"))
@@ -193,17 +194,15 @@ func (s *Server) payAgain(w http.ResponseWriter, r *http.Request) {
 		toPay(w, r)
 		return
 	}
-	r.Form.Set("phone_src", "")
+	// The order may have been started from a house number, which is easy to guess: the retry page is the house-number
+	// view (byCode false), so it never shows the account code and never offers the number on file. The number of the
+	// earlier attempt is filled in only when it is not the number on file (the page never holds that one).
+	r.Form.Del("phone_src")
 	r.Form.Del("phone")
-	if n := normOrEmpty(a.Phone); o.Phone != "" && o.Phone != n {
-		r.Form.Set("phone_src", "other")
-		r.Form.Set("phone", localPhone(o.Phone))
-	} else if n != "" {
-		r.Form.Set("phone_src", "file")
-	} else if o.Phone != "" {
+	if o.Phone != "" && o.Phone != normOrEmpty(a.Phone) {
 		r.Form.Set("phone", localPhone(o.Phone))
 	}
-	s.payChoose(w, r, p, a, true, http.StatusOK, "", o.PackageID)
+	s.payChoose(w, r, p, a, false, http.StatusOK, "", o.PackageID)
 }
 
 // payPage is everything the public payment page shows. It never carries a

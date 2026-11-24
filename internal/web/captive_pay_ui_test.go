@@ -119,8 +119,25 @@ func TestPayTryAgainIsPrefilled(t *testing.T) {
 	r := c.visit("GET", "/pay/again?order="+o.ID, "isp.ftw.co.ke", nil)
 	html := body(t, r)
 	if r.StatusCode != 200 || !strings.Contains(html, "Flat 4B") || !strings.Contains(html, `value="`+day+`" checked`) ||
-		!strings.Contains(html, `value="0799111222"`) || !strings.Contains(html, `value="other" checked`) {
+		!strings.Contains(html, `value="0799111222"`) {
 		t.Errorf("not prefilled: %d\n%s", r.StatusCode, html)
+	}
+	// An order id must not turn a house-number visit into an account-code one: no code, no number on file.
+	if strings.Contains(html, c.acct.Code) || strings.Contains(html, "number on file") {
+		t.Errorf("retry page shows the account code or offers the number on file:\n%s", html)
+	}
+	// An attempt paid from the number on file does not put that number on the page.
+	onFile, err := billing.NormalizePhone(c.acct.Phone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o2, err := c.svc.CreateOrder(billing.OrderInput{AccountID: c.acct.ID, PackageID: day, Phone: onFile, Method: "mpesa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	html = body(t, c.visit("GET", "/pay/again?order="+o2.ID, "isp.ftw.co.ke", nil))
+	if strings.Contains(html, "0"+onFile[3:]) || strings.Contains(html, onFile) {
+		t.Errorf("retry page carries the number on file:\n%s", html)
 	}
 	// An unknown order goes to the landing page.
 	r = c.visit("GET", "/pay/again?order=nope", "isp.ftw.co.ke", nil)
