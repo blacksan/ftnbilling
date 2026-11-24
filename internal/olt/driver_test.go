@@ -120,6 +120,13 @@ func TestDenylistBlocksBeforeSending(t *testing.T) {
 		"erase flash", "era startup-config", "factory-reset", "default interface", "reboot", "reload", "rebo", "format flash:",
 		"delete startup-config", "write erase", "copy tftp flash", "upgrade firmware", "username admin password x", "password new",
 		"enable password x", "shutdown", "no ip route 0.0.0.0 0.0.0.0 10.7.1.1", "no interface vlan 98", "no ipaddress",
+		// Abbreviations the CLI accepts, other spellings, "do", and words further along the line.
+		"reb", "reboo", "REBOOT", "  Reload  ", "rel", "res", "er", "fo", "form flash", "fac", "def", "dele startup-config", "cop tftp",
+		"wr er", "write era", "w e", "write tftp 1.2.3.4", "do reboot", "do  wr er", "system reboot", "onu reset 3", "onu reb 3",
+		"shu", "usern admin", "no usern admin", "no ip addr", "no ip rou 0.0.0.0 0.0.0.0 10.7.1.1", "no int vlan 98", "no in vl 98",
+		"no vlan 90-100", "no vlan 5,98", "no vl 98", "clear config",
+		// A line break or control character inside a value.
+		"onu add 1 profile p sn ABCD12345678\nreboot", "vlan 5\rreload", "vlan 5\x00", "vlan\t5",
 	}
 	for _, c := range bad {
 		if err := s.Config(ctx(t), []string{"vlan 5", c}); !errors.Is(err, ErrDenied) {
@@ -142,6 +149,44 @@ func TestDenylistBlocksBeforeSending(t *testing.T) {
 	// Good lines still pass.
 	if err := s.Config(ctx(t), []string{"vlan 99", "exit", "no onu 3"}); err != nil {
 		t.Errorf("ordinary lines refused: %v", err)
+	}
+	// Every line the dialect itself builds passes the denylist.
+	d := VSOL()
+	var gen []string
+	gen = append(gen, d.VLANLines(100)...)
+	gen = append(gen, d.UplinkLines("0/1", []int{99, 98}, 100)...)
+	gen = append(gen, d.MgmtIfaceLines(98, "10.7.1.2", "255.255.255.248", "10.7.1.1")...)
+	gen = append(gen, d.DBALines(DefaultDBA, DefaultAssured, DefaultMaximum)...)
+	gen = append(gen, d.ONUProfileLines(DefaultONUProfile)...)
+	gen = append(gen, d.PONEnter(1)...)
+	gen = append(gen, d.ONUAddLine(1, DefaultONUProfile, "ABCD12345678"), d.ONURemoveLine(1))
+	gen = append(gen, d.ONUServiceLines(1, DefaultDBA, 100, 99)...)
+	gen = append(gen, d.PONExit()...)
+	gen = append(gen, d.EnableCmd, d.ConfigCmd, d.EndCmd, d.ExitCmd, d.SaveCmd, d.NoPaging, d.VersionCmd, d.RunningCmd, d.AutoFindCmd)
+	gen = append(gen, d.StateQuery(1).Cmds...)
+	gen = append(gen, d.OpticalQuery(1).Cmds...)
+	for _, l := range gen {
+		if err := s.checkIn(l, false); err != nil {
+			t.Errorf("a dialect line is denied: %q: %v", l, err)
+		}
+	}
+}
+
+func TestWriteRefusesLineBreaks(t *testing.T) {
+	f := newFake(t)
+	f.EnablePass = "x"
+	tg := target(f, "telnet")
+	tg.Enable = "x\rreboot"
+	if s, err := Open(ctx(t), VSOL(), tg, nil); err == nil {
+		defer s.Close()
+		if _, err := s.Show(ctx(t), "show version"); err == nil {
+			t.Fatal("an enable password with a line break was sent")
+		}
+	}
+	for _, l := range f.Lines() {
+		if strings.Contains(strings.ToLower(l), "reboot") {
+			t.Fatalf("the OLT received %q", l)
+		}
 	}
 }
 
@@ -170,9 +215,9 @@ func TestErrorAbortsBatch(t *testing.T) {
 }
 
 func TestRedact(t *testing.T) {
-	in := "username admin password s3cr3t\nsnmp community public\nenable password 7 abcdef\nvlan 5"
+	in := "username admin password s3cr3t\nsnmp community public\nenable password 7 abcdef\nradius-server key rad1us\ntacacs-server key 7 tac4cs\nvlan 5"
 	out := Redact(in)
-	for _, w := range []string{"s3cr3t", "public", "abcdef"} {
+	for _, w := range []string{"s3cr3t", "public", "abcdef", "rad1us", "tac4cs"} {
 		if strings.Contains(out, w) {
 			t.Fatalf("%q survived: %s", w, out)
 		}

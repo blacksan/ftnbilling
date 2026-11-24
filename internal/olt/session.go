@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -132,6 +133,11 @@ func (s *Session) Close() {
 }
 
 func (s *Session) write(line string) error {
+	// Every write is one line, including the login name and the passwords: a line break inside one would be a second
+	// command that no check has seen.
+	if strings.ContainsAny(line, "\r\n\x00") {
+		return errors.New("olt: refusing to send a line with a line break inside it")
+	}
 	_, err := io.WriteString(s.rw, line+s.eol)
 	return err
 }
@@ -356,22 +362,102 @@ func (s *Session) lower(ctx context.Context) {
 func (s *Session) check(line string) error { return s.checkIn(line, s.inMgmt) }
 
 func (s *Session) checkIn(line string, inMgmt bool) error {
+	// One line is one command: a line break (or any other control character) inside it would let a value smuggle a
+	// second command past the checks below.
+	for _, c := range line {
+		if c < 0x20 || c == 0x7f {
+			return &DeniedError{Line: line, Why: "a control character or line break inside the line"}
+		}
+	}
 	n := Norm(line)
+	f := strings.Fields(n)
+	// "do <command>" runs a privileged command from configuration mode: check the command itself.
+	for len(f) > 1 && f[0] == "do" {
+		f = f[1:]
+	}
+	n = strings.Join(f, " ")
 	for _, r := range s.d.Deny {
 		if r.RE.MatchString(n) {
 			return &DeniedError{Line: line, Why: r.Why}
 		}
 	}
+	if len(f) == 0 {
+		return nil
+	}
+	if prefixOfAny(f[0], s.d.DenyVerbs, 1) {
+		return &DeniedError{Line: line, Why: "a denied command (or an abbreviation of one)"}
+	}
+	for _, w := range f {
+		if prefixOfAny(w, s.d.DenyAnywhere, 3) {
+			return &DeniedError{Line: line, Why: "a denied word (or an abbreviation of one)"}
+		}
+	}
+	if isPrefix(f[0], "write", 1) && len(f) > 1 && !inList(f[1], s.d.WriteArgsOK) {
+		return &DeniedError{Line: line, Why: "write to elsewhere"}
+	}
+	if f[0] == "no" && len(f) > 1 {
+		switch {
+		case prefixOfAny(f[1], s.d.DenyAfterNo, 1):
+			return &DeniedError{Line: line, Why: "user, password, address or route removal"}
+		case f[1] == "ip" && len(f) > 2 && prefixOfAny(f[2], []string{"address", "route", "default-gateway", "gateway"}, 1):
+			return &DeniedError{Line: line, Why: "removal of the management address or route"}
+		case isPrefix(f[1], "interface", 2) && len(f) > 2 && prefixOfAny(f[2], []string{"vlan", "vlanif"}, 1):
+			return &DeniedError{Line: line, Why: "removal of a VLAN interface"}
+		}
+	}
 	if s.Protect > 0 {
-		f := strings.Fields(n)
-		if len(f) == 3 && f[0] == "no" && f[1] == "vlan" && f[2] == fmt.Sprint(s.Protect) {
+		if f[0] == "no" && len(f) >= 3 && isPrefix(f[1], "vlan", 2) && vlanListHas(f[2], s.Protect) {
 			return &DeniedError{Line: line, Why: "removal of the management VLAN"}
 		}
-		if inMgmt && len(f) > 0 && f[0] == "no" {
+		if inMgmt && f[0] == "no" {
 			return &DeniedError{Line: line, Why: "a removal inside the management interface"}
 		}
 	}
 	return nil
+}
+
+// isPrefix reports whether w (at least min letters) is the start of word: how the CLI reads an abbreviation.
+func isPrefix(w, word string, min int) bool {
+	return len(w) >= min && strings.HasPrefix(word, w)
+}
+
+func prefixOfAny(w string, words []string, min int) bool {
+	for _, x := range words {
+		if isPrefix(w, x, min) {
+			return true
+		}
+	}
+	return false
+}
+
+func inList(w string, l []string) bool {
+	for _, x := range l {
+		if w == x {
+			return true
+		}
+	}
+	return false
+}
+
+// vlanListHas reports whether a VLAN argument ("98", "90-100", "5,98") names v.
+func vlanListHas(arg string, v int) bool {
+	for _, part := range strings.Split(arg, ",") {
+		lo, hi, isRange := strings.Cut(part, "-")
+		a, err := strconv.Atoi(lo)
+		if err != nil {
+			continue
+		}
+		b := a
+		if isRange {
+			if b, err = strconv.Atoi(hi); err != nil {
+				continue
+			}
+		}
+		if a <= v && v <= b {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Session) track(line string) { s.inMgmt = s.trackIn(line, s.inMgmt) }
@@ -383,9 +469,9 @@ func (s *Session) trackIn(line string, inMgmt bool) bool {
 		return inMgmt
 	}
 	switch {
-	case len(f) >= 3 && f[0] == "interface" && f[1] == "vlan":
+	case len(f) >= 3 && isPrefix(f[0], "interface", 2) && isPrefix(f[1], "vlan", 1):
 		return s.Protect > 0 && f[2] == fmt.Sprint(s.Protect)
-	case f[0] == "interface", f[0] == "exit", f[0] == "end", f[0] == "vlan", f[0] == "profile":
+	case isPrefix(f[0], "interface", 2), f[0] == "exit", f[0] == "end", f[0] == "vlan", f[0] == "profile":
 		return false
 	}
 	return inMgmt
@@ -500,31 +586,37 @@ func (s *Session) DisablePaging(ctx context.Context) {
 // returned error is a *CmdError or *DeniedError naming it, and results holds every line sent so far. Nothing is saved
 // here: call Save when the batch worked.
 func (s *Session) Config(ctx context.Context, lines []string) error {
+	_, err := s.ConfigN(ctx, lines)
+	return err
+}
+
+// ConfigN is Config that also says how many of the lines were sent to the OLT (the refused one included).
+func (s *Session) ConfigN(ctx context.Context, lines []string) (int, error) {
 	// Check every line before any is sent: a denied line must stop the batch before it changes anything.
 	in := s.inMgmt
 	for _, l := range lines {
 		if err := s.checkIn(l, in); err != nil {
-			return err
+			return 0, err
 		}
 		in = s.trackIn(l, in)
 	}
 	if err := s.raise(ctx, ModeConfig); err != nil {
-		return err
+		return 0, err
 	}
-	for _, l := range lines {
+	for i, l := range lines {
 		out, err := s.exec(ctx, l, false)
 		if err != nil {
 			s.lower(ctx)
-			return err
+			return i + 1, err
 		}
 		if failed(s.d.ErrorRE, out) {
 			s.Transcript[len(s.Transcript)-1].Err = "refused"
 			s.lower(ctx)
-			return &CmdError{Cmd: l, Output: out}
+			return i + 1, &CmdError{Cmd: l, Output: out}
 		}
 	}
 	s.lower(ctx)
-	return nil
+	return len(lines), nil
 }
 
 // Save writes the running configuration to the OLT's flash.
@@ -545,4 +637,4 @@ func (s *Session) Save(ctx context.Context) error {
 // Redact hides what looks like a secret in text that is shown or stored.
 func Redact(s string) string { return redactRE.ReplaceAllString(s, "${1}<redacted>") }
 
-var redactRE = regexp.MustCompile(`(?im)\b((?:enable\s+)?(?:password|passwd|secret|community|auth-key|priv-key|key-string|md5|sha|encrypted|psk)\b\s*(?:\d\s+)?(?:=\s*|:\s*)?)\S+`)
+var redactRE = regexp.MustCompile(`(?im)\b((?:enable\s+)?(?:password|passwd|pwd|secret|community|auth-key|priv-key|key-string|key|md5|sha|encrypted|cipher|psk)\b\s*(?:\d\s+)?(?:=\s*|:\s*)?)\S+`)

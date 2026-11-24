@@ -37,6 +37,9 @@ type Dialect struct {
 
 	// Deny is the hard denylist: a line matching any rule is never sent, whatever asked for it.
 	Deny []DenyRule
+	// Prefix-aware denials (see VSOL): DenyVerbs for the first word, DenyAnywhere for any word, DenyAfterNo for the word
+	// after "no", and the only arguments "write" may take.
+	DenyVerbs, DenyAnywhere, DenyAfterNo, WriteArgsOK []string
 
 	// Fixed commands.
 	EnableCmd, ConfigCmd, EndCmd, ExitCmd, SaveCmd string
@@ -108,6 +111,17 @@ func VSOL() *Dialect {
 		{ci(`^no\s+(ip\s*address|ipaddress|ip\s+route|ip\s+default-gateway|ip\s+gateway|gateway)\b`), "removal of the management address or route"},
 		{ci(`^no\s+(interface\s+vlan|vlanif)\b`), "removal of a VLAN interface"},
 	}
+	// The CLI accepts any unambiguous prefix of a command word ("reb", "wr er", "fo"), so the regular expressions above
+	// are not enough on their own: a first word that is a prefix of one of DenyVerbs is refused too, and so is any word
+	// (3 letters or more) that is a prefix of one of DenyAnywhere, wherever it stands ("system reboot", "onu reset 3").
+	d.DenyVerbs = []string{"erase", "factory", "default", "reboot", "reload", "restart", "reset", "restore", "format", "delete", "remove",
+		"copy", "tftp", "ftp", "upgrade", "upload", "download", "load", "update", "firmware", "username", "user", "passwd", "password",
+		"aaa", "crypto", "shutdown", "boot", "clear", "debug", "rm", "cp"}
+	d.DenyAnywhere = []string{"erase", "factory", "reboot", "reload", "reset", "restore", "format", "upgrade", "firmware"}
+	// After "no", a word that is a prefix of one of these is refused (user, password, address and route removal).
+	d.DenyAfterNo = []string{"username", "user", "passwd", "password", "aaa", "enable", "ipaddress", "vlanif", "gateway"}
+	// "write" saves; "write <anything>" (erase, to a server, ...) is refused, except these.
+	d.WriteArgsOK = []string{"memory", "mem"}
 	return d
 }
 
