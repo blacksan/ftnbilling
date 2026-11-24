@@ -9,6 +9,7 @@
 | `v5-bootstrap.md` | the one-line router set-up, router record, automatic fixes, checks, ports; lists the calls that answer 410 |
 | `v8-onu.md` | ONU management (TR-069): Wi-Fi change, reboot, ONU list and links, the ONU register (serial + WAN MAC pairs), swap ONU |
 | `v7-webfig.md` | remote WebFig: `webfig_url` on router JSON, the admin step-up pages, the WebFig host |
+| `v9-olt.md` | OLT management: status, auto-found ONUs, saved configurations, provisioning switch, plan and apply |
 | `v6-apartments.md` | apartments (buildings), units, caretaker and landlord, the MAC-in-another-apartment rule |
 
 What belongs in a notes file: the exact request and response shapes as built (field names, nullability, error codes and statuses), role needed, limits and caching, and anything that differs from addendum L of `api-v1.md`.

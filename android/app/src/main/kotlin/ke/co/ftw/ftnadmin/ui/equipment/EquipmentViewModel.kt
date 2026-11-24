@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import ke.co.ftw.ftnadmin.data.equipment.EquipmentRepository
 import ke.co.ftw.ftnadmin.data.equipment.EquipmentTree
+import ke.co.ftw.ftnadmin.data.equipment.OltStatus
 import ke.co.ftw.ftnadmin.data.equipment.TreeOlt
 import ke.co.ftw.ftnadmin.data.equipment.TreeOnu
 import ke.co.ftw.ftnadmin.data.equipment.TreePon
@@ -39,6 +40,8 @@ data class EquipmentUiState(
     val oltId: String? = null,
     val ponPort: Int? = null,
     val move: MoveSheet? = null,
+    /** Read-only OLT status of the open OLT; null until it is read, or when the server has no OLT management. */
+    val oltStatus: OltStatus? = null,
     val info: String? = null,
 ) {
     private val data: EquipmentTree? get() = (tree as? Loadable.Ready)?.value
@@ -100,7 +103,14 @@ class EquipmentViewModel(private val repo: EquipmentRepository) : ViewModel() {
 
     fun openRouter(id: String) = _state.update { it.copy(routerId = id, oltId = null, ponPort = null) }
 
-    fun openOlt(id: String) = _state.update { it.copy(oltId = id, ponPort = null) }
+    fun openOlt(id: String) {
+        _state.update { it.copy(oltId = id, ponPort = null, oltStatus = null) }
+        viewModelScope.launch {
+            apiResult { repo.oltStatus(id) }.onSuccess { st ->
+                _state.update { cur -> if (cur.oltId == id) cur.copy(oltStatus = st) else cur }
+            }
+        }
+    }
 
     fun openPon(port: Int) = _state.update { it.copy(ponPort = port) }
 

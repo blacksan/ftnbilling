@@ -22,6 +22,9 @@ class EquipmentRepository(private val api: ApiClient) {
 
     suspend fun olt(id: String): Olt = api.get("olts", id)
 
+    /** What the server last read from the OLT: online ONUs, optics, and serials found on the PON that are not in inventory. */
+    suspend fun oltStatus(id: String): OltStatus = api.get("olts", id, "status")
+
     /** Adds an OLT, or changes [id]. A 400 on `mac` means the MAC is an account's or another device's. */
     suspend fun saveOlt(id: String?, input: OltInput): Olt =
         if (id == null) api.post("olts", body = oltBody(input)) else api.put("olts", id, body = oltBody(input))

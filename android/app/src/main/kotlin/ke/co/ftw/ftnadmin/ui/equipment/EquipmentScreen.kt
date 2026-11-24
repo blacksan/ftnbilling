@@ -56,6 +56,7 @@ import ke.co.ftw.ftnadmin.ui.common.ChipRow
 import ke.co.ftw.ftnadmin.ui.common.EmptyState
 import ke.co.ftw.ftnadmin.ui.common.ErrorState
 import ke.co.ftw.ftnadmin.ui.common.LabeledValue
+import ke.co.ftw.ftnadmin.ui.common.SectionCard
 import ke.co.ftw.ftnadmin.ui.common.Loadable
 import ke.co.ftw.ftnadmin.ui.common.LocalContainer
 import ke.co.ftw.ftnadmin.ui.common.StatusChip
@@ -153,6 +154,7 @@ fun EquipmentScreen(
                     }
                     EquipmentLevel.Olt -> ui.olt?.let { o ->
                         item { OltDetail(o, user.canWrite) { onEditOlt(o.id) } }
+                        ui.oltStatus?.let { st -> item { OltStatusCard(st) } }
                         if (o.pons.isEmpty()) item { EmptyState(stringResource(R.string.olt_no_pon_ports)) }
                         items(o.pons, key = { it.port }) { p -> PonNode(p) { vm.openPon(p.port) } }
                     }
@@ -279,6 +281,26 @@ internal fun MoveSheetContent(m: MoveSheet, olts: List<TreeOlt>, vm: EquipmentVi
                 Text(stringResource(if (m.busy) R.string.saving else if (m.oltId.isBlank()) R.string.take_out_of_olt else R.string.action_save))
             }
             TextButton(onClick = vm::cancelMove, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.action_cancel)) }
+        }
+    }
+}
+
+/** Read-only: how many ONUs are online, the weakest optical level, and serials on the PON that are not in inventory. No controls. */
+@Composable
+internal fun OltStatusCard(st: ke.co.ftw.ftnadmin.data.equipment.OltStatus) {
+    SectionCard(stringResource(R.string.olt_status_title)) {
+        if (!st.configured) {
+            Text(stringResource(R.string.olt_status_not_set), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            return@SectionCard
+        }
+        LabeledValue(stringResource(R.string.olt_status_link), stringResource(if (st.connected) R.string.olt_status_reachable else R.string.olt_status_unreachable))
+        LabeledValue(stringResource(R.string.olt_status_online), "${st.online} / ${st.total}")
+        val weakest = st.onus.filter { it.rxPower.isNotBlank() }.minByOrNull { it.rxPower.toDoubleOrNull() ?: 0.0 }
+        if (weakest != null) LabeledValue(stringResource(R.string.olt_status_weakest), "${weakest.rxPower} dBm  |  ${weakest.serial}", mono = true)
+        if (st.error.isNotBlank() && !st.connected) Text(st.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        if (st.notInInventory.isNotEmpty()) {
+            Text(stringResource(R.string.olt_status_not_in_inventory), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+            st.notInInventory.forEach { f -> MonoText("PON ${f.pon}  ${f.serial}", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
 }

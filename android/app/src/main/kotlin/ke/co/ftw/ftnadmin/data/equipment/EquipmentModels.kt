@@ -147,3 +147,36 @@ data class OnuPlacement(
     @SerialName("pon_port") val ponPort: Int = 0,
     val warnings: List<String> = emptyList(),
 )
+
+/** Read-only state of an OLT as the server last saw it (`GET /olts/{id}/status`). Nothing here is a secret or a control. */
+@Serializable
+data class OltStatus(
+    val configured: Boolean = false,
+    val connected: Boolean = false,
+    @SerialName("checked_at") val checkedAt: String? = null,
+    val error: String = "",
+    val online: Int = 0,
+    val total: Int = 0,
+    val onus: List<OltStatusOnu> = emptyList(),
+    @SerialName("not_in_inventory") val notInInventory: List<OltFoundOnu> = emptyList(),
+)
+
+@Serializable
+data class OltStatusOnu(
+    val pon: Int = 0,
+    val id: Int = 0,
+    val serial: String = "",
+    val state: String = "",
+    val online: Boolean = false,
+    @SerialName("rx_power") val rxPower: String = "",
+    @SerialName("tx_power") val txPower: String = "",
+    val distance: String = "",
+)
+
+@Serializable
+data class OltFoundOnu(
+    val pon: Int = 0,
+    val serial: String = "",
+    val verdict: String = "",
+    val detail: String = "",
+)
