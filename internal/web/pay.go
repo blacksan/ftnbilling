@@ -404,7 +404,8 @@ func (s *Server) payChoose(w http.ResponseWriter, r *http.Request, p payPage, a 
 		// The number on file is offered, masked, only to a visitor who typed the account code (a flat label is easy to
 		// guess). The page never carries the full number: /pay/start fills it in from the account.
 		p.PhoneMask = maskPhone(a.Phone)
-		p.UseFile = r.FormValue("phone_src") != "other"
+		src := r.FormValue("phone_src")
+		p.UseFile = src != "other" && !(src == "" && strings.TrimSpace(p.Phone) != "")
 	}
 	s.render(w, "pay", p)
 }
@@ -465,8 +466,29 @@ func (s *Server) payStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rawPhone := strings.TrimSpace(r.FormValue("phone"))
-	if byCode && a.Phone != "" && r.FormValue("phone_src") != "other" {
-		rawPhone = a.Phone // "use the number on file": the page never held it
+	if byCode && a.Phone != "" {
+		// Two ways to name the paying number: the one on file (the page never held it) or one typed by the visitor.
+		// A typed number is never dropped silently: it is either used (the visitor chose "another number", or a form
+		// without the choice sent one) or the visitor is asked which number pays. The prompt never goes to a number
+		// the visitor did not choose.
+		src := r.FormValue("phone_src")
+		switch {
+		case src == "other" || (src == "" && rawPhone != ""):
+			if rawPhone == "" {
+				r.Form.Set("phone_src", "other")
+				again(http.StatusBadRequest, "Type the number that should pay, or choose \"Use the number on file\".")
+				return
+			}
+		default:
+			if rawPhone != "" {
+				if typed, err := billing.NormalizePhone(rawPhone); err != nil || typed != normOrEmpty(a.Phone) {
+					r.Form.Set("phone_src", "other") // show the number they typed
+					again(http.StatusBadRequest, "You typed another number, but \"Use the number on file\" is selected. Choose which number pays.")
+					return
+				}
+			}
+			rawPhone = a.Phone
+		}
 	}
 	phone, err := billing.NormalizePhone(rawPhone)
 	if err != nil {
@@ -558,4 +580,13 @@ func localPhone(p string) string {
 		return "0" + p[3:]
 	}
 	return p
+}
+
+// normOrEmpty is the normalised form of a stored phone number, "" when it does not parse.
+func normOrEmpty(p string) string {
+	n, err := billing.NormalizePhone(p)
+	if err != nil {
+		return ""
+	}
+	return n
 }

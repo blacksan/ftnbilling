@@ -51,3 +51,6 @@ select{width:100%;font:inherit;font-size:var(--fs-16);min-height:48px;padding:0 
 .ck input{width:22px;height:22px;flex:none;accent-color:var(--brand)}
 .hp{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}
 input[type=text]:focus-visible,input[type=tel]:focus-visible,select:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+/* The other-number box belongs to "Pay with another number" and shows only then. A browser without :has() keeps it visible. */
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@supports selector(:has(a)){.phonegrp:has(input[name=phone_src]) .otherphone{display:none}.phonegrp:has(input[value=other]:checked) .otherphone{display:block}}

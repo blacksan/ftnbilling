@@ -12,9 +12,10 @@
 {{range .Packages}}{{if index $.Blocked .ID}}<label class="pkg off"><input type="radio" name="package" value="{{.ID}}" disabled><b>{{.Name}}</b><small>{{dur .DurationMin}} · {{.SpeedMbps}} Mbps · {{kes .PriceKES}}</small><small class="why">Available when your current plan ends on {{$.BlockedUntil}}</small></label>{{else}}<label class="pkg"><input type="radio" name="package" value="{{.ID}}"{{if eq .ID $sel}} checked{{end}}><b>{{.Name}}</b><small>{{dur .DurationMin}} · {{.SpeedMbps}} Mbps · {{kes .PriceKES}}</small></label>{{end}}
 {{end}}{{end}}
 {{if or .Mpesa .Test}}<h2>Phone that pays (M-Pesa)</h2>
+<div class="phonegrp">
 {{if .PhoneMask}}<label class="pkg"><input type="radio" name="phone_src" value="file"{{if .UseFile}} checked{{end}}><b>Use the number on file</b><small>{{.PhoneMask}}</small></label>
 <label class="pkg"><input type="radio" name="phone_src" value="other"{{if not .UseFile}} checked{{end}}><b>Pay with another number</b></label>{{end}}
-<input type="tel" name="phone" inputmode="tel" placeholder="{{if .PhoneMask}}Other number, e.g. {{end}}07XX XXX XXX" value="{{.Phone}}" autocomplete="tel"{{if not .PhoneMask}} required{{end}}>
+<label class="otherphone"><span class="sr">Number that pays</span><input type="tel" name="phone" inputmode="tel" placeholder="07XX XXX XXX" value="{{.Phone}}" autocomplete="tel"{{if not .PhoneMask}} required{{end}}></label></div>
 {{if .Mpesa}}<button type="submit" name="method" value="mpesa">Pay with M-Pesa</button>{{end}}
 {{if .Test}}<button type="submit" name="method" value="test" class="alt">Test payment (no money)</button>{{end}}
 {{else}}<p class="muted">Online payment is not available right now. Call {{.Support}} or use the contacts below.</p>{{end}}
@@ -35,4 +36,5 @@
 {{end}}
 {{if and (not .Found) .Detected}}<div class="card"><b>New here?</b><p class="muted">If you do not have an account yet, register and we will set you up.</p><a class="btn alt" href="/pay/register">Register for internet</a></div>{{end}}
 {{template "contacts" .Contacts}}
+<script src="{{static "portal.js"}}"></script>
 {{template "foot"}}{{end}}
