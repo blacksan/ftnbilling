@@ -94,7 +94,7 @@ func TestOLTFormTreeRouterTabAndApartmentPage(t *testing.T) {
 	})
 	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"A1"}, "tenant": {"Jane Wanjiru"}, "equipment_id": {eq}, "apartment_id": {a.aptID(t)}})
 
-	tree := a.adminGet(t, "/admin/equipment")
+	tree := a.adminGet(t, "/admin/equipment?tab=tree")
 	for _, want := range []string{"Block A", "Apartments", "(logical)", "(physical)", "Block A OLT", tOLTMAC, "on ether3", "PON 1", "serves: ", "ZTEG1", "Jane Wanjiru", "A1", "F601", "ONUs not under an OLT"} {
 		if !strings.Contains(tree, want) {
 			t.Errorf("tree page lacks %q", want)
@@ -103,7 +103,7 @@ func TestOLTFormTreeRouterTabAndApartmentPage(t *testing.T) {
 	if strings.Contains(tree, "Olt-Secret-99") {
 		t.Fatal("password on the tree")
 	}
-	if !strings.Contains(a.adminGet(t, "/admin/equipment?view=list"), "ZTEG1") {
+	if !strings.Contains(a.adminGet(t, "/admin/equipment?tab=onu"), "ZTEG1") {
 		t.Fatal("list view lost")
 	}
 	rt := a.adminGet(t, "/admin/routers/view?id="+a.site+"&tab=equipment")

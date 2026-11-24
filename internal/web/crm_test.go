@@ -83,7 +83,7 @@ func TestCustomersEquipmentSearchAndAccountCards(t *testing.T) {
 		t.Fatal(loc)
 	}
 	eid := m[1]
-	if !strings.Contains(a.adminGet(t, "/admin/equipment"), "ZTEGC0FFEE01") {
+	if !strings.Contains(a.adminGet(t, "/admin/equipment?tab=onu"), "ZTEGC0FFEE01") {
 		t.Error("equipment list")
 	}
 	if l := a.adminPost(t, "/admin/equipment/assign", url.Values{"id": {eid}, "account": {acct.ID}, "use_mac": {"1"}}); strings.Contains(l, "Error") {
