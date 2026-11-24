@@ -46,6 +46,14 @@ type Options struct {
 	MaxSessions int           // at once, over all OLTs (default 3)
 	Interval    time.Duration // poll interval (default 5 minutes)
 	Dialect     *Dialect
+	// PortSeen reads what the router shows on its OLT management port of a site (nil: adoption through the port is off).
+	PortSeen func(ctx context.Context, siteID string) (PortSeen, error)
+	// EnsurePort makes the router's OLT management port rules match the site (heals them; by is the actor).
+	EnsurePort func(ctx context.Context, siteID, by string) error
+	// ProbeWait is how long to wait after the first knock on an empty port (tests: short; default 1.5 s).
+	ProbeWait time.Duration
+	// Vendor names the maker from a MAC's OUI ("" when unknown).
+	Vendor func(mac string) string
 	// ACS gives the address and the shared first-contact login of the TR-069 ACS (nil result: none). The login is a secret:
 	// it only ever goes into the lines sent to the OLT.
 	ACS func() *ACS
@@ -59,6 +67,8 @@ type Service struct {
 	sem   chan struct{}
 	mu    sync.Mutex
 	locks map[string]chan struct{}
+	// alerted rate-limits the possible-OLT alerts (key -> last sent).
+	alerted map[string]time.Time
 }
 
 // New creates the service.
@@ -148,11 +158,26 @@ type opened struct {
 	sess *Session
 	e    store.Equipment
 	st   store.OLTState
+	addr string // where the server dialled
+}
+
+// cred is a login used for one session instead of the stored one (the adoption passes). Source says where it came from
+// (stored, pending, factory, owner); it is never a secret.
+type cred struct {
+	User, Pass, Enable string
+	Source             string
+	// NoPin keeps the SSH host key from being pinned by this session: the device has not been identified yet.
+	NoPin bool
 }
 
 // withSession logs in to an OLT and runs fn: one session at a time per OLT (wait=false gives up with ErrBusy), and at
 // most MaxSessions over all OLTs.
 func (s *Service) withSession(ctx context.Context, id string, wait bool, fn func(o *opened) error) error {
+	return s.withSessionAs(ctx, id, wait, nil, fn)
+}
+
+// withSessionAs is withSession with a login that replaces the stored one (nil = the stored one).
+func (s *Service) withSessionAs(ctx context.Context, id string, wait bool, c *cred, fn func(o *opened) error) error {
 	lk := s.lockOf(id)
 	if wait {
 		select {
@@ -186,7 +211,7 @@ func (s *Service) withSession(ctx context.Context, id string, wait bool, fn func
 			return
 		}
 		st = d.OLTStateOf(id).Clone()
-		if e.MgmtIP == "" || e.MgmtUser == "" || e.MgmtPass == "" {
+		if c == nil && (e.MgmtIP == "" || e.MgmtUser == "" || e.MgmtPass == "") {
 			rerr = ErrNotConfigured
 			return
 		}
@@ -202,19 +227,27 @@ func (s *Service) withSession(ctx context.Context, id string, wait bool, fn func
 	if s.o.Box == nil {
 		return ErrNoKey
 	}
-	pass, err := s.o.Box.OpenAAD(e.MgmtPass, mgmtAAD)
-	if err != nil {
-		return errors.New("the stored OLT password cannot be opened with this server's data key")
-	}
-	enable := ""
-	if st.Settings.EnablePass != "" {
-		if enable, err = s.o.Box.OpenAAD(st.Settings.EnablePass, enableAAD); err != nil {
-			return errors.New("the stored enable password cannot be opened with this server's data key")
+	user, pass, enable := e.MgmtUser, "", ""
+	var err error
+	if c != nil {
+		user, pass, enable = c.User, c.Pass, c.Enable
+	} else {
+		if pass, err = s.o.Box.OpenAAD(e.MgmtPass, mgmtAAD); err != nil {
+			return errors.New("the stored OLT password cannot be opened with this server's data key")
+		}
+		if st.Settings.EnablePass != "" {
+			if enable, err = s.o.Box.OpenAAD(st.Settings.EnablePass, enableAAD); err != nil {
+				return errors.New("the stored enable password cannot be opened with this server's data key")
+			}
 		}
 	}
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	sess, err := Open(cctx, s.o.Dialect, Target{Addr: addr, Proto: st.Settings.ProtoOrDefault(), User: e.MgmtUser, Pass: pass, Enable: enable,
+	proto := st.Settings.ProtoOrDefault()
+	if c != nil {
+		proto = store.OLTProtoSSH // the adoption passes never use Telnet
+	}
+	sess, err := Open(cctx, s.o.Dialect, Target{Addr: addr, Proto: proto, User: user, Pass: pass, Enable: enable,
 		PinnedKey: st.Settings.HostKey, Protect: st.Settings.MgmtVLANOrDefault()}, s.o.Dial)
 	if err != nil {
 		if errors.Is(err, ErrHostKey) {
@@ -224,7 +257,7 @@ func (s *Service) withSession(ctx context.Context, id string, wait bool, fn func
 	}
 	defer sess.Close()
 	sess.Timeout = s.o.Timeout
-	if sess.NewHostKey != "" {
+	if sess.NewHostKey != "" && (c == nil || !c.NoPin) {
 		fp := sess.NewHostKey
 		_ = s.upd(id, func(d *store.Data, e store.Equipment, st *store.OLTState) {
 			if st.Settings.HostKey == "" {
@@ -234,7 +267,7 @@ func (s *Service) withSession(ctx context.Context, id string, wait bool, fn func
 		})
 	}
 	sess.DisablePaging(cctx)
-	return fn(&opened{sess: sess, e: e, st: st})
+	return fn(&opened{sess: sess, e: e, st: st, addr: addr})
 }
 
 // hostKeyAlert tells the owners that an OLT answered with another SSH host key than the pinned one (a replaced OLT, or
@@ -320,6 +353,7 @@ func (s *Service) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			if s.o.Store.Healthy() == nil {
+				s.AdoptAll(ctx)
 				s.PollAll(ctx)
 			}
 		}

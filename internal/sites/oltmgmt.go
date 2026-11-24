@@ -183,8 +183,10 @@ func (p OLTMgmtPlan) Snippet(parent string) string {
 	for _, l := range p.SetupLines(parent) {
 		b.WriteString(l + "\n")
 	}
-	b.WriteString(`/ip/firewall/filter remove [find where comment~"^ftn: olt"]` + "\n")
-	b.WriteString(`/ip/firewall/nat remove [find where comment~"^ftn: olt"]` + "\n")
+	// "^ftn: olt " with the space: the rows of the OLT management port ("ftn: oltm ...", oltadopt.go) are not this
+	// snippet's and must survive a paste (without them the port's address would stay and its drop rules would be gone).
+	b.WriteString(`/ip/firewall/filter remove [find where comment~"^ftn: olt "]` + "\n")
+	b.WriteString(`/ip/firewall/nat remove [find where comment~"^ftn: olt "]` + "\n")
 	fwd, in, nat := p.Rules()
 	for _, r := range fwd {
 		b.WriteString(fmt.Sprintf(`/ip/firewall/filter add %s place-before=[find where comment="ftn: wg no forward in"] comment="%s"`+"\n", r.Args(), rq(r.Comment)))
@@ -225,9 +227,31 @@ func (m *Manager) OLTReach(d *store.Data, e store.Equipment, s store.OLTSettings
 	if !ok || site.Removed {
 		return "", errors.New("the OLT is not on a router")
 	}
+	// A router with an OLT management port reaches an OLT inside that port's subnet (or one with no address yet, which is
+	// a factory OLT) through the port; the console-snippet route (VLAN 98) is the fallback and the manual option.
+	if !s.Adopt.Manual && m.onAdoptNet(site, e.MgmtIP) {
+		addr, _, err := m.OLTAdoptReach(site, e.MgmtIP)
+		return addr, err
+	}
 	host, port, err := OLTForward(site, s.MgmtVLAN, ServerTunnelIP(m.pfx), OLTTarget{IP: e.MgmtIP, Proto: s.ProtoOrDefault(), Port: s.PortOrDefault()})
 	if err != nil {
 		return "", err
 	}
 	return net.JoinHostPort(host, strconv.Itoa(port)), nil
+}
+
+// onAdoptNet: the site has an OLT management port and the address is empty or inside that port's subnet.
+func (m *Manager) onAdoptNet(site store.Site, mgmtIP string) bool {
+	if site.OLTMgmtPort == "" {
+		return false
+	}
+	if strings.TrimSpace(mgmtIP) == "" {
+		return true
+	}
+	pfx, err := netip.ParsePrefix(OLTMgmtNetOf(site))
+	if err != nil {
+		return false
+	}
+	a, err := netip.ParseAddr(strings.TrimSpace(mgmtIP))
+	return err == nil && pfx.Contains(a)
 }

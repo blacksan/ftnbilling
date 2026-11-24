@@ -289,6 +289,7 @@ internal fun MoveSheetContent(m: MoveSheet, olts: List<TreeOlt>, vm: EquipmentVi
 @Composable
 internal fun OltStatusCard(st: ke.co.ftw.ftnadmin.data.equipment.OltStatus) {
     SectionCard(stringResource(R.string.olt_status_title)) {
+        st.adoption?.takeIf { it.steps.isNotEmpty() }?.let { OltAdoptionBlock(it) }
         if (!st.configured) {
             Text(stringResource(R.string.olt_status_not_set), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             return@SectionCard
@@ -303,4 +304,31 @@ internal fun OltStatusCard(st: ke.co.ftw.ftnadmin.data.equipment.OltStatus) {
             st.notInInventory.forEach { f -> MonoText("PON ${f.pon}  ${f.serial}", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
+}
+
+/** The adoption checklist, read-only: one line per step with its state, and what the owner does next (on the web). */
+@Composable
+internal fun OltAdoptionBlock(a: ke.co.ftw.ftnadmin.data.equipment.OltAdoption) {
+    Text(stringResource(R.string.olt_adopt_title), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+    StatusChip(
+        stringResource(R.string.olt_adopt_progress, a.doneCount, a.steps.size) + if (a.manual) "  |  " + stringResource(R.string.olt_adopt_manual) else "",
+        when {
+            a.failed -> Tone.Bad
+            a.secured -> Tone.Good
+            else -> Tone.Warn
+        },
+    )
+    a.steps.forEach { s ->
+        LabeledValue(
+            s.label,
+            when (s.state) {
+                "ok" -> stringResource(R.string.olt_adopt_ok)
+                "fail" -> stringResource(R.string.olt_adopt_fail)
+                else -> stringResource(R.string.olt_adopt_todo)
+            },
+        )
+    }
+    if (a.next.isNotBlank()) Text(a.next, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    if (a.error.isNotBlank()) Text(a.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+    Text(stringResource(R.string.olt_adopt_web_only), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }

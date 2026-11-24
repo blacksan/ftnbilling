@@ -8,6 +8,7 @@ object PortRole {
     const val WAN = "wan"
     const val LAN = "lan"
     const val OLT = "olt"
+    const val OLT_MGMT = "oltmgmt"
     const val CUSTOMER = "customer"
     const val UNUSED = "unused"
 
@@ -15,6 +16,7 @@ object PortRole {
         WAN -> "Internet uplink (WAN)"
         LAN -> "Admin LAN"
         OLT -> "OLT uplink"
+        OLT_MGMT -> "OLT management"
         CUSTOMER -> "Customer port"
         UNUSED -> "Unused"
         else -> role

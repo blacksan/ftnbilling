@@ -20,6 +20,12 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// Attempt is one login attempt (SSH or Telnet): the user, the password tried (tests only) and whether it was accepted.
+type Attempt struct {
+	User, Pass string
+	OK         bool
+}
+
 // OLT is a fake OLT. Create it with New, then use Addr for the SSH or Telnet listener.
 type OLT struct {
 	User, Pass, EnablePass string
@@ -38,13 +44,29 @@ type OLT struct {
 	// MaxPON bounds interface gpon 0/N.
 	Secret string // appears in the running config as "password <Secret>"
 
+	// IgnoreUserChange makes `user login-password` / `user enable-password` answer fine but change nothing (a firmware that
+	// accepts the line and keeps the old password), so a verification with the new password fails.
+	IgnoreUserChange bool
+	// BlockNewPass makes a login password set by `user login-password` unusable for logins (the CLI accepted it, the next
+	// session is refused), so a verification session fails while the old password still works once it is put back.
+	BlockNewPass bool
+	// FailWrite makes `write` an error.
+	FailWrite bool
+	// Communities are the SNMP communities (default public and private).
+	Communities []string
+
 	SSHAddr, TelnetAddr string
 	HostKeyFP           string
 
-	mu     sync.Mutex
-	lines  []string
-	blocks []*block
-	closeF []func()
+	mu       sync.Mutex
+	lines    []string
+	attempts []Attempt
+	events   []string
+	blocked  map[string]bool
+	origPass string
+	writes   int
+	blocks   []*block
+	closeF   []func()
 }
 
 // BenchVersion is what "show version" printed on the bench OLT.
@@ -74,8 +96,9 @@ func New() (*OLT, error) {
 	}
 	_ = pub
 	o.HostKeyFP = ssh.FingerprintSHA256(signer.PublicKey())
+	o.Communities = []string{"public", "private"}
 	cfg := &ssh.ServerConfig{PasswordCallback: func(c ssh.ConnMetadata, p []byte) (*ssh.Permissions, error) {
-		if c.User() == o.User && string(p) == o.Pass {
+		if o.login(c.User(), string(p)) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("denied")
@@ -118,6 +141,55 @@ func (o *OLT) Close() {
 	for _, f := range o.closeF {
 		f()
 	}
+}
+
+// login checks a login and records the attempt.
+func (o *OLT) login(user, pass string) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	ok := user == o.User && pass == o.Pass && !o.blocked[pass]
+	o.attempts = append(o.attempts, Attempt{user, pass, ok})
+	o.events = append(o.events, fmt.Sprintf("login %s %v", user, ok))
+	return ok
+}
+
+// Events are the logins (without passwords) and command lines in the order they happened: "login admin true",
+// "cmd write".
+func (o *OLT) Events() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.events...)
+}
+
+// Attempts are the logins tried so far.
+func (o *OLT) Attempts() []Attempt {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]Attempt(nil), o.attempts...)
+}
+
+// Creds are the current login, login password and enable password.
+func (o *OLT) Creds() (user, pass, enable string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.User, o.Pass, o.EnablePass
+}
+
+// SetCreds sets the login, its password and the enable password.
+func (o *OLT) SetCreds(user, pass, enable string) {
+	o.mu.Lock()
+	o.User, o.Pass, o.EnablePass = user, pass, enable
+	o.mu.Unlock()
+}
+
+// Writes is how many times `write` saved the configuration.
+func (o *OLT) Writes() int { o.mu.Lock(); defer o.mu.Unlock(); return o.writes }
+
+// SNMPCommunities are the communities now configured.
+func (o *OLT) SNMPCommunities() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.Communities...)
 }
 
 // Lines returns every command line received so far (login answers are not included).
@@ -218,7 +290,7 @@ func (o *OLT) serveTelnet(c net.Conn) {
 	if b, err := br.Peek(1); err == nil && b[0] == '\n' {
 		_, _ = br.ReadByte() // the LF of the CR LF that ended the password
 	}
-	if u != o.User || p != o.Pass {
+	if !o.login(u, p) {
 		fmt.Fprint(c, "\r\nLogin incorrect\r\n")
 		return
 	}
@@ -297,7 +369,9 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 		}
 	}()
 	// SSH lands privileged on the bench; with an enable password set the fake starts at the user prompt instead.
+	o.mu.Lock()
 	enabled, config := o.EnablePass == "", false
+	o.mu.Unlock()
 	var stack []string // contexts below config: interface gpon 0/1, vlan 98, profile line name x ...
 	curBlock := func() *block {
 		hdr := ""
@@ -372,6 +446,7 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 		w(line + "\n") // the OLT echoes what was typed
 		o.mu.Lock()
 		o.lines = append(o.lines, line)
+		o.events = append(o.events, "cmd "+line)
 		o.mu.Unlock()
 		fields := strings.Fields(strings.ToLower(line))
 		out := ""
@@ -388,7 +463,10 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 				out = unknown
 				break
 			}
-			if o.EnablePass != "" {
+			o.mu.Lock()
+			needEnable := o.EnablePass
+			o.mu.Unlock()
+			if needEnable != "" {
 				w("Password: ")
 				p := ""
 				for {
@@ -408,7 +486,7 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 					p += string(b)
 				}
 				w("\n")
-				if p != o.EnablePass {
+				if p != needEnable {
 					out = "% Access denied\n"
 					break
 				}
@@ -521,7 +599,40 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 			o.mu.Unlock()
 			out = b.String()
 		case line == "write" || line == "write memory":
+			if o.FailWrite {
+				out = "% Write failed.\n"
+				break
+			}
+			o.mu.Lock()
+			o.writes++
+			o.mu.Unlock()
 			out = "Saving... OK\n"
+		case config && len(stack) == 0 && line == "user manager":
+			stack = append(stack, "user manager")
+		case config && len(stack) > 0 && stack[len(stack)-1] == "user manager":
+			out = o.userLine(fields, line)
+		case config && len(stack) == 0 && line == "show snmp-server community":
+			o.mu.Lock()
+			for _, c := range o.Communities {
+				out += c + " ro\n"
+			}
+			o.mu.Unlock()
+		case config && len(stack) == 0 && len(fields) == 4 && fields[0] == "no" && fields[1] == "snmp-server" && fields[2] == "community":
+			o.mu.Lock()
+			var keep []string
+			found := false
+			for _, c := range o.Communities {
+				if c == fields[3] {
+					found = true
+					continue
+				}
+				keep = append(keep, c)
+			}
+			o.Communities = keep
+			o.mu.Unlock()
+			if !found {
+				out = "% Community not exist.\n"
+			}
 		case config && (fields[0] == "interface" || fields[0] == "vlan" && len(fields) == 2 || fields[0] == "profile"):
 			o.mu.Lock()
 			hdr := line
@@ -677,4 +788,39 @@ func (o *OLT) ponLine(pon int, line string, f []string, b *block) string {
 		add(line)
 	}
 	return ""
+}
+
+// userLine handles a line inside `user manager`: `user login-password USER PW` and `user enable-password USER PW` change
+// the password of the one user (unless IgnoreUserChange).
+func (o *OLT) userLine(f []string, line string) string {
+	orig := strings.Fields(line)
+	if len(f) == 4 && f[0] == "user" && (f[1] == "login-password" || f[1] == "enable-password") {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		if orig[2] != o.User {
+			return "% User not exist.\n"
+		}
+		if o.IgnoreUserChange {
+			return ""
+		}
+		if f[1] == "login-password" {
+			if o.origPass == "" {
+				o.origPass = o.Pass
+			}
+			o.Pass = orig[3]
+			if o.BlockNewPass && orig[3] != o.origPass {
+				if o.blocked == nil {
+					o.blocked = map[string]bool{}
+				}
+				o.blocked[orig[3]] = true
+			}
+		} else {
+			o.EnablePass = orig[3]
+		}
+		return ""
+	}
+	if len(f) == 2 && f[0] == "user" && f[1] == "list" {
+		return o.User + " admin\n"
+	}
+	return "% Unknown command.\n"
 }

@@ -1036,7 +1036,7 @@ func (m *Manager) startPortsPolicy(siteID string, eff store.Site, sn *snapshot) 
 		}
 		switch role := roleOf(eff, name); {
 		case role == PortRoleLAN:
-		case role == PortRoleOLT, role == PortRoleCustomer, yes(r["running"]):
+		case role == PortRoleOLT, role == PortRoleOLTMgmt, role == PortRoleCustomer, yes(r["running"]):
 			enabled = append(enabled, name)
 			kept = append(kept, name)
 		}
@@ -1052,6 +1052,7 @@ func (m *Manager) startPortsPolicy(siteID string, eff store.Site, sn *snapshot) 
 		kept = append(kept, name)
 	}
 	add(eff.OLTInterface)
+	add(eff.OLTMgmtPort)
 	for _, p := range SplitPorts(eff.CustomerPorts) {
 		add(p)
 	}

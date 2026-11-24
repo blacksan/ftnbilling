@@ -20,13 +20,23 @@ var ErrOLTMAC = errors.New("That MAC belongs to an OLT")
 // OLTMACError says which OLT. errors.Is(err, ErrOLTMAC) is true for it.
 type OLTMACError struct{ Name, ID string }
 
-func (e *OLTMACError) Error() string        { return "That MAC belongs to OLT " + e.Name }
+func (e *OLTMACError) Error() string {
+	if e.ID == "" {
+		return "That MAC is a possible OLT seen on a router's OLT management port"
+	}
+	return "That MAC belongs to OLT " + e.Name
+}
 func (e *OLTMACError) Is(target error) bool { return target == ErrOLTMAC }
 
 // oltMACLocked returns an *OLTMACError when mac is the MAC of a live OLT, else nil.
 func oltMACLocked(d *store.Data, mac string) error {
 	if o, ok := d.OLTByMAC(mac); ok {
 		return &OLTMACError{Name: store.OLTLabel(o), ID: o.ID}
+	}
+	for _, dv := range d.Devices {
+		if dv.Source == store.DeviceSourceOLTMgmt && strings.EqualFold(dv.MAC, mac) {
+			return &OLTMACError{Name: "possible OLT"}
+		}
 	}
 	return nil
 }

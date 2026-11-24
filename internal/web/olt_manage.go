@@ -42,6 +42,7 @@ func (s *Server) oltRoutes2(get, post func(string, http.HandlerFunc)) {
 	post("/admin/olts/manage/apply", s.adminOLTApply)
 	post("/admin/olts/manage/remove-plan", s.adminOLTRemovePlan)
 	post("/admin/olts/manage/remove-apply", s.adminOLTRemoveApply)
+	s.oltRoutes3(post)
 }
 
 func manageURL(id string) string { return "/admin/olts/manage?id=" + url.QueryEscape(id) }
@@ -127,6 +128,7 @@ func (s *Server) adminOLTManage(w http.ResponseWriter, r *http.Request) {
 	p.Data["HasEnable"], p.Data["Configured"] = st.Settings.EnablePass != "", pw
 	p.Data["PolledAt"] = s.ageText(st.Status.At)
 	p.Data["Note"] = s.olt.Dialect().VersionNote(st.Status.Model, st.Status.SWVersion)
+	s.adoptData(r, e, &p, p.IsOwner)
 	s.render(w, "admin_olt_manage", p)
 }
 

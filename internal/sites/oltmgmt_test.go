@@ -1,6 +1,7 @@
 package sites
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -102,7 +103,8 @@ func TestOLTMgmtSnippet(t *testing.T) {
 		`place-before=[find where comment="ftn: wg no forward in"]`,
 		`/ip/firewall/nat add chain=dstnat action=dst-nat protocol=tcp in-interface=wg-ftn src-address=10.99.0.1 dst-address=10.99.0.2 dst-port=22002 to-addresses=10.7.3.2 to-ports=22`,
 		`place-before=0 comment="ftn: olt mgmt input drop"`,
-		`/ip/firewall/filter remove [find where comment~"^ftn: olt"]`,
+		`/ip/firewall/filter remove [find where comment~"^ftn: olt "]`,
+		`/ip/firewall/nat remove [find where comment~"^ftn: olt "]`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("snippet lacks %q:\n%s", want, s)
@@ -112,6 +114,22 @@ func TestOLTMgmtSnippet(t *testing.T) {
 	for _, bad := range []string{"/user", "/ip/service", "/system", "wireguard", "/ip/route"} {
 		if strings.Contains(s, bad) {
 			t.Errorf("snippet touches %s", bad)
+		}
+	}
+}
+
+// The VLAN 98 snippet removes its own firewall rows by a comment pattern; it must never take the OLT management port's
+// rows ("ftn: oltm ..."), or a paste would leave that port with its address and without its drop rules.
+func TestOLTMgmtSnippetSparesOLTMRows(t *testing.T) {
+	re := regexp.MustCompile(`^ftn: olt `)
+	for c := range oltmComments {
+		if re.MatchString(c) {
+			t.Errorf("the snippet's remove pattern matches %q", c)
+		}
+	}
+	for _, c := range []string{OLTDstNatComment, OLTServerInComment, OLTReplyComment, OLTDropInComment, OLTDropOutComment, OLTInputDropComment} {
+		if !re.MatchString(c) {
+			t.Errorf("the snippet's remove pattern misses its own %q", c)
 		}
 	}
 }

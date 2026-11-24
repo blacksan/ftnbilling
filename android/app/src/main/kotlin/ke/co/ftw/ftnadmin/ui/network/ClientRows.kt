@@ -162,6 +162,7 @@ internal fun InterfaceRow(i: NetInterface, expanded: Boolean, onToggle: () -> Un
 internal fun roleLabel(role: String) = when (role) {
     "wan" -> "WAN"
     "olt" -> "OLT"
+    "oltmgmt" -> "OLT management"
     "customer" -> "Customers"
     "tunnel" -> "Tunnel"
     "bench" -> "Bench"
@@ -170,7 +171,7 @@ internal fun roleLabel(role: String) = when (role) {
 
 private fun roleTone(role: String) = when (role) {
     "wan" -> Tone.Good
-    "olt", "customer" -> Tone.Neutral
+    "olt", "oltmgmt", "customer" -> Tone.Neutral
     "bench" -> Tone.Warn
     else -> Tone.Neutral
 }

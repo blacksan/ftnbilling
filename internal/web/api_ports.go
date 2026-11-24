@@ -36,7 +36,7 @@ type portRoleLabel struct {
 
 var portRoleList = []portRoleLabel{
 	{sites.PortRoleWAN, sites.PortRoleLabels[sites.PortRoleWAN]}, {sites.PortRoleLAN, sites.PortRoleLabels[sites.PortRoleLAN]},
-	{sites.PortRoleOLT, sites.PortRoleLabels[sites.PortRoleOLT]}, {sites.PortRoleCustomer, sites.PortRoleLabels[sites.PortRoleCustomer]},
+	{sites.PortRoleOLT, sites.PortRoleLabels[sites.PortRoleOLT]}, {sites.PortRoleOLTMgmt, sites.PortRoleLabels[sites.PortRoleOLTMgmt]}, {sites.PortRoleCustomer, sites.PortRoleLabels[sites.PortRoleCustomer]},
 	{sites.PortRoleUnused, sites.PortRoleLabels[sites.PortRoleUnused]},
 }
 

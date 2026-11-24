@@ -20,6 +20,8 @@ import (
 //	wan       the Internet uplink (Site.WANInterface); locked, the server never writes it
 //	lan       the admin LAN (Site.LANPorts, members of br-lan)
 //	olt       the OLT uplink (Site.OLTInterface)
+//	oltmgmt   the OLT management port (Site.OLTMgmtPort): a spare port cabled to an OLT's factory management port; the
+//	          server gives it an address, a dst-nat from the server only and drop rules (oltadopt.go)
 //	customer  an extra customer port (Site.CustomerPorts, members of br-customers)
 //	unused    everything else
 //
@@ -35,13 +37,14 @@ const (
 	PortRoleWAN      = "wan"
 	PortRoleLAN      = "lan"
 	PortRoleOLT      = "olt"
+	PortRoleOLTMgmt  = "oltmgmt"
 	PortRoleCustomer = "customer"
 	PortRoleUnused   = "unused"
 )
 
 // PortRoleLabels are the words shown to people.
 var PortRoleLabels = map[string]string{
-	PortRoleWAN: "Internet uplink (WAN)", PortRoleLAN: "Admin LAN", PortRoleOLT: "OLT uplink",
+	PortRoleWAN: "Internet uplink (WAN)", PortRoleLAN: "Admin LAN", PortRoleOLT: "OLT uplink", PortRoleOLTMgmt: "OLT management",
 	PortRoleCustomer: "Customer port", PortRoleUnused: "Unused",
 }
 
@@ -156,6 +159,8 @@ func roleOf(eff store.Site, name string) string {
 		return PortRoleLAN
 	case name == eff.OLTInterface:
 		return PortRoleOLT
+	case eff.OLTMgmtPort != "" && name == eff.OLTMgmtPort:
+		return PortRoleOLTMgmt
 	case containsStr(SplitPorts(eff.CustomerPorts), name):
 		return PortRoleCustomer
 	}
@@ -358,7 +363,7 @@ func (m *Manager) Ports(ctx context.Context, siteID, viewerRole string) (PortsVi
 	for _, it := range out.Items {
 		listed[it.Name] = true
 	}
-	stored := append(append(SplitPorts(site.LANPorts), SplitPorts(site.CustomerPorts)...), site.OLTInterface)
+	stored := append(append(append(SplitPorts(site.LANPorts), SplitPorts(site.CustomerPorts)...), site.OLTInterface), site.OLTMgmtPort)
 	for _, name := range stored {
 		if name == "" || listed[name] {
 			continue
@@ -371,7 +376,7 @@ func (m *Manager) Ports(ctx context.Context, siteID, viewerRole string) (PortsVi
 			pi.Running, pi.Disabled, pi.MAC, pi.Comment = isYes(r["running"]), isYes(r["disabled"]), r["mac-address"], r["comment"]
 			pi.Comment = strings.TrimSpace(pi.Comment)
 			pi.Link = ""
-			pi.NeedsOwner = role == PortRoleOLT || role == PortRoleLAN
+			pi.NeedsOwner = role == PortRoleOLT || role == PortRoleLAN || role == PortRoleOLTMgmt
 		} else {
 			pi.Missing = true
 			pi.Comment = "The router has no port with this name any more."
@@ -423,7 +428,7 @@ func (m *Manager) decoratePort(pi *PortInfo, site store.Site, viewerRole string)
 	switch pi.Role {
 	case PortRoleWAN:
 		return // locked: no actions
-	case PortRoleLAN, PortRoleOLT:
+	case PortRoleLAN, PortRoleOLT, PortRoleOLTMgmt:
 		pi.NeedsOwner = true
 		pi.CanChange = rank >= 2
 	default:
@@ -451,12 +456,15 @@ func (m *Manager) decoratePort(pi *PortInfo, site store.Site, viewerRole string)
 		}
 		return
 	}
-	for _, r := range []string{PortRoleLAN, PortRoleOLT, PortRoleCustomer, PortRoleUnused} {
+	for _, r := range []string{PortRoleLAN, PortRoleOLT, PortRoleOLTMgmt, PortRoleCustomer, PortRoleUnused} {
 		if r == pi.Role {
 			continue
 		}
-		if (r == PortRoleLAN || r == PortRoleOLT) && roleRank(viewerRole) < 2 {
+		if (r == PortRoleLAN || r == PortRoleOLT || r == PortRoleOLTMgmt) && roleRank(viewerRole) < 2 {
 			continue
+		}
+		if pi.Role == PortRoleOLTMgmt && r != PortRoleUnused {
+			continue // the management port is given back by clearing its role; it moves by giving the role to another port
 		}
 		if pi.Role == PortRoleOLT {
 			continue // the OLT uplink moves by giving the role to another port
@@ -475,7 +483,7 @@ type PortActor struct{ Name, Role string }
 
 // PortChange is a change request for one port.
 type PortChange struct {
-	Role        *string // lan | olt | customer | unused
+	Role        *string // lan | olt | oltmgmt | customer | unused
 	Disabled    *bool
 	ConfirmName string
 }
@@ -586,9 +594,9 @@ func (m *Manager) ChangePort(ctx context.Context, siteID, port string, ch PortCh
 		switch target {
 		case PortRoleWAN:
 			return res, portErr(PortErrLocked, "The Internet uplink (WAN) is not set here: it is part of the router's Network settings (owner) and a new line.")
-		case PortRoleLAN, PortRoleOLT, PortRoleCustomer, PortRoleUnused:
+		case PortRoleLAN, PortRoleOLT, PortRoleOLTMgmt, PortRoleCustomer, PortRoleUnused:
 		default:
-			return res, portErr(PortErrInvalid, "role %q: use lan, olt, customer or unused", target)
+			return res, portErr(PortErrInvalid, "role %q: use lan, olt, oltmgmt, customer or unused", target)
 		}
 	}
 	if !site.Runnable() {
@@ -628,7 +636,7 @@ func (m *Manager) ChangePort(ctx context.Context, siteID, port string, ch PortCh
 		return res, portErr(PortErrInvalid, "%s is a wireless interface: only a wired port can be an admin LAN, OLT or customer port", port)
 	}
 	// who may: owners for anything on the admin LAN or the OLT uplink
-	touchesCore := func(r string) bool { return r == PortRoleLAN || r == PortRoleOLT }
+	touchesCore := func(r string) bool { return r == PortRoleLAN || r == PortRoleOLT || r == PortRoleOLTMgmt }
 	needOwner := (roleChange && (touchesCore(cur) || touchesCore(target))) || (ch.Disabled != nil && touchesCore(cur))
 	if needOwner && rank < 2 {
 		return res, portErr(PortErrForbidden, "only an owner may change the admin LAN or the OLT uplink")
@@ -643,7 +651,7 @@ func (m *Manager) ChangePort(ctx context.Context, siteID, port string, ch PortCh
 			return res, portErr(PortErrLastLAN, "%s is the last Admin LAN port. Make another port an Admin LAN port first.", port)
 		case cur == PortRoleLAN && !m.lanSurvivor(ctx, rt, ifaces, removeStr(lans, port), true):
 			return res, portErr(PortErrLastLAN, lastLANMsg, port)
-		case (target == PortRoleLAN || target == PortRoleOLT) && (isYes(row["disabled"]) || containsStr(SplitPorts(site.DisabledPorts), port) || (portsManaged(site) && !containsStr(SplitPorts(site.EnabledPorts), port))):
+		case (target == PortRoleLAN || target == PortRoleOLT || target == PortRoleOLTMgmt) && (isYes(row["disabled"]) || containsStr(SplitPorts(site.DisabledPorts), port) || (portsManaged(site) && !containsStr(SplitPorts(site.EnabledPorts), port))):
 			return res, portErr(PortErrConflict, "%s is switched off. Enable it first.", port)
 		}
 	}
@@ -679,6 +687,18 @@ func (m *Manager) ChangePort(ctx context.Context, siteID, port string, ch PortCh
 	}
 	// only customer and unused ports are kept off by the sweep; a LAN port switched off is a one-off
 	keep := endRole == PortRoleCustomer || endRole == PortRoleUnused
+	if roleChange && (target == PortRoleOLTMgmt || cur == PortRoleOLTMgmt) {
+		if wantDisable {
+			return res, portErr(PortErrInvalid, "give the OLT management role (or take it away) in one request and switch the port in another")
+		}
+		if err := m.changeOLTMgmtRole(ctx, siteID, site, port, cur, target, who); err != nil {
+			return res, err
+		}
+		m.QueueCustomerPort(siteID)
+		m.dropPortsView(siteID)
+		m.chk.drop(siteID)
+		return res, nil
+	}
 	if roleChange && wantDisable {
 		// Both in one request: the router write is the part that can fail for reasons nobody can check up front,
 		// so it goes first; the role is stored only when it worked, and the router is put back if the role is refused.
@@ -729,7 +749,13 @@ func (m *Manager) setPortRole(siteID, port, cur, target string, who PortActor) e
 		lans, custs, olt := SplitPorts(eff.LANPorts), SplitPorts(eff.CustomerPorts), eff.OLTInterface
 		lans, custs = removeStr(lans, port), removeStr(custs, port)
 		oldOLT := olt
+		mgmt := eff.OLTMgmtPort
+		if mgmt == port {
+			mgmt = "" // the port leaves the OLT management role (the rows are removed by the caller first)
+		}
 		switch target {
+		case PortRoleOLTMgmt:
+			mgmt = port
 		case PortRoleLAN:
 			lans = append(lans, port)
 		case PortRoleCustomer:
@@ -741,7 +767,7 @@ func (m *Manager) setPortRole(siteID, port, cur, target string, who PortActor) e
 			perr = portErr(PortErrLastLAN, "%s is the last Admin LAN port. Make another port an Admin LAN port first.", port)
 			return perr
 		}
-		s.LANPorts, s.CustomerPorts, s.OLTInterface = strings.Join(lans, ","), strings.Join(custs, ","), olt
+		s.LANPorts, s.CustomerPorts, s.OLTInterface, s.OLTMgmtPort = strings.Join(lans, ","), strings.Join(custs, ","), olt, mgmt
 		s.BenchPort = ""
 		if target == PortRoleLAN || target == PortRoleOLT {
 			s.DisabledPorts = strings.Join(removeStr(SplitPorts(s.DisabledPorts), port), ",")
@@ -821,4 +847,62 @@ func (m *Manager) dropPortsView(siteID string) {
 	m.live.mu.Lock()
 	delete(m.live.ent, siteID+"|"+viewPortsFast)
 	m.live.mu.Unlock()
+}
+
+// changeOLTMgmtRole gives the OLT management role to a port, or takes it away, with the router rows that go with it.
+// The caller holds the router's run lock. Giving the role: the plan and the port are checked first, the role is stored,
+// the rows are written; when that fails the role is put back. Taking it away: the rows go first (a router that cannot
+// be reached keeps the role), then the role.
+func (m *Manager) changeOLTMgmtRole(ctx context.Context, siteID string, site store.Site, port, cur, target string, who PortActor) error {
+	eff := m.Effective(site)
+	if target == PortRoleOLTMgmt {
+		next := eff
+		next.OLTMgmtPort = port
+		oltIP := m.adoptOLTIP(next)
+		plan, err := PlanOLTAdopt(next, oltIP, ServerTunnelIP(m.pfx))
+		if err != nil {
+			return portErr(PortErrConflict, "%s", err.Error())
+		}
+		rows, err := m.readOLTMgmt(ctx, m.Router(siteID))
+		if err != nil {
+			return err
+		}
+		if err := checkOLTMgmtPort(next, plan, rows); err != nil {
+			return portErr(PortErrConflict, "%s", err.Error())
+		}
+		prev := eff.OLTMgmtPort
+		if err := m.setPortRole(siteID, port, cur, target, who); err != nil {
+			return err
+		}
+		var after store.Site
+		m.st.View(func(d *store.Data) { after = d.Sites[siteID] })
+		if err := m.ensureOLTMgmtLocked(ctx, m.Effective(after), oltIP, who.Name); err != nil {
+			// Put everything back: the role and whatever part of the rows was written.
+			if prev != "" {
+				_ = m.setPortRole(siteID, prev, PortRoleUnused, PortRoleOLTMgmt, who)
+			} else {
+				_ = m.setPortRole(siteID, port, target, PortRoleUnused, who)
+			}
+			var back store.Site
+			m.st.View(func(d *store.Data) { back = d.Sites[siteID] })
+			if rerr := m.ensureOLTMgmtLocked(ctx, m.Effective(back), oltIP, who.Name); rerr != nil {
+				m.log.Warn("could not restore the OLT management rows after a failed change", "site", siteID, "err", rerr)
+			}
+			var pe *ErrOLTMgmtPort
+			if errors.As(err, &pe) {
+				return portErr(PortErrConflict, "%s", pe.Msg)
+			}
+			return err
+		}
+		return nil
+	}
+	// the role goes away
+	if err := m.clearOLTMgmtLocked(ctx, eff, who.Name); err != nil {
+		var pe *ErrOLTMgmtPort
+		if errors.As(err, &pe) {
+			return portErr(PortErrConflict, "%s", pe.Msg)
+		}
+		return err
+	}
+	return m.setPortRole(siteID, port, cur, target, who)
 }
