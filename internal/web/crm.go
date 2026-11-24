@@ -327,53 +327,6 @@ type eqRow struct {
 	Site string
 }
 
-func (s *Server) adminEquipment(w http.ResponseWriter, r *http.Request) {
-	p := s.page(r, "equipment")
-	sc := s.scopeOf(r)
-	qv := r.URL.Query()
-	kind, status, q := qv.Get("kind"), qv.Get("status"), strings.TrimSpace(qv.Get("q"))
-	if qv.Get("view") != "list" && kind == "" && status == "" && q == "" { // the tree is the front page of Equipment
-		p.Data["View"], p.Data["Tree"] = "tree", s.treeFor(sc)
-		s.render(w, "admin_equipment", p)
-		return
-	}
-	p.Data["View"] = "list"
-	names := map[string]string{}
-	for _, st := range sc.Sites {
-		names[st.ID] = st.Name
-	}
-	var rows []eqRow
-	counts := map[string]int{}
-	s.st.View(func(d *store.Data) {
-		for _, e := range d.Equipment {
-			if e.SiteID != "" && !sc.Has(e.SiteID) {
-				continue
-			}
-			if (kind != "" && e.Kind != kind) || (status != "" && e.Status != status) {
-				continue
-			}
-			a, _ := d.AnyAccount(e.AccountID)
-			if q != "" && !(store.ContainsFold(e.Serial, q) || store.ContainsFold(e.MAC, q) || store.ContainsFold(e.Model, q) ||
-				store.ContainsFold(a.Flat, q) || store.ContainsFold(a.Code, q) || store.ContainsFold(strings.ReplaceAll(e.MAC, ":", ""), strings.ReplaceAll(q, ":", ""))) {
-				continue
-			}
-			counts[e.Status]++
-			rows = append(rows, eqRow{e, a, names[e.SiteID]})
-		}
-	})
-	sort.Slice(rows, func(i, j int) bool {
-		a, b := rows[i].E, rows[j].E
-		if a.Kind != b.Kind {
-			return a.Kind < b.Kind
-		}
-		return a.Serial < b.Serial
-	})
-	p.Data["Rows"], p.Data["Counts"], p.Data["Kind"], p.Data["Status"], p.Data["Q"] = rows, counts, kind, status, q
-	p.Data["Kinds"], p.Data["Statuses"] = billing.EquipmentKinds, billing.EquipmentStatuses
-	p.Data["Flash2"] = qv.Get("skipped")
-	s.render(w, "admin_equipment", p)
-}
-
 type eqEvRow struct {
 	Ev store.EquipmentEvent
 	A  store.Account
@@ -416,6 +369,9 @@ func (s *Server) adminEquipmentView(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin/olts/view?id="+url.QueryEscape(e.ID), http.StatusSeeOther)
 		return
 	}
+	p.eqCrumb(eqTabForKind(e.Kind))
+	p.Data["BackTab"] = eqTabForKind(e.Kind)
+	p.Detail = firstNonEmpty(e.Serial, e.MAC, e.Model, "Item")
 	sort.Slice(hist, func(i, j int) bool { return hist[i].Ev.Time.After(hist[j].Ev.Time) })
 	p.Data["E"], p.Data["Acct"], p.Data["Cust"], p.Data["Hist"], p.Data["Accts"] = e, acct, cust, hist, accts
 	p.Data["Kinds"], p.Data["Statuses"] = billing.EquipmentKinds, billing.EquipmentStatuses
@@ -445,7 +401,7 @@ func (s *Server) adminEquipmentSave(w http.ResponseWriter, r *http.Request) {
 	}
 	e, err := s.svc.SaveEquipment(in)
 	if err != nil {
-		to := "/admin/equipment"
+		to := nextOr(r, "/admin/equipment?tab="+eqTabForKind(strings.ToLower(in.Kind)))
 		if in.ID != "" {
 			to = "/admin/equipment/view?id=" + url.QueryEscape(in.ID)
 		}
@@ -458,14 +414,14 @@ func (s *Server) adminEquipmentSave(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminEquipmentImport(w http.ResponseWriter, r *http.Request) {
 	res, err := s.svc.ImportEquipment(r.PostFormValue("lines"))
 	if err != nil {
-		s.back(w, r, nextOr(r, "/admin/equipment"), "Error: "+err.Error())
+		s.back(w, r, nextOr(r, "/admin/equipment?tab=onu"), "Error: "+err.Error())
 		return
 	}
 	msg := "Imported " + strconv.Itoa(res.Added) + " items"
 	if len(res.Skipped) > 0 {
 		msg += ". Skipped: " + strings.Join(res.Skipped, "; ")
 	}
-	s.back(w, r, nextOr(r, "/admin/equipment"), msg)
+	s.back(w, r, nextOr(r, "/admin/equipment?tab=onu"), msg)
 }
 
 func (s *Server) adminEquipmentAssign(w http.ResponseWriter, r *http.Request) {

@@ -14,11 +14,9 @@
 <a class="nav" href="/admin/devices"{{if eq $a "devices"}} aria-current="page"{{end}}>{{template "navi" "devices"}}New devices{{if .NavDevices}}<span class="cnt" aria-label="{{.UnregCount}} online, {{.PendingRegs}} waiting for approval">{{.NavDevices}}</span>{{end}}</a></div></details>
 <details data-g="network" open><summary>Network</summary><div>
 <a class="nav" href="/admin/live"{{if eq $a "live"}} aria-current="page"{{end}}>{{template "navi" "live"}}Live now</a>
-<a class="nav" href="/admin/routers"{{if or (eq $a "sites") (eq $a "fleet")}} aria-current="page"{{end}}>{{template "navi" "sites"}}Routers</a>
 <a class="nav" href="/admin/packages"{{if eq $a "packages"}} aria-current="page"{{end}}>{{template "navi" "packages"}}Plans</a>
 <a class="nav" href="/admin/map"{{if eq $a "map"}} aria-current="page"{{end}}>{{template "navi" "map"}}Network map</a>
-<a class="nav" href="/admin/onus"{{if eq $a "onus"}} aria-current="page"{{end}}>{{template "navi" "equipment"}}ONUs</a>
-<a class="nav" href="/admin/equipment"{{if eq $a "equipment"}} aria-current="page"{{end}}>{{template "navi" "equipment"}}Equipment</a>
+<a class="nav" href="/admin/equipment"{{if or (eq $a "equipment") (eq $a "sites") (eq $a "fleet") (eq $a "onus")}} aria-current="page"{{end}}>{{template "navi" "equipment"}}Equipment</a>
 <a class="nav" href="/admin/metrics"{{if eq $a "metrics"}} aria-current="page"{{end}}>{{template "navi" "metrics"}}Usage and quality</a>
 {{if .HasOps}}<a class="nav" href="/admin/uptime"{{if eq $a "uptime"}} aria-current="page"{{end}}>{{template "navi" "uptime"}}Uptime</a>{{end}}</div></details>
 <details data-g="finance" open><summary>Finance</summary><div>
@@ -54,6 +52,8 @@
 
 {{define "statbody"}}<span class="k">{{.K}}</span><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true">{{template "picon" .Icon}}</svg></span><span class="v"{{if .Key}} data-stat="{{.Key}}"{{end}}>{{.V}}{{if .Of}} <small>{{.Of}}</small>{{end}}</span><span class="s">{{.S}}</span>{{if .Spark}}{{.Spark}}{{end}}{{end}}
 {{define "stat"}}{{if .Href}}<a href="{{.Href}}" class="stat{{if .Tone}} t-{{.Tone}}{{end}}{{if .Feature}} feature{{end}}">{{template "statbody" .}}</a>{{else}}<div class="stat{{if .Tone}} t-{{.Tone}}{{end}}{{if .Feature}} feature{{end}}">{{template "statbody" .}}</div>{{end}}{{end}}
+
+{{define "eq_tabs"}}<nav class="tabs" aria-label="Equipment">{{range .Data.EqTabs}}<a class="tab" href="{{.Href}}"{{if eq .Key $.Data.EqTab}} aria-current="page"{{end}}>{{.Label}}{{if .Count}}<span class="n">{{.N}}</span>{{end}}</a>{{end}}</nav>{{end}}
 
 {{define "empty"}}<div class="empty"><svg viewBox="0 0 96 96" aria-hidden="true"><rect x="8" y="30" width="80" height="44" rx="14" fill="var(--surface-2)" stroke="var(--line-strong)" stroke-width="2"/><circle cx="26" cy="52" r="4" fill="var(--brand)"/><circle cx="40" cy="52" r="4" fill="var(--line-strong)"/><path d="M56 52h24" stroke="var(--line-strong)" stroke-width="4" stroke-linecap="round"/><path d="M30 24c10-10 26-10 36 0" fill="none" stroke="var(--brand)" stroke-width="4" stroke-linecap="round"/><path d="M38 30c6-5 14-5 20 0" fill="none" stroke="var(--brand)" stroke-width="4" stroke-linecap="round" opacity=".55"/></svg><h3>{{.Title}}</h3><p>{{.Text}}</p>{{if .Acts}}<div class="act">{{range .Acts}}{{if .Modal}}<button type="button" class="btn{{if .Ghost}} ghost{{end}}" data-open="{{.Modal}}">{{.Label}}</button>{{else}}<a class="btn{{if .Ghost}} ghost{{end}}" href="{{.Href}}">{{.Label}}</a>{{end}}{{end}}</div>{{end}}</div>{{end}}
 

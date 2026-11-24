@@ -24,7 +24,7 @@
 <section class="panel"><div class="panel-h"><h2>ONUs not under an OLT</h2><span class="muted">in stock, or installed with no OLT recorded</span></div>
 {{if .Data.Tree.UnplacedONUs}}{{template "eq_onu_rows" (dict "ONUs" .Data.Tree.UnplacedONUs "D" $d)}}{{else}}<p class="muted">Every ONU of the register is under an OLT.</p>{{end}}</section>
 </div>
-{{if .CanWrite}}<p class="muted"><a class="btn ghost sm" href="/admin/olts/new">Add an OLT</a> &middot; ONUs are added in the <a href="/admin/equipment?view=list">list</a>; open one to set its OLT and PON port.</p>{{end}}{{end}}
+{{if .CanWrite}}<p class="muted"><a class="btn ghost sm" href="/admin/olts/new">Add an OLT</a> &middot; ONUs are added in the <a href="/admin/equipment?tab=onu">ONU tab</a>; open one to set its OLT and PON port.</p>{{end}}{{end}}
 
 {{define "rt_equipment"}}{{$d := .}}{{$r := .Data.EqRouter}}
 <div class="eqcol"><section class="panel"><h2>Apartments <span class="muted">(logical)</span></h2>
@@ -33,7 +33,7 @@
 <div class="tw"><table class="rs"><thead><tr><th>OLT</th><th>MAC</th><th>Router port</th><th class="n">PON ports</th><th class="n">ONUs</th><th>Status</th></tr></thead><tbody>
 {{range $r.OLTs}}<tr><td class="who"><a href="/admin/olts/view?id={{.Equip.ID}}"><b>{{.Label}}</b></a><span class="muted">{{.Equip.Model}}</span></td><td class="mono" data-label="MAC">{{.Equip.MAC}}</td><td data-label="Port">{{.Equip.RouterPort}}</td><td class="n" data-label="PON ports">{{.Equip.PONPorts}}</td><td class="n" data-label="ONUs">{{.ONUCount}}{{if .ONUCount}} <span class="muted">({{.Online}} online)</span>{{end}}</td><td data-label="Status"><span class="pill {{.Equip.Status}}">{{if eq .Equip.Status "installed"}}deployed{{else}}{{stat .Equip.Status}}{{end}}</span></td></tr>
 {{else}}<tr><td colspan="6" class="muted">No OLT is recorded on this router.</td></tr>{{end}}</tbody></table></div>
-<p class="muted"><a href="/admin/equipment">See the whole tree</a></p></section></div>{{end}}
+<p class="muted"><a href="/admin/equipment?tab=tree">See the whole tree</a></p></section></div>{{end}}
 
 {{define "apt_equipment"}}<section class="mt-4 panel"><h2>Fibre: OLT and PON port</h2>
 {{range .Data.ServedBy}}<p><a href="/admin/olts/view?id={{.OLT.ID}}"><b>{{oltLabel .OLT}}</b></a> <span class="muted">{{.OLT.Model}}</span>, PON {{.Port}}: {{len .ONUs}} ONU{{if ne (len .ONUs) 1}}s{{end}} in this apartment</p>
@@ -41,7 +41,7 @@
 {{else}}<p class="muted">No OLT PON port is recorded as serving this apartment.</p>{{end}}</section>{{end}}
 
 {{define "admin_olt"}}{{template "ahead" .}}{{$d := .}}{{$E := .Data.E}}
-<p><a href="/admin/equipment">&larr; equipment tree</a></p>
+<p><a href="/admin/equipment?tab=olt">&larr; all OLTs</a> &middot; <a href="/admin/equipment?tab=tree">tree</a></p>
 {{if .Data.Existing}}<div class="tiles"><div class="tile">Router<b style="font-size:19px">{{if $E.SiteID}}<a href="/admin/routers/view?id={{$E.SiteID}}&amp;tab=equipment">{{.Data.RouterName}}</a>{{else}}none{{end}}</b><small>{{if $E.RouterPort}}port {{$E.RouterPort}}{{end}}</small></div>
 <div class="tile">MAC<b style="font-size:19px" class="mono">{{$E.MAC}}</b><small>{{$E.Model}}{{if $E.Firmware}} &middot; firmware {{$E.Firmware}}{{end}}</small></div>
 <div class="tile">Status<b style="font-size:19px"><span class="pill {{$E.Status}}">{{if eq $E.Status "installed"}}deployed{{else}}{{stat $E.Status}}{{end}}</span></b><small>{{.Data.ONUCount}} ONU{{if ne .Data.ONUCount 1}}s{{end}}</small></div></div>{{end}}

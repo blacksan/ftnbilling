@@ -121,7 +121,7 @@
 <section class="panel"><h2>Network equipment</h2><table>
 {{range .Router}}<tr><td>Router</td><td><a href="/admin/equipment/view?id={{.ID}}">{{if .Serial}}{{.Serial}}{{else}}{{.Model}}{{end}}</a> <span class="muted">{{.Model}} {{.MAC}}</span></td></tr>{{end}}
 {{range .OLT}}<tr><td>OLT</td><td><a href="/admin/equipment/view?id={{.ID}}">{{if .Serial}}{{.Serial}}{{else}}{{.Model}}{{end}}</a> <span class="muted">{{.Model}} {{.MAC}}</span></td></tr>{{end}}
-{{if not (or .Router .OLT)}}<tr><td class="muted">None recorded. <a href="/admin/equipment">Add the router and OLT</a>.</td></tr>{{end}}</table></section>
+{{if not (or .Router .OLT)}}<tr><td class="muted">None recorded. <a href="/admin/equipment?tab=olt">Add the OLT</a>.</td></tr>{{end}}</table></section>
 <section class="panel"><h2>Apartments served</h2><table>{{range .Apartments}}<tr><td><b><a href="/admin/apartments/view?id={{.ID}}">{{.Name}}</a></b></td><td class="muted">{{.Address}}</td></tr>{{else}}<tr><td class="muted">No apartments linked yet. <a href="/admin/apartments">Link this router to an apartment</a>.</td></tr>{{end}}</table></section>{{end}}
 </div>
 

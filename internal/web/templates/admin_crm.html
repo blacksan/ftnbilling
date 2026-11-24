@@ -48,28 +48,64 @@
 <form method="post" action="/admin/customers/anonymize" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$C.ID}}"><input name="confirm" placeholder="{{$C.Name}}" required autocomplete="off"><button>Anonymise</button></form></div>{{end}}
 {{template "afoot" .}}{{end}}
 
-{{define "admin_equipment"}}{{template "ahead" .}}{{$d := .}}
-<nav class="tabs" aria-label="Equipment views"><a class="tab" href="/admin/equipment"{{if eq .Data.View "tree"}} aria-current="page"{{end}}>Tree</a><a class="tab" href="/admin/equipment?view=list"{{if eq .Data.View "list"}} aria-current="page"{{end}}>List</a></nav>
-{{if eq .Data.View "tree"}}{{template "equip_tree" .}}{{else}}
-<form method="get" action="/admin/equipment" class="mb-3 row"><label>Find<input name="q" value="{{.Data.Q}}" placeholder="serial, MAC, model, house number" size="26"></label>
-<label>Kind<select name="kind"><option value="">All</option>{{range .Data.Kinds}}<option value="{{.}}"{{if eq . $d.Data.Kind}} selected{{end}}>{{.}}</option>{{end}}</select></label>
-<label>Status<select name="status"><option value="">All</option>{{range .Data.Statuses}}<option value="{{.}}"{{if eq . $d.Data.Status}} selected{{end}}>{{.}}</option>{{end}}</select></label><button>Filter</button></form>
-<div class="tiles">{{range .Data.Statuses}}<div class="tile{{if eq . "faulty"}} warn{{end}}">{{stat .}}<b>{{index $d.Data.Counts .}}</b></div>{{end}}</div>
-<div class="tw"><table><tr>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>Kind</th><th>Serial</th><th>MAC</th><th>Model</th><th>Status</th><th>Installed at</th></tr>
-{{range .Data.Rows}}<tr>{{if $d.Data.ShowSite}}<td>{{.Site}}</td>{{end}}<td>{{.E.Kind}}</td><td><a href="/admin/equipment/view?id={{.E.ID}}"><b>{{if and (eq .E.Kind "olt") .E.Name}}{{.E.Name}}{{else if .E.Serial}}{{.E.Serial}}{{else}}(no serial){{end}}</b></a></td><td>{{.E.MAC}}</td><td>{{.E.Model}}</td><td><span class="pill {{.E.Status}}">{{stat .E.Status}}</span></td>
-<td>{{if .A.Code}}<a href="/admin/accounts/view?code={{.A.Code}}">{{.A.Flat}}</a>{{else if .Site}}{{.Site}}{{end}}</td></tr>
-{{else}}<tr><td colspan="7">No equipment matches.</td></tr>{{end}}</table></div>
-<div class="grid2">
-<div class="card"><b>Add an item</b><form method="post" action="/admin/equipment/save" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}">{{template "sitepick" .}}
-<label>Kind<select name="kind">{{range .Data.Kinds}}<option>{{.}}</option>{{end}}</select></label><label>Serial<input name="serial"></label><label>GPON serial<input name="gpon_serial" placeholder="only if different"></label><label>WAN MAC<input name="mac" placeholder="AA:BB:CC:DD:EE:FF"></label><label>Model<input name="model"></label><button>Add</button></form>
-<p class="muted" style="margin:6px 0 0">An ONT starts in stock. For an ONT the MAC must be the WAN MAC the router sees. The MAC printed on the label is often the LAN MAC: confirm it on the bench (New devices, or the lease, when the ONU first connects) before saving the pair; TR-069 reports it too. A router, OLT or splitter added to a router is installed there.</p></div>
-<div class="card"><b>Import a list</b><p class="muted" style="margin:4px 0">One item per line: <code>kind,serial,mac,model</code>, or for ONUs only <code>serial,mac,model[,gpon serial]</code>. A serial already in the register is skipped.</p>
-<form method="post" action="/admin/equipment/import"><input type="hidden" name="_csrf" value="{{.CSRF}}"><textarea name="lines" rows="4" style="width:100%;font:13px monospace" placeholder="ont,ZTEG12345678,AA:BB:CC:DD:EE:01,F601"></textarea><button>Import</button></form></div></div>
-{{end}}{{template "afoot" .}}{{end}}
+{{define "eq_filters"}}<form method="get" action="/admin/equipment" class="mb-3 row"><input type="hidden" name="tab" value="{{.Tab}}"><label>Find<input name="q" value="{{.D.Data.Q}}" placeholder="{{.Hint}}" size="26"></label>
+{{if .Kinds}}<label>Kind<select name="kind"><option value="">All</option>{{range .Kinds}}<option value="{{.}}"{{if eq . $.D.Data.Kind}} selected{{end}}>{{.}}</option>{{end}}</select></label>{{end}}
+<label>Status<select name="status"><option value="">All</option>{{range .D.Data.Statuses}}<option value="{{.}}"{{if eq . $.D.Data.Status}} selected{{end}}>{{eqStat .}}</option>{{end}}</select></label>
+{{if .Routers}}<label>Router<select name="router"><option value="">All</option>{{range .D.Data.Routers}}<option value="{{.ID}}"{{if eq .ID $.D.Data.Router}} selected{{end}}>{{.Name}}</option>{{end}}</select></label>{{end}}
+{{if .OLTs}}<label>OLT<select name="olt"><option value="">All</option>{{range .D.Data.OLTs}}<option value="{{.ID}}"{{if eq .ID $.D.Data.OLT}} selected{{end}}>{{oltLabel .}}</option>{{end}}</select></label>{{end}}
+<button>Filter</button>{{if .Active}} <a class="btn ghost sm" href="/admin/equipment?tab={{.Tab}}">Clear</a>{{end}}</form>
+<div class="tiles">{{range .D.Data.Statuses}}<div class="tile{{if eq . "faulty"}} warn{{end}}">{{eqStat .}}<b>{{index $.D.Data.Counts .}}</b></div>{{end}}</div>{{end}}
+
+{{define "admin_equipment_tree"}}{{template "ahead" .}}{{template "eq_tabs" .}}{{template "equip_tree" .}}{{template "afoot" .}}{{end}}
+
+{{define "admin_equipment_olts"}}{{template "ahead" .}}{{template "eq_tabs" .}}{{$d := .}}
+{{template "eq_filters" (dict "D" . "Tab" "olt" "Hint" "name, model, MAC" "Routers" true "Active" (or .Data.Q .Data.Status .Data.Router))}}
+{{if .Data.Rows}}<div class="tw"><table class="rs"><thead><tr><th>OLT</th><th>MAC</th><th>Router and port</th><th>PON ports and apartments served</th><th class="n">ONUs online</th><th>Status</th></tr></thead><tbody>
+{{range .Data.Rows}}<tr><td class="who"><a href="/admin/olts/view?id={{.E.ID}}"><b>{{.Label}}</b></a><span class="muted">{{.E.Model}}</span></td>
+<td class="mono" data-label="MAC">{{.E.MAC}}</td>
+<td data-label="Router">{{if .Router}}{{.Router}}{{if .E.RouterPort}} <span class="muted">port {{.E.RouterPort}}</span>{{end}}{{else}}<span class="muted">not on a router</span>{{end}}</td>
+<td data-label="PON ports">{{.E.PONPorts}} port{{if ne .E.PONPorts 1}}s{{end}}{{if .Apartments}} <span class="muted">serving {{range $i, $a := .Apartments}}{{if $i}}, {{end}}{{$a}}{{end}}</span>{{else}} <span class="muted">no apartment recorded</span>{{end}}</td>
+<td class="n" data-label="ONUs">{{.Online}} / {{.ONUs}}{{if .Warnings}} <span class="pill suspended" title="ONUs with a placement warning">{{.Warnings}}</span>{{end}}</td>
+<td data-label="Status"><span class="pill {{.E.Status}}">{{eqStat .E.Status}}</span></td></tr>{{end}}</tbody></table></div>
+{{else if .CanWrite}}{{template "empty" (dict "Title" "No OLT matches." "Text" "An OLT is the box the ONUs hang off. Add one, give it its router, its router port and the apartments each PON port serves." "Acts" (acts "Add OLT|/admin/olts/new"))}}
+{{else}}{{template "empty" (dict "Title" "No OLT matches." "Text" "An OLT is the box the ONUs hang off.")}}{{end}}
+{{template "afoot" .}}{{end}}
+
+{{define "admin_equipment_onus"}}{{template "ahead" .}}{{template "eq_tabs" .}}{{$d := .}}
+{{template "eq_filters" (dict "D" . "Tab" "onu" "Hint" "serial, MAC, model, house number" "Routers" true "OLTs" true "Active" (or .Data.Q .Data.Status .Data.Router .Data.OLT))}}
+{{if .Data.Rows}}<div class="tw"><table class="rs"><thead><tr><th>Serial</th><th>WAN MAC</th><th>Model</th><th>OLT and PON</th><th>House and customer</th><th>Status</th><th>TR-069 last check-in</th></tr></thead><tbody>
+{{range .Data.Rows}}<tr><td class="who"><a href="/admin/equipment/view?id={{.E.ID}}"><b>{{if .E.Serial}}{{.E.Serial}}{{else}}(no serial){{end}}</b></a>{{if .E.GPONSerial}}<span class="muted">GPON {{.E.GPONSerial}}</span>{{end}}</td>
+<td class="mono" data-label="WAN MAC">{{.E.MAC}}</td><td data-label="Model">{{.E.Model}}</td>
+<td data-label="OLT">{{if .OLTLabel}}<a href="/admin/olts/view?id={{.OLTID}}">{{.OLTLabel}}</a>{{if .E.PONPort}} <span class="muted">PON {{.E.PONPort}}</span>{{end}}{{if .Router}}<span class="muted"> &middot; {{.Router}}</span>{{end}}{{else}}<span class="muted">not placed</span>{{end}}</td>
+<td data-label="House">{{if .Code}}<a href="/admin/accounts/view?code={{.Code}}">{{if .Apartment}}{{.Apartment}}, {{end}}{{.House}}</a>{{if .Customer}} <span class="muted">{{.Customer}}</span>{{end}}{{else}}<span class="muted">no house</span>{{end}}</td>
+<td data-label="Status"><span class="pill {{.E.Status}}">{{eqStat .E.Status}}</span></td>
+<td data-label="TR-069">{{if .TR069}}{{if .CheckIn.IsZero}}never{{else}}{{eat .CheckIn}}{{end}}{{if .Held}} <span class="pill suspended">held back</span>{{end}}{{else}}<span class="muted">not reporting</span>{{end}}</td></tr>{{end}}</tbody></table></div>
+{{else}}{{template "empty" (dict "Title" "No ONU matches." "Text" "Add an ONU by hand or import a list. It starts in stock and is installed when a house gets it.")}}{{end}}
+{{if .CanWrite}}<div class="grid2" id="add">
+<div class="card"><b>Add an ONU</b><form method="post" action="/admin/equipment/save" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="next" value="/admin/equipment?tab=onu"><input type="hidden" name="kind" value="ont">{{template "sitepick" .}}
+<label>Serial<input name="serial"></label><label>GPON serial<input name="gpon_serial" placeholder="only if different"></label><label>WAN MAC<input name="mac" placeholder="AA:BB:CC:DD:EE:FF"></label><label>Model<input name="model"></label><button>Add ONU</button></form>
+<p class="muted" style="margin:6px 0 0">An ONU starts in stock. The MAC must be the WAN MAC the router sees. The MAC printed on the label is often the LAN MAC: confirm it on the bench (New devices, or the lease, when the ONU first connects) before saving the pair; TR-069 reports it too. Open an ONU to set its OLT and PON port.</p></div>
+<div class="card"><b>Import a list (CSV)</b><p class="muted" style="margin:4px 0">One ONU per line: <code>serial,mac,model[,gpon serial]</code>, or <code>ont,serial,mac,model</code>. A serial already in the register is skipped.</p>
+<form method="post" action="/admin/equipment/import"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="next" value="/admin/equipment?tab=onu"><textarea name="lines" rows="4" style="width:100%;font:13px monospace" placeholder="ZTEG12345678,AA:BB:CC:DD:EE:01,F601"></textarea><button>Import</button></form></div></div>{{end}}
+{{template "afoot" .}}{{end}}
+
+{{define "admin_equipment_other"}}{{template "ahead" .}}{{template "eq_tabs" .}}{{$d := .}}
+{{template "eq_filters" (dict "D" . "Tab" "other" "Hint" "serial, MAC, model" "Kinds" .Data.Kinds "Active" (or .Data.Q .Data.Status .Data.Kind))}}
+{{if .Data.Rows}}<div class="tw"><table class="rs"><thead><tr>{{if .Data.ShowSite}}<th>Router</th>{{end}}<th>Kind</th><th>Serial</th><th>MAC</th><th>Model</th><th>Status</th><th>Installed at</th></tr></thead><tbody>
+{{range .Data.Rows}}<tr>{{if $d.Data.ShowSite}}<td data-label="Router">{{.Site}}</td>{{end}}<td data-label="Kind">{{.E.Kind}}</td><td class="who"><a href="/admin/equipment/view?id={{.E.ID}}"><b>{{if .E.Serial}}{{.E.Serial}}{{else}}(no serial){{end}}</b></a></td><td class="mono" data-label="MAC">{{.E.MAC}}</td><td data-label="Model">{{.E.Model}}</td><td data-label="Status"><span class="pill {{.E.Status}}">{{eqStat .E.Status}}</span></td>
+<td data-label="Installed at">{{if .A.Code}}<a href="/admin/accounts/view?code={{.A.Code}}">{{.A.Flat}}</a>{{else if .Site}}{{.Site}}{{end}}</td></tr>{{end}}</tbody></table></div>
+{{else}}{{template "empty" (dict "Title" "No other equipment matches." "Text" "Switches, access points, splitters, UPS units and anything else that is not an OLT or an ONU are kept here.")}}{{end}}
+{{if .CanWrite}}<div class="grid2" id="add">
+<div class="card"><b>Add an item</b><form method="post" action="/admin/equipment/save" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="next" value="/admin/equipment?tab=other">{{template "sitepick" .}}
+<label>Kind<select name="kind">{{range .Data.Kinds}}<option>{{.}}</option>{{end}}</select></label><label>Serial<input name="serial"></label><label>MAC<input name="mac" placeholder="AA:BB:CC:DD:EE:FF"></label><label>Model<input name="model"></label><button>Add item</button></form>
+<p class="muted" style="margin:6px 0 0">A router, switch or splitter added to a router is installed there. OLTs and ONUs have their own tabs.</p></div>
+<div class="card"><b>Import a list</b><p class="muted" style="margin:4px 0">One item per line: <code>kind,serial,mac,model</code>. A serial already in the register is skipped.</p>
+<form method="post" action="/admin/equipment/import"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="next" value="/admin/equipment?tab=other"><textarea name="lines" rows="4" style="width:100%;font:13px monospace" placeholder="switch,SW12345,AA:BB:CC:DD:EE:01,CRS326"></textarea><button>Import</button></form></div></div>{{end}}
+{{template "afoot" .}}{{end}}
 
 {{define "admin_equipment_view"}}{{template "ahead" .}}{{$E := .Data.E}}{{$d := .}}
 <h2>{{$E.Kind}} {{if $E.Serial}}{{$E.Serial}}{{else}}<span class="muted">(no serial)</span>{{end}} <span class="pill {{$E.Status}}">{{stat $E.Status}}</span></h2>
-<p><a href="/admin/equipment">&larr; all equipment</a></p>
+<p><a href="/admin/equipment?tab={{.Data.BackTab}}">&larr; back to the list</a></p>
 <div class="tiles"><div class="tile">Installed at<b style="font-size:19px">{{if .Data.Acct.Code}}<a href="/admin/accounts/view?code={{.Data.Acct.Code}}">{{.Data.Acct.Flat}}</a>{{else if .Data.SiteName}}{{.Data.SiteName}}{{else}}not installed{{end}}</b>{{if .Data.Cust.Name}}<small><a href="/admin/customers/view?id={{.Data.Cust.ID}}">{{.Data.Cust.Name}}</a></small>{{end}}</div>
 <div class="tile">MAC<b style="font-size:19px">{{if $E.MAC}}{{$E.MAC}}{{else}}-{{end}}</b><small>{{$E.Model}}{{if $E.Firmware}} &middot; firmware {{$E.Firmware}}{{end}}</small></div>
 <div class="tile">Installed since<b style="font-size:19px">{{if $E.InstalledAt.IsZero}}-{{else}}{{day $E.InstalledAt}}{{end}}</b></div></div>

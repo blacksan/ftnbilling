@@ -42,6 +42,7 @@ type rtRow struct {
 	State                 string // up | down | paused | waiting
 	Setup, SetupTone      string // the setup view's state: not_started, waiting_router, online, ready (or paused)
 	Flats, Active, Online int
+	Apartments, OLTs      int // apartments the router serves, OLTs on it
 	WAN, Tunnel, Seen     string
 	WANPct                float64
 	Attention             bool
@@ -87,6 +88,9 @@ func (s *Server) routerRows(ctx context.Context, sc scope) []rtRow {
 	for _, st := range list {
 		b := base[st.ID]
 		r := rtRow{S: st, State: states[st.ID], Flats: b.Accounts, Active: b.Active, Online: onl[st.ID], Detail: b.Detail}
+		s.st.View(func(d *store.Data) {
+			r.Apartments, r.OLTs = len(d.SiteApartmentIDs(st.ID)), len(d.OLTsOfSite(st.ID))
+		})
 		if col := s.mgr.Collector(st.ID); col != nil {
 			cfg, snap := col.Config(), col.Snapshot()
 			if pt, ok := snap.Ports[cfg.WAN]; ok {
@@ -144,12 +148,12 @@ func shortAge(d time.Duration) string {
 }
 
 func (s *Server) adminSites(w http.ResponseWriter, r *http.Request) {
-	p := s.page(r, "sites")
+	p := s.eqPage(r, "sites", eqTabRouters)
 	sc := scope{All: true, Sites: s.scopeOf(r).Sites} // the router list always shows every router
 	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 	defer cancel()
 	all := s.routerRows(ctx, sc)
-	tab := r.URL.Query().Get("tab")
+	tab := routerStateFilter(r)
 	cnt := map[string]int{"all": len(all)}
 	var rows []rtRow
 	var online, offline, setting, attn, flatsOn int
@@ -175,9 +179,6 @@ func (s *Server) adminSites(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	cnt["online"], cnt["offline"], cnt["setting"] = online, offline, setting
-	if tab == "" {
-		tab = "all"
-	}
 	p.Data["Rows"], p.Data["Tab"], p.Data["Cnt"], p.Data["All"] = rows, tab, cnt, len(all)
 	p.Data["Online"], p.Data["Offline"], p.Data["FlatsOn"], p.Data["Attn"] = online, offline, flatsOn, attn
 	p.Data["AutoOpen"] = r.URL.Query().Get("add") == "1" && p.CanWrite
@@ -192,6 +193,21 @@ func (s *Server) adminSites(w http.ResponseWriter, r *http.Request) {
 	}
 	p.Data["Notices"] = notices
 	s.render(w, "admin_sites", p)
+}
+
+// routerStateFilter is the status filter of the Routers tab (all, online, offline, setting): ?state= on the Equipment
+// page. The old /admin/routers?tab=online address keeps its meaning.
+func routerStateFilter(r *http.Request) string {
+	q := r.URL.Query()
+	v := q.Get("state")
+	if v == "" && r.URL.Path != "/admin/equipment" {
+		v = q.Get("tab")
+	}
+	switch v {
+	case "online", "offline", "setting":
+		return v
+	}
+	return "all"
 }
 
 // adminSiteNew keeps the old "add" address working: the form is a dialog now.

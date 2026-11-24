@@ -65,7 +65,7 @@ type ponApt struct {
 // oltForm renders the OLT form. With rejected set (a save that was refused) it shows that error over the values the
 // operator typed, with status 422; the password is never put back.
 func (s *Server) oltForm(w http.ResponseWriter, r *http.Request, e store.Equipment, existing bool, rejected ...string) {
-	p := s.page(r, "equipment")
+	p := s.eqPage(r, "equipment", eqTabOLT)
 	if len(rejected) > 0 {
 		p.Flash, p.FlashBad = "Error: "+rejected[0], true
 	}
@@ -139,7 +139,7 @@ func (s *Server) adminOLTSave(w http.ResponseWriter, r *http.Request) {
 		MgmtUser: r.PostFormValue("mgmt_user"), MgmtPass: r.PostFormValue("mgmt_pass"), ClearMgmtPass: r.PostFormValue("clear_pass") == "1",
 		Status: r.PostFormValue("status")}
 	if in.SiteID != "" && !s.scopeAllows(r, in.SiteID) {
-		s.back(w, r, "/admin/equipment", "Error: choose one of your routers")
+		s.back(w, r, "/admin/equipment?tab=olt", "Error: choose one of your routers")
 		return
 	}
 	// The PON mapping is replaced only when the form carried it (the add form for a router with no apartments does not).
@@ -161,7 +161,7 @@ func (s *Server) adminOLTSave(w http.ResponseWriter, r *http.Request) {
 		if id != "" {
 			s.st.View(func(d *store.Data) { cur, exists = d.Equipment[id] })
 			if !exists || cur.Kind != store.KindOLT {
-				s.back(w, r, "/admin/equipment", "Error: "+err.Error())
+				s.back(w, r, "/admin/equipment?tab=olt", "Error: "+err.Error())
 				return
 			}
 		} else {

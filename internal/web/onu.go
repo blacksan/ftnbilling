@@ -155,6 +155,8 @@ func (s *Server) adminONUs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := s.page(r, "onus")
+	p.eqCrumb(eqTabONU)
+	p.Detail = "TR-069 check-ins"
 	list := s.acs.ONUs(p.Site)
 	p.Data["ONUs"] = list
 	var free []store.Account
