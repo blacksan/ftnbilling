@@ -29,6 +29,13 @@ val signingFile: Map<String, String> = providers.environmentVariable("ANDROID_SI
 
 fun signingValue(name: String): String? = signingFile[name] ?: providers.environmentVariable(name).orNull
 
+// Google Maps (Maps SDK for Android) key of the Network screen. Not a signing secret, but kept out of git: pass it as
+// -PMAPS_API_KEY=..., in ~/.gradle/gradle.properties, or as the MAPS_API_KEY environment variable / line of the CI
+// signing file. Empty (the default) is valid: CI builds without it and the Network screen then shows the list view.
+// Restrict the key in Google Cloud Console to this app's package and signing certificate (see android/README.md).
+val mapsApiKey: String = (providers.gradleProperty("MAPS_API_KEY").orNull ?: signingValue("MAPS_API_KEY") ?: "").trim()
+require(mapsApiKey.matches(Regex("[A-Za-z0-9_-]*"))) { "MAPS_API_KEY may hold only letters, digits, - and _" }
+
 android {
     namespace = "ke.co.ftw.ftnadmin"
     compileSdk = 37
@@ -41,6 +48,9 @@ android {
         versionName = providers.gradleProperty("versionName").getOrElse("0.1.0-dev")
 
         buildConfigField("String", "API_BASE", "\"https://isp.ftw.co.ke\"")
+        // Whether a Maps key was given at build time (the key itself only goes into the manifest).
+        manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
+        buildConfigField("boolean", "MAPS_KEY_SET", mapsApiKey.isNotEmpty().toString())
         // The in-app update check is for signed release builds; the .debug app is installed by hand.
         buildConfigField("boolean", "UPDATES_ENABLED", "true")
     }
@@ -127,6 +137,8 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.biometric)
+    implementation(libs.maps.compose)
+    implementation(libs.play.services.maps)
     implementation(libs.kotlinx.coroutines.android)
 
     implementation(libs.okhttp)
