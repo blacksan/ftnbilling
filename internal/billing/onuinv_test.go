@@ -150,3 +150,58 @@ func TestSwapONUUnlinksTheOldBox(t *testing.T) {
 		}
 	})
 }
+
+// trustedONU puts an ONU row that the owner trusted ("Trust this ONU") in the store for the serial.
+func (e *env) trustedONU(t *testing.T, id, serial, acct string) {
+	t.Helper()
+	if err := e.st.Update(func(d *store.Data) error {
+		d.ONUs[id] = store.ONU{ID: id, Serial: serial, AccountID: acct, Sec: store.ONUSec{MACTrusted: "02:00:0A:06:03:14", MACCheck: store.MACOK}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (e *env) trustOf(id string) (m string) {
+	e.st.View(func(d *store.Data) { m = d.ONUs[id].Sec.MACTrusted })
+	return m
+}
+
+func TestTrustedMACIsClearedWhenTheRegisteredWANMACChanges(t *testing.T) {
+	e := newEnv(t)
+	it, err := e.svc.SaveEquipment(EquipmentInput{Kind: "ont", Serial: "TRUST1", MAC: "AA:BB:CC:DD:EE:81"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.trustedONU(t, "o1", "TRUST1", "")
+	// an edit that keeps the MAC keeps the trust
+	if _, err := e.svc.SaveEquipment(EquipmentInput{ID: it.ID, Kind: "ont", Serial: "TRUST1", MAC: "aa-bb-cc-dd-ee-81", Model: "F601"}); err != nil {
+		t.Fatal(err)
+	}
+	if e.trustOf("o1") == "" {
+		t.Fatal("trust cleared by an edit that did not change the MAC")
+	}
+	if _, err := e.svc.SaveEquipment(EquipmentInput{ID: it.ID, Kind: "ont", Serial: "TRUST1", MAC: "AA:BB:CC:DD:EE:82"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.trustOf("o1"); got != "" {
+		t.Fatalf("trust survived a WAN MAC change: %q", got)
+	}
+}
+
+func TestTrustedMACIsClearedWhenTheItemIsReturnedOrRetired(t *testing.T) {
+	for _, status := range []string{store.EqReturned, store.EqRetired} {
+		e := newEnv(t)
+		it, err := e.svc.SaveEquipment(EquipmentInput{Kind: "ont", Serial: "TRUST2", MAC: "AA:BB:CC:DD:EE:83"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.trustedONU(t, "o2", "TRUST2", "")
+		if err := e.svc.ReturnEquipment(it.ID, status, "x"); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.trustOf("o2"); got != "" {
+			t.Fatalf("%s: trust survived: %q", status, got)
+		}
+	}
+}

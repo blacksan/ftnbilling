@@ -870,6 +870,9 @@ NETFLOW_ADDR=$WG_SERVER_IP:2055
 # ONU management (TR-069): the built-in ACS listens on the tunnel address only (ufw allows it on wg0 only).
 # The ONUs reach it through their router's management VLAN. Set ACS_LISTEN=off to turn it off.
 ACS_LISTEN=$WG_SERVER_IP:$ACS_PORT
+# Only ONUs that are in the ONU inventory may check in, and the house Wi-Fi waits until the management MAC is near the
+# registered WAN MAC (the owner can override one ONU). Set false to accept any serial (not recommended).
+ACS_REGISTERED_ONLY=true
 
 # Remote WinBox: devices (sudo ftnbilling-mgmt add <name>) join this separate WireGuard
 # interface and reach the routers' WinBox through this server. Routers built from the
@@ -909,6 +912,7 @@ EOF
     addkv WG_ENDPOINT "$PUBIP:$WG_PORT"
     addkv WG_SUBNET "$WG_SUBNET"
     addkv ACS_LISTEN "$WG_SERVER_IP:$ACS_PORT"
+    addkv ACS_REGISTERED_ONLY "true"
     setkv MGMT_PORT "$MGMT_PORT"
     addkv MGMT_SUBNET "$MGMT_SUBNET"
     [ -z "${ADMIN_PASS:-}" ] || setkv ADMIN_PASS "$ADMIN_PASS"

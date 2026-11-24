@@ -156,3 +156,37 @@ func TestAPIONUQuarantineConfirmAndTasks(t *testing.T) {
 		t.Fatalf("%d %s", m.Status, m.Raw)
 	}
 }
+
+func TestAPIONUTrustIsOwnerOnlyAndUnknownListWorks(t *testing.T) {
+	forceACS = true
+	t.Cleanup(func() { forceACS = false })
+	r := newAPIRig(t)
+	r.st.Update(func(d *store.Data) error {
+		s := d.Sites[r.A.ID]
+		s.ONUMgmtN = 4
+		d.Sites[r.A.ID] = s
+		d.Equipment["eqt"] = store.Equipment{ID: "eqt", Kind: store.KindONT, Serial: "SNT1", MAC: "AA:BB:CC:00:00:10", Status: store.EqInStock, CreatedAt: time.Now()}
+		d.ONUs["ot1"] = store.ONU{ID: "ot1", Serial: "SNT1", Manufacturer: "V-SOL", Root: store.RootTR098, SiteID: r.A.ID, MgmtIP: "10.6.4.9", LastInform: time.Now(),
+			Sec: store.ONUSec{MACCheck: store.MACWaiting, MACWaitLease: "AA:BB:CC:00:00:90"}}
+		return nil
+	})
+	if v := r.call(r.oper.Access, "POST", "/onus/ot1/trust", nil, nil); v.Status != 403 {
+		t.Fatalf("an operator trusted an ONU: %d", v.Status)
+	}
+	g := r.call(r.view.Access, "GET", "/onus", nil, nil)
+	if !strings.Contains(string(g.Raw), `"mac_wait"`) || !strings.Contains(string(g.Raw), "Waiting: management MAC doesn't match the registered ONU yet") {
+		t.Fatalf("%d %s", g.Status, g.Raw)
+	}
+	if v := r.call(r.owner.Access, "POST", "/onus/ot1/trust", map[string]any{"mac": "AA:BB:CC:00:00:91"}, nil); v.Status != 409 {
+		t.Fatalf("trusted for a MAC the ONU no longer waits with: %d %s", v.Status, v.Raw)
+	}
+	if v := r.call(r.owner.Access, "POST", "/onus/ot1/trust", map[string]any{"mac": "AA:BB:CC:00:00:90"}, nil); v.Status != 200 {
+		t.Fatalf("%d %s", v.Status, v.Raw)
+	}
+	if v := r.call(r.owner.Access, "POST", "/onus/nope/trust", nil, nil); v.Status != 404 {
+		t.Fatalf("%d", v.Status)
+	}
+	if u := r.call(r.view.Access, "GET", "/onus/unknown", nil, nil); u.Status != 200 || !strings.Contains(string(u.Raw), `"items"`) {
+		t.Fatalf("%d %s", u.Status, u.Raw)
+	}
+}

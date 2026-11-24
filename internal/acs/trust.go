@@ -30,13 +30,15 @@ import (
 
 // Verdicts of an Inform.
 const (
-	stOK          = "ok"
-	stNew         = "new"
-	stQuarantined = "quarantined"
-	stUnverified  = "unverified"
-	stBlocked     = "blocked"
-	stBadAuth     = "badauth"
-	stCapped      = "capped"
+	stOK           = "ok"
+	stNew          = "new"
+	stQuarantined  = "quarantined"
+	stUnverified   = "unverified"
+	stBlocked      = "blocked"
+	stBadAuth      = "badauth"
+	stCapped       = "capped"
+	stUnregistered = "unregistered" // ACS_REGISTERED_ONLY: the serial is not in the ONU inventory
+	stMACWait      = "macwait"      // registered, but its management MAC is not near the registered WAN MAC yet
 )
 
 // trustLevel is what the session program may do.
@@ -54,6 +56,10 @@ type verdict struct {
 	alert string
 	// reset: the box came back with the shared login although it had its own (it lost its settings).
 	reset bool
+	// noWrite: nothing was changed in the store (an unregistered serial seen again within the minute).
+	noWrite bool
+	// noLink: the record must not be linked to a house by this Inform (a second record of a registered ONU).
+	noLink bool
 }
 
 // leaseResult is the router's answer for an address: ok=false when it could not be asked, else mac is the MAC the
@@ -85,7 +91,7 @@ func (s *Service) lookupLease(ctx context.Context, siteID, ip string) leaseResul
 // needLease: does this Inform need the lease table?
 func (s *Service) needLease(cur store.ONU, found bool, siteID, ip string, ai authInfo) bool {
 	switch {
-	case !found, cur.Sec.MgmtMAC == "", ai.kind == authShared, cur.SiteID != siteID, cur.MgmtIP != ip:
+	case !found, cur.Sec.MgmtMAC == "", cur.Sec.MACCheck == store.MACWaiting, ai.kind == authShared, cur.SiteID != siteID, cur.MgmtIP != ip:
 		return true
 	}
 	return false
@@ -117,6 +123,15 @@ func (s *Service) decide(d *store.Data, in Inform, site store.Site, ip netip.Add
 	}
 	isNew := !found
 	linked := found && cur.AccountID != ""
+	if isNew && s.cfg.ACSRegisteredOnly {
+		if _, ok := d.ONTBySerial(in.Serial); !ok {
+			// Not in the ONU inventory: answered, and nothing else. It is listed for the owner, and no device record is made.
+			var wrote bool
+			v.alert, wrote = s.noteUnknown(d, in, site, ipS, now)
+			v.state, v.trust, v.noWrite = stUnregistered, trustNone, !wrote
+			return cur, v
+		}
+	}
 	if isNew {
 		n := 0
 		for _, x := range d.ONUs {
@@ -129,10 +144,26 @@ func (s *Service) decide(d *store.Data, in Inform, site store.Site, ip netip.Add
 			return cur, v
 		}
 		cur = store.ONU{ID: newONUID(), Serial: in.Serial, OUI: in.OUI, FirstSeen: now}
-		if lease.ok && lease.mac != "" {
-			cur.Sec.MgmtMAC = lease.mac // the first claim of a serial binds it to this box's MAC
-		}
 		v.state, v.trust = stNew, trustNew
+		g := s.macGate(d, in.Serial, cur.Sec, lease)
+		if s.cfg.ACSRegisteredOnly {
+			if other, ok := siblingONU(d, in.Serial, cur.ID); ok {
+				// The registered ONU already has a device record under another spelling of its serial or another OUI:
+				// this is a second box claiming to be it. Held whatever its MAC, and it must not take the house.
+				g = macGate{hold: true, wan: g.wan, note: siblingNote(other)}
+				v.noLink = true
+			}
+		}
+		if g.hold {
+			// A registered serial, but its management MAC is not near the registered WAN MAC: nothing goes out yet.
+			v.state, v.trust = stMACWait, trustNone
+			v.alert = s.holdMAC(&cur, g, lease, in.Serial, s.siteName(d, site.ID), now)
+		} else if lease.ok && lease.mac != "" {
+			cur.Sec.MgmtMAC = lease.mac // the first claim of a serial binds it to this box's MAC
+			if s.cfg.ACSRegisteredOnly {
+				cur.Sec.MACCheck = store.MACOK
+			}
+		}
 	} else {
 		siteChanged := cur.SiteID != "" && cur.SiteID != site.ID
 		ipChanged := cur.MgmtIP != "" && cur.MgmtIP != ipS
@@ -207,6 +238,47 @@ func (s *Service) decide(d *store.Data, in Inform, site store.Site, ip netip.Add
 			v.state, v.trust = stQuarantined, trustNone
 			return cur, v
 		}
+		var gate macGate
+		if cur.Sec.MACCheck == store.MACWaiting || (ai.kind == authShared && cur.Sec.ACSCred == store.CredDevice) {
+			// First contact still waiting, or a return on the shared login (a factory reset): the management MAC has to be
+			// near the registered WAN MAC before anything secret goes out.
+			gate = s.macGate(d, cur.Serial, cur.Sec, lease)
+			trusted := lease.ok && lease.mac != "" && cur.Sec.MACTrusted == lease.mac
+			if s.cfg.ACSRegisteredOnly && cur.Sec.MACCheck == store.MACWaiting && !trusted {
+				if other, ok := siblingONU(d, cur.Serial, cur.ID); ok {
+					// still a second record of a registered ONU: a near MAC does not release it, only the owner does
+					gate = macGate{hold: true, wan: gate.wan, note: siblingNote(other)}
+				}
+			}
+		}
+		firstLogin := cur.Sec.ACSCred == store.CredNone
+		wasWaiting := cur.Sec.MACCheck == store.MACWaiting
+		if gate.hold {
+			// Held: the record keeps the place, profile and Wi-Fi report of the box it belongs to (the device now checking
+			// in may not be that box); only the wait and the time of the check-in are recorded.
+			v.state, v.trust = stMACWait, trustNone
+			v.alert = s.holdMAC(&cur, gate, lease, cur.Serial, s.siteName(d, site.ID), now)
+			cur.LastInform, cur.LastEvents = now, strings.Join(in.Events, ",")
+			d.ONUs[cur.ID] = cur
+			return cur, v
+		} else {
+			if wasWaiting || cur.Sec.MACCheck == store.MACWaiting {
+				cur.Sec.MACCheck, cur.Sec.MACWaitLease, cur.Sec.MACWaitNote = store.MACOK, "", ""
+			}
+			s.proceed(d, &cur, &v, in, site, ipS, ai, lease, linked, macState, now)
+			if wasWaiting && firstLogin && v.trust == trustFull {
+				v.trust = trustNew // released just now: its own login is written first, the house's secrets at the next session
+			}
+		}
+	}
+	return s.completeInform(d, cur, v, in, site, ipS, now)
+}
+
+// proceed is the trusted path of a known box: the MAC is bound, its login state moves on, and what it may be told is set.
+func (s *Service) proceed(d *store.Data, curp *store.ONU, vp *verdict, in Inform, site store.Site, ipS string, ai authInfo, lease leaseResult, linked bool, macState string, now time.Time) {
+	cur, v := *curp, *vp
+	defer func() { *curp, *vp = cur, v }()
+	{
 		if macState == "unbound" || (!linked && lease.ok && lease.mac != "") {
 			cur.Sec.MgmtMAC = lease.mac
 		}
@@ -261,6 +333,10 @@ func (s *Service) decide(d *store.Data, in Inform, site store.Site, ip netip.Add
 			}
 		}
 	}
+}
+
+// completeInform records what the Inform says about the box and queues the housekeeping that follows every Inform.
+func (s *Service) completeInform(d *store.Data, cur store.ONU, v verdict, in Inform, site store.Site, ipS string, now time.Time) (store.ONU, verdict) {
 	cur.Manufacturer, cur.ProductClass = nonEmpty(in.Manufacturer, cur.Manufacturer), nonEmpty(cleanText(in.ProductClass), cur.ProductClass)
 	if cur.OUI == "" {
 		cur.OUI = in.OUI
@@ -297,7 +373,9 @@ func (s *Service) decide(d *store.Data, in Inform, site store.Site, ip netip.Add
 		}
 	}
 	d.ONUs[cur.ID] = cur
-	autoLink(d, cur.ID, now)
+	if !v.noLink {
+		autoLink(d, cur.ID, now)
+	}
 	cur = d.ONUs[cur.ID]
 	// A box that was linked to a house during this Inform keeps trustNew: its address or MAC may have just been
 	// (re)bound, so this session gives it no house secret; the next one, from the same place, does.

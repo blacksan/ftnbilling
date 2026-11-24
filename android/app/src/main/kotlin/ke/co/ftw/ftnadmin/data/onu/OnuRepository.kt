@@ -52,6 +52,17 @@ class OnuRepository(private val api: ApiClient) {
 
     suspend fun unblock(onuId: String): Onu = api.post("onus", onuId, "unblock")
 
+    /**
+     * Owner only: trust the management MAC a waiting ONU checked in from. [leaseMac] is the MAC that was shown: the
+     * server refuses (409) when the ONU has checked in from another one since.
+     */
+    suspend fun trust(onuId: String, leaseMac: String): Onu =
+        api.post("onus", onuId, "trust", body = buildJsonObject { put("mac", leaseMac) })
+
+    /** Serials that tried to check in and are not in the ONU inventory. */
+    suspend fun unknown(siteId: String? = null): List<UnknownOnu> =
+        api.get<ItemList<UnknownOnu>>("onus", "unknown", query = if (siteId == null) emptyMap() else mapOf("site_id" to siteId)).items
+
     suspend fun forRouter(siteId: String): List<Onu> = api.get<ItemList<Onu>>("sites", siteId, "onus").items
 
     suspend fun link(onuId: String, accountId: String): Onu =

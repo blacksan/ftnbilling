@@ -12,7 +12,9 @@
 <td data-label="Wi-Fi" class="wrap">{{range .WiFi}}{{.Band}} GHz: {{.SSID}}{{if not .Enabled}} (off){{end}}<br>{{end}}</td>
 <td data-label="Register" class="pnote">{{template "onu_reg" (dict "P" $d "O" . "Next" $next)}}</td></tr>
 {{if .Quarantine}}<tr><td colspan="8" class="wrap" style="max-width:none"><div class="flash bad heldback" style="margin:0"><div><b>Held back.</b> ONU {{.Serial}} checked in from an unexpected place ({{.Quarantine.Reason}}). It gets no settings and no tasks until you decide.
-{{if $d.CanWrite}}<div class="row mt-2"><form method="post" action="/admin/onus/approve"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="onu" value="{{.ID}}"><input type="hidden" name="next" value="{{$next}}"><button class="sm">Approve</button></form><form method="post" action="/admin/onus/block" data-confirm="Block this ONU's check-ins from that place?"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="onu" value="{{.ID}}"><input type="hidden" name="next" value="{{$next}}"><button class="ghost sm">Block</button></form></div>{{end}}</div></div></td></tr>{{end}}{{end}}</tbody></table></div>
+{{if $d.CanWrite}}<div class="row mt-2"><form method="post" action="/admin/onus/approve"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="onu" value="{{.ID}}"><input type="hidden" name="next" value="{{$next}}"><button class="sm">Approve</button></form><form method="post" action="/admin/onus/block" data-confirm="Block this ONU's check-ins from that place?"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="onu" value="{{.ID}}"><input type="hidden" name="next" value="{{$next}}"><button class="ghost sm">Block</button></form></div>{{end}}</div></div></td></tr>{{end}}
+{{if .MACWait}}<tr><td colspan="8" class="wrap" style="max-width:none"><div class="flash bad heldback" style="margin:0"><div><b>{{.MACWait.Text}}.</b> Nothing is sent to ONU {{.Serial}} until it does. Management MAC: <code>{{if .MACWait.LeaseMAC}}{{.MACWait.LeaseMAC}}{{else}}not known yet{{end}}</code>. Registered WAN MAC: <code>{{if .MACWait.WANMAC}}{{.MACWait.WANMAC}}{{else}}none registered{{end}}</code>.{{if .MACWait.Reason}} <span class="muted">({{.MACWait.Reason}})</span>{{end}}
+{{if and $d.IsOwner .MACWait.CanTrust}}<form method="post" action="/admin/onus/trust" class="row mt-2" autocomplete="off" data-confirm="Trust this ONU? It will be given the house's settings."><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="onu" value="{{.ID}}"><input type="hidden" name="mac" value="{{.MACWait.LeaseMAC}}"><input type="hidden" name="next" value="{{$next}}"><input name="current_password" type="password" placeholder="Your password" autocomplete="current-password" aria-label="Your password" required><button class="sm">Trust this ONU</button></form>{{else if .MACWait.CanTrust}}<p class="muted">An owner can trust this ONU.</p>{{end}}</div></div></td></tr>{{end}}{{end}}</tbody></table></div>
 {{else}}<p class="muted">No ONU has reported yet. Once the OLT hands out the TR-069 address (see ONU management in Settings), each ONU appears here within a few minutes.</p>{{end}}{{end}}
 
 {{define "onu_reg"}}{{$d := .P}}{{$o := .O}}{{range $o.Warnings}}<div class="flash bad">{{.}}</div>{{end}}
@@ -20,7 +22,14 @@
 {{if $d.CanWrite}}{{if and $o.AccountID $o.UseMACs}}<form method="post" action="/admin/onus/usemac" class="row"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="account" value="{{$o.AccountID}}"><input type="hidden" name="next" value="{{.Next}}"><select name="mac" aria-label="Reported MAC">{{range $o.UseMACs}}<option>{{.}}</option>{{end}}</select><button class="ghost sm">Use the reported MAC</button></form>{{end}}
 {{if not $o.InInventory}}{{if $o.MACs}}<form method="post" action="/admin/onus/inventory" class="row"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="onu" value="{{$o.ID}}"><input type="hidden" name="next" value="{{.Next}}"><select name="mac" aria-label="WAN MAC">{{range $o.MACs}}<option>{{.}}</option>{{end}}</select><button class="ghost sm">Add to the register</button></form>{{end}}{{else}}<span class="muted">in the register ({{$o.InvStatus}})</span>{{end}}{{end}}{{end}}
 
+{{define "onu_unknown"}}{{$d := .P}}{{if .Unknown}}<section class="panel"><h2>Unknown ONUs tried to check in</h2>
+<p class="muted">These serials are not in the ONU inventory, so they were given nothing and are not kept as devices. An entry goes after a week without a check-in, or once the serial is added.</p>
+<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr><th>Serial</th><th>Model</th><th>Router</th><th>Last tried</th><th class="n">Times</th><th></th></tr></thead><tbody>
+{{range .Unknown}}<tr><td><code>{{.Serial}}</code></td><td>{{.Manufacturer}} {{.Model}}</td><td>{{.SiteName}} <span class="muted">{{.IP}}</span></td><td>{{eat .LastSeen}}</td><td class="n">{{.Count}}</td>
+<td>{{if $d.CanWrite}}<a class="btn ghost sm" href="{{printf "/admin/equipment?tab=onu&add_serial=%s&add_model=%s#add" (urlquery .Serial) (urlquery .Model)}}">Add to inventory</a>{{end}}</td></tr>{{end}}</tbody></table></div></section>{{end}}{{end}}
+
 {{define "admin_onus"}}{{template "ahead" .}}
+{{template "onu_unknown" (dict "P" . "Unknown" .Data.Unknown)}}
 {{template "onu_list" (dict "P" . "ONUs" .Data.ONUs "Free" .Data.FreeAccounts "Next" "/admin/onus")}}
 {{template "afoot" .}}{{end}}
 
@@ -33,6 +42,7 @@
 {{if .Data.ONUSnippet}}<h3 class="mt-3">Routers built before this feature</h3><p class="muted">A router set up from a new join line already has this. For one built earlier, paste this in its terminal once (it removes and re-adds only objects whose comment starts with "ftn: onu"). The server never writes these over the API.</p><pre class="code" id="onu-snippet" tabindex="0">{{.Data.ONUSnippet}}</pre><p><button type="button" class="ghost sm" data-copy-from="#onu-snippet">Copy</button></p>{{end}}
 {{else}}<p class="muted">This router has no management network yet.</p>
 {{if .CanWrite}}<form method="post" action="/admin/routers/onu/enable" class="row mt-3"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><label class="field">VLAN<input name="vlan" value="{{.Data.ONUDefault}}" inputmode="numeric" style="width:6em"></label><button>Set up the management network</button></form>{{end}}{{end}}</section>
+{{template "onu_unknown" (dict "P" . "Unknown" .Data.Unknown)}}
 <section class="panel"><h2>ONUs on this router</h2>{{template "onu_list" (dict "P" . "ONUs" .Data.ONUs "Free" .Data.FreeAccounts "Next" (printf "/admin/routers/view?id=%s&tab=onus" $s.ID))}}</section>{{end}}{{end}}
 
 {{define "onu_card"}}{{$A := .Data.A}}{{$d := .}}
@@ -43,6 +53,7 @@
 Last seen {{if .LastInform.IsZero}}never{{else}}{{eat .LastInform}}{{end}}, <b>{{if .Online}}online{{else}}silent{{end}}</b>.</p>
 <p>{{range .WiFi}}{{.Band}} GHz: <b>{{.SSID}}</b>{{if not .Enabled}} (off){{end}}<br>{{end}}{{if not .WiFi}}<span class="muted">The ONU has not reported its Wi-Fi yet.</span>{{end}}</p>
 {{if .Quarantine}}<div class="flash bad">This ONU checked in from an unexpected place and is held back. Approve or block it in the ONUs list.</div>{{end}}
+{{if .MACWait}}<div class="flash bad">{{.MACWait.Text}}. Nothing is sent to it yet. An owner can trust it in the ONUs list.</div>{{end}}
 {{if .Desired.Changed}}<div class="flash bad">The Wi-Fi name on the device is not the one saved here. The tenant may have changed it on the box. Saving again will overwrite it.</div>{{end}}
 {{if .LastTask}}<p>Last request: {{.LastTask.Kind}}, <b>{{.LastTask.StatusText}}</b> <span class="muted">({{eat .LastTask.CreatedAt}})</span></p>
 {{if and $d.CanWrite .LastTask.CanConfirm}}<p class="muted">Check the Wi-Fi on a phone. "Accepted" only means the box said yes.</p><div class="row"><form method="post" action="/admin/accounts/onu/confirm"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}"><button>It works</button></form><form method="post" action="/admin/accounts/onu/reject"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$A.ID}}"><button class="ghost">It didn't work</button></form></div>{{end}}

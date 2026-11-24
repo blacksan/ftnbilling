@@ -24,6 +24,7 @@ func linkedWithOwnLogin(t *testing.T, f *fixture, serial, ip string) *cpe {
 		t.Fatal(err)
 	}
 	eventually(t, "accepted", func() bool { return f.lastTask(f.onuBySerial(serial).ID).Status == store.TaskAccepted })
+	settle(f, c) // the session that sent the Wi-Fi may still be running: a task queued now must wait for the next one
 	return c
 }
 

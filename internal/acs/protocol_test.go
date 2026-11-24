@@ -327,13 +327,15 @@ func TestRejectTriesAnotherName(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "accepted", f.acceptedWiFi(c))
+	settle(f, c) // the session that sent the first name ends before the owner says it did not work
 	if _, err := f.svc.RejectWiFi("owner", "", "a1"); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "second try accepted", func() bool {
 		ok := false
+		id := f.onuBySerial(c.Serial).ID // not inside the View below: a nested read lock deadlocks behind a waiting writer
 		f.st.View(func(d *store.Data) {
-			for _, tk := range d.ONUTasksOf(f.onuBySerial(c.Serial).ID) {
+			for _, tk := range d.ONUTasksOf(id) {
 				if tk.Status == store.TaskAccepted && tk.PassLeaf == "KeyPassphrase" {
 					ok = true
 				}

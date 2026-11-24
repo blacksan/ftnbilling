@@ -97,7 +97,7 @@ fun OnusScreen(
                     }
                 }
                 items(list.value, key = { it.id }) { onu ->
-                    OnuCard(onu, user.canWrite, ui.busy, vm, onOpenAccount)
+                    OnuCard(onu, user.canWrite, user.isOwner, ui.busy, vm, onOpenAccount)
                 }
               }
             }
@@ -124,13 +124,14 @@ fun OnusScreen(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun OnuCard(onu: Onu, canWrite: Boolean, busy: Boolean, vm: OnusViewModel, onOpenAccount: (String) -> Unit) {
+private fun OnuCard(onu: Onu, canWrite: Boolean, isOwner: Boolean, busy: Boolean, vm: OnusViewModel, onOpenAccount: (String) -> Unit) {
     var confirmUnlink by remember { mutableStateOf(false) }
     SectionCard(onu.title) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             StatusChip(stringResource(if (onu.online) R.string.state_online else R.string.silent), if (onu.online) Tone.Good else Tone.Warn)
             if (!onu.inInventory) StatusChip("Not in the register", Tone.Neutral)
             if (onu.isQuarantined) StatusChip("Held back", Tone.Bad)
+            if (onu.isWaitingForMac) StatusChip("Waiting for MAC", Tone.Bad)
             if (onu.blocked) StatusChip("Blocked", Tone.Bad)
             if (onu.sharedLoginOnly) StatusChip("Shared login only", Tone.Neutral)
             if (onu.returned) StatusChip("Returned", Tone.Neutral)
@@ -146,6 +147,20 @@ private fun OnuCard(onu: Onu, canWrite: Boolean, busy: Boolean, vm: OnusViewMode
                     Button(onClick = { vm.approve(onu) }, enabled = !busy) { Text("Approve") }
                     OutlinedButton(onClick = { vm.block(onu) }, enabled = !busy) { Text("Block") }
                 }
+            }
+        }
+        onu.macWait?.let { w ->
+            Text(
+                "${w.text}. Nothing is sent to ONU ${onu.serial} until it does.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+            LabeledValue("Management MAC", w.leaseMac.ifBlank { "not known yet" })
+            LabeledValue("Registered WAN MAC", w.registeredMac.ifBlank { "none registered" })
+            if (isOwner && w.canTrust) {
+                Button(onClick = { vm.trust(onu) }, enabled = !busy) { Text("Trust this ONU") }
+            } else if (w.canTrust) {
+                Text("An owner can trust this ONU.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         if (onu.blocked && !onu.isQuarantined && canWrite) {

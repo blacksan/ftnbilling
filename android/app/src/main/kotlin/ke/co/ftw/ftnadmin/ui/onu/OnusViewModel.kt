@@ -103,6 +103,9 @@ class OnusViewModel(
 
     fun unblock(onu: Onu) = decide(onu, "Unblocked.") { repo.unblock(onu.id) }
 
+    /** The owner's override for an ONU that waits for its management MAC to match the registered ONU. */
+    fun trust(onu: Onu) = decide(onu, "Trusted. The ONU gets its settings at its next check-in.") { repo.trust(onu.id, onu.macWait?.leaseMac.orEmpty()) }
+
     private fun decide(onu: Onu, done: String, call: suspend () -> Onu) {
         _state.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {

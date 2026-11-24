@@ -597,8 +597,8 @@ func (c *cpe) listen() {
 			w.WriteHeader(200)
 			return
 		}
+		c.crWG.Add(1) // before the answer: once the ACS has its answer, settle sees this session
 		w.WriteHeader(200)
-		c.crWG.Add(1)
 		go func() {
 			defer c.crWG.Done()
 			if err := c.session(ev...); err != nil {
@@ -640,6 +640,17 @@ func (c *cpe) count(method string) int {
 }
 
 // eventually polls for a condition.
+// settle waits until the connection requests the ACS sent in the background, and the sessions the boxes opened for
+// them, are over: a test's next session must not run alongside one of them (a real box runs one session at a time).
+func settle(f *fixture, cs ...*cpe) {
+	for i := 0; i < 3; i++ {
+		f.svc.Wait()
+		for _, c := range cs {
+			c.crWG.Wait()
+		}
+	}
+}
+
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

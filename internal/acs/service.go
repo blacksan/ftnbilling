@@ -60,6 +60,7 @@ type Service struct {
 	ips      map[netip.Addr]*ipState
 	kicks    map[string]Kick
 	capLog   map[string]time.Time
+	unkLog   []time.Time // when owners were last told about an unknown serial
 	wg       sync.WaitGroup
 }
 
@@ -345,7 +346,9 @@ type ONUView struct {
 	InvStatus   string   `json:"inventory_status,omitempty"`
 	InvMAC      string   `json:"inventory_mac,omitempty"`
 	Warnings    []string `json:"warnings"`
-	UseMACs     []string `json:"use_macs,omitempty"` // reported MACs the house can be switched to in one click
+	// MACWait is set while the ONU waits for its management MAC to match the registered ONU (nothing is sent to it).
+	MACWait *MACWaitView `json:"mac_wait,omitempty"`
+	UseMACs []string     `json:"use_macs,omitempty"` // reported MACs the house can be switched to in one click
 }
 
 func taskView(t store.ONUTask) TaskView {
@@ -425,6 +428,7 @@ func (s *Service) view(d *store.Data, o store.ONU) ONUView {
 		v.Kick = k.Text()
 	}
 	s.inventoryView(d, o, &v)
+	v.MACWait = s.macWaitView(d, o)
 	if o.Sec.RestoreOwed && o.AccountID != "" {
 		v.Warnings = append(v.Warnings, "This ONU came back on the shared login (a factory reset?). The house's Wi-Fi is restored at its first check-in after "+o.Sec.HoldUntil.Local().Format("15:04")+", once no other device has claimed to be it.")
 	}

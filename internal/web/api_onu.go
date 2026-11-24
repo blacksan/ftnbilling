@@ -30,6 +30,8 @@ func (s *Server) onuRoutesAPI(h func(string, string, apiFunc)) {
 	h("POST /api/v1/onu-tasks/{id}/cancel", operator, s.apiONUTaskCancel)
 	h("POST /api/v1/onus/{id}/approve", operator, s.apiONUDecide("approve"))
 	h("POST /api/v1/onus/{id}/block", operator, s.apiONUDecide("block"))
+	h("POST /api/v1/onus/{id}/trust", store.RoleOwner, s.apiONUDecide("trust"))
+	h("GET /api/v1/onus/unknown", viewer, s.apiUnknownONUs)
 	h("POST /api/v1/onus/{id}/unblock", operator, s.apiONUDecide("unblock"))
 	h("GET /api/v1/sites/{id}/onus", viewer, s.apiSiteONUs)
 	h("GET /api/v1/onus", viewer, s.apiONUs)
@@ -58,7 +60,7 @@ func (s *Server) acsErr(w http.ResponseWriter, err error) {
 		validationErr(w, map[string]string{fe.Field: fe.Msg})
 	case errors.Is(err, acs.ErrNoONU), errors.Is(err, acs.ErrONUGone), errors.Is(err, acs.ErrNoAccount):
 		apiErr(w, http.StatusNotFound, codeNotFound, err.Error(), nil)
-	case errors.Is(err, acs.ErrNothingToConfirm), errors.Is(err, acs.ErrNotQuarantined), errors.Is(err, acs.ErrTaskGone), errors.Is(err, acs.ErrTwoPlaces):
+	case errors.Is(err, acs.ErrNothingToConfirm), errors.Is(err, acs.ErrNotQuarantined), errors.Is(err, acs.ErrTaskGone), errors.Is(err, acs.ErrTwoPlaces), errors.Is(err, acs.ErrNotWaiting), errors.Is(err, acs.ErrNoLeaseMAC), errors.Is(err, acs.ErrLeaseMoved):
 		apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
 	case errors.Is(err, acs.ErrLinked), errors.Is(err, acs.ErrONULinked), errors.Is(err, acs.ErrSite):
 		apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
@@ -192,6 +194,15 @@ func (s *Server) apiONUDecide(what string) apiFunc {
 			err = s.acs.ApproveONU(c.user.Username, c.ip, r.PathValue("id"))
 		case "block":
 			err = s.acs.BlockONU(c.user.Username, c.ip, r.PathValue("id"))
+		case "trust":
+			// {mac}: optional, the lease MAC the owner was shown; refused with 409 when the ONU has moved on since.
+			var req struct {
+				MAC string `json:"mac"`
+			}
+			if !decode(w, r, &req, true) {
+				return
+			}
+			err = s.acs.TrustONU(c.user.Username, c.ip, r.PathValue("id"), req.MAC)
 		default:
 			err = s.acs.UnblockONU(c.user.Username, c.ip, r.PathValue("id"))
 		}
@@ -203,6 +214,18 @@ func (s *Server) apiONUDecide(what string) apiFunc {
 		v, _ := s.acs.ONU(r.PathValue("id"))
 		writeJSON(w, http.StatusOK, v)
 	}
+}
+
+// apiUnknownONUs lists the serials that tried to check in and are not in the ONU inventory (kept a week).
+func (s *Server) apiUnknownONUs(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	if !s.apiACS(w) {
+		return
+	}
+	items := s.acs.UnknownONUs(r.URL.Query().Get("site_id"))
+	if items == nil {
+		items = []acs.UnknownONU{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) apiAccountONUSwap(w http.ResponseWriter, r *http.Request, c *apiCtx) {
