@@ -154,13 +154,13 @@ fun AccountRow(a: Account, onClick: () -> Unit) {
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(a.unitLabel, style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(end = 8.dp))
+                Text(a.headline, style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(end = 8.dp))
                 StatusChip(accountStateLabel(a), accountTone(a))
             }
-            val who = listOf(a.tenant, a.phone).filter { it.isNotBlank() }.joinToString(" - ")
-            if (who.isNotBlank()) Text(who, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+            if (a.placeLine.isNotBlank()) Text(a.placeLine, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (a.phone.isNotBlank()) Text(a.phone, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(
-                listOfNotNull(a.apartment?.name?.takeIf { it.isNotBlank() }, a.routerLabel.takeIf { it.isNotBlank() }, a.pkg?.name, if (a.expiresAt != null) formatExpiry(a.expiresAt) else null).joinToString("  |  "),
+                listOfNotNull(a.routerLabel.takeIf { it.isNotBlank() }, a.pkg?.name, if (a.expiresAt != null) formatExpiry(a.expiresAt) else null).joinToString("  |  "),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

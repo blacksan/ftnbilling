@@ -453,3 +453,78 @@ func TestGeolocationPolicyOnlyOnApartmentForm(t *testing.T) {
 		}
 	}
 }
+
+// The subscribers list leads with the customer name (the link); the building, the
+// house number and the code sit below it, smaller.
+func TestAdminAccountsNameOnTopPlaceBelow(t *testing.T) {
+	m := newMulti(t)
+	A := m.addSite(t, "Alpha")
+	apt, err := m.svc.CreateApartment(billing.ApartmentInput{Name: "MG One Central"}, []string{A.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := m.svc.CreateAccount(billing.AccountInput{ApartmentID: apt.ID, SiteID: A.ID, Unit: "A-1", Tenant: "Wanjiru", MAC: "AA:BB:CC:00:D1:02"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := m.adminGet(t, "/admin/accounts")
+	want := `<td class="who"><b><a href="/admin/accounts/view?code=` + a.Code + `">Wanjiru</a></b><span>MG One Central &middot; House A-1 &middot; <code>` + a.Code + `</code></span></td>`
+	if !strings.Contains(page, want) {
+		t.Errorf("subscribers cell: want %s", want)
+	}
+}
+
+// ---- one place for the apartment and house number --------------------------------------
+
+// Saving the Details card never changes the house number (even if an old form still
+// posts "flat"); the apartment card is the single place, offers only saved apartments
+// through the picker hook, and keeps the router filtering data.
+func TestAccountDetailsKeepHouseNumberAndApartmentCardIsOnlyPlace(t *testing.T) {
+	m := newMulti(t)
+	A := m.addSite(t, "Alpha")
+	m.addSite(t, "Beta")
+	acct, err := m.svc.CreateAccount(billing.AccountInput{SiteID: A.ID, Flat: "A-1", Tenant: "Wanjiru", MAC: "AA:BB:CC:00:E1:01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.adminPost(t, "/admin/accounts/update", url.Values{"id": {acct.ID}, "flat": {"ZZ-99"}, "tenant": {"Njeri"}, "phone": {"0744123123"}})
+	got, _ := m.svc.GetAccount(acct.ID)
+	if got.Tenant != "Njeri" || got.Flat != "A-1" || got.Unit != "A-1" {
+		t.Fatalf("details save changed the house number or lost the tenant: %+v", got)
+	}
+
+	page := m.adminGet(t, "/admin/accounts/view?code="+got.Code)
+	i := strings.Index(page, "<h2>Details</h2>")
+	j := strings.Index(page, "<h2>Apartment and house number</h2>")
+	if i < 0 || j < 0 {
+		t.Fatalf("cards missing: %d %d", i, j)
+	}
+	if strings.Contains(page[i:j], `name="flat"`) || strings.Contains(page[i:j], "House number<input") {
+		t.Error("Details card still has a house number field")
+	}
+	card := page[j:]
+	if k := strings.Index(card, "</section>"); k > 0 {
+		card = card[:k]
+	}
+	for _, want := range []string{`name="apartment_id" required data-apt-select`, `name="unit"`, `data-router-select`, `data-apt-move`, `data-routers="`, `data-router-names="`} {
+		if !strings.Contains(card, want) {
+			t.Errorf("apartment card lacks %s", want)
+		}
+	}
+	if strings.Contains(card, `name="apartment"`) || strings.Contains(card, `<input name="apartment_id"`) {
+		t.Error("free-text apartment input")
+	}
+	// Only saved apartments are options (the select has no empty option, and one option per saved apartment).
+	n := 0
+	m.st.View(func(d *store.Data) { n = len(d.Apartments) })
+	if c := strings.Count(card, `<option value="`+aptOf(t, m.st, A.ID)+`"`); c != 1 {
+		t.Errorf("current apartment listed %d times", c)
+	}
+	if n < 2 {
+		t.Fatalf("expected the saved apartments, have %d", n)
+	}
+	js := m.adminGet(t, "/static/app.js")
+	if !strings.Contains(js, "form[data-apt-move]") || !strings.Contains(js, "data-routers") {
+		t.Error("router filtering script missing")
+	}
+}

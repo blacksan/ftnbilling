@@ -176,6 +176,11 @@ tbody tr:hover td,tr:hover>td{background:var(--surface-2)}
 td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 td.mono,.tw td code{font-family:var(--f-mono);font-size:var(--fs-13)}
 .tw td{white-space:nowrap}.tw td.nw{white-space:normal;max-width:220px}
+/* Ports tab: the Actions notes wrap instead of being cut off; a narrow window scrolls the table sideways */
+.tw.ports{overflow-x:auto}
+.tw td.pact{white-space:normal;overflow-wrap:anywhere;min-width:200px;max-width:320px;padding-top:6px;padding-bottom:6px}
+td.pact button,td.pact select{margin:2px 6px 2px 0;vertical-align:middle}
+td.pact>.muted{display:block;margin:2px 0}
 .tw.msgs td.bld{white-space:normal}.tw.msgs td.nw{max-width:none;min-width:130px}.tw.msgs td.act{text-align:right;width:1%}
 td b a,td a b{color:var(--ink)}
 td b{font-weight:600}
@@ -424,6 +429,7 @@ body.auth p.back{text-align:center;margin-top:var(--sp-4)}
   table.rs td{display:flex;justify-content:space-between;gap:12px;height:auto;min-height:30px;padding:3px 0;border:0;white-space:normal!important;text-align:right}
   table.rs td::before{content:attr(data-label);color:var(--muted);font:500 var(--fs-12) var(--f-sans);text-align:left;flex:0 0 auto;padding-top:3px}
   table.rs td:not([data-label])::before{display:none}
+  table.rs td.pact{display:block;text-align:left;max-width:none;min-width:0}table.rs td.pact::before{display:block;margin-bottom:2px}
   table.rs td.who{display:block;text-align:left}table.rs td.who::before{display:none}
   .grid2,.fgrid{grid-template-columns:1fr}
   th,td{padding:0 10px}
