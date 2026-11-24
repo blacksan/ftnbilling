@@ -18,6 +18,26 @@ const (
 		"connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
 )
 
+// cspNetwork is the admin policy plus what the Google Maps JavaScript API needs, and only for the Network page and
+// only when a key is set (see networkCSP). Nothing else changes: script-src stays free of 'unsafe-inline', so the page
+// still runs no inline script (the Maps loader is a script element created by /static/netmap.js).
+const cspNetwork = "default-src 'self'; script-src 'self' https://maps.googleapis.com https://maps.gstatic.com; " +
+	"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+	"img-src 'self' data: blob: https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.googleusercontent.com; " +
+	"font-src 'self' https://fonts.gstatic.com; " +
+	"connect-src 'self' https://maps.googleapis.com https://*.googleapis.com; " +
+	"worker-src blob:; frame-src https://*.google.com; " +
+	"form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+
+// networkCSP is cspNetwork for the Network page when a Maps key is set, else the normal admin policy (the page then
+// shows the list view and loads nothing from Google).
+func (s *Server) networkCSP() string {
+	if s.live().GoogleMapsAPIKey == "" {
+		return s.adminCSP()
+	}
+	return strings.Replace(cspNetwork, "form-action 'self'", "form-action 'self'"+s.webFigFormAction(), 1)
+}
+
 // securityHeaders sets the headers every response carries.
 func (s *Server) securityHeaders(h http.Header, r *http.Request) {
 	h.Set("X-Content-Type-Options", "nosniff")
@@ -40,6 +60,13 @@ func (s *Server) securityHeaders(h http.Header, r *http.Request) {
 		h.Set("Content-Security-Policy", cspStrict)
 		return
 	}
+	if p == "/admin/network" && s.live().GoogleMapsAPIKey != "" {
+		h.Set("Content-Security-Policy", s.networkCSP())
+		// A key restricted by HTTP referrer needs the page's origin on the requests to Google: with the site-wide
+		// "same-origin" policy they carry no Referer and Google refuses the key (RefererNotAllowedMapError).
+		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		return
+	}
 	if strings.HasPrefix(p, "/admin") {
 		h.Set("Content-Security-Policy", s.adminCSP())
 		return
@@ -52,11 +79,19 @@ func (s *Server) securityHeaders(h http.Header, r *http.Request) {
 // https://<WEBFIG_DOMAIN>/_ftn/open; Chrome checks form-action against the
 // redirect target too, so without this it blocks the redirect (Firefox lets it through).
 func (s *Server) adminCSP() string {
+	if f := s.webFigFormAction(); f != "" {
+		return strings.Replace(cspAdmin, "form-action 'self'", "form-action 'self'"+f, 1)
+	}
+	return cspAdmin
+}
+
+// webFigFormAction is " https://<WEBFIG_DOMAIN>" when remote WebFig is on, else "".
+func (s *Server) webFigFormAction() string {
 	d := s.cfg.WebFigDomain
 	if d == "" || !hostnameOK(d) {
-		return cspAdmin
+		return ""
 	}
-	return strings.Replace(cspAdmin, "form-action 'self'", "form-action 'self' https://"+d, 1)
+	return " https://" + d
 }
 
 // hostnameOK accepts a plain DNS name (letters, digits, dots and hyphens), so a

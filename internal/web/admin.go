@@ -76,6 +76,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	s.settingsRoutes(get, post)
 	s.crmRoutes(get, post)
 	s.apartmentRoutes(get, post)
+	s.networkRoutes(get)
 	s.metricsRoutes(get, post)
 	s.opsRoutes(get, post)
 	s.onuRoutes(get, post)
