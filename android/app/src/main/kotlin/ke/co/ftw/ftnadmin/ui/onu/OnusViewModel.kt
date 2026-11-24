@@ -22,6 +22,8 @@ data class OnusUiState(
     val busy: Boolean = false,
     val error: String? = null,
     val info: String? = null,
+    /** Pull to refresh is running (the list stays on screen). */
+    val refreshing: Boolean = false,
 )
 
 /** The ONUs of one router, with link-to-house and unlink. */
@@ -37,13 +39,19 @@ class OnusViewModel(
         load()
     }
 
+    /** Pull to refresh: reloads without replacing the list by a spinner. */
+    fun refresh() {
+        _state.update { it.copy(refreshing = true) }
+        load()
+    }
+
     fun load() {
         viewModelScope.launch {
             val r = apiResult { repo.forRouter(siteId) }
             _state.update { cur ->
                 r.fold(
-                    { l -> cur.copy(items = Loadable.Ready(l)) },
-                    { e -> cur.copy(items = Loadable.Failed(e.userMessage())) },
+                    { l -> cur.copy(items = Loadable.Ready(l), refreshing = false) },
+                    { e -> cur.copy(items = Loadable.Failed(e.userMessage()), refreshing = false) },
                 )
             }
         }
@@ -66,7 +74,7 @@ class OnusViewModel(
             val r = apiResult { repo.link(onu.id, account.id) }
             _state.update { cur ->
                 r.fold(
-                    { cur.copy(busy = false, linking = null, info = "Linked to ${account.flat}") },
+                    { cur.copy(busy = false, linking = null, info = "Linked to house ${account.unitLabel}") },
                     { e -> cur.copy(busy = false, error = e.userMessage()) },
                 )
             }

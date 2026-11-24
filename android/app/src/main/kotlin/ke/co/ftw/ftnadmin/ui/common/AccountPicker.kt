@@ -1,17 +1,12 @@
 package ke.co.ftw.ftnadmin.ui.common
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -19,9 +14,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import ke.co.ftw.ftnadmin.R
 import ke.co.ftw.ftnadmin.domain.Account
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -61,36 +58,48 @@ fun AccountPicker(
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
-            label = { Text("Search house number, tenant or phone") },
+            label = { Text(stringResource(R.string.search_accounts)) },
+            supportingText = { Text(stringResource(R.string.search_accounts_hint)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
         val shown = if (suggested != null && query.isBlank()) listOf(suggested) + results.filter { it.id != suggested.id } else results
-        Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
-            shown.forEach { a ->
-                Row(
-                    Modifier.fillMaxWidth().clickable { onSelect(a) }.padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RadioButton(selected = a.id == selectedId, onClick = null)
-                    Column(Modifier.padding(start = 12.dp)) {
+        // No scroll area of its own: the sheet or screen around it scrolls (one scroll container per surface). The list is capped
+        // and the search box narrows it.
+        Column(Modifier.selectableGroup()) {
+            shown.take(MAX_SHOWN).forEach { a ->
+                RadioRow(selected = a.id == selectedId, onSelect = { onSelect(a) }, modifier = Modifier.padding(vertical = 2.dp)) {
+                    Column(Modifier.weight(1f)) {
                         Text(
-                            "${a.flat}${if (a.id == suggested?.id) "  (suggested)" else ""}",
+                            "${a.unitLabel.ifBlank { a.code }}${if (a.id == suggested?.id) "  " + stringResource(R.string.suggested) else ""}",
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            listOf(a.tenant, a.phone, a.code, a.mac.ifBlank { "no MAC yet" }).filter { it.isNotBlank() }.joinToString("  |  "),
+                            listOf(a.tenant, formatPhone(a.phone)).filter { it.isNotBlank() }.joinToString("  |  "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        MonoText(
+                            listOf(a.code, a.mac.ifBlank { stringResource(R.string.no_mac_yet) }).filter { it.isNotBlank() }.joinToString("  |  "),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
             }
+            if (shown.size > MAX_SHOWN) {
+                Text(
+                    pluralStringResource(R.plurals.more_matches_narrow, shown.size - MAX_SHOWN, shown.size - MAX_SHOWN),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(8.dp),
+                )
+            }
             if (shown.isEmpty() && !loading) {
                 Text(
-                    error ?: "No matching accounts.",
-                    style = MaterialTheme.typography.bodySmall,
+                    error ?: stringResource(R.string.no_matching_accounts),
+                    style = MaterialTheme.typography.bodyMedium,
                     color = if (error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(8.dp),
                 )
@@ -98,3 +107,5 @@ fun AccountPicker(
         }
     }
 }
+
+private const val MAX_SHOWN = 12

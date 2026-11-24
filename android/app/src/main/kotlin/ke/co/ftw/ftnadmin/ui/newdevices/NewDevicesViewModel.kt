@@ -210,7 +210,7 @@ class NewDevicesViewModel(
             it.copy(
                 sheet = DeviceSheet(
                     device = d,
-                    selected = d.suggestedAccount?.let { s -> Account(id = s.id, code = s.code, flat = s.flat, siteId = d.routerKey) },
+                    selected = d.suggestedAccount?.let { s -> Account(id = s.id, code = s.code, flat = s.flat, unit = s.flat, siteId = d.routerKey) },
                     // The only apartment the router could move the customer into is preselected.
                     moveApartmentId = b?.moveToChoices?.singleOrNull()?.id,
                 ),
@@ -277,13 +277,13 @@ class NewDevicesViewModel(
     suspend fun searchAccounts(q: String): List<Account> {
         val site = _state.value.sheet?.device?.routerKey ?: siteId
         return accounts.list(siteId = site, query = q.ifBlank { null }, limit = 50).items
-            .sortedWith(compareBy<Account> { it.mac.isNotBlank() }.thenBy { it.flat })
+            .sortedWith(compareBy<Account> { it.mac.isNotBlank() }.thenBy { it.unitLabel })
     }
 
     fun attach() {
         val sh = _state.value.sheet ?: return
         val acc = sh.selected ?: return
-        run(sh, "MAC attached to house ${acc.flat}") { repo.attach(sh.device.routerKey, sh.device.mac, acc.id) }
+        run(sh, "MAC attached to house ${acc.unitLabel}") { repo.attach(sh.device.routerKey, sh.device.mac, acc.id) }
     }
 
     fun create(confirmed: Boolean = false) {

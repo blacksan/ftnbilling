@@ -1,7 +1,9 @@
 package ke.co.ftw.ftnadmin.ui.network
 
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import ke.co.ftw.ftnadmin.R
 import ke.co.ftw.ftnadmin.data.accounts.AccountsRepository
 import ke.co.ftw.ftnadmin.data.routers.Client
 import ke.co.ftw.ftnadmin.data.routers.ClientsResponse
@@ -25,14 +27,17 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-enum class NetworkTab(val label: String) { Clients("Clients"), Interfaces("Interfaces") }
+enum class NetworkTab(val label: String, @StringRes val labelRes: Int) {
+    Clients("Clients", R.string.network_clients),
+    Interfaces("Interfaces", R.string.network_interfaces),
+}
 
 /** Filter chips of the clients list. Each maps to the server's `kind` / `online` query. */
-enum class ClientFilter(val label: String, val kind: String?, val online: Boolean?) {
-    All("All", null, null),
-    Flats("Houses", "flats", null),
-    Unregistered("Unregistered", "unregistered", null),
-    Online("Online", null, true),
+enum class ClientFilter(val label: String, val kind: String?, val online: Boolean?, @StringRes val labelRes: Int) {
+    All("All", null, null, R.string.filter_all),
+    Flats("Houses", "flats", null, R.string.filter_houses),
+    Unregistered("Unregistered", "unregistered", null, R.string.filter_unregistered),
+    Online("Online", null, true, R.string.state_online),
 }
 
 data class NetworkUiState(

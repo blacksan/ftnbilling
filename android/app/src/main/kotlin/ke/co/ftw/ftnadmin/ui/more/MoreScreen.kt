@@ -37,11 +37,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material3.AssistChip
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -56,6 +58,7 @@ import ke.co.ftw.ftnadmin.ui.common.TabScaffold
 import ke.co.ftw.ftnadmin.ui.common.vmFactory
 import ke.co.ftw.ftnadmin.ui.theme.AppTheme
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MoreScreen(
     user: UserInfo,
@@ -97,28 +100,28 @@ fun MoreScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     color = s.onSurfaceVariant,
                 )
-                ChipRow(horizontalPadding = 0.dp) {
+                // Choosing a router is an action, not a filter: assist chips, wrapping so every router is in view.
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     (routers as? Loadable.Ready)?.value.orEmpty().forEach { r ->
-                        FilterChip(
-                            selected = false,
+                        AssistChip(
                             onClick = { ctx.select(r.key) },
                             leadingIcon = { StatusDot(r.online, size = 10.dp) },
-                            label = { ChipLabel(r.label) },
+                            label = { Text(r.label) },
                         )
                     }
                 }
             } else {
-                ActionCard("Setup and checks", "Router checks and fixes", Icons.Default.Build, s.primaryContainer, s.onPrimaryContainer, s.primary, s.onPrimary) { onSetupChecks(id) }
-                ActionCard("Router setup", "Setup steps, bootstrap line and reset", Icons.Default.Info, s.secondaryContainer, s.onSecondaryContainer, s.secondary, s.onSecondary) { onRouterSetup(id) }
+                ActionCard("Setup and checks", "Router checks and fixes", Icons.Default.Build, s.surfaceContainerHigh, s.onSurface, s.primary, s.onPrimary) { onSetupChecks(id) }
+                ActionCard("Router page", "Status, setup steps, bootstrap line and reset", Icons.Default.Info, s.surfaceContainerHigh, s.onSurface, s.primary, s.onPrimary) { onRouterSetup(id) }
                 if (user.canWrite) {
                     ActionCard(
                         "Recheck", "Read every check from the router again", Icons.Default.Check,
-                        s.tertiaryContainer, s.onTertiaryContainer, s.tertiary, s.onTertiary,
+                        s.surfaceContainerHigh, s.onSurface, s.primary, s.onPrimary,
                         busy = ui.busy == "recheck",
                     ) { vm.recheck() }
                     ActionCard(
                         "Resync", "Re-apply every customer to the router", Icons.Default.Refresh,
-                        x.successContainer, x.onSuccessContainer, x.success, x.onSuccess,
+                        s.surfaceContainerHigh, s.onSurface, s.primary, s.onPrimary,
                         busy = ui.busy == "resync",
                     ) { vm.resync() }
                 }
@@ -134,10 +137,10 @@ fun MoreScreen(
             }
 
             Heading("Manage")
-            ActionCard("Equipment", "Routers, OLTs, ONUs and other equipment", Icons.Default.Place, s.primaryContainer, s.onPrimaryContainer, s.primary, s.onPrimary, onClick = onEquipment)
-            ActionCard("Apartments", "Apartments, their routers, houses, caretaker and landlord", Icons.Default.Home, s.tertiaryContainer, s.onTertiaryContainer, s.tertiary, s.onTertiary, onClick = onApartments)
-            ActionCard("Alerts", "Open alerts and muted routers", Icons.Default.Notifications, x.warningContainer, x.onWarningContainer, x.warning, x.onWarning, onClick = onAlertList)
-            ActionCard("App settings", "Theme, app lock, updates, devices and sign out", Icons.Default.Settings, s.secondaryContainer, s.onSecondaryContainer, s.secondary, s.onSecondary, onClick = onSettings)
+            ActionCard("Equipment", "Routers, OLTs, ONUs and other equipment", Icons.Default.Place, s.surfaceContainerHigh, s.onSurface, s.primary, s.onPrimary, onClick = onEquipment)
+            ActionCard("Apartments", "Apartments, their routers, houses, caretaker and landlord", Icons.Default.Home, s.surfaceContainerHigh, s.onSurface, s.primary, s.onPrimary, onClick = onApartments)
+            ActionCard("Alerts", "Open alerts and muted routers", Icons.Default.Notifications, s.surfaceContainerHigh, s.onSurface, s.primary, s.onPrimary, onClick = onAlertList)
+            ActionCard("App settings", "Theme, app lock, updates, devices and sign out", Icons.Default.Settings, s.surfaceContainerHigh, s.onSurface, s.primary, s.onPrimary, onClick = onSettings)
         }
     }
 
@@ -165,7 +168,6 @@ private fun Heading(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.titleLarge,
-        fontWeight = FontWeight.ExtraBold,
         color = MaterialTheme.colorScheme.onBackground,
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
@@ -196,8 +198,8 @@ private fun ActionCard(
                 Icon(icon, contentDescription = null, modifier = Modifier.padding(9.dp))
             }
             Column(Modifier.weight(1f)) {
-                Text(if (busy) "$title..." else title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(if (busy) "$title..." else title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall)
             }
         }
     }

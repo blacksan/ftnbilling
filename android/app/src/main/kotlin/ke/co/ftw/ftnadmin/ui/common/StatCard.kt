@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -27,6 +28,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import ke.co.ftw.ftnadmin.ui.theme.AppTheme
 
 /**
@@ -67,6 +69,8 @@ fun StatCard(
     icon: ImageVector? = null,
     spark: List<Double> = emptyList(),
     onClick: (() -> Unit)? = null,
+    /** Lines the label may take before it ends in an ellipsis; raise it for sentences such as the Home attention cards. */
+    labelMaxLines: Int = 1,
 ) {
     val c = tone.colors()
     val colors = CardDefaults.cardColors(
@@ -88,18 +92,21 @@ fun StatCard(
                     label,
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
+                    maxLines = labelMaxLines,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
             }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.Bottom) {
+                // The number shrinks (24 sp down to 14 sp) to fit its card instead of losing digits; the card width
+                // limits it, so the FlowRow wraps the unit under it first.
                 Text(
                     value,
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     softWrap = false,
+                    autoSize = TextAutoSize.StepBased(minFontSize = 14.sp, maxFontSize = 24.sp),
                 )
                 if (unit.isNotBlank()) {
                     Text(

@@ -97,7 +97,7 @@ fun AddRouterScreen(onBack: () -> Unit, onOpenRouter: (String) -> Unit) {
 }
 
 @Composable
-fun EditRouterScreen(routerId: String, onBack: () -> Unit) {
+fun EditRouterScreen(routerId: String, onBack: () -> Unit, onOpenPorts: ((routerName: String) -> Unit)? = null) {
     val container = LocalContainer.current
     val vm: EditRouterViewModel = viewModel(
         key = "edit-router-$routerId",
@@ -122,7 +122,11 @@ fun EditRouterScreen(routerId: String, onBack: () -> Unit) {
                 customerPortLine(ui.customerPort)?.let {
                     Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                RouterFormFields(form, ui.fieldErrors, vm::edit, ports = ui.ports)
+                RouterFormFields(
+                    form, ui.fieldErrors, vm::edit, ports = ui.ports,
+                    portsReadOnly = true,
+                    onOpenPorts = onOpenPorts?.let { open -> { open(form.name) } },
+                )
                 ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
                 Button(onClick = vm::save, enabled = ui.canSave, modifier = Modifier.fillMaxWidth()) {
                     Text(if (ui.busy) "Saving..." else "Save", maxLines = 1)

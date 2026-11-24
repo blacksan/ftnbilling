@@ -1,7 +1,9 @@
 package ke.co.ftw.ftnadmin.ui.payments
 
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import ke.co.ftw.ftnadmin.R
 import ke.co.ftw.ftnadmin.core.network.ApiError
 import ke.co.ftw.ftnadmin.core.network.ErrorCode
 import ke.co.ftw.ftnadmin.data.accounts.AccountsRepository
@@ -23,9 +25,9 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-enum class PaymentFilter(val label: String, val status: String?) {
-    All("All", null),
-    Unmatched("Unmatched", "unmatched"),
+enum class PaymentFilter(val label: String, val status: String?, @StringRes val labelRes: Int) {
+    All("All", null, R.string.filter_all),
+    Unmatched("Unmatched", "unmatched", R.string.unmatched),
 }
 
 sealed interface PaymentDialog {
@@ -199,7 +201,7 @@ class PaymentsViewModel(
             val r = apiResult { payments.assign(d.payment.key, account.id, pkg, null) }
             _state.update { cur ->
                 r.fold(
-                    { cur.copy(busy = false, dialog = PaymentDialog.None, info = "Assigned to house ${account.flat}") },
+                    { cur.copy(busy = false, dialog = PaymentDialog.None, info = "Assigned to house ${account.unitLabel}") },
                     { e -> cur.copy(busy = false, dialogError = e.userMessage()) },
                 )
             }
