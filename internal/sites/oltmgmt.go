@@ -3,7 +3,9 @@ package sites
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 
 	"ispbill/internal/store"
@@ -211,4 +213,18 @@ func (m *Manager) OLTPlan(s store.Site, vlan int, targets []OLTTarget) (OLTMgmtP
 // OLTForward is where the server dials to reach the OLT t behind router s.
 func (m *Manager) OLTForward(s store.Site, vlan int, t OLTTarget) (string, int, error) {
 	return OLTForward(s, vlan, ServerTunnelIP(m.pfx), t)
+}
+
+// OLTReach is the address the server dials to log in to the OLT e (host:port): its router's tunnel address and the port
+// that the router forwards to the OLT. It is the Reach function of the OLT service.
+func (m *Manager) OLTReach(d *store.Data, e store.Equipment, s store.OLTSettings) (string, error) {
+	site, ok := d.Sites[e.SiteID]
+	if !ok || site.Removed {
+		return "", errors.New("the OLT is not on a router")
+	}
+	host, port, err := OLTForward(site, s.MgmtVLAN, ServerTunnelIP(m.pfx), OLTTarget{IP: e.MgmtIP, Proto: s.ProtoOrDefault(), Port: s.PortOrDefault()})
+	if err != nil {
+		return "", err
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port)), nil
 }

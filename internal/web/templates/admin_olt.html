@@ -42,6 +42,7 @@
 
 {{define "admin_olt"}}{{template "ahead" .}}{{$d := .}}{{$E := .Data.E}}
 <p><a href="/admin/equipment?tab=olt">&larr; all OLTs</a> &middot; <a href="/admin/equipment?tab=tree">tree</a></p>
+{{if .Data.Existing}}<p><a class="btn ghost sm" href="/admin/olts/manage?id={{$E.ID}}">OLT management: status, backups, provisioning</a></p>{{end}}
 {{if .Data.Existing}}<p class="muted">{{.Data.ONUCount}} ONU{{if ne .Data.ONUCount 1}}s{{end}} on this OLT{{if $E.SiteID}} &middot; <a href="/admin/routers/view?id={{$E.SiteID}}&amp;tab=equipment">open its router ({{.Data.RouterName}})</a>{{end}}. Change anything below.</p>{{end}}
 <form method="post" action="/admin/olts/save" class="panel mt-3"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
 <div class="two3"><label class="field">Name<input name="name" value="{{$E.Name}}" required maxlength="60" placeholder="e.g. Block A OLT"></label><label class="field">Model<input name="model" value="{{$E.Model}}" maxlength="60" placeholder="e.g. V1600GS-R"></label><label class="field">Serial<input name="serial" value="{{$E.Serial}}" maxlength="60"></label></div>

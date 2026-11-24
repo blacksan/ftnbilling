@@ -25,6 +25,7 @@ func (s *Server) apiHierarchyRoutes(h func(string, string, apiFunc)) {
 	h("GET /api/v1/olts/{id}", viewer, s.apiOLTGet)
 	h("PUT /api/v1/olts/{id}", operator, s.apiOLTSave)
 	h("PUT /api/v1/equipment/{id}/placement", operator, s.apiONUPlacement)
+	s.oltRoutesAPI(h)
 }
 
 // apiEquipment is an equipment item as the API shows it: the register fields, never the sealed password.

@@ -1,0 +1,89 @@
+{{define "admin_olt_manage"}}{{template "ahead" .}}{{$E := .Data.E}}{{$S := .Data.Set}}{{$st := .Data.S}}
+<p><a href="/admin/olts/view?id={{$E.ID}}">&larr; OLT details</a> &middot; <a href="/admin/olts/adopt?id={{$E.ID}}">Adopt this OLT</a> &middot; <a href="/admin/equipment?tab=olt">all OLTs</a></p>
+
+<section class="panel mt-3"><div class="panel-h"><h2>Status</h2>
+<span class="muted">read {{.Data.PolledAt}}</span></div>
+{{if not .Data.Configured}}<p class="muted">Set the OLT's management IP, login name and password on the <a href="/admin/olts/view?id={{$E.ID}}">OLT details</a> page first, then give it an address with <a href="/admin/olts/adopt?id={{$E.ID}}">Adopt this OLT</a>.</p>
+{{else if $st.Status.At.IsZero}}<p class="muted">The server has not read this OLT yet. Use Test connection.</p>
+{{else if $st.Status.OK}}<p><span class="pill live">connected</span> <span class="muted">{{$st.Status.Version}}</span></p>
+<p><b>{{.Data.Online}}</b> of {{.Data.Total}} ONU{{if ne .Data.Total 1}}s{{end}} online</p>
+{{else}}<p><span class="pill suspended">not reachable</span> <span class="muted">{{$st.Status.Error}}</span></p>{{end}}
+{{if .CanWrite}}{{if .Data.Configured}}<div class="row mt-2">
+<form method="post" action="/admin/olts/manage/test"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><button class="btn ghost sm">Test connection</button></form>
+<form method="post" action="/admin/olts/manage/poll"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><button class="btn ghost sm">Read now</button></form>
+<form method="post" action="/admin/olts/manage/backup"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><button class="btn ghost sm">Back up the configuration now</button></form></div>{{end}}{{end}}</section>
+
+{{if $st.Status.ONUs}}<section class="panel mt-3"><h2>ONUs on the OLT</h2><div class="tw"><table class="rs"><thead><tr><th>PON</th><th class="n">ID</th><th>Serial</th><th>State</th><th class="n">Rx dBm</th><th class="n">Tx dBm</th><th class="n">Distance m</th><th>Last down</th></tr></thead><tbody>
+{{range $st.Status.ONUs}}<tr><td data-label="PON">{{.PON}}</td><td class="n" data-label="ID">{{.ID}}</td><td class="mono" data-label="Serial">{{.Serial}}</td><td data-label="State"><span class="pill {{if .Online}}online{{else}}offline{{end}}">{{.State}}</span></td><td class="n" data-label="Rx">{{.RxPower}}</td><td class="n" data-label="Tx">{{.TxPower}}</td><td class="n" data-label="Distance">{{.Distance}}</td><td data-label="Last down">{{.LastDown}}</td></tr>{{end}}</tbody></table></div></section>{{end}}
+{{if $st.Status.Raw}}<section class="panel mt-3"><h2>Not understood</h2><p class="muted">The OLT printed this and the server could not read it. It is shown as it came, so the command table can be corrected.</p><pre class="mono">{{$st.Status.Raw}}</pre></section>{{end}}
+
+<section class="panel mt-3"><h2>Found on the PON ports</h2>
+{{if .Data.Unknown}}<h3>Found on the PON, not in inventory</h3><p class="muted">These serials are plugged into the OLT but are not in the register. The server did <b>not</b> add them.</p>
+<div class="tw"><table class="rs"><thead><tr><th>PON</th><th>Serial</th><th>First seen</th><th></th></tr></thead><tbody>
+{{range .Data.Unknown}}<tr><td data-label="PON">{{.PON}}</td><td class="mono" data-label="Serial">{{.Serial}}</td><td data-label="First seen">{{eats .FirstSeen}}</td><td>{{if $.CanWrite}}<a class="btn ghost sm" href="{{.AddURL}}">Add to inventory</a>{{end}}</td></tr>{{end}}</tbody></table></div>{{end}}
+{{if .Data.Rows}}<h3>In the inventory</h3><div class="tw"><table class="rs"><thead><tr><th>PON</th><th>Serial</th><th>Result</th><th>Why</th></tr></thead><tbody>
+{{range .Data.Rows}}<tr><td data-label="PON">{{.PON}}</td><td class="mono" data-label="Serial">{{.Serial}}</td><td data-label="Result"><span class="pill {{if eq .Verdict "added"}}live{{else if eq .Verdict "ready"}}unknown{{else}}suspended{{end}}">{{.Verdict}}</span></td><td data-label="Why" style="white-space:normal">{{.Detail}}</td></tr>{{end}}</tbody></table></div>{{end}}
+{{if and (not .Data.Unknown) (not .Data.Rows)}}<p class="muted">Nothing is waiting on the PON ports.</p>{{end}}</section>
+
+{{if .IsOwner}}
+<section class="panel mt-3"><h2>Let the server configure this OLT</h2>
+<p>Provisioning is <b>{{if $S.Provisioning}}ON{{else}}OFF{{end}}</b>{{if $S.ProvisioningBy}} <span class="muted">(set by {{$S.ProvisioningBy}} {{eats $S.ProvisioningAt}})</span>{{end}}. Command syntax checked: <b>{{if $S.DialectChecked}}yes{{else}}no{{end}}</b>{{if $S.CheckedBy}} <span class="muted">({{$S.CheckedBy}} {{eats $S.CheckedAt}})</span>{{end}}.</p>
+<p class="muted">Off by default. With both on, the server saves the OLT's configuration, then authorises ONUs that are in the inventory, given to a house, and plugged into the right PON, and sets up their services. It never removes anything by itself, and it never adds a serial that is not in the inventory. {{.Data.Note}}</p>
+<form method="post" action="/admin/olts/manage/plan" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><button class="btn sm">Preview the plan</button></form>
+<form method="post" action="/admin/olts/manage/dialect" class="row mt-2"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="on" value="{{if $S.DialectChecked}}0{{else}}1{{end}}">
+<label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="btn ghost sm">{{if $S.DialectChecked}}Mark the syntax as not checked{{else}}The plan preview looks right: mark the command syntax as checked{{end}}</button></form>
+<form method="post" action="/admin/olts/manage/provisioning" class="row mt-2"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="on" value="{{if $S.Provisioning}}0{{else}}1{{end}}">
+<label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="btn {{if $S.Provisioning}}ghost {{end}}sm">{{if $S.Provisioning}}Stop letting the server configure this OLT{{else}}Let the server configure this OLT{{end}}</button></form>
+{{if .Data.Held}}<h3>Held</h3><p class="muted">These ONUs are in the inventory but were not added. The owners were told.</p>{{end}}
+</section>
+
+<section class="panel mt-3"><h2>Connection</h2>
+<form method="post" action="/admin/olts/manage/settings"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
+<div class="two3"><label class="field">Protocol<select name="proto"><option value="ssh"{{if eq .Data.Proto "ssh"}} selected{{end}}>SSH</option><option value="telnet"{{if eq .Data.Proto "telnet"}} selected{{end}}>Telnet</option></select></label>
+<label class="field">OLT port<input name="port" type="number" min="1" max="65535" value="{{.Data.Port}}"></label>
+<label class="field">Enable password<input name="enable_pass" type="password" autocomplete="new-password" placeholder="{{if .Data.HasEnable}}stored, leave empty to keep{{else}}none{{end}}"></label></div>
+<div class="two3 mt-2"><label class="field">OLT management VLAN<input name="mgmt_vlan" type="number" min="2" max="4094" value="{{.Data.MgmtVLAN}}"></label>
+<label class="field">Uplink port (to the router)<input name="uplink" value="{{.Data.Uplink}}" placeholder="0/1" class="mono"></label>
+<label class="field">Internet VLAN on the OLT<input name="internet_vlan" type="number" min="0" max="4094" value="{{$S.InternetVLAN}}" placeholder="from the router"></label></div>
+<p class="muted">Login name and password are on the <a href="/admin/olts/view?id={{$E.ID}}">OLT details</a> page. The password and the enable password are stored encrypted and never shown. {{if $S.HostKey}}SSH host key pinned: <span class="mono">{{$S.HostKey}}</span> <label class="ck muted"><input type="checkbox" name="clear_hostkey" value="1"> forget it (after replacing the OLT)</label>{{else}}The SSH host key is pinned the first time the server connects, and shown here.{{end}}
+{{if .Data.HasEnable}} <label class="ck muted"><input type="checkbox" name="clear_enable" value="1"> remove the enable password</label>{{end}}</p>
+<div class="row mt-2"><button>Save</button></div></form></section>
+
+<section class="panel mt-3"><h2>Saved configurations</h2>
+<p class="muted">The last {{len .Data.Backups}} copies of the running configuration (at most 20), one before every change the server makes. Passwords and keys are hidden when shown.</p>
+{{if .Data.Backups}}<div class="tw"><table class="rs"><thead><tr><th>When</th><th>Why</th><th>By</th><th class="n">Size</th><th></th></tr></thead><tbody>
+{{range .Data.Backups}}<tr><td data-label="When">{{.At}}</td><td data-label="Why">{{.Why}}</td><td data-label="By">{{.By}}</td><td class="n" data-label="Size">{{.Size}}</td><td><a class="btn ghost sm" href="/admin/olts/backup?id={{$E.ID}}&amp;b={{.ID}}">View</a> <a class="btn ghost sm" href="/admin/olts/backup?id={{$E.ID}}&amp;b={{.ID}}&amp;dl=1">Download</a></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">None yet.</p>{{end}}</section>
+
+{{if $st.Status.ONUs}}<section class="panel mt-3"><h2>Remove an ONU from the OLT</h2><p class="muted">Only on your say-so, never automatically: you see the command first and confirm with your password.</p>
+<form method="post" action="/admin/olts/manage/remove-plan" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><label class="field">Serial<select name="serial">{{range $st.Status.ONUs}}{{if .Serial}}<option value="{{.Serial}}">{{.Serial}} (PON {{.PON}}, ID {{.ID}})</option>{{end}}{{end}}</select></label><button class="btn ghost sm">Show the removal plan</button></form></section>{{end}}
+{{end}}
+{{template "afoot" .}}{{end}}
+
+{{define "admin_olt_plan"}}{{template "ahead" .}}{{$E := .Data.E}}{{$P := .Data.Plan}}
+<p><a href="/admin/olts/manage?id={{$E.ID}}">&larr; back to {{oltLabel $E}}</a></p>
+<section class="panel mt-3"><h2>{{if .Data.Remove}}Removal plan{{else}}Plan{{end}} <span class="muted">{{.Data.Cmds}} line{{if ne .Data.Cmds 1}}s{{end}}, id {{.Data.Hash}}</span></h2>
+<p class="muted">This is exactly what would be sent. Nothing has been changed. The OLT's configuration is saved first, and the lines are read back afterwards to check them.</p>
+{{range $P.Steps}}<h3>{{.Title}}</h3><pre class="mono">{{range .Lines}}{{.}}
+{{end}}</pre>{{else}}<p>Nothing to change: the OLT already matches.</p>{{end}}
+{{range $P.Warnings}}<p><span class="eqwarn" role="note">{{.}}</span></p>{{end}}
+{{range $P.Notes}}<p class="muted">{{.}}</p>{{end}}
+{{if $P.Adds}}<h3>ONUs that will be authorised</h3><ul>{{range $P.Adds}}<li><span class="mono">{{.Serial}}</span> on PON {{.PON}} as ONU {{.ID}} {{if .Label}}({{.Label}}){{end}}</li>{{end}}</ul>{{end}}
+{{if .Data.Cmds}}{{if .Data.MayApply}}<form method="post" action="{{if .Data.Remove}}/admin/olts/manage/remove-apply{{else}}/admin/olts/manage/apply{{end}}" class="row mt-3"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="hash" value="{{.Data.Hash}}">{{if .Data.Remove}}<input type="hidden" name="serial" value="{{.Data.Remove}}">{{end}}
+<label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="btn sm">{{if .Data.Remove}}Remove the ONU{{else}}Apply these lines{{end}}</button></form>
+{{else}}<p class="muted mt-3">The server may not change this OLT yet: turn provisioning on and mark the command syntax as checked on the previous page, after reading this plan.</p>{{end}}{{end}}
+</section>
+{{template "afoot" .}}{{end}}
+
+{{define "admin_olt_adopt"}}{{template "ahead" .}}{{$E := .Data.E}}
+<p><a href="/admin/olts/manage?id={{$E.ID}}">&larr; back to {{oltLabel $E}}</a></p>
+{{if .Data.Problem}}<section class="panel mt-3"><p>{{.Data.Problem}}</p></section>{{else}}
+<section class="panel mt-3"><h2>1. Router: make the OLT management network</h2>
+<p class="muted">Paste this once in the router's terminal (WinBox, New Terminal). It makes VLAN {{.Data.Plan.VLAN}} on {{.Data.Parent}}, the address {{.Data.Plan.GatewayCIDR}}, and the firewall so that only this server can reach the OLT ({{.Data.Plan.Subnet}}). It can be pasted again later, for example after adding another OLT.</p>
+<pre class="mono">{{.Data.RouterScript}}</pre></section>
+<section class="panel mt-3"><h2>2. OLT: give it its management address</h2>
+<p class="muted">Connect to the OLT console (USB-C, or its factory address 192.168.8.200 from a laptop) and paste this once. It makes the management VLAN {{.Data.Plan.VLAN}} with the address {{$E.MgmtIP}}, tags it on the uplink and saves. Syntax is from research: if a line is refused, tell the OLT's help what it wants and correct it on the bench.</p>
+<pre class="mono">{{.Data.ConsoleScript}}</pre>
+<p class="muted">Then open <a href="/admin/olts/manage?id={{$E.ID}}">OLT management</a> and press Test connection.</p></section>
+<section class="panel mt-3"><h2>Why this is not automatic</h2><p class="muted">A factory OLT answers only on 192.168.8.200 on its untagged port. Reaching it from the server would need the router to put an address of that network on the customer-facing OLT port, which would also expose the OLT to every customer on it. The paste above avoids that.</p></section>
+{{end}}
+{{template "afoot" .}}{{end}}

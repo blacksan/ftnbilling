@@ -131,7 +131,9 @@ func (s *Service) Load(id string) (store.Equipment, store.OLTState, bool) {
 			ok = false
 		}
 	})
-	e.MgmtPass = "" // callers never need the sealed value
+	if e.MgmtPass != "" {
+		e.MgmtPass = "(stored)" // callers only need to know there is one, never the sealed value
+	}
 	return e, st, ok
 }
 
