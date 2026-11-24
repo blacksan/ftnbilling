@@ -52,6 +52,9 @@ type SecureResult struct {
 	SNMPRemoved   []string // default communities removed
 	SNMPNote      string
 	ACLNote       string
+	ACLDone       bool     // SSH is restricted to the router's address, verified with a new session, saved
+	ACLRules      []string // the login-access-list rules the OLT showed afterwards (read back)
+	ACLFinding    string   // what is still open (web)
 }
 
 // Secure replaces an OLT's login and enable password with generated ones (the owner's action; step-up is the caller's).
@@ -197,10 +200,11 @@ func (s *Service) secureIn(ctx context.Context, o *opened, cur cred, by string) 
 	}
 	// SNMP: remove the default communities.
 	s.secureSNMP(ctx, o, by, &res)
-	// SSH access list: restrict SSH to the router's address.
-	s.secureACL(&res)
+	// SSH access list: restrict SSH to the router's OLT-management address (verified with a new session before it is saved).
+	s.secureACL(ctx, o, user, login, enable, vi.Serial, by, &res)
 	_ = s.setAdopt(e.ID, func(a *store.OLTAdopt, e *store.Equipment, d *store.Data) {
-		a.SNMPNote, a.SNMPOff, a.ACLNote, a.ACLDone = res.SNMPNote, len(res.SNMPRemoved) > 0 || strings.Contains(res.SNMPNote, "SNMP is off"), res.ACLNote, false
+		a.SNMPNote, a.SNMPOff = res.SNMPNote, len(res.SNMPRemoved) > 0 || strings.Contains(res.SNMPNote, "SNMP is off")
+		a.ACLNote, a.ACLDone, a.ACLRules, a.ACLFinding = res.ACLNote, res.ACLDone, res.ACLRules, res.ACLFinding
 	})
 	return res, nil
 }
@@ -293,57 +297,57 @@ func (s *Service) secureSNMP(ctx context.Context, o *opened, by string, res *Sec
 	s.auditNote(o.e.ID, by, "OLT "+store.OLTLabel(o.e)+": default SNMP communities removed")
 }
 
+// SNMPCommunity is one row of `show snmp-server community`.
+type SNMPCommunity struct{ Name, Access string }
+
+// ParseSNMPCommunities reads the table the OLT prints (bench, V1.0.5):
+//
+//	community               access
+//	 public                    ro
+//	 private                   rw
+//
+// The header is skipped; the first column is the name and the second the access (ro or rw). Error lines ("% ...") and
+// blank lines are skipped. An empty table gives no rows.
+func ParseSNMPCommunities(out string) []SNMPCommunity {
+	var rows []SNMPCommunity
+	for _, l := range strings.Split(out, "\n") {
+		f := strings.Fields(l)
+		if len(f) < 2 || strings.HasPrefix(f[0], "%") {
+			continue
+		}
+		if strings.EqualFold(f[0], "community") && strings.EqualFold(f[1], "access") {
+			continue
+		}
+		acc := strings.ToLower(f[1])
+		if acc != "ro" && acc != "rw" {
+			continue
+		}
+		rows = append(rows, SNMPCommunity{Name: f[0], Access: acc})
+	}
+	return rows
+}
+
 // defaultCommunities lists the default communities (public, private) printed by `show snmp-server community`, and the
-// other community names.
+// other community names. A line of another layout that still names public or private counts as that community (it must
+// never be hidden by a layout the parser does not know).
 func defaultCommunities(out string) (def, other []string) {
 	seen := map[string]bool{}
 	for _, l := range strings.Split(out, "\n") {
-		f := strings.Fields(strings.TrimSpace(l))
-		if len(f) == 0 || strings.HasPrefix(f[0], "%") {
-			continue
-		}
-		// The default names count wherever they stand in the line (the bench has not shown this command's layout: a
-		// "Community: public" or a table with an index column must not hide them).
-		hit := false
-		for _, t := range f {
+		for _, t := range strings.Fields(l) {
 			t = strings.Trim(t, `:,;"'`)
 			if (t == "public" || t == "private") && !seen[t] {
 				seen[t] = true
 				def = append(def, t)
 			}
-			hit = hit || t == "public" || t == "private"
 		}
-		if hit {
-			continue
-		}
-		w := f[0]
-		switch strings.ToLower(w) {
-		case "community", "name", "snmp", "snmp-server", "no", "show", "---", "total", "access":
-			continue
-		}
-		if strings.HasPrefix(w, "-") || seen[w] {
-			continue
-		}
-		seen[w] = true
-		switch w {
-		case "public", "private":
-			def = append(def, w)
-		default:
-			other = append(other, w)
+	}
+	for _, c := range ParseSNMPCommunities(out) {
+		if !seen[c.Name] {
+			seen[c.Name] = true
+			other = append(other, c.Name)
 		}
 	}
 	return def, other
-}
-
-// secureACL is the step that restricts SSH to the router's OLT management address and refuses it from everywhere else.
-//
-// TODO(bench): the bench grammar (`find login-access-list` was not captured; the running config shows only
-// `login-access-list deny telnet 0.0.0.0 0.0.0.0`, `login-access-list deny snmp 0.0.0.0 0.0.0.0` and
-// `login-access-list enable`) does not show the PERMIT syntax. A deny of ssh without a permit for the router would lock the
-// server out, so this step is SKIPPED, with a visible note, until the syntax is read from the OLT with
-// `find login-access-list` and added to Dialect.SecureShapes.
-func (s *Service) secureACL(res *SecureResult) {
-	res.ACLNote = "Not applied: the permit syntax of login-access-list is not known yet (TODO(bench): run `find login-access-list` on the OLT). SSH is not restricted to the router; the OLT is only reachable through the router's OLT management port."
 }
 
 // adoptPending makes the pending login (the one an interrupted change was setting) the stored one: it worked just now.

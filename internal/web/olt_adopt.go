@@ -90,6 +90,9 @@ func (s *Server) adminOLTSecure(w http.ResponseWriter, r *http.Request) {
 	if res.SNMPNote != "" {
 		msg += " " + res.SNMPNote
 	}
+	if res.ACLNote != "" {
+		msg += " " + res.ACLNote
+	}
 	s.back(w, r, to, msg)
 }
 

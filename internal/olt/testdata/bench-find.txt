@@ -1,4 +1,4 @@
-# The bench OLT's own 'find' output (V1600GS-R, V1.0.5): find onu/profile/tr069/wan/auto/vlan/user/password/snmp-server community/sshd/ip route.
+# The bench OLT's own 'find' output (V1600GS-R, V1.0.5): find onu/profile/tr069/wan/auto/vlan/user/password/snmp-server community/sshd/ip route/login-access-list. The login-access-list lines and the `show snmp-server community` table are from bench-login-access-snmp.txt.
 # Grammar lines only, as '(mode)  syntax'. Used by grammar_test.go.
   (Alarm profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp>
   (Alarm profile)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> id (1-128)
@@ -173,6 +173,9 @@
   (config)  ipv6 mld snooping vlan (1-4094) mroute interface gigabitethernet <S/P>
   (config)  lldp vlan (1-4094)
   (config)  log facility <kern|user|mail|daemon|auth|syslog|lpr|news|uucp|cron|local0|local1|local2|local3|local4|local5|local6|local7>
+  (config)  login-access-list <enable|disable|clear>
+  (config)  login-access-list <permit|deny> <telnet|web|snmp|ssh> A.B.C.D A.B.C.D
+  (config)  login-access-list ipv6 <permit|deny> <telnet|web|snmp|ssh> X:X::X:X/M
   (config)  loopback mode <only-alarm|auto-recovery|manual-recovery>
   (config)  loopback packet-send <port-base|vlan-base> (1-360)
   (config)  mac address-table <static|dynamic> vlan (1-4094) X:X:X:X:X:X interface gigabitEthernet <S/P>
@@ -207,6 +210,8 @@
   (config)  no onu allowlist sn-auth
   (config)  no onu allowlist sn-auth WORD
   (config)  no onu allowlist sn-auth WORD WORD
+  (config)  no login-access-list <permit|deny> <telnet|web|snmp|ssh> A.B.C.D A.B.C.D
+  (config)  no login-access-list ipv6 <permit|deny> <telnet|web|snmp|ssh> X:X::X:X/M
   (config)  no onu auto-learn bind <onu-profile|line-profile|srv-profile|alarm-profile|pri-profile|format-profile> WORD
   (config)  no onu locking allowlist sn-auth
   (config)  no onu locking allowlist sn-auth SN
@@ -301,6 +306,7 @@
   (config)  show profile <onu|dba|line|srv|alarm|pri|format|igmp> running-config
   (config)  show rogue-onu-detect config
   (config)  show rogue-onu-detect info [pon 1]
+  (config)  show login-access-list
   (config)  show snmp-server community
   (config)  show snmp-server notify profile
   (config)  show snmp-server user [WORD]

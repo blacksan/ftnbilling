@@ -7,6 +7,8 @@
 {{if .Error}}<p><span class="eqwarn" role="note">{{.Error}}</span></p>{{end}}
 {{if .Steps}}<div class="tw"><table class="rs"><thead><tr><th>Step</th><th>State</th><th>Detail</th></tr></thead><tbody>
 {{range .Steps}}<tr><td data-label="Step">{{.Label}}</td><td data-label="State"><span class="pill {{if eq .State "ok"}}live{{else if eq .State "fail"}}suspended{{else}}unknown{{end}}">{{if eq .State "ok"}}done{{else if eq .State "fail"}}problem{{else if eq .State "off"}}skipped{{else}}to do{{end}}</span></td><td data-label="Detail">{{.Detail}}</td></tr>{{end}}</tbody></table></div>{{end}}
+{{if .ACLRules}}<h3 class="mt-2">Login access list on the OLT</h3><ul class="mono">{{range .ACLRules}}<li>{{.}}</li>{{end}}</ul>{{end}}
+{{if .ACLFinding}}<p><span class="eqwarn" role="note">{{.ACLFinding}}</span></p>{{end}}
 {{if $.CanWrite}}<div class="row mt-2"><form method="post" action="/admin/olts/manage/adopt-check"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><button class="btn sm">Check now</button></form></div>{{end}}
 </section>{{end}}
 
