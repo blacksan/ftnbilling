@@ -215,15 +215,19 @@ func TestNetworkCSPRelaxedOnlyOnNetworkPage(t *testing.T) {
 		return r.Header.Get("Content-Security-Policy"), r.Header
 	}
 	net, h := csp("/admin/network")
-	for _, want := range []string{"script-src 'self' https://maps.googleapis.com", "img-src 'self' data: blob: https://*.googleapis.com https://*.gstatic.com https://*.google.com",
-		"connect-src 'self' https://maps.googleapis.com https://*.googleapis.com", "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", "font-src 'self' https://fonts.gstatic.com",
-		"frame-ancestors 'none'", "object-src 'none'"} {
+	// Google's documented allowlist for the Maps JavaScript API (minus 'unsafe-inline' for script).
+	for _, want := range []string{"script-src 'self' 'unsafe-eval' https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.ggpht.com https://*.googleusercontent.com blob:;",
+		"img-src 'self' data: blob: https://*.googleapis.com https://*.gstatic.com https://*.google.com",
+		"connect-src 'self' https://*.googleapis.com https://*.google.com https://*.gstatic.com data: blob:;", "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", "font-src 'self' https://fonts.gstatic.com",
+		"worker-src blob:", "frame-src https://*.google.com", "frame-ancestors 'none'", "object-src 'none'"} {
 		if !strings.Contains(net, want) {
 			t.Errorf("network CSP lacks %q: %s", want, net)
 		}
 	}
-	if strings.Contains(net, "script-src 'self' 'unsafe-inline'") || strings.Contains(net, "unsafe-eval") || strings.Contains(net, "'unsafe-inline' https://maps") {
-		t.Errorf("network CSP allows inline script: %s", net)
+	scriptSrc := net[strings.Index(net, "script-src"):]
+	scriptSrc = scriptSrc[:strings.Index(scriptSrc, ";")]
+	if strings.Contains(scriptSrc, "unsafe-inline") || strings.Contains(scriptSrc, "http:") || strings.Contains(scriptSrc, " *") {
+		t.Errorf("network CSP allows inline or any-host script: %s", scriptSrc)
 	}
 	if rp := h.Get("Referrer-Policy"); rp != "strict-origin-when-cross-origin" {
 		t.Errorf("a referrer-restricted key needs the origin: Referrer-Policy %q", rp)

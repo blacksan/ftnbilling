@@ -19,13 +19,19 @@ const (
 )
 
 // cspNetwork is the admin policy plus what the Google Maps JavaScript API needs, and only for the Network page and
-// only when a key is set (see networkCSP). Nothing else changes: script-src stays free of 'unsafe-inline', so the page
-// still runs no inline script (the Maps loader is a script element created by /static/netmap.js).
-const cspNetwork = "default-src 'self'; script-src 'self' https://maps.googleapis.com https://maps.gstatic.com; " +
+// only when a key is set (see networkCSP). The host lists follow Google's "allowlist CSP" for the Maps JavaScript API
+// (developers.google.com/maps/documentation/javascript/content-security-policy): script-src *.googleapis.com
+// *.gstatic.com *.google.com *.ggpht.com *.googleusercontent.com blob:, connect-src *.googleapis.com *.google.com
+// *.gstatic.com data: blob:, worker-src blob:, frame-src *.google.com. Both of Google's documented policies (strict and
+// allowlist) carry 'unsafe-eval' in script-src, so it is kept here, on this page only. 'unsafe-inline' is NOT given to
+// script (Google's allowlist example has it, but this page runs no inline script: the Maps loader is a script element
+// created by /static/netmap.js, and every map/DOM text is set with textContent). style-src keeps 'unsafe-inline' (the
+// admin policy already has it, and the Maps library styles its controls inline).
+const cspNetwork = "default-src 'self'; script-src 'self' 'unsafe-eval' https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.ggpht.com https://*.googleusercontent.com blob:; " +
 	"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
 	"img-src 'self' data: blob: https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.googleusercontent.com; " +
 	"font-src 'self' https://fonts.gstatic.com; " +
-	"connect-src 'self' https://maps.googleapis.com https://*.googleapis.com; " +
+	"connect-src 'self' https://*.googleapis.com https://*.google.com https://*.gstatic.com data: blob:; " +
 	"worker-src blob:; frame-src https://*.google.com; " +
 	"form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
 
