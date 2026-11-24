@@ -2,17 +2,28 @@ package olt
 
 import (
 	"fmt"
+	"net/netip"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 )
 
-// This file is the ONLY place that knows what a V-SOL OLT's command line looks like. The syntax below comes from
-// research (vendor blogs, a third-party sample, one bench session), not from the V1600GS-R manual, so every line that
-// is not yet confirmed carries a TODO(bench) marker. When the bench `show running-config` and `show version` are in,
-// fix the table here; nothing else in the program hardcodes CLI text.
+// This file is the ONLY place that knows what a V-SOL OLT's command line looks like. The grammar below is the one the
+// bench OLT printed with its own `find` command (V1600GS-R, software V1.0.5), plus the bench `show running-config` and
+// `show version`. What the bench did not show carries a TODO(bench) marker. Nothing else in the program hardcodes
+// CLI text.
 //
-// Confirmed on the bench (owner, 2026-11): the OLT has a web UI where the service profile's TR069 tab holds the ACS URL
-// and login; descriptions cannot contain spaces; GE0/1 needs its PVID set before it leaves VLAN 1.
+// Facts from the bench:
+//   - SSH lands at "gpon-olt#" (already privileged). The top level is FRR (vtysh) based. `show version` and
+//     `show running-config` are run from configuration mode; `show onu ...` and `onu ...` run inside
+//     `interface gpon 0/<pon>` (prompt "gpon-olt(config-pon-0/1)#", grammar mode slot_pon).
+//   - Profiles (dba, line, srv, pri, onu) are entered from configuration mode with `profile <kind> [id N] [name WORD]`,
+//     filled, then `commit` and `exit`.
+//   - ONU serials are printed with lower-case hex ("VSOL00127e0f"); inventory holds upper case. Matching is case
+//     insensitive and the server sends the serial in the inventory's case (checked by reading it back).
+//   - The OLT web UI is not needed for TR-069: the ACS URL and login go in a Pri profile (`tr069_mng`).
+//   - Descriptions cannot contain spaces; GE0/1 needs its PVID set before it leaves VLAN 1.
 
 // Mode is where in the CLI a command runs.
 type Mode int
@@ -26,9 +37,11 @@ const (
 // Dialect is a CLI dialect: how prompts and errors look, what may never be sent, and every command text.
 type Dialect struct {
 	Name string
+	// The model and software version the command table was checked against. A different version is shown as a warning.
+	CheckedModel, CheckedSoftware string
 
 	// Prompts and prompts' neighbours.
-	PromptRE   *regexp.Regexp // the last line of the buffer, e.g. "gpon-olt#" or "gpon-olt(config-if)#"
+	PromptRE   *regexp.Regexp // the last line of the buffer, e.g. "gpon-olt#" or "gpon-olt(config-pon-0/1)#"
 	MoreRE     *regexp.Regexp // pagination marker
 	UserRE     *regexp.Regexp // "Username:" / "login:"
 	PasswordRE *regexp.Regexp // "Password:"
@@ -38,19 +51,25 @@ type Dialect struct {
 	// Deny is the hard denylist: a line matching any rule is never sent, whatever asked for it.
 	Deny []DenyRule
 	// Prefix-aware denials (see VSOL): DenyVerbs for the first word, DenyAnywhere for any word, DenyAfterNo for the word
-	// after "no", and the only arguments "write" may take.
-	DenyVerbs, DenyAnywhere, DenyAfterNo, WriteArgsOK []string
+	// after "no", and the only arguments "write" may take. SubVerbsOK are first words that are denied at the top level
+	// of configuration mode but are ordinary inside an interface, VLAN or profile ("service" in a line profile).
+	// AllowLines are the exact shapes of the few lines that start with a denied word (the management address).
+	DenyVerbs, DenyAnywhere, DenyAfterNo, WriteArgsOK, SubVerbsOK []string
+	AllowLines                                                    []*regexp.Regexp
 
 	// Fixed commands.
 	EnableCmd, ConfigCmd, EndCmd, ExitCmd, SaveCmd string
 	NoPaging                                       string // sent once, a failure is ignored
-	VersionCmd, RunningCmd, AutoFindCmd            string
+	VersionCmd, RunningCmd                         string
+	// VersionMode and RunningMode are the modes those two run in (the bench: configuration mode).
+	VersionMode, RunningMode Mode
 
-	// Build the commands of the actions below. The functions only return text.
-	StateQuery   func(pon int) Query // the ONU state table of one PON port
-	OpticalQuery func(pon int) Query // optical power and distance of one PON port
-	// TODO(bench): the OMCI TR-069 CLI (ACS URL, login) is not known; the bench did it in the web UI service profile's TR069 tab.
-	TR069Note string
+	// Read commands inside a PON interface.
+	CmdInfo, CmdState, CmdOptical, CmdDistance, CmdAutoFind string
+
+	// Names of the objects the plan creates or binds. The bench OLT already has dba_1g, srv_hgu and line_hgu (made by the
+	// owner): they are used as they are. The Pri profile is new.
+	DefaultDBA, DefaultLine, DefaultSrv, DefaultPri, DefaultONUProfile string
 }
 
 // Query is a read-only command sequence and the mode it starts in.
@@ -67,34 +86,36 @@ type DenyRule struct {
 
 func ci(s string) *regexp.Regexp { return regexp.MustCompile(`(?i)` + s) }
 
-// VSOL is the dialect of the V-SOL V1600G family (V1600GS-R on the bench).
+// VSOL is the dialect of the V-SOL V1600G family (V1600GS-R, software V1.0.5, on the bench).
 func VSOL() *Dialect {
 	d := &Dialect{
-		Name: "vsol-v1600g",
-		// gpon-olt>  gpon-olt#  gpon-olt(config)#  gpon-olt(config-if-gpon-0/1)#  (host name letters, digits, - _ .)
+		Name:            "vsol-v1600g",
+		CheckedModel:    "V1600GS-R",
+		CheckedSoftware: "V1.0.5",
+		// gpon-olt#  gpon-olt(config)#  gpon-olt(config-pon-0/1)#  (host name letters, digits, - _ .)
 		PromptRE:   regexp.MustCompile(`^[A-Za-z0-9_.\-]+(\((?:config|cfg)[^)\n]*\))?[>#]\s?$`),
 		MoreRE:     regexp.MustCompile(`(?i)-+\s*more\s*-+|\(more\)|press any key|<--- more --->`),
 		UserRE:     regexp.MustCompile(`(?i)(user ?name|login)\s*:\s*$`),
 		PasswordRE: regexp.MustCompile(`(?i)password\s*:\s*$`),
+		// "% Command incomplete", "% Unknown command" and the like start with "% ".
 		ErrorRE:    regexp.MustCompile(`(?i)^\s*%|unknown command|unrecognized command|\berror\b|\binvalid\b|incomplete command|ambiguous command|\bfailed\b|not exist|already exist|not found|conflict`),
-
 		QueryErrRE: regexp.MustCompile(`(?i)^\s*%|unknown command|unrecognized command|incomplete command|ambiguous command|invalid (input|command)`),
 
 		EnableCmd: "enable", ConfigCmd: "configure terminal", EndCmd: "end", ExitCmd: "exit", SaveCmd: "write",
-		NoPaging:    "terminal length 0", // TODO(bench): unverified; a failure is ignored
+		NoPaging:    "terminal length 0", // TODO(bench): status unknown; a failure is ignored
 		VersionCmd:  "show version",
 		RunningCmd:  "show running-config",
-		AutoFindCmd: "show onu auto-find",
+		VersionMode: ModeConfig,
+		RunningMode: ModeConfig,
 
-		TR069Note: "The ACS URL and login are not set over the OLT command line: set them once in the OLT web UI, service profile, TR069 tab (URL http://10.99.0.1:7547/ and the shared ACS login from Settings). TODO(bench): find the OMCI TR-069 CLI.",
-	}
-	d.StateQuery = func(pon int) Query {
-		// TODO(bench): `show onu state` runs inside `interface gpon 0/<pon>` on the sample; some firmware takes `show onu state gpon 0/<pon>` at the # prompt.
-		return Query{ModeConfig, []string{fmt.Sprintf("interface gpon 0/%d", pon), "show onu state", "exit"}}
-	}
-	d.OpticalQuery = func(pon int) Query {
-		// TODO(bench): the optical table command is unknown (the MIB has gOnuOpticalInfoRxPwr/TxPwr, gOnuRttDistance).
-		return Query{ModeConfig, []string{fmt.Sprintf("interface gpon 0/%d", pon), "show onu optical-info", "exit"}}
+		CmdInfo:     "show onu info",
+		CmdState:    "show onu state",
+		CmdOptical:  "show onu optical-info",
+		CmdDistance: "show onu distance", // TODO(bench): the table layout is unknown; read leniently, never an error
+		CmdAutoFind: "show onu auto-find",
+
+		DefaultDBA: "dba_1g", DefaultLine: "line_hgu", DefaultSrv: "srv_hgu", DefaultPri: "ftn_pri",
+		DefaultONUProfile: "default",
 	}
 	d.Deny = []DenyRule{
 		{ci(`^(erase|eras|era)\b`), "erase"},
@@ -110,32 +131,90 @@ func VSOL() *Dialect {
 		{ci(`^(shutdown|shut)\b`), "port shutdown"},
 		{ci(`^no\s+(ip\s*address|ipaddress|ip\s+route|ip\s+default-gateway|ip\s+gateway|gateway)\b`), "removal of the management address or route"},
 		{ci(`^no\s+(interface\s+vlan|vlanif)\b`), "removal of a VLAN interface"},
+		// The bench grammar's dangerous commands.
+		{ci(`^start-shell\b`), "a shell on the OLT"},
+		{ci(`^(no\s+)?onu-s\w*`), "scheduled ONU reboot"},
+		{ci(`^(no\s+)?onu\s+auto-d\w*`), "automatic ONU deletion"},
+		{ci(`^(no\s+)?auto-up\w*`), "automatic firmware upgrade"},
+		{ci(`^rogue\S*`), "rogue ONU detection (it can shut a PON port down)"},
+		{ci(`^(no\s+)?set\s+(license|cust|onu)`), "licence or customer key"},
+		{ci(`^(no\s+)?(onu\s+\S+\s+)?pri\s+(factory_reset|mac_clean)`), "ONU factory reset or MAC table clean"},
+		{ci(`^gponapp\b`), "debug"},
 	}
 	// The CLI accepts any unambiguous prefix of a command word ("reb", "wr er", "fo"), so the regular expressions above
 	// are not enough on their own: a first word that is a prefix of one of DenyVerbs is refused too, and so is any word
 	// (3 letters or more) that is a prefix of one of DenyAnywhere, wherever it stands ("system reboot", "onu reset 3").
 	d.DenyVerbs = []string{"erase", "factory", "default", "reboot", "reload", "restart", "reset", "restore", "format", "delete", "remove",
 		"copy", "tftp", "ftp", "upgrade", "upload", "download", "load", "update", "firmware", "username", "user", "passwd", "password",
-		"aaa", "crypto", "shutdown", "boot", "clear", "debug", "rm", "cp"}
-	d.DenyAnywhere = []string{"erase", "factory", "reboot", "reload", "reset", "restore", "format", "upgrade", "firmware"}
+		"aaa", "crypto", "shutdown", "boot", "clear", "debug", "rm", "cp",
+		// The bench OLT's top-level (config) words that are never needed: system, file, login and routing settings.
+		"start-shell", "exec", "software", "line", "sshd", "ssh", "telnet", "tacacs", "login-access-list", "set", "schedule", "clean",
+		"save", "time", "timezone", "dst", "ntp", "remote", "router", "route-map", "route", "frr", "zebra", "bfd", "mpls", "evpn", "vrf",
+		"pseudowire", "nexthop-group", "allow-external-route-update", "key", "monitor", "service", "snmp", "snmp-server", "web", "ip",
+		"hostname", "domainname", "del", "output", "watchfrr", "gponapp"}
+	d.DenyAnywhere = []string{"erase", "factory", "factory_reset", "mac_clean", "reboot", "reload", "reset", "restore", "format", "upgrade",
+		"firmware", "debug", "license", "cust"}
 	// After "no", a word that is a prefix of one of these is refused (user, password, address and route removal).
-	d.DenyAfterNo = []string{"username", "user", "passwd", "password", "aaa", "enable", "ipaddress", "vlanif", "gateway"}
+	d.DenyAfterNo = []string{"username", "user", "passwd", "password", "aaa", "enable", "ipaddress", "vlanif", "gateway", "cust"}
 	// "write" saves; "write <anything>" (erase, to a server, ...) is refused, except these.
 	d.WriteArgsOK = []string{"memory", "mem"}
+	d.SubVerbsOK = []string{"service"}
+	d.AllowLines = []*regexp.Regexp{
+		regexp.MustCompile(`^ip address \d{1,3}(\.\d{1,3}){3}/\d{1,2}$`),
+		regexp.MustCompile(`^ip route 0\.0\.0\.0/0 \d{1,3}(\.\d{1,3}){3}$`),
+	}
 	return d
 }
 
-// ---- the command builders (text only) -----------------------------------------------------------------------------
+// ---- version -------------------------------------------------------------------------------------------------------
 
-// Spec is what the plan builder asks the dialect to render.
+// VersionQuery is the read of the OLT's version.
+func (d *Dialect) VersionQuery() Query { return Query{d.VersionMode, []string{d.VersionCmd}} }
+
+// VersionNote is the warning to show when the OLT is not the model and software the command table was checked
+// against; empty when it is (or when the OLT did not say).
+func (d *Dialect) VersionNote(model, software string) string {
+	if model == "" && software == "" {
+		return ""
+	}
+	if strings.EqualFold(model, d.CheckedModel) && strings.EqualFold(software, d.CheckedSoftware) {
+		return ""
+	}
+	return fmt.Sprintf("Commands checked against %s software %s; this OLT reports %s software %s. Read every plan before applying it.",
+		d.CheckedModel, d.CheckedSoftware, orUnknown(model), orUnknown(software))
+}
+
+func orUnknown(s string) string {
+	if s == "" {
+		return "(unknown)"
+	}
+	return s
+}
+
+// ---- reads inside a PON interface ----------------------------------------------------------------------------------
+
+// PONEnter and PONExit enter and leave a PON port's interface.
+func (d *Dialect) PONEnter(pon int) []string {
+	return []string{fmt.Sprintf("interface gpon 0/%d", pon)}
+}
+func (d *Dialect) PONExit() []string { return []string{"exit"} }
+
+// PONReadQuery reads everything about one PON port in one visit: the ONU table, states, optics, distances and the
+// auto-find list.
+func (d *Dialect) PONReadQuery(pon int) Query {
+	cmds := append(d.PONEnter(pon), d.CmdInfo, d.CmdState, d.CmdOptical, d.CmdDistance, d.CmdAutoFind)
+	return Query{ModeConfig, append(cmds, d.PONExit()...)}
+}
+
+// ---- the command builders (text only) ------------------------------------------------------------------------------
 
 // VLANLines creates a VLAN.
 func (d *Dialect) VLANLines(vlan int) []string { return []string{fmt.Sprintf("vlan %d", vlan), "exit"} }
 
 // UplinkLines puts VLANs on the uplink port: tagged lists tagged VLANs, untagged is the one untagged VLAN (0 = none),
-// which also becomes the port's PVID (bench: the port needs it to leave VLAN 1).
+// which also becomes the port's PVID (bench: the port needs it to leave VLAN 1). port is "0/1".
 func (d *Dialect) UplinkLines(port string, tagged []int, untagged int) []string {
-	l := []string{"interface gigabitethernet " + port}
+	l := []string{"interface gigabitEthernet " + port}
 	for _, v := range tagged {
 		l = append(l, fmt.Sprintf("switchport hybrid vlan %d tagged", v))
 	}
@@ -145,57 +224,175 @@ func (d *Dialect) UplinkLines(port string, tagged []int, untagged int) []string 
 	return append(l, "exit")
 }
 
-// MgmtIfaceLines gives the OLT its management address on the management VLAN, with its default route.
+// MgmtIfaceLines gives the OLT its management address on the management VLAN, with its default route. The bench shows
+// `interface vlan 1` / `ip address 192.168.8.200/24`.
 func (d *Dialect) MgmtIfaceLines(vlan int, ip, mask, gateway string) []string {
 	return []string{
-		fmt.Sprintf("interface vlan %d", vlan), fmt.Sprintf("ipaddress %s %s", ip, mask), "exit",
-		// TODO(bench): the default-route syntax is unknown (ip route / ip default-gateway).
-		fmt.Sprintf("ip route 0.0.0.0 0.0.0.0 %s", gateway),
+		fmt.Sprintf("interface vlan %d", vlan), fmt.Sprintf("ip address %s/%d", ip, maskBits(mask)), "exit",
+		// TODO(bench): the default-route syntax is not in the captured grammar; `ip route 0.0.0.0/0 GW` is the FRR form.
+		fmt.Sprintf("ip route 0.0.0.0/0 %s", gateway),
 	}
 }
 
-// DBALines creates a DBA profile (type 3: assured + maximum, kbit/s).
-func (d *Dialect) DBALines(name string, assured, maximum int) []string {
-	return []string{"profile dba name " + name, fmt.Sprintf("type 3 assured %d maximum %d", assured, maximum), "commit", "exit"}
+// maskBits turns "255.255.255.248" into 29 (0 when it is not a netmask).
+func maskBits(mask string) int {
+	a, err := netip.ParseAddr(mask)
+	if err != nil || !a.Is4() {
+		return 0
+	}
+	b := a.As4()
+	n := 0
+	for _, x := range b {
+		for i := 7; i >= 0; i-- {
+			if x&(1<<i) == 0 {
+				return n
+			}
+			n++
+		}
+	}
+	return n
 }
 
-// ONUProfileLines creates the ONU profile of an HGU (the ONU routes by itself; one VEIP port).
-func (d *Dialect) ONUProfileLines(name string) []string {
-	// TODO(bench): sample is `port-num eth 1`; the HGU form (VEIP=1) is a guess.
-	return []string{"profile onu name " + name, "port-num veip 1", "commit", "exit"}
+// DBALines creates a DBA profile of one maximum rate (kbit/s). Bench: `profile dba id 10 name dba_1g` holds
+// `type 4 maximum 1000000`.
+func (d *Dialect) DBALines(name string, maximum int) []string {
+	return []string{"profile dba name " + name, fmt.Sprintf("type 4 maximum %d", maximum), "commit", "exit"}
 }
 
-// PONEnter and PONExit enter and leave a PON port's interface.
-func (d *Dialect) PONEnter(pon int) []string {
-	return []string{fmt.Sprintf("interface gpon 0/%d", pon)}
+// LineProfileLines creates a line profile like the bench's line_hgu: a T-CONT on the DBA profile, one gemport, one
+// service for the internet VLAN (and the ONU management VLAN) and a service-port for each.
+func (d *Dialect) LineProfileLines(name, dba string, inetVLAN, mgmtVLAN int) []string {
+	vl := []int{inetVLAN}
+	svc := "internet"
+	if mgmtVLAN > 0 {
+		vl = append(vl, mgmtVLAN)
+		svc = "internet_mgmt"
+	}
+	sort.Ints(vl)
+	var list []string
+	for _, v := range vl {
+		list = append(list, strconv.Itoa(v))
+	}
+	l := []string{
+		"profile line name " + name,
+		"tcont 1 dba " + dba,
+		"gemport 1 tcont 1 gemport_name gem_1", // TODO(bench-verify): shown by the bench running config; the creating command is not in `find`
+		fmt.Sprintf("service %s gemport 1 tag %s", svc, strings.Join(list, ",")),
+		fmt.Sprintf("service-port 1 gemport 1 uservlan %d vlan %d", inetVLAN, inetVLAN),
+		"service-port 1 description internet",
+	}
+	if mgmtVLAN > 0 {
+		l = append(l, fmt.Sprintf("service-port 2 gemport 1 uservlan %d vlan %d", mgmtVLAN, mgmtVLAN), "service-port 2 description onu_mgmt")
+	}
+	return append(l, "commit", "exit")
 }
-func (d *Dialect) PONExit() []string { return []string{"exit"} }
 
-// ONUAddLine authorises an ONU by serial inside the PON interface.
+// SrvProfileLines creates a service profile of an HGU: one VEIP port, VLANs pass transparently (bench srv_hgu).
+func (d *Dialect) SrvProfileLines(name string) []string {
+	return []string{"profile srv name " + name, "portvlan veip 1 mode transparent", "commit", "exit"}
+}
+
+// ACS is what an ONU needs to reach the ACS. The values are secrets (the login): they only ever appear in command
+// lines that are sent, and Redact hides them everywhere else.
+type ACS struct {
+	URL, User, Pass string
+	InformSeconds   int
+}
+
+// Valid reports whether the values can go in a command line (one word each, no spaces).
+func (a ACS) Valid() bool {
+	return acsURLRE.MatchString(a.URL) && acsWordRE.MatchString(a.User) && acsWordRE.MatchString(a.Pass)
+}
+
+var (
+	acsURLRE  = regexp.MustCompile(`^https?://[A-Za-z0-9.\-]+(:\d{1,5})?(/[A-Za-z0-9._~/%\-]*)?$`)
+	acsWordRE = regexp.MustCompile(`^[A-Za-z0-9._@\-]{1,64}$`)
+)
+
+// tr069MngLine is the OMCI TR-069 management line (grammar: `tr069_mng enable acs_server url WORD username WORD password
+// WORD certificate <enable|disable> inform enable inform_interval N reverse_connection username WORD password WORD`).
+// The connection-request login is the shared ACS login too: the ACS replaces it per ONU after first contact.
+func (d *Dialect) tr069MngLine(a ACS) string {
+	cert := "disable"
+	if strings.HasPrefix(a.URL, "https://") {
+		cert = "enable"
+	}
+	every := a.InformSeconds
+	if every <= 0 {
+		every = 300
+	}
+	return fmt.Sprintf("tr069_mng enable acs_server url %s username %s password %s certificate %s inform enable inform_interval %d reverse_connection username %s password %s",
+		a.URL, a.User, a.Pass, cert, every, a.User, a.Pass)
+}
+
+// PriProfileLines creates the Pri profile new ONUs are bound to: the internet WAN (route, DHCP, NAT, the internet VLAN,
+// all LAN ports and the first SSID, like the bench's ONU 1) and, when mgmtVLAN > 0 and acs is set, a TR-069 WAN (route
+// mode tr069, DHCP, no NAT, the management VLAN) with the OMCI TR-069 login. A profile is only ever created, never
+// edited: `wan_adv add route` is not idempotent.
+func (d *Dialect) PriProfileLines(name string, inetVLAN, mgmtVLAN int, acs *ACS) []string {
+	l := []string{"profile pri name " + name,
+		"wan_adv add route",
+		"wan_adv index 1 route mode internet mtu 1500",
+		"wan_adv index 1 route ipv4 dhcp nat enable",
+		fmt.Sprintf("wan_adv index 1 vlan tag wan_vlan %d 0 qos enable", inetVLAN),
+		"wan_adv index 1 bind lan lan1 lan2 lan3 lan4",
+		"wan_adv index 1 bind ssid ssid1",
+	}
+	if mgmtVLAN > 0 && acs != nil {
+		l = append(l, "wan_adv add route", "wan_adv index 2 route mode tr069", "wan_adv index 2 route ipv4 dhcp nat disable",
+			fmt.Sprintf("wan_adv index 2 vlan tag wan_vlan %d 0", mgmtVLAN), d.tr069MngLine(*acs))
+	}
+	return append(l, "commit", "exit")
+}
+
+// ONUAddLine authorises an ONU by serial inside the PON interface. The serial is sent as the inventory has it (upper
+// case); the OLT prints it back in lower case, so every comparison is case insensitive.
 func (d *Dialect) ONUAddLine(id int, profile, serial string) string {
 	return fmt.Sprintf("onu add %d profile %s sn %s", id, profile, serial)
 }
 
-// ONURemoveLine removes an authorised ONU (inside the PON interface). TODO(bench): unverified.
+// ONURemoveLine removes an authorised ONU (inside the PON interface).
 func (d *Dialect) ONURemoveLine(id int) string { return fmt.Sprintf("no onu %d", id) }
 
-// ONUServiceLines are one ONU's service lines inside its PON interface: a T-CONT on the DBA profile, a gemport for
-// the internet and one for TR-069 management, a service and a service-port each, and the port VLAN.
-func (d *Dialect) ONUServiceLines(id int, dba string, inetVLAN, mgmtVLAN int) []string {
-	l := []string{
-		fmt.Sprintf("onu %d tcont 1 dba %s", id, dba),
-		fmt.Sprintf("onu %d gemport 1 tcont 1", id),
-		fmt.Sprintf("onu %d service 1 gemport 1 vlan %d", id, inetVLAN),
-		fmt.Sprintf("onu %d service-port 1 gemport 1 uservlan %d vlan %d", id, inetVLAN, inetVLAN),
+// ONUBindLine binds a line, srv or pri profile to an ONU (inside the PON interface).
+func (d *Dialect) ONUBindLine(id int, kind, name string) string {
+	return fmt.Sprintf("onu %d profile %s name %s", id, kind, name)
+}
+
+// ONUDescLine names an ONU. A description is one word.
+func (d *Dialect) ONUDescLine(id int, label string) string {
+	return fmt.Sprintf("onu %d desc %s", id, descWord(label))
+}
+
+var descBadRE = regexp.MustCompile(`[^A-Za-z0-9_\-]+`)
+
+// descWord makes a label one word of at most 24 characters ("" when nothing is left).
+func descWord(s string) string {
+	s = strings.Trim(descBadRE.ReplaceAllString(strings.TrimSpace(s), "_"), "_")
+	if len(s) > 24 {
+		s = s[:24]
 	}
-	if mgmtVLAN > 0 {
-		l = append(l,
-			fmt.Sprintf("onu %d gemport 2 tcont 1", id),
-			fmt.Sprintf("onu %d service 2 gemport 2 vlan %d", id, mgmtVLAN),
-			fmt.Sprintf("onu %d service-port 2 gemport 2 uservlan %d vlan %d", id, mgmtVLAN, mgmtVLAN))
+	return s
+}
+
+// ONUWANLines gives one ONU its TR-069 WAN and OMCI TR-069 login, per ONU (an ONU that was authorised before the Pri
+// profile existed). index is the WAN index the new connection gets: the next one after the ONU's existing ones.
+func (d *Dialect) ONUWANLines(id, index, mgmtVLAN int, acs ACS) []string {
+	p := fmt.Sprintf("onu %d pri ", id)
+	return []string{
+		p + "wan_adv add route",
+		fmt.Sprintf("%swan_adv index %d route mode tr069", p, index),
+		fmt.Sprintf("%swan_adv index %d route ipv4 dhcp nat disable", p, index),
+		fmt.Sprintf("%swan_adv index %d vlan tag wan_vlan %d 0", p, index, mgmtVLAN),
+		p + "wan_adv commit", // TODO(bench-verify): the grammar has `wan_adv <commit|show>`; the bench config does not show whether a commit is needed
+		p + d.tr069MngLine(acs),
 	}
-	// TODO(bench): for an HGU the LAN side is the ONU's own; this line follows the sample and may be dropped.
-	return append(l, fmt.Sprintf("onu %d portvlan eth 1 mode hybrid def_vlan %d", id, inetVLAN))
+}
+
+// AutoLearnOffLines stop a PON port from authorising any ONU that plugs in (bench: `onu auto-learn` and
+// `plug_and_play enable vlan 1` are on).
+func (d *Dialect) AutoLearnOffLines(pon int) []string {
+	return append(append(d.PONEnter(pon), "no onu auto-learn", "plug_and_play disable"), d.PONExit()...)
 }
 
 // AdoptSnippet is what the owner pastes into the OLT console (USB-C or the factory address) to make a factory OLT

@@ -8,13 +8,8 @@ import (
 	"ispbill/internal/store"
 )
 
-// Defaults of the generated profiles.
-const (
-	DefaultDBA        = "ftn_dba"
-	DefaultONUProfile = "ftn_hgu"
-	DefaultAssured    = 10000   // kbit/s
-	DefaultMaximum    = 1000000 // kbit/s
-)
+// DefaultMaximum is the maximum rate of a generated DBA profile (kbit/s).
+const DefaultMaximum = 1000000
 
 // GPONSerialOf is the serial the OLT knows an inventory ONU by: its GPON serial, else its serial.
 func GPONSerialOf(e store.Equipment) string {
@@ -27,14 +22,15 @@ func GPONSerialOf(e store.Equipment) string {
 // BuildDesired computes the desired configuration of an OLT from the server's data. add lists ONUs to authorise (their
 // serial, PON port and inventory item); every inventory ONU that is placed on this OLT and already authorised on it
 // gets its services checked. baseOnly leaves the ONUs out; onusOnly leaves the base configuration out.
-func BuildDesired(d *store.Data, olt store.Equipment, st store.OLTState, run *Running, add []DesiredONU, onusOnly bool) (Desired, []string, error) {
+func BuildDesired(d *store.Data, olt store.Equipment, st store.OLTState, run *Running, add []DesiredONU, onusOnly bool, dl *Dialect, acs *ACS) (Desired, []string, error) {
 	var notes []string
 	site, ok := d.Sites[olt.SiteID]
 	if !ok || site.Removed {
 		return Desired{}, nil, fmt.Errorf("the OLT is not on a router")
 	}
 	s := st.Settings
-	w := Desired{DBA: DefaultDBA, DBAAssured: DefaultAssured, DBAMax: DefaultMaximum, ONUProfile: DefaultONUProfile}
+	w := Desired{DBA: dl.DefaultDBA, DBAMax: DefaultMaximum, LineProfile: dl.DefaultLine, SrvProfile: dl.DefaultSrv, PriProfile: dl.DefaultPri,
+		ONUProfile: dl.DefaultONUProfile, ACS: acs, Provisioning: s.Provisioning}
 	w.InternetVLAN = s.InternetVLAN
 	if w.InternetVLAN == 0 {
 		w.InternetVLAN = site.VLANID
@@ -56,6 +52,10 @@ func BuildDesired(d *store.Data, olt store.Equipment, st store.OLTState, run *Ru
 		} else {
 			notes = append(notes, fmt.Sprintf("The OLT's address %s is not in the router's OLT network %s, so the plan leaves its management address alone.", olt.MgmtIP, sub))
 		}
+	}
+	if acs != nil && !acs.Valid() {
+		notes = append(notes, "The ACS address or login has characters the OLT command line cannot take as one word, so the plan has no TR-069 lines.")
+		w.ACS = nil
 	}
 	w.OnlyONUs = onusOnly
 	// Placed ONUs already on the OLT keep their services.

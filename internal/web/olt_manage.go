@@ -126,7 +126,7 @@ func (s *Server) adminOLTManage(w http.ResponseWriter, r *http.Request) {
 	p.Data["MgmtVLAN"], p.Data["Uplink"] = st.Settings.MgmtVLANOrDefault(), st.Settings.UplinkOrDefault()
 	p.Data["HasEnable"], p.Data["Configured"] = st.Settings.EnablePass != "", pw
 	p.Data["PolledAt"] = s.ageText(st.Status.At)
-	p.Data["Note"] = s.olt.Dialect().TR069Note
+	p.Data["Note"] = s.olt.Dialect().VersionNote(st.Status.Model, st.Status.SWVersion)
 	s.render(w, "admin_olt_manage", p)
 }
 
@@ -298,7 +298,7 @@ func (s *Server) planPage(w http.ResponseWriter, r *http.Request, e store.Equipm
 	pg := s.eqPage(r, "equipment", eqTabOLT)
 	pg.Detail = store.OLTLabel(e) + " plan"
 	pg.H1a, pg.H1b = "OLT plan", store.OLTLabel(e)
-	pg.Data["E"], pg.Data["Plan"], pg.Data["Hash"], pg.Data["Remove"] = e, p, hash, removeSerial
+	pg.Data["E"], pg.Data["Plan"], pg.Data["Hash"], pg.Data["Remove"] = e, p.Display(), hash, removeSerial
 	pg.Data["Cmds"] = len(p.Commands())
 	pg.Data["MayApply"] = st.Settings.Provisioning && st.Settings.DialectChecked
 	pg.Data["Set"] = st.Settings

@@ -56,7 +56,7 @@ var gponSerialRE = regexp.MustCompile(`^[A-Z]{4}[0-9A-F]{8}$`)
 
 // computePlan reads the running configuration inside a session and builds the plan.
 func (s *Service) computePlan(ctx context.Context, o *opened) (Plan, *Running, error) {
-	text, err := o.sess.Show(ctx, s.o.Dialect.RunningCmd)
+	text, err := s.readRunning(ctx, o.sess)
 	if err != nil {
 		return Plan{}, nil, err
 	}
@@ -67,7 +67,7 @@ func (s *Service) computePlan(ctx context.Context, o *opened) (Plan, *Running, e
 	s.o.Store.View(func(d *store.Data) {
 		e := d.Equipment[o.e.ID]
 		st := d.OLTStateOf(o.e.ID)
-		want, notes, derr = BuildDesired(d, e, st, run, readyAdds(d, e, st, 0, s.now()), false)
+		want, notes, derr = BuildDesired(d, e, st, run, readyAdds(d, e, st, 0, s.now()), false, s.o.Dialect, s.acsInfo())
 	})
 	if derr != nil {
 		return Plan{}, nil, derr
@@ -130,7 +130,7 @@ func (s *Service) applyPlan(ctx context.Context, o *opened, p Plan, why, by stri
 	defer cancel()
 	before := len(o.sess.Transcript)
 	n, cerr := o.sess.ConfigN(wctx, cmds)
-	res.Sent = cmds[:n]
+	res.Sent = redactAll(cmds[:n])
 	if cerr == nil {
 		cerr = o.sess.Save(wctx)
 	}
@@ -145,10 +145,10 @@ func (s *Service) applyPlan(ctx context.Context, o *opened, p Plan, why, by stri
 	// The ONUs it authorised are placed on this OLT before the check, so that the check looks at their services too.
 	s.afterApply(o, p)
 	// Verify: read it back; nothing the plan wanted may be missing.
-	text, err := o.sess.Show(wctx, s.o.Dialect.RunningCmd)
+	text, err := s.readRunning(wctx, o.sess)
 	if err == nil {
 		run := ParseRunning(text)
-		s.o.Store.View(func(d *store.Data) { res.Remaining = verify(d, run) })
+		s.o.Store.View(func(d *store.Data) { res.Remaining = redactAll(verify(d, run)) })
 		res.Verified = len(res.Remaining) == 0
 	}
 	s.auditApply(o.e, by, p, res, "ok")
@@ -161,7 +161,7 @@ type verifier func(d *store.Data, run *Running) []string
 // verifyPlan rebuilds the plan from the re-read configuration: an empty result means the OLT is as wanted.
 func (s *Service) verifyPlan(id string, onusOnly bool) verifier {
 	return func(d *store.Data, run *Running) []string {
-		want, _, err := BuildDesired(d, d.Equipment[id], d.OLTStateOf(id), run, nil, onusOnly)
+		want, _, err := BuildDesired(d, d.Equipment[id], d.OLTStateOf(id), run, nil, onusOnly, s.o.Dialect, s.acsInfo())
 		if err != nil {
 			return []string{err.Error()}
 		}
@@ -230,18 +230,19 @@ func (s *Service) autoProvision(ctx context.Context, o *opened) {
 	if len(ready) == 0 {
 		return
 	}
-	text, err := o.sess.Show(ctx, s.o.Dialect.RunningCmd)
+	text, err := s.readRunning(ctx, o.sess)
 	if err != nil {
 		return
 	}
 	run := ParseRunning(text)
-	if !run.HasBlock("profile dba name "+DefaultDBA) || !run.HasBlock("profile onu name "+DefaultONUProfile) {
+	dl := s.o.Dialect
+	if !run.HasBlock("profile line name "+dl.DefaultLine) || !run.HasBlock("profile srv name "+dl.DefaultSrv) || !run.HasBlock("profile pri name "+dl.DefaultPri) {
 		s.markFound(o.e.ID, ready, store.OLTFoundHeld, "the base configuration (profiles) is not on the OLT yet: open Plan and apply it first")
 		return
 	}
 	var want Desired
 	s.o.Store.View(func(d *store.Data) {
-		want, _, _ = BuildDesired(d, d.Equipment[o.e.ID], d.OLTStateOf(o.e.ID), run, ready, true)
+		want, _, _ = BuildDesired(d, d.Equipment[o.e.ID], d.OLTStateOf(o.e.ID), run, ready, true, s.o.Dialect, s.acsInfo())
 	})
 	p := s.o.Dialect.BuildPlan(want, run)
 	if len(p.Adds) == 0 {
@@ -290,7 +291,7 @@ func (s *Service) PlanRemove(ctx context.Context, id, serial string) (Plan, stri
 }
 
 func (s *Service) removePlan(ctx context.Context, o *opened, serial string) (Plan, error) {
-	text, err := o.sess.Show(ctx, s.o.Dialect.RunningCmd)
+	text, err := s.readRunning(ctx, o.sess)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -325,4 +326,18 @@ func (s *Service) ApplyRemove(ctx context.Context, id, serial, wantHash, by stri
 		return err
 	})
 	return res, err
+}
+
+// readRunning reads the running configuration in the mode the dialect needs.
+func (s *Service) readRunning(ctx context.Context, sess *Session) (string, error) {
+	return sess.ShowAt(ctx, s.o.Dialect.RunningMode, s.o.Dialect.RunningCmd)
+}
+
+// acsInfo is the ACS address and the shared first-contact login the ONUs are given (nil when there is no ACS or it has
+// no login yet).
+func (s *Service) acsInfo() *ACS {
+	if s.o.ACS == nil {
+		return nil
+	}
+	return s.o.ACS()
 }

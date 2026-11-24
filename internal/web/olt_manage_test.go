@@ -47,6 +47,9 @@ func newOLTRig(t *testing.T) *oltRig {
 	}
 	or := &oltRig{apiRig: r, f: f}
 	or.svc2 = olt.New(olt.Options{Store: r.st, Box: box, Interval: time.Hour,
+		ACS: func() *olt.ACS {
+			return &olt.ACS{URL: "http://10.99.0.1:7547/", User: oltACSUser, Pass: oltACSPass, InformSeconds: 300}
+		},
 		Reach: func(d *store.Data, e store.Equipment, s store.OLTSettings) (string, error) { return f.SSHAddr, nil },
 		Dial: func(ctx context.Context, n, a string) (net.Conn, error) {
 			var d net.Dialer
@@ -82,6 +85,11 @@ func (o *oltRig) alertText() string {
 	defer o.mu.Unlock()
 	return strings.Join(o.alerts, "\n")
 }
+
+const (
+	oltACSUser = "ftn-web-acs"
+	oltACSPass = "web-acs-pass-77"
+)
 
 func TestOLTAPIRolesStepUpAndSecrets(t *testing.T) {
 	o := newOLTRig(t)
@@ -160,6 +168,10 @@ func TestOLTAPIRolesStepUpAndSecrets(t *testing.T) {
 		t.Fatalf("plan: %d %s", pl.Status, pl.Raw)
 	}
 	hash := pl.JSON(t)["hash"].(string)
+	// The plan shows the TR-069 line (ACS address) with the login hidden.
+	if raw := string(pl.Raw); !strings.Contains(raw, "tr069_mng enable acs_server url http://10.99.0.1:7547/") || strings.Contains(raw, oltACSPass) || strings.Contains(raw, oltACSUser) {
+		t.Fatalf("plan JSON: %s", raw)
+	}
 	if g := o.call(o.owner.Access, "POST", p+"/apply", map[string]any{"hash": "stale", "password": o.ownerW.Pass}, nil); g.Status != 409 {
 		t.Fatalf("stale: %d %s", g.Status, g.Raw)
 	}
@@ -171,7 +183,10 @@ func TestOLTAPIRolesStepUpAndSecrets(t *testing.T) {
 		t.Fatalf("apply: %d %s", ap.Status, ap.Raw)
 	}
 	// no secret in any response above or in the audit trail
-	for _, secret := range []string{o.f.Pass, "HASHED-ADMIN-SECRET"} {
+	if raw := string(ap.Raw); strings.Contains(raw, oltACSPass) || strings.Contains(raw, oltACSUser) {
+		t.Fatalf("apply response: %s", raw)
+	}
+	for _, secret := range []string{o.f.Pass, "HASHED-ADMIN-SECRET", oltACSPass, oltACSUser} {
 		if strings.Contains(o.auditText(), secret) {
 			t.Fatalf("%q in the audit trail", secret)
 		}

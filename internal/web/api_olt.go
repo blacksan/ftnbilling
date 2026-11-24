@@ -92,7 +92,7 @@ func (s *Server) apiOLTStatus(w http.ResponseWriter, r *http.Request, c *apiCtx)
 	})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"olt_id": e.ID, "name": store.OLTLabel(e), "configured": e.MgmtIP != "" && e.MgmtUser != "" && e.MgmtPass != "",
-		"protocol": st.Settings.ProtoOrDefault(), "connected": st.Status.OK, "checked_at": tp(st.Status.At), "error": st.Status.Error, "version": st.Status.Version,
+		"protocol": st.Settings.ProtoOrDefault(), "connected": st.Status.OK, "checked_at": tp(st.Status.At), "error": st.Status.Error, "version": st.Status.Version, "model": st.Status.Model, "sw_version": st.Status.SWVersion, "hw_version": st.Status.HWVersion, "findings": nz(st.Status.Findings), "version_note": s.olt.Dialect().VersionNote(st.Status.Model, st.Status.SWVersion),
 		"online": online, "total": len(onus), "onus": onus, "auto_found": found, "not_in_inventory": unknown,
 		"provisioning": map[string]any{"enabled": st.Settings.Provisioning, "dialect_checked": st.Settings.DialectChecked},
 		"host_key":     st.Settings.HostKey, "unparsed": st.Status.Raw,
@@ -224,6 +224,7 @@ func (s *Server) apiOLTProvisioning(w http.ResponseWriter, r *http.Request, c *a
 }
 
 func planJSON(p olt.Plan, hash string) map[string]any {
+	p = p.Display() // the login in a TR-069 line is hidden
 	steps := []map[string]any{}
 	for _, st := range p.Steps {
 		steps = append(steps, map[string]any{"title": st.Title, "lines": st.Lines})
