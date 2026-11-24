@@ -58,6 +58,10 @@
 #   MGMT_SUBNET (10.98.0.0/24: a private IPv4 prefix, /16 to /29, apart from
 #                WG_SUBNET; the server is .1, each device gets the next free address.
 #                Routers built after this setting is made accept WinBox from it).
+#   MAC_VENDOR_LOOKUP  online (default) or off: names the maker of a device whose MAC
+#                the built-in table does not know, by asking api.macvendors.com from
+#                a background worker (only the first three bytes of the MAC leave the
+#                server). MAC_VENDOR_DAILY caps those requests a day (default 500).
 #   WEBFIG_DOMAIN e.g. tech.ftw.co.ke: opens a router's WebFig through this server, from
 #                the router page in the admin (owners only, after a fresh password and
 #                code). Needs its own DNS A record to this VPS (like DOMAIN) and DOMAIN
@@ -912,6 +916,17 @@ EOF
     setkv WEBFIG_LISTEN "127.0.0.1:$WEBFIG_PORT"
   elif [ "$WEBFIG_OFF" = 1 ] && grep -qs '^WEBFIG_DOMAIN=' "$ENVF"; then
     setkv WEBFIG_DOMAIN ""
+  fi
+  # Online MAC-vendor lookup: the default is written once; a value given on this run is written.
+  addkv MAC_VENDOR_LOOKUP "online"
+  case "${MAC_VENDOR_LOOKUP:-}" in
+    "") ;;
+    online | off) setkv MAC_VENDOR_LOOKUP "$MAC_VENDOR_LOOKUP" ;;
+    *) die "MAC_VENDOR_LOOKUP must be online or off, got: $MAC_VENDOR_LOOKUP" ;;
+  esac
+  if [ -n "${MAC_VENDOR_DAILY:-}" ]; then
+    [[ $MAC_VENDOR_DAILY =~ ^[0-9]{1,6}$ ]] && [ "$((10#$MAC_VENDOR_DAILY))" -ge 1 ] && [ "$((10#$MAC_VENDOR_DAILY))" -le 100000 ] || die "MAC_VENDOR_DAILY must be a number from 1 to 100000, got: $MAC_VENDOR_DAILY"
+    setkv MAC_VENDOR_DAILY "$MAC_VENDOR_DAILY"
   fi
   # DATA_KEY encrypts the secrets saved in Settings and national IDs. Every
   # install gets one. Losing it makes both unreadable: it is in the Drive

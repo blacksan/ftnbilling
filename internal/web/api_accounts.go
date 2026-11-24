@@ -312,6 +312,8 @@ func (s *Server) apiAccountCreate(w http.ResponseWriter, r *http.Request, c *api
 		EquipmentID string `json:"equipment_id"` // an in-stock ONU of the register: its WAN MAC becomes the house MAC (mac may be empty)
 		Activate    bool   `json:"activate"`
 		Note        string `json:"note"`
+		// ConfirmNoAddress: yes, this device that never asked for an address is the customer's ONU.
+		ConfirmNoAddress bool `json:"confirm_no_address"`
 	}
 	if !decode(w, r, &req, false) {
 		return
@@ -350,7 +352,7 @@ func (s *Server) apiAccountCreate(w http.ResponseWriter, r *http.Request, c *api
 		note = req.Notes
 	}
 	a, _, err := s.svc.CreateCustomer(r.Context(), billing.AddCustomerInput{ApartmentID: req.ApartmentID, SiteID: req.SiteID, Unit: req.Unit, MAC: mac, Tenant: req.Tenant, Phone: req.Phone,
-		PackageID: req.PackageID, Activate: req.Activate, Note: note, EquipmentID: req.EquipmentID})
+		PackageID: req.PackageID, Activate: req.Activate, Note: note, EquipmentID: req.EquipmentID, ConfirmNoAddress: req.ConfirmNoAddress})
 	if err != nil {
 		s.billingErr(w, err, mac)
 		return

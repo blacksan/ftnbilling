@@ -62,6 +62,7 @@ const (
 	CheckBootFile     = "bootstrap.file"
 	CheckAdminNet     = "admin.no_internet"
 	CheckONUMgmt      = "onu.mgmt"
+	CheckOLTMAC       = "olt.account_mac"
 	checksCacheFor    = 60 * time.Second
 	checksBudget      = 45 * time.Second // the whole pass, all reads together
 	recheckMax        = 6                // ... this many times in a row
@@ -543,6 +544,7 @@ var checkDefs = []checkDef{
 	{CheckIPv6, "network", "IPv6", false, "", evalIPv6},
 	{CheckPublicIP, "services", "Server public address is set", true, "", evalPublicIP},
 	{CheckONUMgmt, "services", "ONU management network (TR-069)", false, "", evalONUMgmt},
+	{CheckOLTMAC, "devices", "No house uses an OLT's MAC", false, "", evalOLTMAC},
 }
 
 func okItem(it *CheckItem, detail string, ev ...string) {
@@ -1771,4 +1773,27 @@ func hasMgmtWinboxRule(sn *snapshot, mgmt string) bool {
 		}
 	}
 	return false
+}
+
+// evalOLTMAC lists the open houses of this router whose MAC is the MAC of a live OLT (data from before the rule, or an
+// OLT added with the same MAC). It only warns: the house keeps working. The fix is Replace the ONT on the house.
+func evalOLTMAC(e *evalCtx, it *CheckItem) {
+	var bad []store.OLTMACClash
+	e.m.st.View(func(d *store.Data) {
+		for _, c := range d.AccountsOnOLTMAC() {
+			if c.Account.SiteID == e.site.ID {
+				bad = append(bad, c)
+			}
+		}
+	})
+	if len(bad) == 0 {
+		okItem(it, "No house on this router uses the MAC of an OLT.")
+		return
+	}
+	it.Status = StatusWarn
+	for _, c := range bad {
+		it.Evidence = append(it.Evidence, fmt.Sprintf("house %s (%s) has the MAC of OLT %s: %s", c.Account.Unit, c.Account.Code, store.OLTLabel(c.OLT), c.Account.MAC))
+	}
+	it.Detail = fmt.Sprintf("%d house(s) use the MAC of an OLT instead of their ONU's WAN MAC. Open each house and use Replace the ONT to set the ONU's WAN MAC.", len(bad))
+	it.Fix = CheckFix{Kind: FixManual}
 }

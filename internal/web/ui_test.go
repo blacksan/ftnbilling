@@ -34,7 +34,7 @@ func TestEveryAdminPageRenders(t *testing.T) {
 		"/admin/devices", "/admin/devices?online=1", "/admin/payments", "/admin/payments?method=mpesa", "/admin/payments/record", "/admin/unmatched", "/admin/orders",
 		"/admin/packages", "/admin/packages?tab=quick", "/admin/packages?tab=monthly", "/admin/vouchers",
 		"/admin/routers", "/admin/routers?tab=online", "/admin/routers?add=1", "/admin/live", "/admin/map", "/admin/audit",
-		"/admin/equipment", "/admin/security", "/admin/tools", "/admin/uptime", "/admin/alerts", "/admin/messages",
+		"/admin/equipment", "/admin/equipment?tab=olt", "/admin/equipment?tab=onu", "/admin/equipment?tab=other", "/admin/equipment?tab=tree", "/admin/security", "/admin/tools", "/admin/uptime", "/admin/alerts", "/admin/messages",
 		"/admin/settings", "/admin/settings/whatsapp", "/admin/settings/mpesa", "/admin/settings/email", "/admin/settings/equipment", "/admin/search?q=Flat"}
 	for _, tab := range []string{"overview", "setup", "clients", "interfaces", "plans", "profile", "danger"} {
 		paths = append(paths, "/admin/routers/view?id="+site+"&tab="+tab)

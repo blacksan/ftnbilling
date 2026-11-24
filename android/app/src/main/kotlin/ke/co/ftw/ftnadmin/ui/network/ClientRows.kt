@@ -1,6 +1,5 @@
 package ke.co.ftw.ftnadmin.ui.network
 
-import ke.co.ftw.ftnadmin.ui.theme.GeistMono
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -23,21 +22,21 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import ke.co.ftw.ftnadmin.R
 import ke.co.ftw.ftnadmin.data.routers.Client
 import ke.co.ftw.ftnadmin.data.routers.NetInterface
 import ke.co.ftw.ftnadmin.ui.common.ChipRow
 import ke.co.ftw.ftnadmin.ui.common.LabeledValue
+import ke.co.ftw.ftnadmin.ui.common.MonoText
 import ke.co.ftw.ftnadmin.ui.common.StatusChip
 import ke.co.ftw.ftnadmin.ui.common.StatusDot
 import ke.co.ftw.ftnadmin.ui.common.Tone
 import ke.co.ftw.ftnadmin.ui.common.formatAge
 import ke.co.ftw.ftnadmin.ui.common.formatBps
 import ke.co.ftw.ftnadmin.ui.common.formatBytes
-
-private val Mono = GeistMono
 
 /** Collapsed: who, address, state. Expanded: lease, queue, usage, port, last seen and the actions. */
 @OptIn(ExperimentalLayoutApi::class)
@@ -49,6 +48,7 @@ internal fun ClientRow(
     canWrite: Boolean,
     onToggle: () -> Unit,
     onOpen: () -> Unit,
+    onChangeMac: () -> Unit,
     onSuspend: () -> Unit,
     onResync: () -> Unit,
     onCreate: () -> Unit,
@@ -61,20 +61,16 @@ internal fun ClientRow(
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                StatusDot(c.online, size = 12.dp)
+                StatusDot(c.online, size = 12.dp, describe = false)
                 Column(Modifier.weight(1f)) {
-                    Text(c.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(c.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     val who = listOf(c.tenant, c.hostName.takeIf { c.isFlat }).filter { !it.isNullOrBlank() }.joinToString(" - ")
-                    if (who.isNotBlank()) Text(who, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(
-                        listOf(c.ip, c.mac).filter { it.isNotBlank() }.joinToString("  "),
-                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = Mono),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    if (who.isNotBlank()) Text(who, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    // IP and MAC each on their own line, in mono, and never cut: a MAC is typed into the router.
+                    if (c.ip.isNotBlank()) MonoText(c.ip, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (c.mac.isNotBlank()) MonoText(c.mac, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Icon(if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, contentDescription = if (expanded) "Collapse" else "Expand")
+                Icon(if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, contentDescription = stringResource(if (expanded) R.string.collapse else R.string.expand))
             }
             ChipRow(horizontalPadding = 0.dp) {
                 if (!c.isFlat) StatusChip("Unregistered", Tone.Warn)
@@ -103,7 +99,7 @@ internal fun ClientRow(
                                     Text(if (c.suspendedOnRouter) "Unsuspend" else "Suspend", maxLines = 1, softWrap = false)
                                 }
                                 OutlinedButton(onClick = onResync, enabled = !busy) { Text("Resync", maxLines = 1, softWrap = false) }
-                                TextButton(onClick = onOpen) { Text("Change MAC", maxLines = 1, softWrap = false) }
+                                TextButton(onClick = onChangeMac) { Text(stringResource(R.string.change_mac), maxLines = 2) }
                             } else if (!c.isFlat) {
                                 Button(onClick = onCreate) { Text("Create customer", maxLines = 1, softWrap = false) }
                                 OutlinedButton(onClick = onDismiss, enabled = !busy) { Text("Dismiss", maxLines = 1, softWrap = false) }
@@ -129,7 +125,7 @@ internal fun InterfaceRow(i: NetInterface, expanded: Boolean, onToggle: () -> Un
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 StatusDot(if (i.disabled) null else i.running, size = 12.dp)
                 Column(Modifier.weight(1f)) {
-                    Text(i.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(i.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(
                         if (i.rxBps != null || i.txBps != null) "down ${formatBps(i.rxBps ?: 0)}, up ${formatBps(i.txBps ?: 0)}" else "Rates appear after the next refresh",
                         style = MaterialTheme.typography.bodySmall,
@@ -138,7 +134,7 @@ internal fun InterfaceRow(i: NetInterface, expanded: Boolean, onToggle: () -> Un
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Icon(if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, contentDescription = if (expanded) "Collapse" else "Expand")
+                Icon(if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, contentDescription = stringResource(if (expanded) R.string.collapse else R.string.expand))
             }
             ChipRow(horizontalPadding = 0.dp) {
                 StatusChip(roleLabel(i.role), roleTone(i.role))
@@ -148,7 +144,7 @@ internal fun InterfaceRow(i: NetInterface, expanded: Boolean, onToggle: () -> Un
             AnimatedVisibility(expanded) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (i.comment.isNotBlank()) LabeledValue("Comment", i.comment)
-                    if (i.mac.isNotBlank()) LabeledValue("MAC", i.mac)
+                    if (i.mac.isNotBlank()) LabeledValue("MAC", i.mac, mono = true)
                     if (i.mtu > 0) LabeledValue("MTU", i.mtu.toString())
                     if (i.addresses.isNotEmpty()) LabeledValue("Addresses", i.addresses.joinToString("\n"))
                     LabeledValue("Received", formatBytes(i.rxBytes))

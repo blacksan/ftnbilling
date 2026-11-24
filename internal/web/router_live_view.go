@@ -105,7 +105,7 @@ func statsOf(lv sites.RouterLive) rtStats {
 	}
 	x.FlatsOn = fmt.Sprint(lv.Flats.Online)
 	x.FlatsSub = fmt.Sprintf("of %d houses", lv.Flats.Total)
-	x.Equip = fmt.Sprintf("%d OLT, %d ONT (%d bound)", lv.Equipment.OLT, lv.Equipment.ONT, lv.ONTsBound)
+	x.Equip = fmt.Sprintf("%d OLT, %d ONU (%d bound)", lv.Equipment.OLT, lv.Equipment.ONT, lv.ONTsBound)
 	x.OpenAlerts, x.UnregOnline = lv.OpenAlerts, lv.UnregisteredOnline
 	x.Revenue = fmt.Sprintf("KES %d today, KES %d this month", lv.Revenue.TodayKES, lv.Revenue.MonthKES)
 	return x

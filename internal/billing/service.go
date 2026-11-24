@@ -200,6 +200,9 @@ type AccountInput struct {
 	// WhatsApp is the tenant's WhatsApp number; WASamePhone copies Phone instead.
 	WhatsApp    string
 	WASamePhone bool
+	// ConfirmNoAddress: the operator confirmed that a device which never asked for an address (seen only at layer 2)
+	// really is the customer's ONU. Without it CreateAccount refuses with ErrConfirmNoAddress.
+	ConfirmNoAddress bool
 	// EquipmentID: an ONU of the register (in stock) to give the house. Its WAN MAC becomes the house MAC
 	// (MAC may then be empty); a MAC typed as well must be the same.
 	EquipmentID string
@@ -326,8 +329,14 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 		if err != nil {
 			return err
 		}
+		if err := oltMACLocked(d, mac); err != nil {
+			return err
+		}
 		if other, ok := d.AccountByMAC(mac); ok {
 			return duplicateMAC(d, other, aptID)
+		}
+		if in.EquipmentID == "" && !in.ConfirmNoAddress && neverAskedForAddressLocked(d, siteID, mac) {
+			return ErrConfirmNoAddress
 		}
 		if err := unitTakenLocked(d, aptID, unit, ""); err != nil {
 			return err
@@ -425,6 +434,9 @@ func (s *Service) ChangeMAC(ctx context.Context, id, rawMAC string) error {
 		a, ok := d.Accounts[id]
 		if !ok {
 			return ErrNotFound
+		}
+		if err := oltMACLocked(d, mac); err != nil {
+			return err
 		}
 		if other, ok := d.AccountByMAC(mac); ok && other.ID != id {
 			return duplicateMAC(d, other, a.ApartmentID)

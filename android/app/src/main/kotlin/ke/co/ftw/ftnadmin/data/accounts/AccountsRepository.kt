@@ -41,6 +41,8 @@ class AccountsRepository(private val api: ApiClient) {
         packageId: String?,
         activate: Boolean,
         note: String? = null,
+        /** The operator said yes to a device that never asked for an address (after a 409 confirm_required). */
+        confirmNoAddress: Boolean = false,
     ): Account = api.post(
         "accounts",
         body = buildJsonObject {
@@ -54,6 +56,7 @@ class AccountsRepository(private val api: ApiClient) {
             putIfNotBlank("package_id", packageId)
             put("activate", activate)
             putIfNotBlank("note", note)
+            if (confirmNoAddress) put("confirm_no_address", true)
         },
     )
 
@@ -61,6 +64,21 @@ class AccountsRepository(private val api: ApiClient) {
     suspend fun setWhatsApp(id: String, whatsapp: String?, samePhone: Boolean): Account = api.patch(
         "accounts", id,
         body = buildJsonObject {
+            put("wa_same_phone", samePhone)
+            if (!samePhone) put("whatsapp", whatsapp?.trim().orEmpty())
+        },
+    )
+
+    /**
+     * Saves the Details form: tenant, phone, WhatsApp and notes (`PATCH /accounts/{id}`). The house number is deliberately not sent:
+     * it changes only through Move. With [samePhone] the WhatsApp number follows the phone and [whatsapp] is not sent.
+     */
+    suspend fun updateDetails(id: String, tenant: String, phone: String, whatsapp: String?, samePhone: Boolean, notes: String): Account = api.patch(
+        "accounts", id,
+        body = buildJsonObject {
+            put("tenant", tenant.trim())
+            put("phone", phone.trim())
+            put("notes", notes.trim())
             put("wa_same_phone", samePhone)
             if (!samePhone) put("whatsapp", whatsapp?.trim().orEmpty())
         },

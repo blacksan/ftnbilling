@@ -36,6 +36,9 @@ func (x Equipment) norm() Equipment {
 	if m, ok := CanonMAC(x.MAC); ok {
 		x.MAC = m
 	}
+	if len(x.PONApartments) == 0 {
+		x.PONApartments = nil
+	}
 	return x
 }
 func (x Account) norm() Account {
@@ -247,6 +250,17 @@ func cloneApartment(a Apartment) Apartment {
 	return a
 }
 
+func cloneEquipment(e Equipment) Equipment {
+	if e.PONApartments != nil {
+		m := make(map[string][]string, len(e.PONApartments))
+		for k, v := range e.PONApartments {
+			m[k] = append([]string(nil), v...)
+		}
+		e.PONApartments = m
+	}
+	return e
+}
+
 func cloneAdminUser(u AdminUser) AdminUser {
 	if u.RecoveryCodes != nil {
 		u.RecoveryCodes = append([]string(nil), u.RecoveryCodes...)
@@ -264,7 +278,7 @@ var tables = []table{
 	tbl[Customer]{func(d *Data) *map[string]Customer { return &d.Customers }, func(c *ChangeSet) *Delta[Customer] { return &c.Customers },
 		eqc[Customer], Customer.norm, func(v Customer) string { return v.ID }, nil},
 	tbl[Equipment]{func(d *Data) *map[string]Equipment { return &d.Equipment }, func(c *ChangeSet) *Delta[Equipment] { return &c.Equipment },
-		eqc[Equipment], Equipment.norm, func(v Equipment) string { return v.ID }, nil},
+		eqDeep[Equipment], Equipment.norm, func(v Equipment) string { return v.ID }, cloneEquipment},
 	tbl[Tenancy]{func(d *Data) *map[string]Tenancy { return &d.Tenancies }, func(c *ChangeSet) *Delta[Tenancy] { return &c.Tenancies },
 		eqc[Tenancy], Tenancy.norm, func(v Tenancy) string { return v.ID }, nil},
 	tbl[Apartment]{func(d *Data) *map[string]Apartment { return &d.Apartments }, func(c *ChangeSet) *Delta[Apartment] { return &c.Apartments },
@@ -297,6 +311,8 @@ var tables = []table{
 		eqDeep[ONU], ONU.norm, func(v ONU) string { return v.ID }, cloneONU},
 	tbl[ONUTask]{func(d *Data) *map[string]ONUTask { return &d.ONUTasks }, func(c *ChangeSet) *Delta[ONUTask] { return &c.ONUTasks },
 		eqc[ONUTask], ONUTask.norm, func(v ONUTask) string { return v.ID }, nil},
+	tbl[OUIEntry]{func(d *Data) *map[string]OUIEntry { return &d.OUICache }, func(c *ChangeSet) *Delta[OUIEntry] { return &c.OUICache },
+		eqc[OUIEntry], OUIEntry.norm, func(v OUIEntry) string { return v.Prefix }, nil},
 	tbl[APIDevice]{func(d *Data) *map[string]APIDevice { return &d.APIDevices }, func(c *ChangeSet) *Delta[APIDevice] { return &c.APIDevices },
 		eqDeep[APIDevice], APIDevice.norm, func(v APIDevice) string { return v.ID }, cloneAPIDevice},
 }
@@ -481,7 +497,7 @@ func cloneData(d *Data) Data {
 		Customers: cloneMap(d.Customers, nil), Tenancies: cloneMap(d.Tenancies, nil), Apartments: cloneMap(d.Apartments, nil), ApartmentSites: cloneMap(d.ApartmentSites, nil),
 		Equipment: cloneMap(d.Equipment, nil), EquipmentEvents: cloneMap(d.EquipmentEvents, nil), Notes: cloneMap(d.Notes, nil), Settings: cloneMap(d.Settings, nil),
 		AdminUsers: cloneMap(d.AdminUsers, cloneAdminUser), AdminSessions: cloneMap(d.AdminSessions, nil), APIDevices: cloneMap(d.APIDevices, cloneAPIDevice), Registrations: cloneMap(d.Registrations, nil),
-		ONUs: cloneMap(d.ONUs, cloneONU), ONUTasks: cloneMap(d.ONUTasks, nil),
+		ONUs: cloneMap(d.ONUs, cloneONU), ONUTasks: cloneMap(d.ONUTasks, nil), OUICache: cloneMap(d.OUICache, nil),
 		Events: append([]Event(nil), d.Events...),
 	}
 }

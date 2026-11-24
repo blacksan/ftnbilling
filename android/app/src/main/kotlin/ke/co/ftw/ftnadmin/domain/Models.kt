@@ -98,6 +98,8 @@ data class Account(
     val whatsapp: String = "",
     /** The WhatsApp number is the phone number and follows it (the "same as the phone" box). */
     @SerialName("wa_same_phone") val waSamePhone: Boolean = false,
+    /** Free-text notes on the account (the web's Details form edits them too). */
+    val notes: String = "",
     val state: String = "new",
     val suspended: Boolean = false,
     @SerialName("package") val pkg: PackageRef? = null,
@@ -317,6 +319,8 @@ data class Ont(
     @SerialName("account_id") val accountId: String = "",
     val code: String = "",
     val flat: String = "",
+    /** v4 servers may send the house number as `unit`; [unitLabel] falls back to the legacy [flat]. */
+    val unit: String = "",
     val mac: String = "",
     val ip: String = "",
     @SerialName("lease_status") val leaseStatus: String = "none",
@@ -325,7 +329,9 @@ data class Ont(
     @SerialName("down_bps") val downBps: Long = 0,
     @SerialName("up_bps") val upBps: Long = 0,
     @SerialName("suspended_on_router") val suspendedOnRouter: Boolean = false,
-)
+) {
+    val unitLabel: String get() = unit.ifBlank { flat }
+}
 
 @Serializable
 data class Alert(
@@ -424,6 +430,29 @@ data class PendingRegistration(
     val unassigned: Boolean = false,
 )
 
+/** The kind of a New devices row (`class` of GET /unregistered). An OLT is dismiss-only: it is equipment, not a customer. */
+@Serializable
+data class DeviceClassInfo(
+    val kind: String = KIND_UNKNOWN,
+    val label: String = "",
+    @SerialName("equipment_id") val equipmentId: String = "",
+    val creatable: Boolean = true,
+    val attachable: Boolean = true,
+    /** Seen only at layer 2: it never asked for an address, so a customer needs an explicit confirmation. */
+    @SerialName("never_asked") val neverAsked: Boolean = false,
+    /** An ONU: the apartments its PON port serves (a preselection for Create account). */
+    @SerialName("apartment_ids") val apartmentIds: List<String> = emptyList(),
+) {
+    val isOlt: Boolean get() = kind == KIND_OLT
+    val isOnu: Boolean get() = kind == KIND_ONU
+
+    companion object {
+        const val KIND_OLT = "olt"
+        const val KIND_ONU = "onu"
+        const val KIND_UNKNOWN = "unknown"
+    }
+}
+
 /** A MAC that is connected to a router's network but not configured on any account. */
 @Serializable
 data class NewDevice(
@@ -447,6 +476,8 @@ data class NewDevice(
     @SerialName("suggested_account") val suggestedAccount: SuggestedAccount? = null,
     /** Set when the MAC belongs to a customer of another apartment: not provisioned here. */
     @SerialName("belongs_to") val belongsTo: BelongsTo? = null,
+    /** Where the device sits in the equipment hierarchy: an OLT, an ONU of the register, or unknown. */
+    @SerialName("class") val deviceClass: DeviceClassInfo = DeviceClassInfo(),
 ) {
     val routerKey: String get() = routerId.ifBlank { siteId }
     val routerLabel: String get() = routerName.ifBlank { siteName }

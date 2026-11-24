@@ -571,3 +571,25 @@ func TestChecklistWarnsThatWalledFlatsCanStillResolveAnyName(t *testing.T) {
 		t.Fatalf("DNS off for customers: %+v", it)
 	}
 }
+
+func TestCheckListsHousesOnAnOLTMAC(t *testing.T) {
+	f, s, _ := checkRig(t)
+	if it := checkItem(t, f, s.ID, CheckOLTMAC); it.Status != StatusOK {
+		t.Fatalf("clean data: %+v", it)
+	}
+	const mac = "48:21:B8:10:D7:72"
+	other := f.create("Other building")
+	if err := f.st.Update(func(d *store.Data) error {
+		d.Accounts["acc707"] = store.Account{ID: "acc707", Code: "707", Unit: "D56552", Flat: "D56552", SiteID: s.ID, MAC: mac}
+		d.Accounts["accOther"] = store.Account{ID: "accOther", Code: "708", Unit: "E1", Flat: "E1", SiteID: other.ID, MAC: "48:21:B8:10:D7:73"}
+		d.Equipment["olt1"] = store.Equipment{ID: "olt1", Kind: store.KindOLT, Name: "Block A OLT", MAC: mac, Status: store.EqInstalled, SiteID: s.ID}
+		d.Equipment["olt2"] = store.Equipment{ID: "olt2", Kind: store.KindOLT, Name: "Other OLT", MAC: "48:21:B8:10:D7:73", Status: store.EqInstalled, SiteID: s.ID}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	it := checkItem(t, f, s.ID, CheckOLTMAC)
+	if it.Status != StatusWarn || it.Blocks || len(it.Evidence) != 1 || !strings.Contains(it.Evidence[0], "D56552") || !strings.Contains(it.Evidence[0], "Block A OLT") {
+		t.Fatalf("one house of this router: %+v", it)
+	}
+}

@@ -1,6 +1,19 @@
 package ke.co.ftw.ftnadmin.ui.routers.ports
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -37,11 +50,14 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import ke.co.ftw.ftnadmin.R
 import ke.co.ftw.ftnadmin.data.routers.PortRole
+import ke.co.ftw.ftnadmin.ui.common.MonoText
+import ke.co.ftw.ftnadmin.ui.common.portApplyLabel
+import ke.co.ftw.ftnadmin.ui.theme.AppTheme
 import ke.co.ftw.ftnadmin.data.routers.PortRow
 import ke.co.ftw.ftnadmin.ui.common.AppTopBar
 import ke.co.ftw.ftnadmin.ui.common.CenteredLoading
-import ke.co.ftw.ftnadmin.ui.common.EmptyState
 import ke.co.ftw.ftnadmin.ui.common.ErrorState
 import ke.co.ftw.ftnadmin.ui.common.Loadable
 import ke.co.ftw.ftnadmin.ui.common.LocalContainer
@@ -85,7 +101,7 @@ fun PortsScreen(routerId: String, routerName: String, onBack: () -> Unit) {
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        topBar = { AppTopBar("Ports", onBack = onBack) },
+        topBar = { AppTopBar(stringResource(R.string.ports_title, routerName), onBack = onBack) },
         snackbarHost = { SnackbarHost(snack) },
     ) { inner ->
         when (val p = ui.ports) {
@@ -104,16 +120,16 @@ fun PortsScreen(routerId: String, routerName: String, onBack: () -> Unit) {
                     if (ui.stale || !p.value.reachable) {
                         item {
                             Text(
-                                "The router did not answer; showing the last known state.",
+                                stringResource(R.string.router_no_answer),
                                 color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodySmall,
+                                style = MaterialTheme.typography.bodyMedium,
                             )
                         }
                     }
                     ke.co.ftw.ftnadmin.domain.customerPortLine(p.value.customerPort)?.let { line ->
                         item { Text(line, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     }
-                    if (p.value.items.isEmpty()) item { EmptyState("No ports reported.") }
+                    if (p.value.items.isEmpty()) item { Text(stringResource(R.string.no_ports), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     items(p.value.items, key = { it.name }) { row ->
                         PortCard(
                             row,
@@ -132,76 +148,92 @@ fun PortsScreen(routerId: String, routerName: String, onBack: () -> Unit) {
             onDismissRequest = vm::cancel,
             title = { Text(pending.confirm.title) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(pending.confirm.warning)
                     if (pending.confirm.needsName) {
-                        Text("Type the router name ($routerName) to confirm.", style = MaterialTheme.typography.bodySmall)
+                        Text(stringResource(R.string.type_router_name, routerName), style = MaterialTheme.typography.bodyMedium)
                         OutlinedTextField(
                             value = pending.typed,
                             onValueChange = vm::setTyped,
+                            label = { Text(stringResource(R.string.router_name)) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
                 }
             },
-            confirmButton = { Button(onClick = vm::confirm, enabled = vm.canConfirm()) { Text("Apply") } },
-            dismissButton = { TextButton(onClick = vm::cancel) { Text("Cancel") } },
+            confirmButton = { Button(onClick = vm::confirm, enabled = vm.canConfirm()) { Text(stringResource(R.string.apply)) } },
+            dismissButton = { TextButton(onClick = vm::cancel) { Text(stringResource(R.string.action_cancel)) } },
         )
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PortCard(p: PortRow, busy: Boolean, onToggle: () -> Unit, onRole: (String) -> Unit) {
     SectionCard(p.name) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 StatusChip(p.roleLabel.ifBlank { PortRole.label(p.role) }, Tone.Neutral)
                 when {
-                    p.disabled -> StatusChip("Disabled", Tone.Warn)
-                    p.running -> StatusChip("Link up", Tone.Good)
-                    else -> StatusChip("No link", Tone.Neutral)
+                    p.disabled -> StatusChip(stringResource(R.string.port_disabled), Tone.Warn)
+                    p.running -> StatusChip(stringResource(R.string.port_link_up), Tone.Good)
+                    else -> StatusChip(stringResource(R.string.port_no_link), Tone.Neutral)
                 }
             }
+            if (p.mac.isNotBlank()) MonoText(p.mac, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val housesText = p.flats?.let { pluralStringResource(R.plurals.houses_count, it, it) }
             val detail = listOfNotNull(
                 p.link.ifBlank { null },
-                p.mac.ifBlank { null },
                 if (p.rxBps != null && p.txBps != null) "rx ${formatBps(p.rxBps)}  tx ${formatBps(p.txBps)}" else null,
-                p.flats?.let { "$it houses" },
+                housesText,
                 p.comment.ifBlank { null },
             )
             if (detail.isNotEmpty()) {
-                Text(detail.joinToString("  ·  "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(detail.joinToString("  \u00B7  "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (p.note.isNotBlank()) {
                 Text(p.note, style = MaterialTheme.typography.bodySmall)
             }
             if (p.warning.isNotBlank()) {
-                Text(p.warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                // A warning is amber with an icon, not the blue tertiary colour, and it says "Warning" in words.
+                val ext = AppTheme.extended
+                Surface(shape = MaterialTheme.shapes.small, color = ext.warningContainer, contentColor = ext.onWarningContainer) {
+                    Row(Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+                        Icon(Icons.Default.Warning, contentDescription = stringResource(R.string.warning))
+                        Text(p.warning, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                    }
+                }
             }
             if (p.disabled && !p.locked && p.role != PortRole.LAN) {
-                Text("Switched off. Nothing works on this port until you enable it.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.port_switched_off), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             p.apply?.takeIf { it.state != "ok" }?.let {
-                Text("${it.state}: ${it.message}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                Text("${portApplyLabel(it.state)}: ${it.message}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
             if (p.locked) {
-                Text("Locked: the server never changes the internet uplink.", style = MaterialTheme.typography.bodySmall)
+                Text(stringResource(R.string.port_locked), style = MaterialTheme.typography.bodySmall)
             } else if (!p.canChange) {
                 Text(
-                    if (p.needsOwner) "Only the owner can change this port." else "Your account cannot change this port.",
+                    stringResource(if (p.needsOwner) R.string.port_owner_only else R.string.port_cannot_change),
                     style = MaterialTheme.typography.bodySmall,
                 )
             } else {
                 var menu by remember { mutableStateOf(false) }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // The note has its own line; the buttons wrap under it, so the Role button is never pushed off-screen.
+                if (!p.canDisable) {
+                    Text(stringResource(R.string.port_olt_note), style = MaterialTheme.typography.bodySmall)
+                }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (p.canDisable) {
-                        OutlinedButton(onClick = onToggle, enabled = !busy) { Text(if (p.disabled) "Enable" else "Disable") }
-                    } else {
-                        Text("OLT port: can't be switched off here. Give the OLT role to another port first.", style = MaterialTheme.typography.bodySmall)
+                        OutlinedButton(
+                            onClick = onToggle,
+                            enabled = !busy,
+                            colors = if (p.disabled) ButtonDefaults.outlinedButtonColors() else ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        ) { Text(stringResource(if (p.disabled) R.string.port_enable else R.string.port_disable)) }
                     }
-                    Column {
-                        OutlinedButton(onClick = { menu = true }, enabled = !busy) { Text("Role") }
+                    Box {
+                        OutlinedButton(onClick = { menu = true }, enabled = !busy) { Text(stringResource(R.string.port_role)) }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                             PortsViewModel.roleChoices(p).forEach { r ->
                                 DropdownMenuItem(

@@ -27,10 +27,15 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ke.co.ftw.ftnadmin.AppContainer
+import ke.co.ftw.ftnadmin.R
 import ke.co.ftw.ftnadmin.ui.theme.AppTheme
+import ke.co.ftw.ftnadmin.ui.theme.GeistMono
 
 val LocalContainer = compositionLocalOf<AppContainer> { error("AppContainer not provided") }
 
@@ -70,20 +75,25 @@ fun ErrorState(message: String, onRetry: (() -> Unit)?, modifier: Modifier = Mod
             textAlign = TextAlign.Center,
         )
         if (onRetry != null) {
-            Button(onClick = onRetry, modifier = Modifier.padding(top = 16.dp)) { Text("Try again") }
+            Button(onClick = onRetry, modifier = Modifier.padding(top = 16.dp)) { Text(stringResource(R.string.action_try_again)) }
         }
     }
 }
 
 @Composable
-fun EmptyState(message: String, modifier: Modifier = Modifier) {
+fun EmptyState(message: String, modifier: Modifier = Modifier, body: String? = null) {
     Box(modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-        Text(
-            message,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                message,
+                style = if (body != null) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyLarge,
+                color = if (body != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+            if (body != null) {
+                Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+            }
+        }
     }
 }
 
@@ -100,23 +110,45 @@ fun SectionCard(title: String, modifier: Modifier = Modifier, content: @Composab
     }
 }
 
+/** Machine identifiers (MAC, serial, IP, account or receipt code) in the mono face. Never ellipsised: a long value wraps. */
 @Composable
-fun LabeledValue(label: String, value: String, modifier: Modifier = Modifier) {
+fun MonoText(
+    text: String,
+    modifier: Modifier = Modifier,
+    style: TextStyle = MaterialTheme.typography.bodyMedium,
+    color: Color = Color.Unspecified,
+    textAlign: TextAlign? = null,
+) {
+    Text(text, modifier = modifier, style = style.copy(fontFamily = GeistMono), color = color, textAlign = textAlign)
+}
+
+/** Label on the left, value on the right. [mono] sets the value in the mono face (MACs, serials, IPs, codes); it wraps, never cuts. */
+@Composable
+fun LabeledValue(label: String, value: String, modifier: Modifier = Modifier, mono: Boolean = false) {
     Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(0.45f, fill = false))
-        Text(
-            value.ifBlank { "-" },
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            textAlign = TextAlign.End,
-            modifier = Modifier.weight(0.55f).padding(start = 16.dp),
-        )
+        val shown = value.ifBlank { "-" }
+        val valueModifier = Modifier.weight(0.55f).padding(start = 16.dp)
+        if (mono) {
+            MonoText(shown, valueModifier, color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.End)
+        } else {
+            Text(
+                shown,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.End,
+                modifier = valueModifier,
+            )
+        }
     }
 }
 
 enum class Tone { Neutral, Good, Warn, Bad }
 
-/** Small coloured status pill using only theme colours. */
+/**
+ * Small coloured status pill using only theme colours. The text wraps to two lines and then ends in an ellipsis; it is never cut
+ * flat. The tone is also in the text (callers pass words such as "Online"), so colour is not the only signal.
+ */
 @Composable
 fun StatusChip(text: String, tone: Tone, modifier: Modifier = Modifier) {
     val ext = AppTheme.extended
@@ -131,8 +163,8 @@ fun StatusChip(text: String, tone: Tone, modifier: Modifier = Modifier) {
         Text(
             text,
             style = MaterialTheme.typography.labelMedium,
-            maxLines = 1,
-            softWrap = false,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
         )
     }
@@ -150,11 +182,11 @@ fun AppTopBar(
     actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
 ) {
     androidx.compose.material3.TopAppBar(
-        title = { Text(title, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+        title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         navigationIcon = {
             if (onBack != null) {
                 androidx.compose.material3.IconButton(onClick = onBack) {
-                    androidx.compose.material3.Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    androidx.compose.material3.Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
                 }
             }
         },
@@ -162,7 +194,7 @@ fun AppTopBar(
             actions()
             if (onSettings != null) {
                 androidx.compose.material3.IconButton(onClick = onSettings) {
-                    androidx.compose.material3.Icon(Icons.Default.Settings, contentDescription = "Settings")
+                    androidx.compose.material3.Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.action_settings))
                 }
             }
         },
@@ -173,7 +205,7 @@ fun AppTopBar(
 /** Label for a chip: always one line, so a chip never wraps letter by letter in a tight row. */
 @Composable
 fun ChipLabel(text: String) {
-    Text(text, maxLines = 1, softWrap = false)
+    Text(text, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
 }
 
 /** Horizontally scrollable chip row. Chips keep their natural width and never shrink. */

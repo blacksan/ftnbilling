@@ -499,6 +499,28 @@ type Equipment struct {
 	InstalledAt time.Time `json:"installed_at,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at,omitempty"`
+
+	// The equipment hierarchy (router > OLT > PON port > ONU). An OLT is an item of kind "olt" with its router in
+	// SiteID and the fields below; an ONU (kind "ont") names its OLT and PON port. All optional: an account with no
+	// inventory, and an ONU with no OLT, work as before.
+	//
+	// Name is the OLT's own name ("Block A OLT"); only OLTs use it.
+	Name string `json:"name,omitempty"`
+	// RouterPort is the router port the OLT is plugged into (ether3, sfp-sfpplus1).
+	RouterPort string `json:"router_port,omitempty"`
+	// PONPorts is how many PON ports the OLT has (V-SOL V1600GS-R: 4).
+	PONPorts int `json:"pon_ports,omitempty"`
+	// PONApartments maps a PON port number ("1") to the apartments it serves. Every apartment must be one the OLT's
+	// router serves (checked when it is saved).
+	PONApartments map[string][]string `json:"pon_apartments,omitempty"`
+	// MgmtIP and MgmtUser are the OLT's management address and login name; MgmtPass is the password sealed with the
+	// data key (never shown, never logged).
+	MgmtIP   string `json:"mgmt_ip,omitempty"`
+	MgmtUser string `json:"mgmt_user,omitempty"`
+	MgmtPass string `json:"mgmt_pass,omitempty"`
+	// OLTID and PONPort place an ONU (kind ont) under an OLT and one of its PON ports (0 = not set).
+	OLTID   string `json:"olt_id,omitempty"`
+	PONPort int    `json:"pon_port,omitempty"`
 }
 
 // Equipment event kinds.
@@ -596,6 +618,9 @@ type Data struct {
 	// ONUs are the TR-069 devices the built-in ACS has met; ONUTasks their queued actions.
 	ONUs     map[string]ONU     `json:"onus"`
 	ONUTasks map[string]ONUTask `json:"onu_tasks"`
+
+	// OUICache holds the answers of the online MAC-vendor lookup (key: the OUI "AA:BB:CC").
+	OUICache map[string]OUIEntry `json:"oui_cache"`
 }
 
 func (d *Data) init() {
@@ -632,6 +657,9 @@ func (d *Data) init() {
 	}
 	if d.ONUTasks == nil {
 		d.ONUTasks = map[string]ONUTask{}
+	}
+	if d.OUICache == nil {
+		d.OUICache = map[string]OUIEntry{}
 	}
 	if d.ClosedAccounts == nil {
 		d.ClosedAccounts = map[string]Account{}

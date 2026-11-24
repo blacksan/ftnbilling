@@ -214,6 +214,21 @@ func Validate(d *Data) []string {
 		if e.AccountID != "" && e.Status != EqInstalled {
 			add("Equipment %s is assigned to a house but its status is %q, not installed.", e.ID, e.Status)
 		}
+		if e.OLTID != "" {
+			if o, ok := d.Equipment[e.OLTID]; !ok || o.Kind != KindOLT {
+				add("Equipment %s names an OLT that does not exist (%s).", e.ID, e.OLTID)
+			}
+		}
+		if e.PONPort < 0 || e.PONPorts < 0 {
+			add("Equipment %s has a negative PON port number.", e.ID)
+		}
+		for port, ids := range e.PONApartments {
+			for _, id := range ids {
+				if _, ok := d.Apartments[id]; !ok {
+					add("OLT %s maps PON port %s to an apartment that does not exist (%s).", e.ID, port, id)
+				}
+			}
+		}
 		if e.Serial != "" {
 			k := e.Kind + "|" + strings.ToUpper(e.Serial)
 			if o, ok := serials[k]; ok {
@@ -316,6 +331,17 @@ func Conflicts(d *Data) []string {
 		}
 		out = append(out, fmt.Sprintf("House %s (%s) in %s has MAC %q%s. Not provisioned until the MAC is fixed.",
 			a.Flat, a.Code, d.Sites[a.SiteID].Name, a.MAC, who))
+	}
+	return out
+}
+
+// Warnings are the soft problems of the data: things an operator should look at that must not stop billing or the
+// JSON to Postgres import (Validate is the hard list and the import refuses on any of it). Today: an open account
+// whose MAC is a live OLT's MAC.
+func Warnings(d *Data) []string {
+	var out []string
+	for _, c := range d.AccountsOnOLTMAC() {
+		out = append(out, fmt.Sprintf("House %s (%s) uses the MAC of the OLT %s.", c.Account.Unit, c.Account.Code, OLTLabel(c.OLT)))
 	}
 	return out
 }

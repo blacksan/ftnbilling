@@ -79,6 +79,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	s.metricsRoutes(get, post)
 	s.opsRoutes(get, post)
 	s.onuRoutes(get, post)
+	s.oltRoutes(get, post)
 }
 
 type adminPage struct {
@@ -144,7 +145,9 @@ func (s *Server) page(r *http.Request, active string) adminPage {
 	p.CanWrite = p.Role == store.RoleOwner || p.Role == store.RoleOperator
 	p.Initial = initialOf(p.User)
 	if p.CanWrite {
-		p.Data["RouterDefaults"] = sites.ApplyDefaults(s.cfg, store.Site{Mode: store.SiteModeWG})
+		rd := sites.ApplyDefaults(s.cfg, store.Site{Mode: store.SiteModeWG})
+		p.Data["RouterDefaults"] = rd
+		p.Data["RouterPortsNotice"], p.Data["RouterPasteHint"] = sites.PortsOffNotice(rd), sites.PasteAdminHint(rd)
 		p.Data["JoinTTL"] = int(s.cfg.JoinTokenTTL.Minutes())
 		p.Data["AptOpts"] = s.apartmentOptions()
 		p.Data["ONUStock"] = s.onuStock()
@@ -319,6 +322,7 @@ type customerForm struct {
 	SiteID, ApartmentID, Flat, Tenant, Phone, WhatsApp, MAC, PackageID, Notes string
 	EquipmentID                                                               string // an ONU of the register
 	WASame, Activate                                                          bool
+	ConfirmNoAddress                                                          bool // the operator confirmed a device that never asked for an address
 }
 
 func customerFormOf(r *http.Request, site string) customerForm {
@@ -328,7 +332,7 @@ func customerFormOf(r *http.Request, site string) customerForm {
 		unit = f("flat") // the older field name
 	}
 	return customerForm{SiteID: site, ApartmentID: f("apartment_id"), Flat: unit, Tenant: f("tenant"), Phone: f("phone"), WhatsApp: f("whatsapp"), MAC: f("mac"), EquipmentID: f("equipment_id"),
-		PackageID: f("package"), Notes: f("notes"), WASame: r.PostFormValue("wa_same") == "1", Activate: r.PostFormValue("activate") == "1"}
+		PackageID: f("package"), Notes: f("notes"), WASame: r.PostFormValue("wa_same") == "1", Activate: r.PostFormValue("activate") == "1", ConfirmNoAddress: r.PostFormValue("confirm_no_address") == "1"}
 }
 
 // createCustomer is the single place the web admin creates a customer account.
@@ -354,7 +358,7 @@ func (s *Server) createCustomer(ctx context.Context, in customerForm) (store.Acc
 		note = "activated on create"
 	}
 	a, rs, err := s.svc.CreateCustomer(ctx, billing.AddCustomerInput{ApartmentID: in.ApartmentID, SiteID: in.SiteID, Unit: in.Flat, Flat: in.Flat, Tenant: in.Tenant, Phone: in.Phone, MAC: mac,
-		PackageID: in.PackageID, Activate: in.Activate, Note: note, EquipmentID: in.EquipmentID})
+		PackageID: in.PackageID, Activate: in.Activate, Note: note, EquipmentID: in.EquipmentID, ConfirmNoAddress: in.ConfirmNoAddress})
 	if a.ID != "" {
 		if in.Activate && in.Notes != "" {
 			_ = s.svc.UpdateAccount(a.ID, a.Flat, a.Tenant, a.Phone, in.Notes)
@@ -404,7 +408,11 @@ func (s *Server) adminAccountCreate(w http.ResponseWriter, r *http.Request) {
 	a, rs, err := s.createCustomer(r.Context(), in)
 	if wantsJSON(r) {
 		if err != nil && a.ID == "" {
-			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"ok": false, "error": err.Error()})
+			out := map[string]any{"ok": false, "error": err.Error()}
+			if errors.Is(err, billing.ErrConfirmNoAddress) {
+				out["confirm"] = true // the dialog asks the operator and sends the form again with confirm_no_address=1
+			}
+			writeJSON(w, http.StatusUnprocessableEntity, out)
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
@@ -481,7 +489,20 @@ func (s *Server) adminAccount(w http.ResponseWriter, r *http.Request) {
 		tab = "overview"
 	}
 	p.Data["Tab"] = tab
-	p.Detail, p.H1a, p.H1b, p.Lead = a.Flat, "", a.Flat+".", ""
+	who := a.Tenant
+	if who == "" {
+		who = houseLabel(a.Unit)
+	}
+	if who == "" {
+		who = a.Flat
+	}
+	var aptNm string
+	s.st.View(func(d *store.Data) { aptNm = d.Apartments[a.ApartmentID].Name })
+	p.Detail, p.H1a, p.H1b, p.Lead = who, "", who, aptHouse(aptNm, a)+" · "+a.Code
+	if aptNm == "" && houseLabel(a.Unit) == "" {
+		p.Lead = a.Code
+	}
+	p.Acts = nil
 	p.Label, p.Href, p.Group = "Subscribers", "/admin/accounts", "Customers"
 	var evs []store.Event
 	s.st.View(func(d *store.Data) {
@@ -535,7 +556,7 @@ func (s *Server) adminAccountMove(w http.ResponseWriter, r *http.Request) {
 		s.back(w, r, s.accountURL(id), "Error: "+err.Error())
 		return
 	}
-	s.back(w, r, s.accountURL(id), "Moved. Its ONT MAC must now be on the new router's network. Payments already made stay with the old router in the ledger.")
+	s.back(w, r, s.accountURL(id), "Moved. Its ONU MAC must now be on the new router's network. Payments already made stay with the old router in the ledger.")
 }
 
 func (s *Server) adminAccountUpdate(w http.ResponseWriter, r *http.Request) {
@@ -561,7 +582,7 @@ func (s *Server) adminAccountUpdate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminAccountMAC(w http.ResponseWriter, r *http.Request) {
 	id := r.PostFormValue("id")
 	err := s.svc.ChangeMAC(r.Context(), id, r.PostFormValue("mac"))
-	s.back(w, r, s.accountURL(id), msgOr(err, "ONT MAC updated. The old session is being ended."))
+	s.back(w, r, s.accountURL(id), msgOr(err, "ONU MAC updated. The old session is being ended."))
 }
 
 func (s *Server) adminAccountSuspend(w http.ResponseWriter, r *http.Request) {

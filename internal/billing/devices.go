@@ -336,6 +336,8 @@ type UnregDevice struct {
 	Suggested *SuggestedAccount
 	// BelongsTo is set when the MAC is the ONT of an open account on another router.
 	BelongsTo *BelongsTo
+	// Class says what the device is in the equipment hierarchy: an OLT, an ONU of the register, or unknown.
+	Class DeviceClass
 }
 
 // DismissedMACs lists the MACs the operator dismissed on a building's router.
@@ -359,14 +361,19 @@ func (s *Service) Unregistered(siteID string, onlineOnly bool) []UnregDevice {
 	var devs []store.Device
 	names := map[string]string{}
 	belongs := map[string]*BelongsTo{}
+	classes := map[string]DeviceClass{}
 	s.st.View(func(d *store.Data) {
 		for _, dv := range d.DeviceList() {
 			if (siteID == "" || dv.SiteID == siteID) && dv.Source != SourceDismissed {
+				if s.isRouterMAC(dv.MAC) {
+					continue // a router's own interface is never a device
+				}
 				b, own := belongsToLocked(d, dv)
 				if own {
 					continue // the account is on this very router: not an unknown device
 				}
 				devs = append(devs, dv)
+				classes[store.DeviceKey(dv.SiteID, dv.MAC)] = classifyLocked(d, dv, false)
 				names[dv.SiteID] = d.Sites[dv.SiteID].Name
 				if b != nil {
 					belongs[store.DeviceKey(dv.SiteID, dv.MAC)] = b
@@ -382,7 +389,7 @@ func (s *Service) Unregistered(siteID string, onlineOnly bool) []UnregDevice {
 		if dv.Vendor == "" {
 			dv.Vendor = Vendor(dv.MAC)
 		}
-		out = append(out, UnregDevice{Device: dv, SiteName: names[dv.SiteID], Online: online, BelongsTo: belongs[store.DeviceKey(dv.SiteID, dv.MAC)]})
+		out = append(out, UnregDevice{Device: dv, SiteName: names[dv.SiteID], Online: online, BelongsTo: belongs[store.DeviceKey(dv.SiteID, dv.MAC)], Class: classes[store.DeviceKey(dv.SiteID, dv.MAC)]})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Online != out[j].Online {
@@ -480,6 +487,9 @@ func (s *Service) UnregisteredOnline(has func(siteID string) bool) int {
 	s.st.View(func(d *store.Data) {
 		for _, dv := range d.Devices {
 			if dv.Source != SourceDismissed && dv.Online && now.Sub(dv.LastSeen) <= OnlineWindow && (has == nil || has(dv.SiteID)) {
+				if _, isOLT := d.OLTByMAC(dv.MAC); isOLT {
+					continue // an OLT needs nothing from the operator: it is not a new device to deal with
+				}
 				n++
 			}
 		}
@@ -536,7 +546,7 @@ func (s *Service) suggest(list []UnregDevice) {
 	now := s.now()
 	perSite := map[string][]int{} // site -> indexes of online devices
 	for i, u := range list {
-		if u.Online && u.BelongsTo == nil {
+		if u.Online && u.BelongsTo == nil && u.Class.Class != ClassOLT {
 			perSite[u.SiteID] = append(perSite[u.SiteID], i)
 		}
 	}
@@ -672,13 +682,14 @@ func (s *Service) AttachDevice(ctx context.Context, siteID, rawMAC, accountID st
 // DeviceAccountInput creates an account from an unregistered device.
 type DeviceAccountInput struct {
 	SiteID, ApartmentID, Unit, MAC, Flat, Tenant, Phone, PackageID string
+	ConfirmNoAddress                                               bool
 }
 
 // CreateFromDevice creates a flat with the device's MAC. A package, when
 // given, is set as the flat's plan (no time is granted: it is paid for as
 // usual); the router gets the lease and queue at once.
 func (s *Service) CreateFromDevice(ctx context.Context, in DeviceAccountInput) (store.Account, error) {
-	a, _, err := s.CreateCustomer(ctx, AddCustomerInput{SiteID: in.SiteID, ApartmentID: in.ApartmentID, Unit: in.Unit, MAC: in.MAC, Flat: in.Flat, Tenant: in.Tenant, Phone: in.Phone, PackageID: in.PackageID})
+	a, _, err := s.CreateCustomer(ctx, AddCustomerInput{SiteID: in.SiteID, ApartmentID: in.ApartmentID, Unit: in.Unit, MAC: in.MAC, Flat: in.Flat, Tenant: in.Tenant, Phone: in.Phone, PackageID: in.PackageID, ConfirmNoAddress: in.ConfirmNoAddress})
 	return a, err
 }
 
@@ -690,6 +701,8 @@ type AddCustomerInput struct {
 	ApartmentID, SiteID, Unit, Flat, Tenant, Phone, MAC, PackageID string
 	// EquipmentID: an ONU of the register (in stock) given to the house; its WAN MAC becomes the house MAC.
 	EquipmentID string
+	// ConfirmNoAddress: see AccountInput.
+	ConfirmNoAddress bool
 	// Activate grants the package's time at once (an admin grant, like
 	// ExtendAccount). Without it the package is only set as the flat's plan
 	// and the tenant pays on the payment page: the flat gets its lease and
@@ -723,7 +736,7 @@ func (s *Service) CreateCustomer(ctx context.Context, in AddCustomerInput) (stor
 			return store.Account{}, AccountRouterState{}, fmt.Errorf("choose a package from the list")
 		}
 	}
-	a, err := s.CreateAccount(AccountInput{ApartmentID: in.ApartmentID, SiteID: in.SiteID, Unit: in.Unit, Flat: in.Flat, MAC: in.MAC, Tenant: in.Tenant, Phone: in.Phone, Notes: in.Note, EquipmentID: in.EquipmentID})
+	a, err := s.CreateAccount(AccountInput{ApartmentID: in.ApartmentID, SiteID: in.SiteID, Unit: in.Unit, Flat: in.Flat, MAC: in.MAC, Tenant: in.Tenant, Phone: in.Phone, Notes: in.Note, EquipmentID: in.EquipmentID, ConfirmNoAddress: in.ConfirmNoAddress})
 	if err != nil {
 		return store.Account{}, AccountRouterState{}, err
 	}
@@ -754,4 +767,75 @@ func (s *Service) CreateCustomer(ctx context.Context, in AddCustomerInput) (stor
 	s.runAccountSiteNoCap(rc, a.ID)
 	a, _ = s.GetAccount(a.ID)
 	return a, s.AccountRouterState(a.ID), nil
+}
+
+// neverAskedForAddressLocked: the MAC is on the router's unknown-device list only because the bridge saw it (no
+// lease, no ARP row, no portal visit) and it is not an ONU of the register. Making a customer of it needs a
+// confirmation: a bridge-only MAC is as likely a switch, a camera or an OLT as an ONU.
+func neverAskedForAddressLocked(d *store.Data, siteID, mac string) bool {
+	dv, ok := d.Devices[store.DeviceKey(siteID, mac)]
+	if !ok || dv.IP != "" || dv.Source != "bridge" {
+		return false
+	}
+	_, inv := d.ONTByMAC(mac)
+	return !inv
+}
+
+// ---- classification --------------------------------------------------------------------------------------
+
+// Device classes of the New devices list: what a MAC is in the equipment hierarchy.
+const (
+	ClassRouter  = "router"  // an interface of the router itself (never listed)
+	ClassOLT     = "olt"     // the MAC of an OLT of the register
+	ClassONU     = "onu"     // the WAN MAC of an ONU of the register
+	ClassUnknown = "unknown" // nothing known
+)
+
+// DeviceClass says what a device row is.
+type DeviceClass struct {
+	Class string
+	// Label is "OLT <model> <name>" or "ONU <model> · <serial>"; empty for unknown.
+	Label string
+	// EquipmentID is the register item of an OLT or ONU.
+	EquipmentID string
+	// Creatable: a customer can be made of it (an in-stock ONU, or an unknown device).
+	Creatable bool
+	// ApartmentIDs: the apartments an ONU's PON port serves (to preselect).
+	ApartmentIDs []string
+	// NeverAsked: an unknown device that only the bridge has seen (confirmation needed to make a customer).
+	NeverAsked bool
+}
+
+func classifyLocked(d *store.Data, dv store.Device, router bool) DeviceClass {
+	if router {
+		return DeviceClass{Class: ClassRouter}
+	}
+	if o, ok := d.OLTByMAC(dv.MAC); ok {
+		return DeviceClass{Class: ClassOLT, Label: strings.Join(strings.Fields("OLT "+o.Model+" "+o.Name), " "), EquipmentID: o.ID}
+	}
+	if e, ok := d.ONTByMAC(dv.MAC); ok {
+		c := DeviceClass{Class: ClassONU, Label: "ONU " + firstNonEmpty(e.Model, "ONU") + " · " + firstNonEmpty(e.Serial, "no serial"), EquipmentID: e.ID,
+			Creatable: e.Status == store.EqInStock, ApartmentIDs: ONUApartmentIDs(d, e)}
+		c.Label = strings.Replace(c.Label, "ONU ONU ", "ONU ", 1)
+		return c
+	}
+	return DeviceClass{Class: ClassUnknown, Creatable: true, NeverAsked: dv.IP == "" && dv.Source == "bridge"}
+}
+
+// ClassifyMAC classes a MAC seen on a router (service entry point for the API and tests).
+func (s *Service) ClassifyMAC(siteID, mac string) DeviceClass {
+	m, err := NormalizeMAC(mac)
+	if err != nil {
+		return DeviceClass{Class: ClassUnknown, Creatable: true}
+	}
+	var c DeviceClass
+	router := s.isRouterMAC(m)
+	s.st.View(func(d *store.Data) {
+		dv, ok := d.Devices[store.DeviceKey(siteID, m)]
+		if !ok {
+			dv = store.Device{SiteID: siteID, MAC: m}
+		}
+		c = classifyLocked(d, dv, router)
+	})
+	return c
 }

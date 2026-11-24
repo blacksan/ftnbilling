@@ -39,6 +39,7 @@ func (s *Server) onuRoutesAPI(h func(string, string, apiFunc)) {
 	h("GET /api/v1/equipment", viewer, s.apiEquipmentList)
 	h("POST /api/v1/equipment", operator, s.apiEquipmentAdd)
 	h("POST /api/v1/equipment/import", operator, s.apiEquipmentImport)
+	s.apiHierarchyRoutes(h)
 }
 
 func (s *Server) apiACS(w http.ResponseWriter) bool {
@@ -358,15 +359,19 @@ func (s *Server) apiONUInventory(w http.ResponseWriter, r *http.Request, c *apiC
 
 func (s *Server) apiEquipmentList(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 	kind, status := r.URL.Query().Get("kind"), r.URL.Query().Get("status")
-	items := []store.Equipment{}
+	raw := []store.Equipment{}
 	s.st.View(func(d *store.Data) {
 		for _, e := range d.Equipment {
 			if (kind == "" || e.Kind == kind) && (status == "" || e.Status == status) {
-				items = append(items, e)
+				raw = append(raw, e)
 			}
 		}
 	})
-	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
+	sort.Slice(raw, func(i, j int) bool { return raw[i].CreatedAt.After(raw[j].CreatedAt) })
+	items := make([]apiEquipment, 0, len(raw))
+	for _, e := range raw {
+		items = append(items, s.equipDTO(e)) // never the sealed OLT password
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
@@ -378,6 +383,8 @@ func (s *Server) apiEquipmentAdd(w http.ResponseWriter, r *http.Request, c *apiC
 		MAC        string `json:"mac"`
 		Model      string `json:"model"`
 		Notes      string `json:"notes"`
+		OLTID      string `json:"olt_id"`   // an ONU's OLT (optional)
+		PONPort    int    `json:"pon_port"` // and its PON port (optional)
 	}
 	if !decode(w, r, &req, false) {
 		return
@@ -396,7 +403,8 @@ func (s *Server) apiEquipmentAdd(w http.ResponseWriter, r *http.Request, c *apiC
 		validationErr(w, fields)
 		return
 	}
-	e, err := s.svc.SaveEquipment(billing.EquipmentInput{Kind: req.Kind, Serial: req.Serial, GPONSerial: req.GPONSerial, MAC: req.MAC, Model: req.Model, Notes: req.Notes})
+	e, err := s.svc.SaveEquipment(billing.EquipmentInput{Kind: req.Kind, Serial: req.Serial, GPONSerial: req.GPONSerial, MAC: req.MAC, Model: req.Model, Notes: req.Notes,
+		SetPlacement: req.OLTID != "" || req.PONPort != 0, OLTID: req.OLTID, PONPort: req.PONPort})
 	if err != nil {
 		if errors.Is(err, billing.ErrDuplicateEquipmentMAC) {
 			apiErr(w, http.StatusConflict, codeMACInUse, err.Error(), map[string]any{"mac": req.MAC})
@@ -410,7 +418,7 @@ func (s *Server) apiEquipmentAdd(w http.ResponseWriter, r *http.Request, c *apiC
 		return
 	}
 	c.audit(s, "register: "+e.Kind+" "+e.Serial+" added")
-	writeJSON(w, http.StatusCreated, e)
+	writeJSON(w, http.StatusCreated, s.equipDTO(e))
 }
 
 func (s *Server) apiEquipmentImport(w http.ResponseWriter, r *http.Request, c *apiCtx) {

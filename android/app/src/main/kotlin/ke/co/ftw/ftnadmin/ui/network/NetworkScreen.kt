@@ -1,5 +1,6 @@
 package ke.co.ftw.ftnadmin.ui.network
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -12,6 +13,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -26,21 +30,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import ke.co.ftw.ftnadmin.R
 import ke.co.ftw.ftnadmin.core.network.UserInfo
-import ke.co.ftw.ftnadmin.ui.common.CenteredLoading
 import ke.co.ftw.ftnadmin.ui.common.ChipLabel
 import ke.co.ftw.ftnadmin.ui.common.ChipRow
-import ke.co.ftw.ftnadmin.ui.common.EmptyState
-import ke.co.ftw.ftnadmin.ui.common.ErrorState
 import ke.co.ftw.ftnadmin.ui.common.Loadable
+import ke.co.ftw.ftnadmin.ui.common.LoadingSpinner
 import ke.co.ftw.ftnadmin.ui.common.LocalContainer
 import ke.co.ftw.ftnadmin.ui.common.StatusDot
 import ke.co.ftw.ftnadmin.ui.common.TabScaffold
+import ke.co.ftw.ftnadmin.ui.common.onlineStateRes
 import ke.co.ftw.ftnadmin.ui.common.vmFactory
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -50,6 +57,8 @@ fun NetworkScreen(
     onAlerts: () -> Unit,
     onOpenCustomer: (String) -> Unit,
     onCreateCustomer: (routerId: String, mac: String) -> Unit,
+    /** Opens the customer with the Edit MAC dialog up (the swap/replace flow for a changed ONU). */
+    onChangeMac: (String) -> Unit = onOpenCustomer,
 ) {
     val container = LocalContainer.current
     val vm: NetworkViewModel = viewModel(
@@ -66,19 +75,16 @@ fun NetworkScreen(
         }
     }
 
-    TabScaffold(title = "Network", onAlerts = onAlerts, snackbarHost = { SnackbarHost(snack) }) { inner ->
+    TabScaffold(title = stringResource(R.string.tab_network), onAlerts = onAlerts, snackbarHost = { SnackbarHost(snack) }) { inner ->
         val id = ui.routerId
         if (id == null) {
             PickRouter(Modifier.padding(inner))
         } else {
-            Column(Modifier.padding(inner).fillMaxSize()) {
-                ChipRow(Modifier.padding(bottom = 4.dp)) {
-                    NetworkTab.entries.forEach { t ->
-                        FilterChip(selected = ui.tab == t, onClick = { vm.setTab(t) }, label = { ChipLabel(t.label) })
-                    }
-                }
+            // One scrolling list per pane: the tab chips, search and filters are its first rows, so at large font sizes
+            // they scroll away instead of squeezing the list to nothing.
+            Box(Modifier.padding(inner).fillMaxSize()) {
                 when (ui.tab) {
-                    NetworkTab.Clients -> ClientsPane(ui, vm, user, id, onOpenCustomer, onCreateCustomer)
+                    NetworkTab.Clients -> ClientsPane(ui, vm, user, id, onOpenCustomer, onChangeMac, onCreateCustomer)
                     NetworkTab.Interfaces -> InterfacesPane(ui, vm)
                 }
             }
@@ -86,37 +92,56 @@ fun NetworkScreen(
     }
 }
 
+@Composable
+private fun TabChips(ui: NetworkUiState, vm: NetworkViewModel) {
+    ChipRow(Modifier.padding(bottom = 4.dp), horizontalPadding = 0.dp) {
+        NetworkTab.entries.forEach { t ->
+            FilterChip(selected = ui.tab == t, onClick = { vm.setTab(t) }, label = { ChipLabel(stringResource(t.labelRes)) })
+        }
+    }
+}
+
+/** Centered spinner or error inside a scrolling list (the list has no bounded height, so nothing here fills the screen). */
+@Composable
+private fun PaneMessage(content: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) { content() }
+}
+
 /** "All routers" is selected: the network views are per router, so offer the routers to pick from. */
 @Composable
 private fun PickRouter(modifier: Modifier) {
     val ctx = LocalContainer.current.routerContext
     val routers by ctx.routers.collectAsStateWithLifecycle()
-    Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(
-            "Pick a router",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.ExtraBold,
-            color = MaterialTheme.colorScheme.onBackground,
-        )
-        Text(
-            "Clients and interfaces are shown one router at a time. You can also switch router from the top bar.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        val list = (routers as? Loadable.Ready)?.value.orEmpty()
-        list.forEach { r ->
-            androidx.compose.material3.Card(
+    val list = (routers as? Loadable.Ready)?.value.orEmpty()
+    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    stringResource(R.string.pick_router),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                Text(
+                    stringResource(R.string.pick_router_hint),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        items(list, key = { it.key }) { r ->
+            Card(
                 onClick = { ctx.select(r.key) },
                 modifier = Modifier.fillMaxWidth(),
-                colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
             ) {
-                Row(Modifier.padding(16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    StatusDot(r.online, size = 12.dp)
-                    Text(r.label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, modifier = Modifier.weight(1f))
+                Row(Modifier.padding(16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    StatusDot(r.online, size = 12.dp, describe = false)
+                    Text(r.label, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text(stringResource(onlineStateRes(r.online)), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
-        if (list.isEmpty()) Text("No routers yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (list.isEmpty()) item { Text(stringResource(R.string.no_routers_yet), color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
 }
 
@@ -128,55 +153,77 @@ private fun ClientsPane(
     user: UserInfo,
     routerId: String,
     onOpenCustomer: (String) -> Unit,
+    onChangeMac: (String) -> Unit,
     onCreateCustomer: (String, String) -> Unit,
 ) {
-    OutlinedTextField(
-        value = ui.query,
-        onValueChange = vm::onQuery,
-        placeholder = { Text("Search name, house number, IP, MAC or vendor", maxLines = 1) },
-        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-        trailingIcon = {
-            if (ui.query.isNotEmpty()) {
-                IconButton(onClick = { vm.onQuery("") }) { Icon(Icons.Default.Clear, contentDescription = "Clear search") }
+    PullToRefreshBox(ui.refreshing, vm::refresh, Modifier.fillMaxSize()) {
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            item { TabChips(ui, vm) }
+            item {
+                OutlinedTextField(
+                    value = ui.query,
+                    onValueChange = vm::onQuery,
+                    placeholder = { Text(stringResource(R.string.search_clients), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    supportingText = { Text(stringResource(R.string.search_clients_hint)) },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (ui.query.isNotEmpty()) {
+                            IconButton(onClick = { vm.onQuery("") }) { Icon(Icons.Default.Clear, contentDescription = stringResource(R.string.clear_search)) }
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
-        },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-    )
-    ChipRow(Modifier.padding(vertical = 4.dp)) {
-        ClientFilter.entries.forEach { f ->
-            val count = (ui.clients as? Loadable.Ready)?.value?.counts?.let {
-                when (f) {
-                    ClientFilter.Flats -> it.flats
-                    ClientFilter.Unregistered -> it.unregistered
-                    ClientFilter.Online -> it.online
-                    ClientFilter.All -> null
+            item {
+                ChipRow(horizontalPadding = 0.dp) {
+                    ClientFilter.entries.forEach { f ->
+                        val count = (ui.clients as? Loadable.Ready)?.value?.counts?.let {
+                            when (f) {
+                                ClientFilter.Flats -> it.flats
+                                ClientFilter.Unregistered -> it.unregistered
+                                ClientFilter.Online -> it.online
+                                ClientFilter.All -> null
+                            }
+                        }
+                        val name = stringResource(f.labelRes)
+                        FilterChip(
+                            selected = ui.filter == f,
+                            onClick = { vm.setFilter(f) },
+                            label = { ChipLabel(if (count != null) "$name $count" else name) },
+                        )
+                    }
                 }
             }
-            FilterChip(
-                selected = ui.filter == f,
-                onClick = { vm.setFilter(f) },
-                label = { ChipLabel(if (count != null) "${f.label} $count" else f.label) },
-            )
-        }
-    }
-    when (val c = ui.clients) {
-        Loadable.Loading -> CenteredLoading()
-        is Loadable.Failed -> ErrorState(c.message, vm::retry)
-        is Loadable.Ready -> PullToRefreshBox(ui.refreshing, vm::refresh, Modifier.fillMaxSize()) {
-            if (c.value.items.isEmpty()) {
-                EmptyState(if (ui.query.isBlank() && ui.filter == ClientFilter.All) "No devices on this router yet." else "Nothing matches.")
-            } else {
-                LazyColumn(
-                    Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
+            when (val c = ui.clients) {
+                Loadable.Loading -> item { PaneMessage { LoadingSpinner() } }
+                is Loadable.Failed -> item {
+                    PaneMessage {
+                        Text(c.message, style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
+                        Button(onClick = vm::retry) { Text(stringResource(R.string.action_try_again)) }
+                    }
+                }
+                is Loadable.Ready -> if (c.value.items.isEmpty()) {
+                    item {
+                        PaneMessage {
+                            Text(
+                                stringResource(if (ui.query.isBlank() && ui.filter == ClientFilter.All) R.string.no_devices_yet else R.string.nothing_matches),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                    }
+                } else {
                     items(c.value.items, key = { it.key }) { cl ->
                         ClientRow(
                             cl, expanded = ui.expanded == cl.key, busy = ui.busy == cl.key, canWrite = user.canWrite,
                             onToggle = { vm.toggle(cl.key) },
                             onOpen = { onOpenCustomer(cl.accountId) },
+                            onChangeMac = { onChangeMac(cl.accountId) },
                             onSuspend = { vm.suspendToggle(cl) },
                             onResync = { vm.resync(cl) },
                             onCreate = { onCreateCustomer(routerId, cl.mac) },
@@ -192,18 +239,24 @@ private fun ClientsPane(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun InterfacesPane(ui: NetworkUiState, vm: NetworkViewModel) {
-    when (val l = ui.interfaces) {
-        Loadable.Loading -> CenteredLoading()
-        is Loadable.Failed -> ErrorState(l.message, vm::retry)
-        is Loadable.Ready -> PullToRefreshBox(ui.refreshing, vm::refresh, Modifier.fillMaxSize()) {
-            if (l.value.isEmpty()) {
-                EmptyState("No interfaces reported.")
-            } else {
-                LazyColumn(
-                    Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
+    PullToRefreshBox(ui.refreshing, vm::refresh, Modifier.fillMaxSize()) {
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            item { TabChips(ui, vm) }
+            when (val l = ui.interfaces) {
+                Loadable.Loading -> item { PaneMessage { LoadingSpinner() } }
+                is Loadable.Failed -> item {
+                    PaneMessage {
+                        Text(l.message, style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
+                        Button(onClick = vm::retry) { Text(stringResource(R.string.action_try_again)) }
+                    }
+                }
+                is Loadable.Ready -> if (l.value.isEmpty()) {
+                    item { PaneMessage { Text(stringResource(R.string.no_interfaces), color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+                } else {
                     items(l.value, key = { it.name }) { i ->
                         InterfaceRow(i, expanded = ui.expanded == "i-${i.name}", onToggle = { vm.toggle("i-${i.name}") })
                     }

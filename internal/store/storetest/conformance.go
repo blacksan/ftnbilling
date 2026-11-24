@@ -88,6 +88,8 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 		d.ONUs["o2"] = store.ONU{ID: "o2", Serial: "HWTC0000002", OUI: "00E0FC", Manufacturer: "Huawei", Root: store.RootTR181, LastInform: at}
 		d.ONUTasks["ot1"] = store.ONUTask{ID: "ot1", ONUID: "o1", SiteID: "s111111", AccountID: "a1", Kind: store.TaskWiFi, Status: store.TaskFailed, Fault: "9005 Invalid parameter name",
 			By: "brian", Attempts: 2, CreatedAt: at, StartedAt: at, FinishedAt: at, AfterReboot: true, PassLeaf: "PreSharedKey.1.KeyPassphrase", ConfirmedAt: at, ConfirmedBy: "brian"}
+		d.OUICache["00:25:9E"] = store.OUIEntry{Prefix: "00:25:9E", Vendor: "Example Maker Ltd", Found: true, CheckedAt: at}
+		d.OUICache["AC:DE:48"] = store.OUIEntry{Prefix: "AC:DE:48", Found: false, CheckedAt: at}
 		d.Notes["n1"] = store.Note{ID: "n1", CustomerID: "c1", AccountID: "a1", SiteID: "s111111", EquipmentID: "e1", Text: "hello", Time: at}
 		d.Settings["wa.token"] = store.Setting{Key: "wa.token", Value: "c2VhbGVk", Enc: true, UpdatedAt: at}
 		d.Settings["wa.lang"] = store.Setting{Key: "wa.lang", Value: "sw", UpdatedAt: at}
@@ -129,6 +131,45 @@ func Run(t *testing.T) {
 		}
 		if _, ok := after.ClosedAccounts["a2"]; !ok {
 			t.Fatal("closed account not restored into ClosedAccounts")
+		}
+	})
+
+	t.Run("EquipmentHierarchyParity", func(t *testing.T) {
+		h := New(t)
+		at := Fixture(t, h.Store)
+		err := h.Store.Update(func(d *store.Data) error {
+			d.Equipment["olt1"] = store.Equipment{ID: "olt1", Kind: store.KindOLT, Serial: "VS1", MAC: "48:21:B8:10:D7:72", Model: "V1600GS-R", Status: store.EqInstalled,
+				SiteID: "s111111", Name: "Block A OLT", RouterPort: "ether3", PONPorts: 4, PONApartments: map[string][]string{"1": {"x1", "x2"}, "3": {"x3"}},
+				MgmtIP: "192.168.1.10", MgmtUser: "admin", MgmtPass: "sealed", CreatedAt: at}
+			d.Equipment["onu1"] = store.Equipment{ID: "onu1", Kind: store.KindONT, Serial: "Z1", MAC: "68:22:9F:00:00:01", Status: store.EqInStock, OLTID: "olt1", PONPort: 3, CreatedAt: at}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := h.Store.Snapshot()
+		after := h.Reopen().Snapshot()
+		if !reflect.DeepEqual(before.Equipment["olt1"], after.Equipment["olt1"]) || !reflect.DeepEqual(before.Equipment["onu1"], after.Equipment["onu1"]) {
+			t.Fatalf("the hierarchy fields changed over a reopen\nbefore %+v\nafter  %+v", before.Equipment["olt1"], after.Equipment["olt1"])
+		}
+		if o := after.Equipment["olt1"]; len(o.PONApartments) != 2 || len(o.PONApartments["1"]) != 2 || o.PONPorts != 4 || o.RouterPort != "ether3" || o.MgmtPass != "sealed" {
+			t.Fatalf("olt %+v", o)
+		}
+		if o := after.Equipment["onu1"]; o.OLTID != "olt1" || o.PONPort != 3 {
+			t.Fatalf("onu %+v", o)
+		}
+		// clearing the mapping persists as empty
+		err = h.Store.Update(func(d *store.Data) error {
+			o := d.Equipment["olt1"]
+			o.PONApartments = nil
+			d.Equipment["olt1"] = o
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := h.Reopen().Snapshot().Equipment["olt1"]; len(got.PONApartments) != 0 {
+			t.Fatalf("mapping not cleared: %+v", got.PONApartments)
 		}
 	})
 

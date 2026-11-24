@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -58,6 +59,7 @@ import ke.co.ftw.ftnadmin.ui.common.Loadable
 import ke.co.ftw.ftnadmin.ui.common.LoadingSpinner
 import ke.co.ftw.ftnadmin.ui.common.LocalContainer
 import ke.co.ftw.ftnadmin.ui.common.StatusChip
+import ke.co.ftw.ftnadmin.ui.common.SwitchRow
 import ke.co.ftw.ftnadmin.ui.common.StatusDot
 import ke.co.ftw.ftnadmin.ui.common.Tone
 import ke.co.ftw.ftnadmin.ui.common.formatDuration
@@ -97,6 +99,15 @@ fun AddCustomerScreen(routerId: String?, mac: String?, onBack: () -> Unit, onOpe
             }
         },
     ) { inner ->
+        if (ui.confirmNoAddress) {
+            AlertDialog(
+                onDismissRequest = vm::cancelConfirmNoAddress,
+                title = { Text("No address yet") },
+                text = { Text("This device has never asked for an address. Is it really a customer's ONU?") },
+                confirmButton = { TextButton(onClick = vm::confirmCreateWithoutAddress) { Text("Create anyway") } },
+                dismissButton = { TextButton(onClick = vm::cancelConfirmNoAddress) { Text("Cancel") } },
+            )
+        }
         Column(
             Modifier.padding(inner).fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -162,12 +173,12 @@ private fun Form(ui: AddCustomerUiState, vm: AddCustomerViewModel) {
             }
         }
         OutlinedTextField(
-            ui.unit, vm::onUnit, label = { Text("House number, for example B4") }, singleLine = true,
+            ui.unit, vm::onUnit, label = { Text("House number") }, placeholder = { Text("B4") }, singleLine = true,
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
             modifier = Modifier.fillMaxWidth(),
         )
     }
-    StepCard(3, "Package") {
+    StepCard(3, "Plan") {
         when (val p = ui.packages) {
             Loadable.Loading -> if (ui.apartmentId == null) {
                 Text("Choose the apartment first.", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -176,7 +187,7 @@ private fun Form(ui: AddCustomerUiState, vm: AddCustomerViewModel) {
             }
             is Loadable.Failed -> Text(p.message, color = MaterialTheme.colorScheme.error)
             is Loadable.Ready -> if (p.value.isEmpty()) {
-                Text("No packages for this router.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("No plans for this router.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
                 p.value.forEach { pk -> PackageCard(pk, selected = pk.id == ui.packageId, onClick = { vm.onPackage(pk.id) }) }
             }
@@ -267,15 +278,14 @@ private fun Form(ui: AddCustomerUiState, vm: AddCustomerViewModel) {
     }
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh), modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f).padding(end = 12.dp)) {
-                Text("Activate now", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Column(Modifier.weight(1f)) {
+                SwitchRow(checked = ui.activate, onChange = vm::onActivate, label = "Activate now")
                 Text(
-                    "Starts the package straight away. Off: the customer lands on the pay page until paid.",
+                    "Starts the plan straight away. Off: the customer lands on the pay page until paid.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Switch(checked = ui.activate, onCheckedChange = vm::onActivate)
         }
     }
     ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
@@ -368,7 +378,7 @@ private fun ResultCard(a: AddedCustomer, onOpen: () -> Unit, onAnother: () -> Un
             LabeledValue("Code", a.account.code)
             LabeledValue("Router", a.account.routerLabel)
             LabeledValue("MAC", a.account.mac)
-            a.account.pkg?.let { LabeledValue("Package", it.name) }
+            a.account.pkg?.let { LabeledValue("Plan", it.name) }
             a.account.router?.let { r ->
                 LabeledValue("Lease", r.leaseStatus.replaceFirstChar { it.uppercase() })
                 if (r.suspendedOnRouter) StatusChip("Waiting for payment", Tone.Warn)

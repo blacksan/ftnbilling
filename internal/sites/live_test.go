@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"ispbill/internal/billing"
 	"ispbill/internal/routeros"
 	"ispbill/internal/store"
 )
@@ -329,7 +330,7 @@ func TestClientsMergeAndSearch(t *testing.T) {
 			f10 = c
 		}
 	}
-	if f3.HostName != "Brians-iPhone" || f3.Port != "sfp-sfpplus1" || f3.QueueLimit != "20M/20M" || !f3.Online || f3.DownBps != 4e6 || f3.UsageMonthBytes != 9 || f3.LeaseStatus != "bound" || f3.Vendor != "Private address (random)" {
+	if f3.HostName != "Brians-iPhone" || f3.Port != "sfp-sfpplus1" || f3.QueueLimit != "20M/20M" || !f3.Online || f3.DownBps != 4e6 || f3.UsageMonthBytes != 9 || f3.LeaseStatus != "bound" || f3.Vendor != billing.PrivateAddress {
 		t.Fatalf("%+v", f3)
 	}
 	if f10.LeaseStatus != "waiting" || f10.QueueLimit != "2M/2M" || f10.Online || f10.State != "expired" {

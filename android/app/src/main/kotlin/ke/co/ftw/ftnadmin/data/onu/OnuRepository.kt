@@ -67,7 +67,15 @@ class OnuRepository(private val api: ApiClient) {
         api.get<ItemList<RegisterItem>>("equipment", query = mapOf("kind" to "ont")).items
 
     /** [mac] must already be normalised (see MacAddress). A 409 means the serial or MAC is already registered. */
-    suspend fun addRegisterItem(serial: String, gponSerial: String?, mac: String, model: String?): RegisterItem = api.post(
+    suspend fun addRegisterItem(
+        serial: String,
+        gponSerial: String?,
+        mac: String,
+        model: String?,
+        /** The OLT the ONU hangs off and its PON port; both blank/zero leave it unplaced. */
+        oltId: String? = null,
+        ponPort: Int = 0,
+    ): RegisterItem = api.post(
         "equipment",
         body = buildJsonObject {
             put("kind", "ont")
@@ -75,6 +83,10 @@ class OnuRepository(private val api: ApiClient) {
             putIfNotBlank("gpon_serial", gponSerial?.trim())
             put("mac", mac)
             putIfNotBlank("model", model?.trim())
+            if (!oltId.isNullOrBlank()) {
+                put("olt_id", oltId)
+                put("pon_port", ponPort)
+            }
         },
     )
 

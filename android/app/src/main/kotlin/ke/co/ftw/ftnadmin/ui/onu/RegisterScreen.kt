@@ -11,7 +11,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
+import androidx.compose.ui.text.input.KeyboardType
+import ke.co.ftw.ftnadmin.ui.common.ChipLabel
+import ke.co.ftw.ftnadmin.ui.common.ChipRow
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -27,6 +32,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import ke.co.ftw.ftnadmin.R
+import ke.co.ftw.ftnadmin.ui.theme.GeistMono
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -48,7 +60,7 @@ import ke.co.ftw.ftnadmin.ui.common.vmFactory
 @Composable
 fun RegisterScreen(user: UserInfo, onBack: () -> Unit) {
     val container = LocalContainer.current
-    val vm: RegisterViewModel = viewModel(key = "onu-register", factory = vmFactory { RegisterViewModel(container.onu) })
+    val vm: RegisterViewModel = viewModel(key = "onu-register", factory = vmFactory { RegisterViewModel(container.onu, container.equipment) })
     val ui by vm.state.collectAsStateWithLifecycle()
     val snack = remember { SnackbarHostState() }
     LaunchedEffect(ui.info) {
@@ -59,29 +71,31 @@ fun RegisterScreen(user: UserInfo, onBack: () -> Unit) {
     }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        topBar = { AppTopBar("ONU register", onBack = onBack) },
+        topBar = { AppTopBar(stringResource(R.string.onu_register), onBack = onBack) },
         snackbarHost = { SnackbarHost(snack) },
     ) { inner ->
         when (val list = ui.items) {
             Loadable.Loading -> CenteredLoading(Modifier.padding(inner))
             is Loadable.Failed -> ErrorState(list.message, vm::load, Modifier.padding(inner))
-            is Loadable.Ready -> LazyColumn(
-                Modifier.padding(inner).fillMaxSize(),
+            is Loadable.Ready -> PullToRefreshBox(ui.refreshing, vm::refresh, Modifier.padding(inner).fillMaxSize()) {
+              LazyColumn(
+                Modifier.fillMaxSize(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                if (user.canWrite) item { Button(onClick = vm::openAdd, modifier = Modifier.fillMaxWidth()) { Text("Add an ONU") } }
+              ) {
+                if (user.canWrite) item { Button(onClick = vm::openAdd, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.add_an_onu)) } }
                 if (list.value.isEmpty()) {
                     item { Text("The register has no ONUs yet.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium) }
                 }
                 items(list.value, key = { it.id }) { RegisterCard(it) }
+              }
             }
         }
     }
     if (ui.adding) {
         ModalBottomSheet(onDismissRequest = vm::closeAdd, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
             Column(
-                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+                Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text("Add an ONU", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
@@ -92,17 +106,38 @@ fun RegisterScreen(user: UserInfo, onBack: () -> Unit) {
                 )
                 val f = ui.form
                 OutlinedTextField(
-                    f.serial, vm::onSerial, label = { Text("Serial number") }, singleLine = true,
+                    f.serial, vm::onSerial, label = { Text(stringResource(R.string.serial_number)) }, singleLine = true,
+                    textStyle = LocalTextStyle.current.copy(fontFamily = GeistMono),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, capitalization = KeyboardCapitalization.Characters),
                     isError = f.errors["serial"] != null, supportingText = { f.errors["serial"]?.let { Text(it) } }, modifier = Modifier.fillMaxWidth(),
                 )
-                OutlinedTextField(f.gponSerial, vm::onGpon, label = { Text("GPON serial (only if different)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(f.gponSerial, vm::onGpon, label = { Text(stringResource(R.string.gpon_serial)) }, supportingText = { Text(stringResource(R.string.gpon_serial_hint)) }, singleLine = true,
+                    textStyle = LocalTextStyle.current.copy(fontFamily = GeistMono),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, capitalization = KeyboardCapitalization.Characters),
+                    modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(
-                    f.mac, vm::onMac, label = { Text("WAN MAC") }, singleLine = true,
+                    f.mac, vm::onMac, label = { Text(stringResource(R.string.wan_mac)) }, singleLine = true,
+                    textStyle = LocalTextStyle.current.copy(fontFamily = GeistMono),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, capitalization = KeyboardCapitalization.Characters),
                     isError = f.errors["mac"] != null, supportingText = { f.errors["mac"]?.let { Text(it) } }, modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(f.model, vm::onModel, label = { Text("Model") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                if (ui.olts.isNotEmpty()) {
+                    Text("OLT (optional)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ui.olts.forEach { o -> FilterChip(f.oltId == o.id, { vm.onOlt(o.id) }, label = { Text(o.name.ifBlank { o.mac }) }) }
+                    }
+                    if (f.oltId.isNotBlank()) {
+                        OutlinedTextField(
+                            f.ponPort, vm::onPonPort, label = { Text("PON port") }, singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            isError = f.errors["pon_port"] != null, supportingText = { f.errors["pon_port"]?.let { Text(it) } },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
                 ui.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
-                Button(onClick = vm::save, enabled = !ui.busy, modifier = Modifier.fillMaxWidth()) { Text(if (ui.busy) "Saving..." else "Save") }
+                Button(onClick = vm::save, enabled = !ui.busy, modifier = Modifier.fillMaxWidth()) { Text(stringResource(if (ui.busy) R.string.saving else R.string.action_save)) }
                 TextButton(onClick = vm::closeAdd, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
             }
         }
@@ -112,12 +147,13 @@ fun RegisterScreen(user: UserInfo, onBack: () -> Unit) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RegisterCard(e: RegisterItem) {
-    SectionCard(e.serial.ifBlank { "(no serial)" }) {
+    SectionCard(e.serial.ifBlank { stringResource(R.string.no_serial) }) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             StatusChip(registerStatusLabel(e.status), registerTone(e.status))
         }
-        LabeledValue("WAN MAC", e.mac)
-        if (e.gponSerial.isNotBlank()) LabeledValue("GPON serial", e.gponSerial)
+        LabeledValue(stringResource(R.string.wan_mac), e.mac, mono = true)
+        if (e.oltId.isNotBlank()) LabeledValue("OLT", if (e.ponPort > 0) "${e.oltName.ifBlank { e.oltId }}, PON ${e.ponPort}" else e.oltName.ifBlank { e.oltId })
+        if (e.gponSerial.isNotBlank()) LabeledValue(stringResource(R.string.gpon_serial_short), e.gponSerial, mono = true)
         LabeledValue("Model", e.model)
     }
 }

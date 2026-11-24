@@ -31,6 +31,9 @@ object ErrorCode {
 
     /** 409: unlinking a router that still serves open accounts of the apartment. */
     const val ROUTER_SERVES_ACCOUNTS = "router_serves_accounts"
+
+    /** 409: a customer for a device that never asked for an address needs the operator's explicit yes (`confirm_no_address`). */
+    const val CONFIRM_REQUIRED = "confirm_required"
     const val DUPLICATE_PAYMENT = "duplicate_payment"
     const val LOWER_PLAN_ACTIVE = "lower_plan_active"
     const val BAD_STATE = "bad_state"

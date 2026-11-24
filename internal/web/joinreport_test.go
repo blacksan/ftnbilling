@@ -150,7 +150,7 @@ func TestMgmtWinboxFollowsTheJoinReport(t *testing.T) {
 	apiFlag := func(id string) any {
 		return r.call(r.view.Access, "GET", "/sites/"+id, nil, nil).JSON(t)["mgmt_winbox"]
 	}
-	const built = "Remote WinBox</dt><dd>Connect your management WireGuard profile, then open WinBox to"
+	const built = "Remote WinBox</dt><dd class=\"l\">Connect your management WireGuard profile, then open WinBox to"
 	const notBuilt = "Built without remote WinBox: reset the router and paste a new line to add it."
 
 	with := newSite("With")

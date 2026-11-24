@@ -292,7 +292,7 @@ func (s *Server) accountCards(d map[string]any, a store.Account, sc scope) {
 				eq = append(eq, e)
 			case e.Kind == store.KindSplitter && e.SiteID == a.SiteID:
 				splitters = append(splitters, e)
-			case e.AccountID == "" && e.Status == store.EqInStock && e.Kind != store.KindSplitter:
+			case e.AccountID == "" && e.Status == store.EqInStock && e.Kind != store.KindSplitter && e.Kind != store.KindONT:
 				stock = append(stock, e)
 			}
 		}
@@ -307,6 +307,13 @@ func (s *Server) accountCards(d map[string]any, a store.Account, sc scope) {
 	sort.Slice(stock, func(i, j int) bool { return stock[i].Kind+stock[i].Serial < stock[j].Kind+stock[j].Serial })
 	sort.Slice(notes, func(i, j int) bool { return notes[i].Time.After(notes[j].Time) })
 	d["Cust"], d["Custs"], d["Equip"], d["Stock"], d["Splitters"], d["Notes"] = cust, custs, eq, stock, splitters, notes
+	d["Place"] = s.placements(eq)
+	d["OLTMACWarn"] = ""
+	s.st.View(func(dd *store.Data) {
+		if o, ok := dd.OLTByMAC(a.MAC); ok && a.MAC != "" {
+			d["OLTMACWarn"] = store.OLTMACWarning(store.OLTMACClash{Account: a, OLT: o})
+		}
+	})
 	if dev, ok := s.svc.AccountDevice(a.ID); ok {
 		d["AcctDev"] = dev
 	}
@@ -318,47 +325,6 @@ type eqRow struct {
 	E    store.Equipment
 	A    store.Account
 	Site string
-}
-
-func (s *Server) adminEquipment(w http.ResponseWriter, r *http.Request) {
-	p := s.page(r, "equipment")
-	sc := s.scopeOf(r)
-	qv := r.URL.Query()
-	kind, status, q := qv.Get("kind"), qv.Get("status"), strings.TrimSpace(qv.Get("q"))
-	names := map[string]string{}
-	for _, st := range sc.Sites {
-		names[st.ID] = st.Name
-	}
-	var rows []eqRow
-	counts := map[string]int{}
-	s.st.View(func(d *store.Data) {
-		for _, e := range d.Equipment {
-			if e.SiteID != "" && !sc.Has(e.SiteID) {
-				continue
-			}
-			if (kind != "" && e.Kind != kind) || (status != "" && e.Status != status) {
-				continue
-			}
-			a, _ := d.AnyAccount(e.AccountID)
-			if q != "" && !(store.ContainsFold(e.Serial, q) || store.ContainsFold(e.MAC, q) || store.ContainsFold(e.Model, q) ||
-				store.ContainsFold(a.Flat, q) || store.ContainsFold(a.Code, q) || store.ContainsFold(strings.ReplaceAll(e.MAC, ":", ""), strings.ReplaceAll(q, ":", ""))) {
-				continue
-			}
-			counts[e.Status]++
-			rows = append(rows, eqRow{e, a, names[e.SiteID]})
-		}
-	})
-	sort.Slice(rows, func(i, j int) bool {
-		a, b := rows[i].E, rows[j].E
-		if a.Kind != b.Kind {
-			return a.Kind < b.Kind
-		}
-		return a.Serial < b.Serial
-	})
-	p.Data["Rows"], p.Data["Counts"], p.Data["Kind"], p.Data["Status"], p.Data["Q"] = rows, counts, kind, status, q
-	p.Data["Kinds"], p.Data["Statuses"] = billing.EquipmentKinds, billing.EquipmentStatuses
-	p.Data["Flash2"] = qv.Get("skipped")
-	s.render(w, "admin_equipment", p)
 }
 
 type eqEvRow struct {
@@ -376,8 +342,16 @@ func (s *Server) adminEquipmentView(w http.ResponseWriter, r *http.Request) {
 	var acct store.Account
 	var cust store.Customer
 	var accts []store.Account
+	aptNames := map[string]string{}
+	var ponMax int
 	s.st.View(func(d *store.Data) {
+		for _, a := range d.Apartments {
+			aptNames[a.ID] = a.Name
+		}
 		e, ok = d.Equipment[id]
+		if o, has := d.Equipment[e.OLTID]; has && e.OLTID != "" {
+			ponMax = o.PONPorts
+		}
 		if !ok {
 			return
 		}
@@ -399,11 +373,30 @@ func (s *Server) adminEquipmentView(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if e.Kind == store.KindOLT {
+		http.Redirect(w, r, "/admin/olts/view?id="+url.QueryEscape(e.ID), http.StatusSeeOther)
+		return
+	}
+	p.eqCrumb(eqTabForKind(e.Kind))
+	p.Data["BackTab"] = eqTabForKind(e.Kind)
+	p.Detail = firstNonEmpty(e.Serial, e.MAC, e.Model, "Item")
 	sort.Slice(hist, func(i, j int) bool { return hist[i].Ev.Time.After(hist[j].Ev.Time) })
 	p.Data["E"], p.Data["Acct"], p.Data["Cust"], p.Data["Hist"], p.Data["Accts"] = e, acct, cust, hist, accts
 	p.Data["Kinds"], p.Data["Statuses"] = billing.EquipmentKinds, billing.EquipmentStatuses
 	p.Data["Sites"] = sc.Sites
 	p.Data["SiteName"] = p.Data["SiteNames"].(map[string]string)[e.SiteID]
+	var served []string
+	if e.Kind == store.KindONT {
+		p.Data["OLTs"] = s.oltChoices(sc)
+		pl := s.svc.PlacementOf(e.ID)
+		p.Data["Place"] = pl
+		served = pl.ApartmentIDs
+	}
+	if ponMax <= 0 {
+		ponMax = 64
+	}
+	p.Data["PONMax"] = ponMax
+	p.Data["AcctGroups"], p.Data["AcctFiltered"] = groupHouses(accts, aptNames, served)
 	s.render(w, "admin_equipment_view", p)
 }
 
@@ -414,9 +407,17 @@ func (s *Server) adminEquipmentSave(w http.ResponseWriter, r *http.Request) {
 	if in.ID == "" && in.SiteID == "" {
 		in.SiteID = s.scopeOf(r).ID
 	}
+	if in.ID == "" && strings.EqualFold(in.Kind, store.KindOLT) { // an OLT has its own form (name, router port, PON ports)
+		http.Redirect(w, r, "/admin/olts/new?site="+url.QueryEscape(in.SiteID), http.StatusSeeOther)
+		return
+	}
+	if r.PostFormValue("placement") == "1" { // the ONU form: its OLT and PON port
+		in.SetPlacement, in.OLTID = true, r.PostFormValue("olt")
+		in.PONPort, _ = strconv.Atoi(strings.TrimSpace(r.PostFormValue("pon_port")))
+	}
 	e, err := s.svc.SaveEquipment(in)
 	if err != nil {
-		to := "/admin/equipment"
+		to := nextOr(r, "/admin/equipment?tab="+eqTabForKind(strings.ToLower(in.Kind)))
 		if in.ID != "" {
 			to = "/admin/equipment/view?id=" + url.QueryEscape(in.ID)
 		}
@@ -429,14 +430,14 @@ func (s *Server) adminEquipmentSave(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminEquipmentImport(w http.ResponseWriter, r *http.Request) {
 	res, err := s.svc.ImportEquipment(r.PostFormValue("lines"))
 	if err != nil {
-		s.back(w, r, nextOr(r, "/admin/equipment"), "Error: "+err.Error())
+		s.back(w, r, nextOr(r, "/admin/equipment?tab=onu"), "Error: "+err.Error())
 		return
 	}
 	msg := "Imported " + strconv.Itoa(res.Added) + " items"
 	if len(res.Skipped) > 0 {
 		msg += ". Skipped: " + strings.Join(res.Skipped, "; ")
 	}
-	s.back(w, r, nextOr(r, "/admin/equipment"), msg)
+	s.back(w, r, nextOr(r, "/admin/equipment?tab=onu"), msg)
 }
 
 func (s *Server) adminEquipmentAssign(w http.ResponseWriter, r *http.Request) {
@@ -588,4 +589,47 @@ func (s *Server) writePaymentsCSV(w http.ResponseWriter, rows []store.Payment, n
 			csvSafe(c.a.Flat), csvSafe(names[p.SiteID]), csvSafe(c.pkg), csvSafe(p.Phone), csvSafe(p.Name), csvSafe(p.BillRef), p.OrderID, csvSafe(c.cust), csvSafe(p.Note)})
 	}
 	cw.Flush()
+}
+
+// houseGroup is the houses of one apartment, for a grouped picker.
+type houseGroup struct {
+	Apt   string
+	Accts []store.Account
+}
+
+// groupHouses groups open houses by apartment (sorted by apartment name, then
+// house number). When served is not empty only those apartments are listed and
+// the second result is true: the picker then says it is filtered.
+func groupHouses(accts []store.Account, names map[string]string, served []string) ([]houseGroup, bool) {
+	only := map[string]bool{}
+	for _, id := range served {
+		only[id] = true
+	}
+	by := map[string]*houseGroup{}
+	var order []string
+	for _, a := range accts {
+		if len(only) > 0 && !only[a.ApartmentID] {
+			continue
+		}
+		key := a.ApartmentID
+		g, ok := by[key]
+		if !ok {
+			nm := names[key]
+			if nm == "" {
+				nm = "No apartment"
+			}
+			g = &houseGroup{Apt: nm}
+			by[key] = g
+			order = append(order, key)
+		}
+		g.Accts = append(g.Accts, a)
+	}
+	out := make([]houseGroup, 0, len(order))
+	for _, k := range order {
+		g := by[k]
+		sort.Slice(g.Accts, func(i, j int) bool { return g.Accts[i].Unit < g.Accts[j].Unit })
+		out = append(out, *g)
+	}
+	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Apt) < strings.ToLower(out[j].Apt) })
+	return out, len(only) > 0
 }

@@ -48,9 +48,11 @@ const (
 	codeDupPayment   = "duplicate_payment"
 	codeLowerPlan    = "lower_plan_active"
 	codeBadState     = "bad_state"
-	codeRateLimited  = "rate_limited"
-	codeDBDown       = "db_unavailable"
-	codeInternal     = "internal"
+	// codeConfirmRequired: the request is fine but needs an explicit yes (a device that never asked for an address).
+	codeConfirmRequired = "confirm_required"
+	codeRateLimited     = "rate_limited"
+	codeDBDown          = "db_unavailable"
+	codeInternal        = "internal"
 )
 
 type apiError struct {
@@ -439,6 +441,10 @@ func (s *Server) billingErr(w http.ResponseWriter, err error, mac string) {
 		apiErr(w, http.StatusConflict, codeMACInUse, "That MAC address is already used by another account.", map[string]any{"mac": mac})
 	case errors.Is(err, billing.ErrRouterOwnMAC):
 		validationErr(w, map[string]string{"mac": billing.ErrRouterOwnMAC.Error()})
+	case errors.Is(err, billing.ErrOLTMAC):
+		validationErr(w, map[string]string{"mac": err.Error()}) // "That MAC belongs to OLT <name>"
+	case errors.Is(err, billing.ErrConfirmNoAddress):
+		apiErr(w, http.StatusConflict, codeConfirmRequired, err.Error()+" Send confirm_no_address: true to create it anyway.", map[string]any{"mac": mac, "field": "confirm_no_address"})
 	case errors.Is(err, billing.ErrBadMAC):
 		validationErr(w, map[string]string{"mac": "must be 12 hex digits, like AA:BB:CC:DD:EE:FF"})
 	case errors.Is(err, billing.ErrNotFound):

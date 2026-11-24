@@ -75,6 +75,13 @@
   });
   var rs = $("#router-switch");
   if (rs) rs.addEventListener("change", function () { location.href = "/admin/site/select?site=" + enc(rs.value) + "&next=" + enc(rs.getAttribute("data-next") || "/admin"); });
+  /* tab strips: bring the current tab into view and fade the edge that has more */
+  $$(".tabs").forEach(function (t) {
+    function edges() { t.classList.toggle("more-l", t.scrollLeft > 4); t.classList.toggle("more-r", t.scrollLeft + t.clientWidth < t.scrollWidth - 4); }
+    var cur = t.querySelector("[aria-current],[aria-selected=true],.on");
+    if (cur && t.scrollWidth > t.clientWidth) t.scrollLeft = Math.max(0, cur.offsetLeft - (t.clientWidth - cur.offsetWidth) / 2);
+    edges(); t.addEventListener("scroll", edges, { passive: true }); window.addEventListener("resize", edges);
+  });
   $$("select[data-goto]").forEach(function (s) { s.addEventListener("change", function () { location.href = s.value; }); });
 
   if (location.search.indexOf("add=1") >= 0) { var ar = $("#addrouter"); if (ar) setTimeout(function () { openDlg(ar); }, 50); }
@@ -99,6 +106,10 @@
         var rsel = $("[data-router-select]", f); if (rsel && o.getAttribute("data-site")) rsel.value = o.getAttribute("data-site");
         aptsFor(f, o.getAttribute("data-site"));
         var fl = o.getAttribute("data-flat"); if (fl) { var ui = $("input[name=unit]", f); if (ui) ui.value = fl; }
+        var cn = $("input[name=confirm_no_address]", f); if (cn) cn.value = "";
+        var osel = $("select[name=equipment_id]", f); // a device that is an ONU of the register: use that item
+        if (osel) { osel.value = o.getAttribute("data-equipment") || ""; }
+        if (o.getAttribute("data-equipment")) presetApts(f, (o.getAttribute("data-apts") || "").split(",").filter(Boolean));
         step(f, "form"); devsFor(f);
       } else if (dlg) {
         var f0 = $("form", dlg); if (f0) aptsFor(f0, ""); // not from a device row: show every apartment again
@@ -120,7 +131,7 @@
 
   /* A native confirm for the simple "are you sure" buttons and forms. */
   doc.addEventListener("submit", function (e) {
-    var m = e.target.getAttribute && e.target.getAttribute("data-confirm");
+    var m = (e.submitter && e.submitter.getAttribute && e.submitter.getAttribute("data-confirm")) || (e.target.getAttribute && e.target.getAttribute("data-confirm"));
     if (m && !window.confirm(m)) e.preventDefault();
   }, true);
 
@@ -320,6 +331,19 @@
     var sel = $("[data-router-select]", form); if (sel && sel.value !== siteId && Array.prototype.some.call(sel.options, function (op) { return op.value === siteId; })) sel.value = siteId;
   }
   $$("[data-apt-select]").forEach(function (a) { a.addEventListener("change", function () { aptRouters(a.form); }); });
+  /* An ONU of the register that sits on a PON port: preselect the apartment(s) the port serves (one: chosen; several: only those are offered). */
+  function presetApts(form, ids) {
+    var a = $("[data-apt-select]", form); if (!a || !ids.length) return;
+    Array.prototype.forEach.call(a.options, function (op) { if (op.value) { op.hidden = op.disabled = ids.indexOf(op.value) < 0; } });
+    if (ids.length === 1) a.value = ids[0];
+    a.dispatchEvent(new Event("ftn:aptsync")); aptRouters(form);
+  }
+  $$("select[name=equipment_id]").forEach(function (s) {
+    s.addEventListener("change", function () {
+      var op = s.options[s.selectedIndex], f = s.form, m = $("input[name=mac]", f);
+      if (op && op.value) { if (m) m.value = op.getAttribute("data-mac") || ""; presetApts(f, (op.getAttribute("data-apts") || "").split(",").filter(Boolean)); }
+    });
+  });
   /* Account page: the apartment card narrows its router list to the saved apartment already chosen. */
   $$("form[data-apt-move]").forEach(function (f) { aptRouters(f); });
   var ac = $("#addcustomer");
@@ -359,6 +383,11 @@
         .then(function (r) { return r.json().catch(function () { return { error: "The server sent something unexpected." }; }); })
         .then(function (j) {
           if (btn) btn.disabled = false;
+          var cn = $("input[name=confirm_no_address]", form);
+          if (!j.ok && j.confirm && cn && window.confirm(j.error + "\n\nCreate the customer on this device anyway?")) {
+            cn.value = "1"; form.requestSubmit(); return; // sent again, confirmed
+          }
+          if (cn) cn.value = "";
           if (!j.ok) {
             var er = el("div", "flash bad ajax-err", j.error || "That did not work."); er.setAttribute("role", "alert");
             var first = $("[data-step=form]", form); first.insertBefore(er, first.firstChild); return;
@@ -376,6 +405,7 @@
             step(form, "status");
             $("[data-join-cmd]", form).value = j.command || ""; $("[data-join-cmd2]", form).value = j.command_nocheck || "";
             var vr = $("[data-view-router]", form); if (vr && j.url) vr.href = j.url;
+            if (j.warning) { var lw = el("div", "flash bad", j.warning); lw.setAttribute("role", "alert"); var jt = $("[data-join-text]", form); jt.parentNode.insertBefore(lw, jt); }
             if (!j.command) { $("[data-join-text]", form).textContent = j.note || "Router created. Open it to make the join command."; $("[data-join-spin]", form).hidden = true; }
             else pollJoin(form, j.id);
           }
@@ -465,7 +495,9 @@
     (function () {
       var rid = portsBox.getAttribute("data-ports"), rname = portsBox.getAttribute("data-name");
       var body = $("[data-ports-body]", portsBox), at = $("[data-ports-at]", portsBox), warn = $("[data-ports-warn]", portsBox), applyEl = $("[data-ports-apply]", portsBox);
-      var roles = {}, busy = false, timer = null;
+      var roles = {}, busy = false, timer = null, hasLink = true;
+      /* ether1, ether2, ether10, sfp-sfpplus1 ...: by name, numbers as numbers */
+      function byName(a, b) { return String(a.name).localeCompare(String(b.name), undefined, { numeric: true, sensitivity: "base" }); }
       function rate(v) { return v == null ? "-" : bps(v); }
       function pill(p) {
         if (p.disabled) return el("span", "pill paused", "disabled");
@@ -504,7 +536,7 @@
         var tr = el("tr");
         function td(label, content, cls) { var c = el("td", cls || ""); c.setAttribute("data-label", label); if (content instanceof Node) c.appendChild(content); else c.textContent = content; tr.appendChild(c); return c; }
         var nm = el("span"); nm.appendChild(el("b", "mono", p.name)); if (p.comment) { nm.appendChild(el("br")); nm.appendChild(el("span", "muted", p.comment)); }
-        td("Port", nm, "mono");
+        td("Port", nm, "mono wrap");
         var rl = el("span"); if (p.locked) { var lk = el("span", "", "🔒 "); lk.setAttribute("aria-hidden", "true"); rl.appendChild(lk); }
         rl.appendChild(document.createTextNode(p.role_label));
         if (p.locked) rl.appendChild(el("span", "sr-only", " (locked)"));
@@ -513,8 +545,8 @@
         if (p.note) rl.appendChild(el("div", "muted", p.note));
         if (p.warning) { var wn = el("div", "warn", p.warning); wn.style.marginTop = "4px"; rl.appendChild(wn); }
         if (p.disabled && !p.locked && p.role !== "lan") rl.appendChild(el("div", "muted", "Switched off until you enable it."));
-        td("Role", rl);
-        td("Link", p.link || "");
+        td("Role", rl, "pnote");
+        td("Link", p.link || "").hidden = !hasLink;
         td("State", pill(p));
         td("Receive", rate(p.rx_bps), "n"); td("Send", rate(p.tx_bps), "n"); td("MAC", p.mac || "", "mono");
         var act = el("td", "pact"); act.setAttribute("data-label", "Actions");
@@ -523,7 +555,7 @@
         else {
           /* the OLT uplink is not switched off here (it can be enabled): give the OLT role to another port first */
           if (p.can_disable !== false) { var b = el("button", "ghost sm", p.disabled ? "Enable" : "Disable"); b.type = "button"; b.onclick = function () { toggle(p); }; act.appendChild(b); }
-          else { act.appendChild(el("span", "muted", "OLT port: can\u2019t be switched off here. Give the OLT role to another port first.")); }
+          else if (p.role === "olt") { act.appendChild(el("span", "muted", "OLT port: can\u2019t be switched off here. Give the OLT role to another port first.")); }
           if (p.role_options && p.role_options.length) {
             var sel = el("select"); sel.setAttribute("aria-label", "Change the role of " + p.name);
             var o0 = el("option", "", "Change role…"); o0.value = ""; sel.appendChild(o0);
@@ -538,7 +570,10 @@
       function draw(j) {
         (j.roles || []).forEach(function (r) { roles[r.key] = r.label; });
         body.textContent = "";
-        (j.items || []).forEach(function (p) { body.appendChild(row(p)); });
+        var items = (j.items || []).slice().sort(byName);
+        hasLink = items.some(function (p) { return p.link; });
+        $$("[data-col=link]", portsBox).forEach(function (h) { h.hidden = !hasLink; });
+        items.forEach(function (p) { body.appendChild(row(p)); });
         if (!(j.items || []).length) { var tr = el("tr"), c = el("td", "muted", "The router could not be read. Ports show here once it answers."); c.colSpan = 8; tr.appendChild(c); body.appendChild(tr); }
         warn.hidden = j.reachable !== false || !(j.items || []).length;
         var cp = j.customer_port || {};
@@ -580,6 +615,7 @@
       if (!j.items) { list.appendChild(el("li", "ph", j.error ? "The router could not be read: " + j.error : "Could not load the checklist.")); sum.textContent = ""; return; }
       var s = j.summary || {};
       sum.textContent = (s.fail ? s.fail + " to fix, " : "") + (s.warn ? s.warn + " to look at, " : "") + (s.ok || 0) + " fine" + (j.router && j.router.reachable === false ? ". The router is not reachable right now." : "");
+      if (j.items.length && j.items.every(function (it) { return it.status === "unknown"; })) { sum.textContent = ""; list.appendChild(el("li", "ph", "The router has not answered yet, so its " + j.items.length + " checks are waiting. They appear here once the tunnel is up.")); return; }
       j.items.slice().sort(function (a, b) { return (ORDER[a.status] - ORDER[b.status]) || 0; }).forEach(function (it) {
         var li = el("li", "check s-" + it.status);
         li.appendChild(el("span", "st", MARK[it.status] || "?")); li.lastChild.setAttribute("aria-label", it.status);
@@ -625,6 +661,7 @@
     var rname = setup.getAttribute("data-name") || "";
     var view = $("[data-setup-view]", setup), stateEl = $("[data-setup-state]", setup);
     var MARKS = { ok: "\u2713", failed: "\u00d7" };
+    var STATE_LABEL = { not_started: "Not started", waiting_router: "Waiting for the router", stalled: "Stalled", online: "Online, checks pending", ready: "Ready" };
     var drawSetup = function (j) {
       if (!view || !j || !j.steps) return;
       view.textContent = "";
@@ -642,7 +679,7 @@
         var d = el("div"); d.appendChild(el("b", "", st.title || st.key || "")); if (st.detail) d.appendChild(el("span", "", st.detail)); li.appendChild(d); ol.appendChild(li);
       });
       view.appendChild(ol);
-      if (stateEl) { stateEl.textContent = j.state; stateEl.className = "pill " + (ready ? "live" : "waiting"); }
+      if (stateEl) { stateEl.textContent = STATE_LABEL[j.state] || String(j.state || "").replace(/_/g, " "); stateEl.className = "pill " + (ready ? "live" : "waiting"); }
       return ready;
     };
     var setupReady = null;

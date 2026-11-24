@@ -42,6 +42,7 @@ type rtRow struct {
 	State                 string // up | down | paused | waiting
 	Setup, SetupTone      string // the setup view's state: not_started, waiting_router, online, ready (or paused)
 	Flats, Active, Online int
+	Apartments, OLTs      int // apartments the router serves, OLTs on it
 	WAN, Tunnel, Seen     string
 	WANPct                float64
 	Attention             bool
@@ -87,6 +88,9 @@ func (s *Server) routerRows(ctx context.Context, sc scope) []rtRow {
 	for _, st := range list {
 		b := base[st.ID]
 		r := rtRow{S: st, State: states[st.ID], Flats: b.Accounts, Active: b.Active, Online: onl[st.ID], Detail: b.Detail}
+		s.st.View(func(d *store.Data) {
+			r.Apartments, r.OLTs = len(d.SiteApartmentIDs(st.ID)), len(d.OLTsOfSite(st.ID))
+		})
 		if col := s.mgr.Collector(st.ID); col != nil {
 			cfg, snap := col.Config(), col.Snapshot()
 			if pt, ok := snap.Ports[cfg.WAN]; ok {
@@ -144,12 +148,12 @@ func shortAge(d time.Duration) string {
 }
 
 func (s *Server) adminSites(w http.ResponseWriter, r *http.Request) {
-	p := s.page(r, "sites")
+	p := s.eqPage(r, "sites", eqTabRouters)
 	sc := scope{All: true, Sites: s.scopeOf(r).Sites} // the router list always shows every router
 	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 	defer cancel()
 	all := s.routerRows(ctx, sc)
-	tab := r.URL.Query().Get("tab")
+	tab := routerStateFilter(r)
 	cnt := map[string]int{"all": len(all)}
 	var rows []rtRow
 	var online, offline, setting, attn, flatsOn int
@@ -175,9 +179,6 @@ func (s *Server) adminSites(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	cnt["online"], cnt["offline"], cnt["setting"] = online, offline, setting
-	if tab == "" {
-		tab = "all"
-	}
 	p.Data["Rows"], p.Data["Tab"], p.Data["Cnt"], p.Data["All"] = rows, tab, cnt, len(all)
 	p.Data["Online"], p.Data["Offline"], p.Data["FlatsOn"], p.Data["Attn"] = online, offline, flatsOn, attn
 	p.Data["AutoOpen"] = r.URL.Query().Get("add") == "1" && p.CanWrite
@@ -192,6 +193,21 @@ func (s *Server) adminSites(w http.ResponseWriter, r *http.Request) {
 	}
 	p.Data["Notices"] = notices
 	s.render(w, "admin_sites", p)
+}
+
+// routerStateFilter is the status filter of the Routers tab (all, online, offline, setting): ?state= on the Equipment
+// page. The old /admin/routers?tab=online address keeps its meaning.
+func routerStateFilter(r *http.Request) string {
+	q := r.URL.Query()
+	v := q.Get("state")
+	if v == "" && r.URL.Path != "/admin/equipment" {
+		v = q.Get("tab")
+	}
+	switch v {
+	case "online", "offline", "setting":
+		return v
+	}
+	return "all"
 }
 
 // adminSiteNew keeps the old "add" address working: the form is a dialog now.
@@ -222,21 +238,30 @@ func (s *Server) adminSiteCreate(w http.ResponseWriter, r *http.Request) {
 		fail(err.Error())
 		return
 	}
+	var linkNote string
+	for _, aid := range r.PostForm["apartment"] { // the apartments this router serves, picked in the Add router dialog
+		if aid = strings.TrimSpace(aid); aid == "" {
+			continue
+		}
+		if err := s.svc.LinkRouter(aid, st.ID); err != nil && !errors.Is(err, store.ErrNoChange) {
+			linkNote = " An apartment could not be linked: " + err.Error()
+		}
+	}
 	st, _ = s.siteByID(st.ID)
 	dest := "/admin/routers/view?id=" + url.QueryEscape(st.ID) + "&tab=setup"
 	if !wantsJSON(r) {
 		// Without JavaScript: the router page, where the Setup tab makes the join line.
-		s.back(w, r, dest, "Router added. Make its join line below.")
+		s.back(w, r, dest, "Router added. Make its join line below."+linkNote)
 		return
 	}
 	cmd, noCheck, exp, jerr := s.joinLines(st)
 	w.Header().Set("Cache-Control", "no-store")
 	if jerr != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": st.ID, "name": st.Name, "url": dest,
-			"note": "Router created, but no join line could be made: " + jerr.Error()})
+			"note": "Router created, but no join line could be made: " + jerr.Error(), "warning": strings.TrimSpace(linkNote)})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": st.ID, "name": st.Name, "command": cmd, "command_nocheck": noCheck, "expires_at": exp, "url": dest})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": st.ID, "name": st.Name, "command": cmd, "command_nocheck": noCheck, "expires_at": exp, "url": dest, "warning": strings.TrimSpace(linkNote)})
 }
 
 func (s *Server) siteByID(id string) (store.Site, bool) {
@@ -250,13 +275,16 @@ func (s *Server) siteByID(id string) (store.Site, bool) {
 
 type tabDef struct{ Key, Label string }
 
-var routerTabs = []tabDef{{"overview", "Overview"}, {"setup", "Setup"}, {"clients", "Clients"}, {"interfaces", "Interfaces"}, {"onus", "ONUs"}, {"ports", "Ports"}, {"plans", "Plans"}, {"profile", "Profile"}, {"danger", "Danger"}}
+var routerTabs = []tabDef{{"overview", "Overview"}, {"setup", "Setup"}, {"clients", "Clients"}, {"equipment", "Equipment"}, {"onus", "ONUs"}, {"ports", "Ports"}, {"plans", "Plans"}, {"profile", "Profile"}, {"danger", "Danger"}}
 
 // siteView builds the router page; cmd and noCheck are set only in the
 // response to a join request, which is the one time the line is shown.
 func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site, cmd, cmdNoCheck string, exp time.Time, extra ...map[string]any) {
 	p := s.page(r, "sites")
 	tab := r.URL.Query().Get("tab")
+	if tab == "interfaces" { // the old Interfaces tab is the Ports tab now
+		tab = "ports"
+	}
 	valid := false
 	for _, t := range routerTabs {
 		valid = valid || t.Key == tab
@@ -329,6 +357,9 @@ func (s *Server) siteView(w http.ResponseWriter, r *http.Request, st store.Site,
 	s.routerTabData(r.Context(), p.Data, st, status, tab, strings.TrimSpace(r.URL.Query().Get("q")))
 	if tab == "onus" {
 		s.onuTabData(p.Data, st)
+	}
+	if tab == "equipment" {
+		s.routerEquipmentData(p.Data, st.ID)
 	}
 	if cmd != "" {
 		w.Header().Set("Cache-Control", "no-store")

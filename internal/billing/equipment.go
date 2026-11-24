@@ -16,6 +16,10 @@ type EquipmentInput struct {
 	ID, Kind, Serial, MAC, Model, Firmware, SiteID, Notes string
 	// GPONSerial is the OLT-side serial of an ONT when it differs from Serial (the TR-069 serial).
 	GPONSerial string
+	// SetPlacement applies OLTID and PONPort to an ONT (optional OLT and PON port); without it they are left as they are.
+	SetPlacement bool
+	OLTID        string
+	PONPort      int
 }
 
 var equipKinds = map[string]bool{store.KindONT: true, store.KindRouter: true, store.KindOLT: true, store.KindSplitter: true, store.KindSwitch: true, store.KindOther: true}
@@ -52,6 +56,9 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 	kind := strings.ToLower(strings.TrimSpace(in.Kind))
 	if !equipKinds[kind] {
 		return store.Equipment{}, errors.New("choose what kind of equipment this is")
+	}
+	if kind == store.KindOLT {
+		return s.saveOLTGeneric(in) // an OLT has one set of rules, wherever it is saved from
 	}
 	serial := strings.ToUpper(cleanText(in.Serial, 60))
 	gpon := strings.ToUpper(strings.Join(strings.Fields(cleanText(in.GPONSerial, 60)), ""))
@@ -104,6 +111,27 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 				e.Status, e.InstalledAt = store.EqInstalled, now
 			}
 		}
+		if exists && e.Kind == store.KindOLT && kind != store.KindOLT {
+			for _, o := range d.Equipment {
+				if o.OLTID == e.ID {
+					return errors.New("ONUs are placed under this OLT: move them to another OLT before changing what kind of equipment it is")
+				}
+			}
+		}
+		if kind == store.KindOLT && mac != "" && e.Status != store.EqRetired {
+			if a, ok := d.AccountByMAC(mac); ok {
+				return fmt.Errorf("that MAC is already the ONT of house %s (%s)", a.Unit, a.Code)
+			}
+		}
+		if in.SetPlacement && kind == store.KindONT {
+			if err := checkPlacementLocked(d, in.OLTID, in.PONPort, e.OLTID); err != nil {
+				return err
+			}
+			e.OLTID, e.PONPort = in.OLTID, in.PONPort
+		}
+		if kind != store.KindONT {
+			e.OLTID, e.PONPort = "", 0
+		}
 		if mac != "" && e.Status != store.EqRetired {
 			for _, o := range d.Equipment {
 				if o.ID != e.ID && o.Status != store.EqRetired && strings.EqualFold(o.MAC, mac) {
@@ -138,6 +166,9 @@ func (s *Service) changeMACLocked(d *store.Data, id, mac string) error {
 	a, ok := d.Accounts[id]
 	if !ok {
 		return ErrNotFound
+	}
+	if err := oltMACLocked(d, mac); err != nil {
+		return err
 	}
 	if other, ok := d.AccountByMAC(mac); ok && other.ID != id {
 		return duplicateMAC(d, other, a.ApartmentID)
@@ -230,8 +261,8 @@ func returnLocked(d *store.Data, key string, e store.Equipment, status, note str
 		}
 	}
 	e.AccountID, e.Status, e.UpdatedAt = "", status, now
-	if status != store.EqInstalled {
-		e.SiteID = ""
+	if status != store.EqInstalled && !(e.Kind == store.KindOLT && status == store.EqFaulty) {
+		e.SiteID = "" // a faulty OLT stays under its router (its ONUs still hang off it)
 	}
 	d.Equipment[key] = e
 	for k, a := range d.Accounts {
@@ -336,8 +367,12 @@ func (s *Service) ImportEquipment(text string) (ImportResult, error) {
 		if i == 0 && strings.EqualFold(get(0), "kind") {
 			continue // header line
 		}
-		in := EquipmentInput{Kind: get(0), Serial: get(1), MAC: get(2), Model: get(3)}
-		if !equipKinds[strings.ToLower(get(0))] {
+		kind := get(0)
+		if strings.EqualFold(kind, "onu") { // the team says ONU; the register's key is "ont"
+			kind = store.KindONT
+		}
+		in := EquipmentInput{Kind: kind, Serial: get(1), MAC: get(2), Model: get(3), GPONSerial: get(4)}
+		if !equipKinds[strings.ToLower(kind)] {
 			// "serial,mac,model[,gpon serial]": the ONU shorthand
 			if i == 0 && strings.EqualFold(get(0), "serial") {
 				continue
@@ -351,4 +386,18 @@ func (s *Service) ImportEquipment(text string) (ImportResult, error) {
 		res.Added++
 	}
 	return res, nil
+}
+
+// saveOLTGeneric is SaveEquipment for kind olt (import, API, the generic form): a new OLT is refused (it needs a
+// name and a router, which only the OLT form and /olts carry), and an edit of an OLT goes through SaveOLT, so the
+// same rules apply: name, router when deployed, MAC uniqueness against equipment, accounts and routers.
+func (s *Service) saveOLTGeneric(in EquipmentInput) (store.Equipment, error) {
+	var cur store.Equipment
+	found := false
+	s.st.View(func(d *store.Data) { cur, found = d.Equipment[in.ID] })
+	if in.ID == "" || !found || cur.Kind != store.KindOLT {
+		return store.Equipment{}, errors.New("add an OLT with the OLT form (Equipment, Add OLT): it needs a name, a router and its MAC")
+	}
+	return s.SaveOLT(OLTInput{ID: cur.ID, Name: cur.Name, Model: in.Model, Serial: in.Serial, MAC: in.MAC, Firmware: in.Firmware, Notes: in.Notes,
+		SiteID: in.SiteID, RouterPort: cur.RouterPort, PONPorts: cur.PONPorts, MgmtIP: cur.MgmtIP, MgmtUser: cur.MgmtUser})
 }

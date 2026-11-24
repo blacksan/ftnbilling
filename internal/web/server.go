@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +52,7 @@ type Server struct {
 	joinRL    *limiter // /j/ by client address
 	testRL    *limiter // settings test buttons
 	stkRL     *limiter // KES 1 test payments
+	revealRL  *limiter // OLT login password reveals, per owner
 	toolRL    *limiter // ping, traceroute, console
 	toolSem   chan struct{}
 	toolRun   ToolRunner // runs ping and traceroute from this server; nil = the real programs
@@ -80,7 +82,7 @@ type onlineEntry struct {
 
 func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map[string]payments.Provider, mpesa *payments.Mpesa, mgr *sites.Manager, log *slog.Logger) *Server {
 	s := &Server{cfg: cfg, st: st, svc: svc, providers: providers, mpesa: mpesa, mgr: mgr, log: log,
-		rl: newLimiter(15, time.Minute), joinRL: newLimiter(10, time.Minute), testRL: newLimiter(5, time.Minute), stkRL: newLimiter(3, 10*time.Minute), toolRL: newLimiter(30, time.Minute), toolSem: make(chan struct{}, 2), findRL: newLimiter(5, time.Minute), online: map[string]onlineEntry{}}
+		rl: newLimiter(15, time.Minute), joinRL: newLimiter(10, time.Minute), testRL: newLimiter(5, time.Minute), stkRL: newLimiter(3, 10*time.Minute), revealRL: newLimiter(5, 10*time.Minute), toolRL: newLimiter(30, time.Minute), toolSem: make(chan struct{}, 2), findRL: newLimiter(5, time.Minute), online: map[string]onlineEntry{}}
 	s.auth = newAdminAuth(s)
 	if p, err := netip.ParsePrefix(cfg.WGSubnet); err == nil {
 		s.wgNet = p.Masked()
@@ -97,7 +99,26 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 	s.refreshRL = newLimiter(30, time.Minute)
 	s.searchRL = newLimiter(searchPerMinute, time.Minute)
 	funcs := template.FuncMap{
-		"kes":      func(n int) string { return "KES " + itoa(n) },
+		"kes":        func(n int) string { return "KES " + groupInt(n) },
+		"num":        groupInt,
+		"setupState": sites.StateLabel,
+		"house":      houseLabel,
+		"houseno":    houseNo,
+		"kindName":   kindName,
+		"aptName": func(id string) string {
+			var n string
+			st.View(func(d *store.Data) { n = d.Apartments[id].Name })
+			return n
+		},
+		// acctWhere: "Apartment · House N" for an account.
+		"acctWhere": func(a store.Account) string {
+			var n string
+			st.View(func(d *store.Data) { n = d.Apartments[a.ApartmentID].Name })
+			return aptHouse(n, a)
+		},
+		"endsSoon": func(t time.Time) bool { return !t.IsZero() && t.Before(svc.Now().Add(72*time.Hour)) },
+		"phone":    displayPhone,
+		"method":   payMethodName,
 		"dur":      billing.DescribeMinutes,
 		"eat":      func(t time.Time) string { return t.In(billing.EAT).Format("Mon 2 Jan 2006, 15:04") + " EAT" },
 		"eats":     func(t time.Time) string { return t.In(billing.EAT).Format("2 Jan 2006, 15:04") },
@@ -112,9 +133,20 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 		"inc":      func(i int) int { return i + 1 },
 		"day":      day,
 		"stat":     func(v string) string { return strings.ReplaceAll(v, "_", " ") },
-		"deref":    func(b *bool) bool { return b != nil && *b },
-		"last4":    lastFour,
-		"maskCode": maskCode,
+		"kesc":     func(n int) string { return "KES " + commas(n) }, // customer pages: KES 12,500
+		"nb":       nbMpesa,                                          // escapes, and keeps "M-Pesa" in one piece
+		"eatd":     func(t time.Time) string { return nbsp(t.In(billing.EAT).Format("Mon 2 Jan 2006")) },
+		"eqStat": func(v string) string {
+			if v == store.EqInstalled {
+				return "deployed"
+			}
+			return strings.ReplaceAll(v, "_", " ")
+		},
+		"oltLabel":  store.OLTLabel,
+		"vendorTip": billing.VendorFull,
+		"deref":     func(b *bool) bool { return b != nil && *b },
+		"last4":     lastFour,
+		"maskCode":  maskCode,
 		"pct": func(a, b float64) float64 {
 			if b <= 0 {
 				return 0
@@ -186,6 +218,65 @@ func (s *Server) live() config.Config {
 }
 
 func itoa(n int) string { b, _ := json.Marshal(n); return string(b) }
+
+// groupInt writes n with thousands separators: 115448 -> "115,448".
+func groupInt(n int) string {
+	s := strconv.Itoa(n)
+	neg := strings.HasPrefix(s, "-")
+	if neg {
+		s = s[1:]
+	}
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	if neg {
+		s = "-" + s
+	}
+	return s
+}
+
+// displayPhone shows a Kenyan number as "0712 345 678" whatever way it is
+// stored (254712345678, +254712345678, 0712345678). Anything else comes back
+// unchanged. Stored values are never rewritten.
+func displayPhone(p string) string {
+	d := strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, p)
+	switch {
+	case len(d) == 12 && strings.HasPrefix(d, "254"):
+		d = "0" + d[3:]
+	case len(d) == 9 && (d[0] == '7' || d[0] == '1'):
+		d = "0" + d
+	}
+	if len(d) != 10 || d[0] != '0' {
+		return p
+	}
+	return d[:4] + " " + d[4:7] + " " + d[7:]
+}
+
+// payMethodName turns a payment method code into the words the team uses.
+func payMethodName(m string) string {
+	switch m {
+	case "mpesa-c2b":
+		return "M-Pesa Paybill"
+	case "mpesa-stk":
+		return "M-Pesa prompt"
+	case "mpesa-manual":
+		return "M-Pesa (recorded by hand)"
+	case "mpesa":
+		return "M-Pesa"
+	case "cash":
+		return "Cash"
+	case "voucher":
+		return "Voucher"
+	case "":
+		return ""
+	}
+	return strings.ToUpper(m[:1]) + strings.ReplaceAll(m[1:], "-", " ")
+}
 
 // Handler returns the full HTTP handler with middleware applied.
 func (s *Server) Handler() http.Handler {

@@ -116,6 +116,24 @@ class ViewModelsTest {
         assertNull("conflict is shown as its own notice, not a generic error", s.error)
     }
 
+    @Test fun saveDetailsSendsTenantPhoneNotesButNeverTheHouseNumber() = runTest(main.dispatcher) {
+        routes["GET /api/v1/accounts/a1"] = ok(account)
+        routes["GET /api/v1/packages"] = ok("""{"items":[]}""")
+        routes["PATCH /api/v1/accounts/a1"] = ok(account)
+        val vm = main.track(CustomerDetailViewModel("a1", AccountsRepository(api)))
+        await(vm.state) { it.account is Loadable.Ready }
+        vm.open(DetailDialog.EditDetails)
+        vm.saveDetails("Jane", "0712345678", "", true, "Pays on the 5th")
+        await(vm.state) { it.dialog == DetailDialog.None && !it.busy }
+        assertEquals("Details saved", vm.state.value.info)
+        val body = requests("PATCH /api/v1/accounts/a1").single().body.readUtf8()
+        assertTrue(body, body.contains("\"tenant\":\"Jane\""))
+        assertTrue(body, body.contains("\"phone\":\"0712345678\""))
+        assertTrue(body, body.contains("\"notes\":\"Pays on the 5th\""))
+        assertTrue(body, body.contains("wa_same_phone"))
+        assertTrue(body, !body.contains("\"unit\""))
+    }
+
     @Test fun badMacIsRejectedLocallyWithoutACall() = runTest(main.dispatcher) {
         routes["GET /api/v1/accounts/a1"] = ok(account)
         routes["GET /api/v1/packages"] = ok("""{"items":[]}""")

@@ -6,25 +6,25 @@
 {{if .Detected}}
 <form method="post" action="/pay/register" autocomplete="on" novalidate><input type="hidden" name="_pcsrf" value="{{.CSRF}}">
 <label class="fld">Full name<input type="text" name="name" value="{{.Name}}" required minlength="2" maxlength="80" autocomplete="name"></label>
-<label class="fld">Phone number<input type="tel" name="phone" inputmode="tel" value="{{.Phone}}" required maxlength="20" placeholder="07XX XXX XXX" autocomplete="tel"></label>
-{{if .Shared}}<label class="fld">Name of your apartment<input type="text" name="apartment_name" value="{{.Building}}" required maxlength="80" placeholder="for example Sunrise Court" autocomplete="off"></label>
+<label class="fld">Phone number<input type="tel" name="phone" inputmode="tel" value="{{.Phone}}" required maxlength="20" autocomplete="tel"><small class="hint">For example 0712 345 678</small></label>
+{{if .Shared}}<label class="fld">Name of your apartment<input type="text" name="apartment_name" value="{{.Building}}" required maxlength="80" autocomplete="off"><small class="hint">For example Sunrise Court</small></label>
 {{else}}<label class="fld">Apartment<select name="apartment_id" required>{{$sel := .ApartmentID}}<option value="">Choose your apartment</option>{{range .Apartments}}<option value="{{.ID}}"{{if eq .ID $sel}} selected{{end}}>{{.Name}}</option>{{end}}</select></label>{{end}}
-<label class="fld">House number<input type="text" name="unit" value="{{.Unit}}" required maxlength="40" placeholder="for example B4" autocapitalize="characters" autocomplete="off"></label>
+<label class="fld">House number<input type="text" name="unit" value="{{.Unit}}" required maxlength="40" autocapitalize="characters" autocomplete="off"><small class="hint">For example B4</small></label>
 <label class="fld">Email (optional)<input type="text" name="email" inputmode="email" value="{{.Email}}" maxlength="120" autocomplete="email"></label>
-<label class="fld">Device name (optional)<input type="text" name="device_name" value="{{.DeviceName}}" maxlength="60" placeholder="as shown in your phone's Wi-Fi settings, for example Wanjiru's iPhone" autocomplete="off"></label>
+<label class="fld">Device name (optional)<input type="text" name="device_name" value="{{.DeviceName}}" maxlength="60" autocomplete="off"><small class="hint">As shown in your phone's <span class="nb">Wi-Fi</span> settings, for example Wanjiru's iPhone</small></label>
 <div class="hp" aria-hidden="true"><label>Leave this empty<input type="text" name="ftn_hp_url" tabindex="-1" autocomplete="off" aria-hidden="true"></label></div>
 <details class="card" open><summary>How we use your details</summary>
 <p class="muted">We collect your name, phone number, apartment, house number and, if you give them, your email and the name of your device. We use them only to set up and bill your internet, to send you payment receipts and plan reminders, and to contact you about the service. We do not sell them or share them for advertising. When the owner approves you, your details are kept on your customer record for as long as you are a customer. If your request is declined, we erase them. A request that is not decided within 30 days is deleted. Under the Kenya Data Protection Act, 2019 you may ask to see, correct or delete your details at any time: use the contacts below.</p></details>
 <label class="ck"><input type="checkbox" name="consent" value="1"{{if .Consent}} checked{{end}} required> I have read how my details are used and I agree.</label>
 <button type="submit">Send my registration</button></form>
 {{else}}<div class="card"><b>We could not tell which network you are on.</b><p class="muted">Please connect to your Wi-Fi and open this page again, or contact support with the details below.</p></div>{{end}}
-<p class="center"><a href="/pay">Back to payment</a></p>
+<p class="center"><a class="tap" href="/pay">Back to payment</a></p>
 {{template "contacts" .Contacts}}
 {{template "foot"}}{{end}}
 {{define "register_done"}}{{template "head" .}}
 {{template "brandbar" .Brand}}{{if .SiteName}}<p class="muted m-tight">{{.SiteName}}</p>{{end}}
 <div class="card ok"><b>Thank you. We received your registration.</b>
 <p class="muted">The owner will check it and switch your internet on. Your device stays offline until then. If it takes long, contact us below.</p></div>
-<p class="center"><a href="/pay">Back to payment</a></p>
+<p class="center"><a class="tap" href="/pay">Back to payment</a></p>
 {{template "contacts" .Contacts}}
 {{template "foot"}}{{end}}

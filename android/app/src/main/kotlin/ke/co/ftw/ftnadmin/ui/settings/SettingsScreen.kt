@@ -33,6 +33,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import ke.co.ftw.ftnadmin.R
+import ke.co.ftw.ftnadmin.ui.common.AppTopBar
+import ke.co.ftw.ftnadmin.ui.common.RadioRow
+import ke.co.ftw.ftnadmin.ui.common.userRoleLabel
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -84,20 +93,13 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            TopAppBar(
-                title = { Text("Settings") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
-                },
-            )
-        },
+        topBar = { AppTopBar(stringResource(R.string.action_settings), onBack = onBack) },
     ) { inner ->
         val s = settings
         Column(Modifier.fillMaxSize().padding(inner).verticalScroll(rememberScrollState())) {
             Header("Account")
             (auth as? AuthState.SignedIn)?.let {
-                Row2("Signed in as", "${it.user.username} (${it.user.role})")
+                Row2("Signed in as", "${it.user.username} (${userRoleLabel(it.user.role)})")
             }
             Row2("Server", BuildConfig.API_BASE)
             Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -162,9 +164,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                     }
                 }
             }
+            // The version is shown once, under Updates ("Installed version", with the build number).
             UpdatesSection(s)
-            Header("About")
-            Row2("Version", BuildConfig.VERSION_NAME)
         }
     }
 
@@ -173,17 +174,16 @@ fun SettingsScreen(onBack: () -> Unit) {
             onDismissRequest = { lockDialog = false },
             title = { Text("Lock after") },
             text = {
-                Column {
+                Column(Modifier.selectableGroup()) {
                     listOf(1, 2, 5, 15).forEach { m ->
-                        Row(
-                            Modifier.fillMaxWidth().clickable {
+                        RadioRow(
+                            selected = settings?.lockTimeoutMin == m,
+                            onSelect = {
                                 update { it.copy(lockTimeoutMin = m) }
                                 lockDialog = false
                             },
-                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            RadioButton(selected = settings?.lockTimeoutMin == m, onClick = null)
-                            Text("$m min", Modifier.padding(start = 12.dp), color = MaterialTheme.colorScheme.onSurface)
+                            Text("$m min", color = MaterialTheme.colorScheme.onSurface)
                         }
                     }
                 }
@@ -259,7 +259,7 @@ private fun UpdatesSection(s: AppSettings?) {
         }
     }
     Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Button(onClick = updates::checkNow, enabled = !state.busy) { Text("Check for updates") }
+        Button(onClick = updates::checkNow, enabled = !state.busy) { Text(stringResource(R.string.check_for_updates)) }
         if (state.checking) LoadingSpinner(Modifier.padding(start = 12.dp))
     }
     if (state.available != null) UpdateCard(state, updates, Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
@@ -330,21 +330,24 @@ private fun Row2(label: String, value: String) {
 
 @Composable
 private fun SwitchRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    // One focus stop: the row toggles, the switch only shows the state.
     Row(
-        Modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(horizontal = 16.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onChange)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Switch(checked = checked, onCheckedChange = onChange)
+        Switch(checked = checked, onCheckedChange = null)
     }
 }
 
 @Composable
 private fun ActionRow(title: String, subtitle: String, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp)) {
+    Column(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp)) {
         Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
         Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }

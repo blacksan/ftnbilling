@@ -514,7 +514,7 @@ func (s *Service) ApproveRegistration(ctx context.Context, id, mac, actor string
 	if err := s.claimRegistration(id); err != nil {
 		return store.Account{}, err
 	}
-	a, err := s.CreateFromDevice(ctx, DeviceAccountInput{SiteID: reg.SiteID, ApartmentID: reg.ApartmentID, Unit: reg.Unit, MAC: m, Tenant: reg.Name, Phone: reg.Phone})
+	a, err := s.CreateFromDevice(ctx, DeviceAccountInput{SiteID: reg.SiteID, ApartmentID: reg.ApartmentID, Unit: reg.Unit, MAC: m, Tenant: reg.Name, Phone: reg.Phone, ConfirmNoAddress: true})
 	if err != nil {
 		s.releaseRegistration(id)
 		return store.Account{}, err

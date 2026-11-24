@@ -49,7 +49,7 @@ To preview without changing anything: `DRY_RUN=1` (works without root and prints
 curl -fsSL -H "Authorization: Bearer $GH" https://raw.githubusercontent.com/blacksan/ftnbilling/main/deploy/install.sh | DRY_RUN=1 bash
 ```
 
-Options (environment variables): `DOMAIN`, `GH_TOKEN`, `VERSION` (a release tag; default is the latest release), `FROM_SOURCE=1` (build on the server instead of using a release), `NO_POSTGRES=1`, `NO_FIREWALL=1`, `DRY_RUN=1`, `PUBLIC_IP`, `ADMIN_PASS`, `BRAND_NAME`, `SUPPORT_PHONE`, `SUPPORT_EMAIL`, `SUPPORT_WHATSAPP`, `WG_PORT`, `WG_SUBNET`, `MGMT_PORT` (UDP, default 51821) and `MGMT_SUBNET` (default `10.98.0.0/24`) for remote WinBox, `WEBFIG_DOMAIN` for remote WebFig (below), `SWAP_MB`. The header of `install.sh` lists them.
+Options (environment variables): `DOMAIN`, `GH_TOKEN`, `VERSION` (a release tag; default is the latest release), `FROM_SOURCE=1` (build on the server instead of using a release), `NO_POSTGRES=1`, `NO_FIREWALL=1`, `DRY_RUN=1`, `PUBLIC_IP`, `ADMIN_PASS`, `BRAND_NAME`, `SUPPORT_PHONE`, `SUPPORT_EMAIL`, `SUPPORT_WHATSAPP`, `WG_PORT`, `WG_SUBNET`, `MGMT_PORT` (UDP, default 51821) and `MGMT_SUBNET` (default `10.98.0.0/24`) for remote WinBox, `WEBFIG_DOMAIN` for remote WebFig (below), `MAC_VENDOR_LOOKUP` and `MAC_VENDOR_DAILY` (below), `SWAP_MB`. The header of `install.sh` lists them.
 
 ### Support contacts on the captive pages
 
@@ -287,6 +287,16 @@ The house page has a Wi-Fi card: the names as the ONU reports them, a Change Wi-
 - A red "checked in from an unexpected place" card on an ONU: its serial came from another router, address or MAC than the one it is bound to (or is flapping). It gets nothing until you press Approve (bind it to the new place) or Block.
 - "shared login only" on an ONU: it refused to take its own ACS login, so it logs in with the shared one. Works, weaker identity.
 - Rotating the ACS password: every ONU stops reporting until its OLT profile has the new one.
+
+## MAC vendor names
+
+The New devices list and the customer pages name the maker of a device from its MAC. The server knows the IEEE registry offline (plus a short list of the names an ISP uses). A prefix that table lacks is looked up online, by one background worker, never while a page is being served: the page shows the name on the next load.
+
+- `MAC_VENDOR_LOOKUP=online` (default) or `off`. Set it with the installer (`sudo MAC_VENDOR_LOOKUP=off ... ./install.sh`) or in `/etc/ftnbilling/ftnbilling.env`, then restart the app. `MAC_VENDOR_DAILY` is the most requests a day (default 500).
+- What leaves the server: the first three bytes of the MAC (`AA:BB:CC`) in a request to `https://api.macvendors.com/`, with the User-Agent `ftnbilling`. Never the whole MAC address, a name, a house or a router.
+- Limits: one request a second, a daily budget, a 5 second timeout, and a `429` is honoured (Retry-After, then a longer wait each time, up to an hour). A name is kept for good, "no such prefix" for 30 days, and a prefix is never asked twice in a day. The answers are kept in the database (table `oui_cache`, migration 0020), so a restart asks nothing again.
+- A randomised (private) MAC, the kind phones use per network, is shown as "Private (randomised) address" and never looked up. Long registry names are shortened (V-SOL, MikroTik, ...); the full name is the tooltip.
+- A failure (no internet, a refusal) is silent: the device simply shows no vendor, and a debug log line says why, at most once a minute.
 
 ## 3. Check
 
