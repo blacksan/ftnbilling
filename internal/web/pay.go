@@ -190,7 +190,7 @@ type payPage struct {
 	ExpiresAt                      time.Time
 	Groups                         []packageGroup
 	Blocked                        map[string]bool
-	BlockedUntil                   string
+	BlockedUntil, BlockedShort     string // the day the current plan ends, long ("Wed 23 Dec 2026") and short ("23 Dec")
 	Selected, Phone                string
 	PhoneMask                      string // the number on file, masked; "" = none offered
 	UseFile                        bool
@@ -384,7 +384,8 @@ func (s *Server) payChoose(w http.ResponseWriter, r *http.Request, p payPage, a 
 		for _, pk := range g.Packages {
 			if until, bl := s.svc.LowerPlanBlocked(a, pk); bl {
 				p.Blocked[pk.ID] = true
-				p.BlockedUntil = until.In(billing.EAT).Format("Mon 2 Jan 2006")
+				p.BlockedUntil = nbsp(until.In(billing.EAT).Format("Mon 2 Jan 2006"))
+				p.BlockedShort = nbsp(until.In(billing.EAT).Format("2 Jan"))
 			}
 		}
 	}
@@ -590,3 +591,6 @@ func normOrEmpty(p string) string {
 	}
 	return n
 }
+
+// nbsp keeps a date or a name in one piece when a line wraps.
+func nbsp(s string) string { return strings.ReplaceAll(s, " ", "\u00a0") }

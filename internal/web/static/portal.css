@@ -13,8 +13,10 @@ a{color:var(--brand-ink);text-underline-offset:2px}
 .pkg b{font-size:var(--fs-16);font-weight:600}
 .pkg small{display:block;color:var(--muted);font-size:var(--fs-13)}
 .pkg:has(input:checked){border-color:var(--brand);background:var(--brand-soft);box-shadow:0 0 0 1px var(--brand)}
-.pkg.off{opacity:.65;background:var(--surface-2);border-style:dashed}
-.pkg.off .why{color:var(--warn);font-weight:500;margin-top:2px}
+.pkg.off{background:var(--surface-2);border-style:dashed}
+.pkg.off b{color:var(--ink-2)}
+.pkg.off .why{color:var(--muted);font-weight:500;margin-top:2px}
+.note{background:var(--brand-soft);color:var(--brand-ink);border-left:3px solid var(--brand);padding:var(--sp-3);border-radius:var(--r1);margin:var(--sp-3) 0}
 input[type=text],input[type=tel],input[type=password]{width:100%;font:inherit;font-size:var(--fs-16);min-height:48px;padding:0 var(--sp-3);color:var(--ink);background:var(--surface);border:1px solid var(--field);border-radius:var(--r1)}
 input::placeholder{color:var(--muted);opacity:1}
 button,.btn{display:block;width:100%;font:500 var(--fs-16)/1 var(--f-sans);min-height:48px;padding:0 var(--sp-4);margin:var(--sp-2) 0;border:1px solid var(--brand);border-radius:var(--r1);background:var(--brand);color:var(--on-brand);text-align:center;text-decoration:none;cursor:pointer;display:flex;align-items:center;justify-content:center}
