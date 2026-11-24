@@ -19,6 +19,7 @@ func (s *Server) apiHierarchyRoutes(h func(string, string, apiFunc)) {
 		operator = store.RoleOperator
 	)
 	h("GET /api/v1/equipment/tree", viewer, s.apiEquipmentTree)
+	h("GET /api/v1/network/map", viewer, s.apiNetworkMap)
 	h("GET /api/v1/olts", viewer, s.apiOLTList)
 	h("POST /api/v1/olts", operator, s.apiOLTSave)
 	h("GET /api/v1/olts/{id}", viewer, s.apiOLTGet)

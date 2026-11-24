@@ -46,6 +46,7 @@ import ke.co.ftw.ftnadmin.ui.home.HomeScreen
 import ke.co.ftw.ftnadmin.ui.more.AddRouterScreen
 import ke.co.ftw.ftnadmin.ui.more.EditRouterScreen
 import ke.co.ftw.ftnadmin.ui.more.MoreScreen
+import ke.co.ftw.ftnadmin.ui.network.NetworkLinks
 import ke.co.ftw.ftnadmin.ui.network.NetworkScreen
 import ke.co.ftw.ftnadmin.ui.newdevices.NewDevicesScreen
 import ke.co.ftw.ftnadmin.ui.payments.PaymentFilter
@@ -132,6 +133,15 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
                 onOpenCustomer = openAccount,
                 onChangeMac = { id -> nav.navigate(CustomerRoute(id, editMac = true)) },
                 onCreateCustomer = { routerId, mac -> nav.navigate(AddCustomerRoute(routerId, mac)) },
+                links = NetworkLinks(
+                    onApartment = { nav.navigate(ApartmentRoute(it)) },
+                    onRouter = { nav.navigate(RouterRoute(it)) },
+                    onOlt = { nav.navigate(OltFormRoute(id = it)) },
+                    // An ONU in a house opens its customer; one not installed yet opens the ONU tab of Equipment.
+                    onOnu = { accountId -> if (accountId.isNotBlank()) openAccount(accountId) else nav.navigate(EquipmentRoute("onu")) },
+                    onOther = { nav.navigate(EquipmentRoute("other")) },
+                    onAddGps = { nav.navigate(ApartmentFormRoute(it)) },
+                ),
             )
         }
         composable<CustomersRoute> {

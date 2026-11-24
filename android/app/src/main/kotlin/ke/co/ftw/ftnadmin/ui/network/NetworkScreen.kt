@@ -50,6 +50,10 @@ import ke.co.ftw.ftnadmin.ui.common.TabScaffold
 import ke.co.ftw.ftnadmin.ui.common.onlineStateRes
 import ke.co.ftw.ftnadmin.ui.common.vmFactory
 
+/**
+ * The Network screen: Map (Google Maps, one pin per apartment), List (the same data as cards, with Open in Google Maps)
+ * and Live (the router-by-router clients and interfaces this screen showed before the map).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NetworkScreen(
@@ -57,6 +61,7 @@ fun NetworkScreen(
     onAlerts: () -> Unit,
     onOpenCustomer: (String) -> Unit,
     onCreateCustomer: (routerId: String, mac: String) -> Unit,
+    links: NetworkLinks,
     /** Opens the customer with the Edit MAC dialog up (the swap/replace flow for a changed ONU). */
     onChangeMac: (String) -> Unit = onOpenCustomer,
 ) {
@@ -66,7 +71,9 @@ fun NetworkScreen(
             NetworkViewModel(container.routerLive, container.accounts, container.newDevices, container.routerContext.selection)
         },
     )
+    val mapVm: NetworkMapViewModel = viewModel(factory = vmFactory { NetworkMapViewModel(container.networkMap) })
     val ui by vm.state.collectAsStateWithLifecycle()
+    val mapUi by mapVm.state.collectAsStateWithLifecycle()
     val snack = remember { SnackbarHostState() }
     LaunchedEffect(ui.message) {
         ui.message?.let {
@@ -74,19 +81,48 @@ fun NetworkScreen(
             vm.clearMessage()
         }
     }
+    LaunchedEffect(mapUi.message) {
+        mapUi.message?.let {
+            snack.showSnackbar(it)
+            mapVm.clearMessage()
+        }
+    }
 
     TabScaffold(title = stringResource(R.string.tab_network), onAlerts = onAlerts, snackbarHost = { SnackbarHost(snack) }) { inner ->
-        val id = ui.routerId
-        if (id == null) {
-            PickRouter(Modifier.padding(inner))
-        } else {
-            // One scrolling list per pane: the tab chips, search and filters are its first rows, so at large font sizes
-            // they scroll away instead of squeezing the list to nothing.
-            Box(Modifier.padding(inner).fillMaxSize()) {
-                when (ui.tab) {
-                    NetworkTab.Clients -> ClientsPane(ui, vm, user, id, onOpenCustomer, onChangeMac, onCreateCustomer)
-                    NetworkTab.Interfaces -> InterfacesPane(ui, vm)
+        Column(Modifier.padding(inner).fillMaxSize()) {
+            ChipRow(Modifier.padding(bottom = 4.dp)) {
+                NetworkMode.entries.forEach { m ->
+                    FilterChip(selected = mapUi.mode == m, onClick = { mapVm.setMode(m) }, label = { ChipLabel(m.label) })
                 }
+            }
+            when (mapUi.mode) {
+                NetworkMode.Live -> LivePane(ui, vm, user, onOpenCustomer, onChangeMac, onCreateCustomer)
+                else -> NetworkMapPane(mapUi, mapVm, user.canWrite, links)
+            }
+        }
+    }
+}
+
+/** The router-by-router view (clients and interfaces of the selected router). */
+@Composable
+private fun LivePane(
+    ui: NetworkUiState,
+    vm: NetworkViewModel,
+    user: UserInfo,
+    onOpenCustomer: (String) -> Unit,
+    onChangeMac: (String) -> Unit,
+    onCreateCustomer: (routerId: String, mac: String) -> Unit,
+) {
+    val id = ui.routerId
+    if (id == null) {
+        PickRouter(Modifier)
+    } else {
+        // One scrolling list per pane: the tab chips, search and filters are its first rows, so at large font sizes
+        // they scroll away instead of squeezing the list to nothing.
+        Box(Modifier.fillMaxSize()) {
+            when (ui.tab) {
+                NetworkTab.Clients -> ClientsPane(ui, vm, user, id, onOpenCustomer, onChangeMac, onCreateCustomer)
+                NetworkTab.Interfaces -> InterfacesPane(ui, vm)
             }
         }
     }

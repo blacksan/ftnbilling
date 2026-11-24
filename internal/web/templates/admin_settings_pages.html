@@ -53,6 +53,18 @@
 {{else}}<p class="muted">Save the mail server and the From address first.</p>{{end}}</div>
 {{template "afoot" .}}{{end}}
 
+{{define "admin_settings_maps"}}{{template "ahead" .}}{{template "set_tabs" .}}
+<p class="muted">The Network page draws every apartment on Google Maps when a key is set here. Without one it shows the same data as a list, with a "View on Google Maps" link per apartment. Changes apply at once.</p>
+{{template "set_form" (dict "P" . "Fields" .Data.Fields "Action" "/admin/settings/maps")}}
+<div class="card"><b>Create the key</b>
+<ol><li>Google Cloud Console, APIs and Services, Library: enable <b>Maps JavaScript API</b> (and nothing else).</li>
+<li>Credentials, Create credentials, API key.</li>
+<li>Application restrictions: <b>Websites</b>, add this admin domain as <code>https://&lt;admin domain&gt;/*</code>.</li>
+<li>API restrictions: <b>Restrict key</b>, tick only Maps JavaScript API.</li>
+<li>Billing must be on for the project (Google gives a monthly free credit). Paste the key above.</li></ol>
+<p class="muted">The key is visible to anyone who opens the Network page, which is why the referrer and API restrictions matter. {{if .Data.KeySet}}A key is set.{{else}}No key is set: the Network page shows the list view.{{end}}</p></div>
+{{template "afoot" .}}{{end}}
+
 {{define "admin_settings_equipment"}}{{template "ahead" .}}{{template "set_tabs" .}}
 <p class="muted">Importing equipment lists is done on the <a href="/admin/equipment?tab=onu">Equipment page</a>.</p>
 <div class="card"><b>Find a MAC address</b><p class="muted">Asks every connected router's router: its DHCP leases. Each router gets 5 seconds.</p>

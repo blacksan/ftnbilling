@@ -572,3 +572,55 @@ body.vprint{background:#fff;color:#000;padding:16px;font:14px var(--f-sans)}
 .klass{display:inline-block;padding:0 8px;border-radius:var(--r-pill);font:600 var(--fs-12)/1.6 var(--f-sans);border:1px solid var(--line);background:var(--surface-2);color:var(--ink-2)}
 .klass.olt{background:var(--teal-800);color:#fff;border-color:transparent}
 .klass.onu{background:var(--brand-soft);color:var(--brand-ink)}
+
+/* ---- Network page: the Google map, its markers, hover card and side panel / bottom sheet (static/netmap.js) ---- */
+.pill.net-ok{--p:var(--brand-ink);--ps:var(--brand-soft);--dot:var(--brand)}
+.pill.net-partial{--p:var(--ink-2);--ps:var(--surface-3);--dot:var(--field)}
+.pill.net-down{--p:var(--bad);--ps:var(--bad-soft);--dot:var(--bad);border-color:transparent}
+.pill.net-unknown{--p:var(--muted);--dot:var(--line-strong)}
+.netwrap{position:relative;display:grid;grid-template-columns:minmax(0,1fr);gap:var(--sp-4);margin:0 0 var(--sp-4)}
+.netwrap.has-panel{grid-template-columns:minmax(0,1fr) minmax(300px,380px)}
+.netmap{min-height:520px;height:68vh;border:1px solid var(--line);border-radius:var(--r2);background:var(--surface-2);overflow:hidden;position:relative}
+.netloading,.netfail{padding:var(--sp-5)}
+.netlayer{position:absolute;left:0;top:0}
+.netpin,.netbubble{position:absolute;transform:translate(-50%,-100%);border:0;padding:0;background:none;cursor:pointer;line-height:0;filter:drop-shadow(0 1px 2px rgba(15,23,42,.45))}
+.netpin svg{--pin:var(--brand);display:block}
+.netpin svg path{fill:var(--pin);stroke:#fff;stroke-width:1.5}
+.netpin svg circle{fill:#fff}
+.netpin.net-partial svg{--pin:var(--field)}
+.netpin.net-down svg{--pin:var(--bad)}
+.netpin.net-unknown svg{--pin:var(--line-strong)}
+.netpin:focus-visible,.netbubble:focus-visible{outline:3px solid var(--focus);outline-offset:2px;border-radius:99px}
+.netbubble{transform:translate(-50%,-50%);min-width:38px;height:38px;padding:0 10px;border-radius:99px;border:2px solid #fff;background:var(--brand);color:var(--on-brand);font:600 var(--fs-14)/34px var(--f-sans);text-align:center}
+.netbubble.net-partial{background:var(--field);color:#fff}
+.netbubble.net-down{background:var(--bad);color:#fff}
+.netbubble.net-unknown{background:var(--line-strong);color:#fff}
+.nethover{position:absolute;z-index:5;width:min(320px,calc(100% - 8px));padding:var(--sp-3) var(--sp-4);border-radius:var(--r2);background:var(--surface);color:var(--ink);border:1px solid var(--line);box-shadow:0 8px 24px rgba(15,23,42,.22);pointer-events:none}
+.nethover[hidden]{display:none}
+.nethover-h{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-2);margin:0 0 var(--sp-2)}
+.netsum{display:grid;gap:var(--sp-1);margin:0}
+.netsum>div{display:grid;grid-template-columns:minmax(96px,34%) 1fr;gap:var(--sp-2);font-size:var(--fs-13)}
+.netsum dt{color:var(--muted)}
+.netsum dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.netpanel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r2);overflow:auto;max-height:68vh;align-self:start}
+.netpanel[hidden]{display:none}
+.netpanel-h{position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;gap:var(--sp-2);padding:var(--sp-3) var(--sp-4);background:var(--surface);border-bottom:1px solid var(--line)}
+.netpanel-h h2{font-size:var(--fs-16);margin:0;min-width:0;overflow-wrap:anywhere}
+.netpanel-b{padding:var(--sp-3) var(--sp-4) var(--sp-4);display:grid;gap:var(--sp-3)}
+.netpanel-state{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2)}
+.netsec h3{font-size:var(--fs-13);color:var(--muted);font-weight:600;margin:0 0 var(--sp-1);text-transform:none}
+.netlist{list-style:none;margin:0;padding:0;display:grid;gap:var(--sp-1);font-size:var(--fs-14)}
+.netacts{display:flex;flex-wrap:wrap;gap:var(--sp-2);margin:0}
+.netlegend{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2);margin:0 0 var(--sp-4)}
+.netgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:var(--sp-4);margin:0 0 var(--sp-4)}
+.netcard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r2);padding:var(--sp-4);display:grid;gap:var(--sp-2);align-content:start;min-width:0}
+.netcard header{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-2)}
+.netcard h3{font-size:var(--fs-16);margin:0;min-width:0;overflow-wrap:anywhere}
+.netcard p{margin:0}
+.netnote{border-left:4px solid var(--brand)}
+@media (max-width:760px){
+  .netwrap.has-panel{grid-template-columns:minmax(0,1fr)}
+  .netmap{min-height:60vh}
+  /* bottom sheet on phones */
+  .netpanel{position:fixed;left:0;right:0;bottom:0;z-index:40;max-height:70vh;border-radius:var(--r4) var(--r4) 0 0;border-bottom:0;box-shadow:0 -8px 24px rgba(15,23,42,.28)}
+}

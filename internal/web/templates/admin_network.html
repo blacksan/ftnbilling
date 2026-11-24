@@ -1,0 +1,54 @@
+{{define "net_tabs"}}<nav class="tabs" aria-label="Network">{{range .Data.NetTabs}}<a class="tab" href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}</nav>{{end}}
+
+{{define "net_state"}}<span class="pill net-{{.}}">{{if eq . "ok"}}All good{{else if eq . "partial"}}Some offline{{else if eq . "down"}}Router down{{else}}No router{{end}}</span>{{end}}
+
+{{define "net_card"}}<article class="netcard" id="apt-{{.ID}}">
+<header><h3><a href="{{.URL}}">{{.Name}}</a></h3>{{template "net_state" .State}}</header>
+{{if .Address}}<p class="muted">{{.Address}}</p>{{end}}
+<dl class="netsum">
+<div><dt>Houses</dt><dd>{{.Houses.Active}} active of {{.Houses.Total}}</dd></div>
+<div><dt>Online now</dt><dd>{{.Houses.Online}}</dd></div>
+<div><dt>Routers</dt><dd>{{if .Routers}}{{range $i, $r := .Routers}}{{if $i}}, {{end}}<a href="{{$r.URL}}">{{$r.Name}}</a> ({{$r.State}}){{end}}{{else}}<span class="muted">none</span>{{end}}</dd></div>
+<div><dt>OLTs</dt><dd>{{if .OLTs}}{{range $i, $o := .OLTs}}{{if $i}}, {{end}}<a href="{{$o.URL}}">{{$o.Name}}</a>{{if $o.PONs}} (PON {{range $j, $p := $o.PONs}}{{if $j}}, {{end}}{{$p}}{{end}}){{end}}{{end}}{{else}}<span class="muted">none</span>{{end}}</dd></div>
+<div><dt>ONUs online</dt><dd>{{.ONUsOnline}} of {{.ONUsTotal}}</dd></div>
+<div><dt>Open alerts</dt><dd>{{.Alerts}}</dd></div>
+</dl>
+{{if or .ONUs .Other}}<details><summary>Equipment installed ({{len .ONUs}} ONU{{if .Other}}, {{len .Other}} other{{end}})</summary>
+<ul class="netlist">{{range .ONUs}}<li><a href="{{.URL}}">ONU {{.Serial}}</a>{{if .House}} · house {{.House}}{{end}}{{if .Customer}} · {{.Customer}}{{end}} · <span class="pill {{.Status}}">{{.Status}}</span></li>{{end}}
+{{range .Other}}<li><a href="{{.URL}}">{{.Label}}</a> · {{.Kind}}{{if .House}} · house {{.House}}{{end}} · {{.Status}}</li>{{end}}</ul></details>{{end}}
+<p class="netacts"><a class="btn sm" href="{{.URL}}">Open apartment</a>{{if .MapsURL}} <a class="btn ghost sm" href="{{.MapsURL}}" target="_blank" rel="noopener">View on Google Maps</a>{{end}}</p>
+</article>{{end}}
+
+{{define "net_nogps"}}<section class="panel netnogps" id="net-nogps" aria-labelledby="net-nogps-h"><div class="panel-h"><h2 id="net-nogps-h">No location yet</h2><span class="muted">{{len .Data.NoGPS}} apartment{{if ne (len .Data.NoGPS) 1}}s{{end}}</span></div>
+{{if .Data.NoGPS}}<p class="muted">These apartments have no GPS point, so they are not on the map.</p>
+<ul class="netlist">{{range .Data.NoGPS}}<li><a href="{{.URL}}">{{.Name}}</a>{{if .Address}} <span class="muted">· {{.Address}}</span>{{end}} · {{if $.CanWrite}}<a href="{{.EditURL}}">Add GPS</a>{{else}}<span class="muted">ask an operator to add GPS</span>{{end}}</li>{{end}}</ul>
+{{else}}<p class="muted">Every apartment has a location.</p>{{end}}</section>{{end}}
+
+{{define "admin_network"}}{{template "ahead" .}}
+{{template "net_tabs" .}}
+<div class="stats">
+{{template "stat" (dict "K" "Apartments" "V" (len .Data.Net.Apartments) "S" "in this view" "Icon" "apartments" "Feature" true)}}
+{{template "stat" (dict "K" "On the map" "V" .Data.Net.WithGPS "S" "with a GPS point" "Icon" "map" "Tone" "info")}}
+{{template "stat" (dict "K" "Router down" "V" .Data.Net.Down "S" "apartments" "Icon" "warn" "Tone" (cond (gt .Data.Net.Down 0) "bad" "ok"))}}
+{{template "stat" (dict "K" "Some offline" "V" .Data.Net.Partial "S" "apartments" "Icon" "warn" "Tone" "info")}}
+</div>
+{{if and (eq .Data.View "map") .Data.MapsKeySet}}
+<div class="netwrap" id="netwrap" data-json="/admin/network/map.json" data-key="{{.Data.MapsKey}}">
+<div class="netmap" id="netmap" role="application" aria-label="Map of the apartments"><p class="muted netloading" id="netloading">Loading the map...</p></div>
+<aside class="netpanel" id="netpanel" role="dialog" aria-label="Equipment at this apartment" aria-modal="false" hidden>
+<div class="netpanel-h"><h2 id="netpanel-title"></h2><button type="button" class="ibtn" id="netpanel-close" aria-label="Close">&times;</button></div>
+<div class="netpanel-b" id="netpanel-body"></div></aside>
+<div class="nethover" id="nethover" role="tooltip" hidden></div>
+</div>
+<p class="netlegend muted"><span class="pill net-ok">All good</span> <span class="pill net-partial">Some offline</span> <span class="pill net-down">Router down</span> Click a marker for the equipment installed there. <a href="/admin/network?view=list">Show as a list</a></p>
+<noscript><p class="muted">The map needs JavaScript. <a href="/admin/network?view=list">Show the list instead</a>.</p></noscript>
+{{template "net_nogps" .}}
+<script src="{{static "netmap.js"}}" defer></script>
+{{else}}
+{{if not .Data.MapsKeySet}}<section class="panel netnote" id="net-nokey"><h2>The map is not switched on</h2>
+<p>This is the same information as a list, with a "View on Google Maps" link for each apartment. To get the map, add a Google Maps browser key{{if .IsOwner}}: <a href="/admin/settings/maps">Settings, Maps</a>{{else}} (an owner does this in Settings, Maps){{end}}. The key is made in Google Cloud Console: enable the <b>Maps JavaScript API</b>, create an API key, restrict it to websites (HTTP referrers) = this admin address and to the Maps JavaScript API only. The steps are in <code>deploy/README.md</code>, "Network map".</p></section>{{end}}
+{{template "net_nogps" .}}
+{{if .Data.Net.Apartments}}<div class="netgrid">{{range .Data.Net.Apartments}}{{if .HasGPS}}{{template "net_card" .}}{{end}}{{end}}</div>
+{{else}}{{template "empty" (dict "Title" "No apartments yet." "Text" "Add an apartment with its GPS point and it appears here." "Acts" (acts "Add apartment|/admin/apartments/new"))}}{{end}}
+{{end}}
+{{template "afoot" .}}{{end}}

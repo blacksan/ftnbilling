@@ -17,6 +17,7 @@ import ke.co.ftw.ftnadmin.data.apartments.ApartmentsRepository
 import ke.co.ftw.ftnadmin.data.auth.AuthRepository
 import ke.co.ftw.ftnadmin.data.auth.DeviceInfo
 import ke.co.ftw.ftnadmin.data.dashboard.DashboardRepository
+import ke.co.ftw.ftnadmin.data.networkmap.NetworkMapRepository
 import ke.co.ftw.ftnadmin.data.onu.OnuRepository
 import ke.co.ftw.ftnadmin.data.payments.PaymentsRepository
 import ke.co.ftw.ftnadmin.data.routers.RouterContext
@@ -61,6 +62,7 @@ class AppContainer(app: Application) {
     val payments = PaymentsRepository(api)
     val onu = OnuRepository(api)
     val equipment = EquipmentRepository(api)
+    val networkMap = NetworkMapRepository(api)
     val sites = SitesRepository(api)
     val siteSetup = SiteSetupRepository(api)
     val newDevices = NewDevicesRepository(api)
