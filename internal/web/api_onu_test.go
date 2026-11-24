@@ -177,7 +177,10 @@ func TestAPIONUTrustIsOwnerOnlyAndUnknownListWorks(t *testing.T) {
 	if !strings.Contains(string(g.Raw), `"mac_wait"`) || !strings.Contains(string(g.Raw), "Waiting: management MAC doesn't match the registered ONU yet") {
 		t.Fatalf("%d %s", g.Status, g.Raw)
 	}
-	if v := r.call(r.owner.Access, "POST", "/onus/ot1/trust", nil, nil); v.Status != 200 {
+	if v := r.call(r.owner.Access, "POST", "/onus/ot1/trust", map[string]any{"mac": "AA:BB:CC:00:00:91"}, nil); v.Status != 409 {
+		t.Fatalf("trusted for a MAC the ONU no longer waits with: %d %s", v.Status, v.Raw)
+	}
+	if v := r.call(r.owner.Access, "POST", "/onus/ot1/trust", map[string]any{"mac": "AA:BB:CC:00:00:90"}, nil); v.Status != 200 {
 		t.Fatalf("%d %s", v.Status, v.Raw)
 	}
 	if v := r.call(r.owner.Access, "POST", "/onus/nope/trust", nil, nil); v.Status != 404 {

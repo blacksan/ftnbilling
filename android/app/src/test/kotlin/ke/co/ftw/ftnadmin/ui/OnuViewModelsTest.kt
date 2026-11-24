@@ -369,7 +369,8 @@ class OnuViewModelsTest {
         assertTrue(onu.macWait!!.canTrust)
         vm.trust(onu)
         await(vm.state) { !it.busy && it.info != null }
-        assertEquals(1, requests("POST /api/v1/onus/o7/trust").size)
+        val body = requests("POST /api/v1/onus/o7/trust").single().body.readUtf8()
+        assertTrue(body, body.contains("\"mac\":\"AA:BB:CC:00:00:90\""))
     }
 
     @Test fun approveWithNothingToApproveShowsTheReason() = runTest(main.dispatcher) {

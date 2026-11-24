@@ -179,19 +179,26 @@ func TestRegisteredSerialWithFarMACIsHeldUntilTheOwnerTrustsIt(t *testing.T) {
 	if _, err := f.svc.SetWiFi("owner", "", "a1", WiFiInput{SSID: "HouseNet", Pass: "housepass99", Same: true}); err != nil {
 		t.Fatal(err)
 	}
+	settle(f, c)
 	_ = c.session("2 PERIODIC")
 	if c.setCount() != 0 {
 		t.Fatalf("Sets went to a held box: %v", c.sets)
 	}
-	// the owner trusts this one box; the next check-ins release it, and the house's Wi-Fi follows
-	if err := f.svc.TrustONU("owner", "", o.ID); err != nil {
+	// the owner trusts this one box, for the MAC that was shown; the next check-ins release it, and the house's Wi-Fi follows
+	if err := f.svc.TrustONU("owner", "", o.ID, farMAC20); err != ErrLeaseMoved {
+		t.Fatalf("trusted for a MAC that was not shown: %v", err)
+	}
+	if err := f.svc.TrustONU("owner", "", o.ID, strings.ToLower(leaseMAC20)); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.svc.TrustONU("owner", "", "nope"); err != ErrONUGone {
+	if err := f.svc.TrustONU("owner", "", "nope", ""); err != ErrONUGone {
 		t.Fatalf("got %v", err)
 	}
+	settle(f, c)
 	_ = c.session("2 PERIODIC")
+	settle(f, c)
 	_ = c.session("2 PERIODIC")
+	settle(f, c)
 	crLogin(c)
 	_ = c.session("2 PERIODIC")
 	eventually(t, "wifi after the override", func() bool { return c.get(c.wlan("1")+"SSID") == "HouseNet" })
@@ -199,7 +206,7 @@ func TestRegisteredSerialWithFarMACIsHeldUntilTheOwnerTrustsIt(t *testing.T) {
 	if o.Sec.MACCheck != store.MACOK || o.Sec.MgmtMAC != leaseMAC20 || o.Sec.MACTrusted != leaseMAC20 {
 		t.Fatalf("not released: %+v", o.Sec)
 	}
-	if err := f.svc.TrustONU("owner", "", o.ID); err != ErrNotWaiting {
+	if err := f.svc.TrustONU("owner", "", o.ID, ""); err != ErrNotWaiting {
 		t.Fatalf("got %v", err)
 	}
 	audited := false
@@ -227,7 +234,7 @@ func TestOverrideIsForTheMACItWasHeldWith(t *testing.T) {
 	f.inventory("SNMOVE", "", farMAC20, "a1")
 	c := newZTE(t, f, "SNMOVE", "10.6.3.20")
 	_ = c.session("0 BOOTSTRAP")
-	if err := f.svc.TrustONU("owner", "", f.onuBySerial("SNMOVE").ID); err != nil {
+	if err := f.svc.TrustONU("owner", "", f.onuBySerial("SNMOVE").ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	f.setLease("10.6.3.20", "02:00:0A:AA:AA:AA") // another device now holds the address
@@ -248,7 +255,7 @@ func TestNoRegisteredWANMACNeedsTheOverride(t *testing.T) {
 	if o.Sec.MACCheck != store.MACWaiting || c.setCount() != 0 || !strings.Contains(o.Sec.MACWaitNote, "no WAN MAC") {
 		t.Fatalf("%+v", o.Sec)
 	}
-	if err := f.svc.TrustONU("owner", "", o.ID); err != nil {
+	if err := f.svc.TrustONU("owner", "", o.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -269,7 +276,7 @@ func TestHeldWhileTheRouterHasNoLeaseThenReleased(t *testing.T) {
 	if v.MACWait == nil || v.MACWait.CanTrust {
 		t.Fatalf("view %+v", v.MACWait)
 	}
-	if err := f.svc.TrustONU("owner", "", f.onuBySerial("SNLATE").ID); err != ErrNoLeaseMAC {
+	if err := f.svc.TrustONU("owner", "", f.onuBySerial("SNLATE").ID, ""); err != ErrNoLeaseMAC {
 		t.Fatalf("got %v", err)
 	}
 	f.mu.Lock()
@@ -354,5 +361,79 @@ func TestSettingOffKeepsTheOldBehaviour(t *testing.T) {
 	}
 	if f.alertCount() != 0 {
 		t.Fatalf("alerts %v", f.alerts)
+	}
+}
+
+// A second device with another spelling of a registered serial (or another OUI) is a new record of the same registered
+// ONU: a near MAC does not let it through, and it must not take the house from the real box.
+func TestSecondRecordOfARegisteredONUIsHeldAndDoesNotTakeTheHouse(t *testing.T) {
+	for _, tc := range []struct{ name, serial, oui string }{{"case", "sndup", ""}, {"oui", "SNDUP", "AAAAAA"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.strict(true)
+			f.inventory("SNDUP", "", nearMAC20, "a1")
+			c := linkedWithOwnLogin(t, f, "SNDUP", "10.6.3.20")
+			real := f.onuBySerial("SNDUP")
+			a := newZTE(t, f, tc.serial, "10.6.3.21") // its lease MAC ...03:15 is within 8 of the registered WAN MAC
+			if tc.oui != "" {
+				a.OUI = tc.oui
+			}
+			for _, ev := range []string{"0 BOOTSTRAP", "2 PERIODIC", "2 PERIODIC"} {
+				if err := a.session(ev); err != nil {
+					t.Fatal(err)
+				}
+			}
+			settle(f, c, a)
+			if a.setCount() != 0 || a.count("GetParameterValues") != 0 {
+				t.Fatalf("the second record got more than an InformResponse: %v", a.rpcs)
+			}
+			var dup store.ONU
+			f.st.View(func(d *store.Data) {
+				for _, o := range d.ONUs {
+					if o.ID != real.ID {
+						dup = o
+					}
+				}
+			})
+			if dup.ID == "" || dup.Sec.MACCheck != store.MACWaiting || dup.AccountID != "" || !strings.Contains(dup.Sec.MACWaitNote, "second device record") {
+				t.Fatalf("second record: %+v", dup)
+			}
+			var now store.ONU
+			var tasks []store.ONUTask
+			f.st.View(func(d *store.Data) { now, tasks = d.ONUs[real.ID], d.ONUTasksOf(real.ID) })
+			if now.AccountID != "a1" || now.State.Returned {
+				t.Fatalf("the real box lost its house: %+v", now)
+			}
+			for _, tk := range tasks {
+				if tk.Kind == store.TaskFactoryReset && tk.Active() {
+					t.Fatal("a factory reset was queued for the real box")
+				}
+			}
+			if f.alertCount() == 0 || !strings.Contains(f.alerts[len(f.alerts)-1], "second device record") {
+				t.Fatalf("alerts %v", f.alerts)
+			}
+		})
+	}
+}
+
+// A held return of a known box records only the wait: the place and profile of the record stay those of the box.
+func TestHeldResetDoesNotMoveTheRecord(t *testing.T) {
+	f := newFixture(t)
+	f.strict(true)
+	f.inventory("SNKEEP", "", nearMAC20, "a1")
+	c := linkedWithOwnLogin(t, f, "SNKEEP", "10.6.3.20")
+	before := f.onuBySerial("SNKEEP")
+	f.st.Update(func(d *store.Data) error {
+		e := d.Equipment["eq-SNKEEP"]
+		e.MAC = farMAC20
+		d.Equipment[e.ID] = e
+		return nil
+	})
+	c.factoryReset()
+	c.set(c.root+"ManagementServer.ConnectionRequestURL", "http://10.6.3.20:9999/elsewhere")
+	_ = c.session("0 BOOTSTRAP")
+	o := f.onuBySerial("SNKEEP")
+	if o.Sec.MACCheck != store.MACWaiting || o.ConnReqURL != before.ConnReqURL || o.Root != before.Root || !o.Profile.Discovered {
+		t.Fatalf("held, but the record moved: %+v", o)
 	}
 }

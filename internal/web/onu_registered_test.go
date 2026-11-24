@@ -34,7 +34,18 @@ func TestONUWaitingForMACShowsBothMACsAndOwnerOverride(t *testing.T) {
 	if a.onu("onuw").Sec.MACTrusted != "" {
 		t.Fatal("trusted with a wrong password")
 	}
-	r = a.admin("POST", "/admin/onus/trust", url.Values{"onu": {"onuw"}, "current_password": {pw}})
+	// without the MAC that was shown, or after the ONU moved on to another MAC, nothing is trusted
+	for _, mac := range []string{"", "AA:BB:CC:DD:EE:78"} {
+		r = a.admin("POST", "/admin/onus/trust", url.Values{"onu": {"onuw"}, "mac": {mac}, "current_password": {pw}})
+		_ = body(t, r)
+		if a.onu("onuw").Sec.MACTrusted != "" {
+			t.Fatalf("trusted with the shown MAC %q", mac)
+		}
+	}
+	if page := a.adminGet(t, "/admin/onus"); !strings.Contains(page, `name="mac" value="AA:BB:CC:DD:EE:77"`) {
+		t.Fatal("the trust form does not carry the MAC it shows")
+	}
+	r = a.admin("POST", "/admin/onus/trust", url.Values{"onu": {"onuw"}, "mac": {"aa-bb-cc-dd-ee-77"}, "current_password": {pw}})
 	_ = body(t, r)
 	if got := a.onu("onuw").Sec.MACTrusted; got != "AA:BB:CC:DD:EE:77" {
 		t.Fatalf("not trusted: %q", got)

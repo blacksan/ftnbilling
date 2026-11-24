@@ -35,6 +35,8 @@ const (
 var (
 	ErrNotWaiting = errors.New("that ONU is not waiting for its management MAC to match")
 	ErrNoLeaseMAC = errors.New("the router has not said which MAC holds this ONU's address yet: wait for its next check-in")
+	// ErrLeaseMoved: the ONU checked in from another MAC since the page was shown; the owner has to look again.
+	ErrLeaseMoved = errors.New("the ONU checked in from another management MAC since this was shown: look at it again before trusting it")
 )
 
 // UnknownONU is a serial that tried to check in and is not in the ONU inventory.
@@ -225,8 +227,37 @@ func (s *Service) macGate(d *store.Data, serial string, sec store.ONUSec, lease 
 	return g
 }
 
-// TrustONU is the owner's override: the lease MAC the held ONU checked in from is accepted for this serial.
-func (s *Service) TrustONU(by, ip, onuID string) error {
+// siblingONU finds another device record of the same registered ONU (the serial spelled otherwise, or another OUI): a
+// new serial that maps to an inventory item some record already maps to.
+func siblingONU(d *store.Data, serial, selfID string) (store.ONU, bool) {
+	inv, ok := d.ONTBySerial(serial)
+	if !ok {
+		return store.ONU{}, false
+	}
+	for _, o := range d.ONUs {
+		if o.ID == selfID {
+			continue
+		}
+		if e, ok := d.ONTBySerial(o.Serial); ok && e.ID == inv.ID {
+			return o, true
+		}
+	}
+	return store.ONU{}, false
+}
+
+func siblingNote(other store.ONU) string {
+	return fmt.Sprintf("the registered ONU already checks in as %s (OUI %s): this is a second device record for it", other.Serial, nonEmpty(other.OUI, "?"))
+}
+
+// TrustONU is the owner's override: the lease MAC the held ONU checked in from is accepted for this serial. seen is the
+// lease MAC the owner was shown: when given, the override applies only while the ONU still waits with that MAC (another
+// device may have checked in with the serial between the page and the click).
+func (s *Service) TrustONU(by, ip, onuID, seen string) error {
+	if seen != "" {
+		if c, ok := store.CanonMAC(strings.TrimSpace(seen)); ok {
+			seen = c
+		}
+	}
 	err := s.st.Update(func(d *store.Data) error {
 		o, ok := d.ONUs[onuID]
 		if !ok {
@@ -237,6 +268,9 @@ func (s *Service) TrustONU(by, ip, onuID string) error {
 		}
 		if o.Sec.MACWaitLease == "" {
 			return ErrNoLeaseMAC
+		}
+		if seen != "" && seen != o.Sec.MACWaitLease {
+			return ErrLeaseMoved
 		}
 		o.Sec.MACTrusted = o.Sec.MACWaitLease
 		d.ONUs[o.ID] = o

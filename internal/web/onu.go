@@ -237,7 +237,12 @@ func (s *Server) adminONUTrust(w http.ResponseWriter, r *http.Request) {
 	if !s.reauth(w, r, to) {
 		return
 	}
-	err := s.acs.TrustONU(s.actorOf(r), realIP(r), r.PostFormValue("onu"))
+	mac := r.PostFormValue("mac")
+	if mac == "" {
+		s.back(w, r, to, "Error: the page did not say which management MAC to trust: reload it and try again")
+		return
+	}
+	err := s.acs.TrustONU(s.actorOf(r), realIP(r), r.PostFormValue("onu"), mac)
 	if err == nil {
 		s.audit(r, "ONU management MAC trusted for "+r.PostFormValue("onu"))
 	}

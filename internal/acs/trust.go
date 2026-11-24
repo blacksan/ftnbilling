@@ -58,6 +58,8 @@ type verdict struct {
 	reset bool
 	// noWrite: nothing was changed in the store (an unregistered serial seen again within the minute).
 	noWrite bool
+	// noLink: the record must not be linked to a house by this Inform (a second record of a registered ONU).
+	noLink bool
 }
 
 // leaseResult is the router's answer for an address: ok=false when it could not be asked, else mac is the MAC the
@@ -143,7 +145,16 @@ func (s *Service) decide(d *store.Data, in Inform, site store.Site, ip netip.Add
 		}
 		cur = store.ONU{ID: newONUID(), Serial: in.Serial, OUI: in.OUI, FirstSeen: now}
 		v.state, v.trust = stNew, trustNew
-		if g := s.macGate(d, in.Serial, cur.Sec, lease); g.hold {
+		g := s.macGate(d, in.Serial, cur.Sec, lease)
+		if s.cfg.ACSRegisteredOnly {
+			if other, ok := siblingONU(d, in.Serial, cur.ID); ok {
+				// The registered ONU already has a device record under another spelling of its serial or another OUI:
+				// this is a second box claiming to be it. Held whatever its MAC, and it must not take the house.
+				g = macGate{hold: true, wan: g.wan, note: siblingNote(other)}
+				v.noLink = true
+			}
+		}
+		if g.hold {
 			// A registered serial, but its management MAC is not near the registered WAN MAC: nothing goes out yet.
 			v.state, v.trust = stMACWait, trustNone
 			v.alert = s.holdMAC(&cur, g, lease, in.Serial, s.siteName(d, site.ID), now)
@@ -232,12 +243,24 @@ func (s *Service) decide(d *store.Data, in Inform, site store.Site, ip netip.Add
 			// First contact still waiting, or a return on the shared login (a factory reset): the management MAC has to be
 			// near the registered WAN MAC before anything secret goes out.
 			gate = s.macGate(d, cur.Serial, cur.Sec, lease)
+			trusted := lease.ok && lease.mac != "" && cur.Sec.MACTrusted == lease.mac
+			if s.cfg.ACSRegisteredOnly && cur.Sec.MACCheck == store.MACWaiting && !trusted {
+				if other, ok := siblingONU(d, cur.Serial, cur.ID); ok {
+					// still a second record of a registered ONU: a near MAC does not release it, only the owner does
+					gate = macGate{hold: true, wan: gate.wan, note: siblingNote(other)}
+				}
+			}
 		}
 		firstLogin := cur.Sec.ACSCred == store.CredNone
 		wasWaiting := cur.Sec.MACCheck == store.MACWaiting
 		if gate.hold {
+			// Held: the record keeps the place, profile and Wi-Fi report of the box it belongs to (the device now checking
+			// in may not be that box); only the wait and the time of the check-in are recorded.
 			v.state, v.trust = stMACWait, trustNone
 			v.alert = s.holdMAC(&cur, gate, lease, cur.Serial, s.siteName(d, site.ID), now)
+			cur.LastInform, cur.LastEvents = now, strings.Join(in.Events, ",")
+			d.ONUs[cur.ID] = cur
+			return cur, v
 		} else {
 			if wasWaiting || cur.Sec.MACCheck == store.MACWaiting {
 				cur.Sec.MACCheck, cur.Sec.MACWaitLease, cur.Sec.MACWaitNote = store.MACOK, "", ""
@@ -350,7 +373,9 @@ func (s *Service) completeInform(d *store.Data, cur store.ONU, v verdict, in Inf
 		}
 	}
 	d.ONUs[cur.ID] = cur
-	autoLink(d, cur.ID, now)
+	if !v.noLink {
+		autoLink(d, cur.ID, now)
+	}
 	cur = d.ONUs[cur.ID]
 	// A box that was linked to a house during this Inform keeps trustNew: its address or MAC may have just been
 	// (re)bound, so this session gives it no house secret; the next one, from the same place, does.

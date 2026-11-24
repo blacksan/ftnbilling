@@ -60,7 +60,7 @@ func (s *Server) acsErr(w http.ResponseWriter, err error) {
 		validationErr(w, map[string]string{fe.Field: fe.Msg})
 	case errors.Is(err, acs.ErrNoONU), errors.Is(err, acs.ErrONUGone), errors.Is(err, acs.ErrNoAccount):
 		apiErr(w, http.StatusNotFound, codeNotFound, err.Error(), nil)
-	case errors.Is(err, acs.ErrNothingToConfirm), errors.Is(err, acs.ErrNotQuarantined), errors.Is(err, acs.ErrTaskGone), errors.Is(err, acs.ErrTwoPlaces), errors.Is(err, acs.ErrNotWaiting), errors.Is(err, acs.ErrNoLeaseMAC):
+	case errors.Is(err, acs.ErrNothingToConfirm), errors.Is(err, acs.ErrNotQuarantined), errors.Is(err, acs.ErrTaskGone), errors.Is(err, acs.ErrTwoPlaces), errors.Is(err, acs.ErrNotWaiting), errors.Is(err, acs.ErrNoLeaseMAC), errors.Is(err, acs.ErrLeaseMoved):
 		apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
 	case errors.Is(err, acs.ErrLinked), errors.Is(err, acs.ErrONULinked), errors.Is(err, acs.ErrSite):
 		apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
@@ -195,7 +195,14 @@ func (s *Server) apiONUDecide(what string) apiFunc {
 		case "block":
 			err = s.acs.BlockONU(c.user.Username, c.ip, r.PathValue("id"))
 		case "trust":
-			err = s.acs.TrustONU(c.user.Username, c.ip, r.PathValue("id"))
+			// {mac}: optional, the lease MAC the owner was shown; refused with 409 when the ONU has moved on since.
+			var req struct {
+				MAC string `json:"mac"`
+			}
+			if !decode(w, r, &req, true) {
+				return
+			}
+			err = s.acs.TrustONU(c.user.Username, c.ip, r.PathValue("id"), req.MAC)
 		default:
 			err = s.acs.UnblockONU(c.user.Username, c.ip, r.PathValue("id"))
 		}
