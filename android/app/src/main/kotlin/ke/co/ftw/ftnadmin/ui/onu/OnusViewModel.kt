@@ -66,7 +66,7 @@ class OnusViewModel(
             val r = apiResult { repo.link(onu.id, account.id) }
             _state.update { cur ->
                 r.fold(
-                    { cur.copy(busy = false, linking = null, info = "Linked to ${account.flat}") },
+                    { cur.copy(busy = false, linking = null, info = "Linked to house ${account.unitLabel}") },
                     { e -> cur.copy(busy = false, error = e.userMessage()) },
                 )
             }

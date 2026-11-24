@@ -248,7 +248,8 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
             ke.co.ftw.ftnadmin.ui.routers.ports.PortsScreen(r.id, r.name, onBack = { nav.popBackStack() })
         }
         composable<EditRouterRoute> { e ->
-            EditRouterScreen(e.toRoute<EditRouterRoute>().id, onBack = { nav.popBackStack() })
+            val routerId = e.toRoute<EditRouterRoute>().id
+            EditRouterScreen(routerId, onBack = { nav.popBackStack() }, onOpenPorts = { name -> nav.navigate(PortsRoute(routerId, name)) })
         }
         composable<NewDevicesRoute> { e ->
             NewDevicesScreen(
