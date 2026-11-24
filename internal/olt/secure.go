@@ -133,16 +133,35 @@ func (s *Service) secureIn(ctx context.Context, o *opened, cur cred, by string) 
 	clearPending := func() {
 		_ = s.setAdopt(e.ID, func(a *store.OLTAdopt, e *store.Equipment, d *store.Data) { a.PendingPass, a.PendingEn = "", "" })
 	}
+	// enableSent: the generated enable password may be on the OLT now. False only when the change stopped at a line the
+	// OLT refused before or at the enable line (user manager, the login line, the enable line itself).
+	enableSent := true
 	restore := func(why string) error {
 		// The old session is still open: put the old passwords back through it.
 		rerr := o.sess.RunRestore(ctx, dl.SecureUserLines(user, cur.Pass, cur.Enable))
-		clearPending()
 		if rerr != nil {
-			return fmt.Errorf("%s; the old password could NOT be restored automatically (%s): log in to the OLT and check its login", why, errText(rerr))
+			// The OLT may now hold the new pair (the old session broke, or the OLT refused the old line): the pair stays
+			// sealed as pending, and the next pass logs in with it when the stored login no longer works.
+			return fmt.Errorf("%s; the old password could NOT be restored automatically (%s): the new passwords are kept sealed and the server tries them on its next check", why, errText(rerr))
 		}
+		if cur.Enable == "" && enableSent {
+			// There was no known enable password to put back: the OLT keeps the generated one (until it restarts
+			// without a save), so the server keeps it too rather than leave the OLT with an enable password nobody knows.
+			_ = s.upd(e.ID, func(d *store.Data, eq store.Equipment, st *store.OLTState) {
+				st.Settings.EnablePass = se
+				st.Settings.Adopt.PendingPass, st.Settings.Adopt.PendingEn = "", ""
+				s.audit(d, eq, firstNonEmpty(by, "system"), "OLT "+label+": the old login password was restored; there was no known enable password to restore, so the generated one is now stored")
+			})
+			return fmt.Errorf("%s; the old login password was restored and nothing was saved (the OLT had no known enable password: the generated one is stored and can be revealed)", why)
+		}
+		clearPending()
 		return fmt.Errorf("%s; the old password was restored and nothing was saved", why)
 	}
 	if err := o.sess.RunSecure(ctx, dl.SecureUserLines(user, login, enable)); err != nil {
+		var ce *CmdError
+		if errors.As(err, &ce) && ce.Cmd != dl.ExitCmd {
+			enableSent = false
+		}
 		return res, s.secureFailed(e, by, restore("the OLT refused the new password ("+errText(err)+")"))
 	}
 	// Verify with a NEW session: the login, the shown serial and, where the session starts at the user prompt, the enable password.
@@ -253,7 +272,8 @@ func (s *Service) secureSNMP(ctx context.Context, o *opened, by string, res *Sec
 		left, other2 = defaultCommunities(out2)
 		other = other2
 	} else {
-		left = nil
+		res.SNMPNote = "The removal of the default SNMP communities was sent but the list could not be read again to confirm it: check `show snmp-server community` on the OLT."
+		return
 	}
 	if len(left) > 0 {
 		res.SNMPNote = "The default SNMP communities " + strings.Join(left, ", ") + " could not be removed. Remove them on the OLT (no snmp-server community WORD)."
@@ -280,6 +300,20 @@ func defaultCommunities(out string) (def, other []string) {
 	for _, l := range strings.Split(out, "\n") {
 		f := strings.Fields(strings.TrimSpace(l))
 		if len(f) == 0 || strings.HasPrefix(f[0], "%") {
+			continue
+		}
+		// The default names count wherever they stand in the line (the bench has not shown this command's layout: a
+		// "Community: public" or a table with an index column must not hide them).
+		hit := false
+		for _, t := range f {
+			t = strings.Trim(t, `:,;"'`)
+			if (t == "public" || t == "private") && !seen[t] {
+				seen[t] = true
+				def = append(def, t)
+			}
+			hit = hit || t == "public" || t == "private"
+		}
+		if hit {
 			continue
 		}
 		w := f[0]

@@ -145,7 +145,8 @@ func (s *Service) AdoptSite(ctx context.Context, siteID, by string) error {
 	// Nothing on the port yet: knock once through the forwarded port, so the router asks the OLT for its MAC (ARP).
 	if len(seen.Rows) == 0 {
 		for _, o := range olts {
-			if o.MgmtIP == "" || s.adoptedOrManual(o.ID) {
+			// An OLT with no address yet is a factory one: Reach dials the factory address through the port.
+			if s.adoptedOrManual(o.ID) {
 				continue
 			}
 			s.probe(ctx, o.ID)
@@ -498,11 +499,22 @@ func (s *Service) identify(ctx context.Context, o *opened, c cred, by string) (s
 		}
 		return "secured", nil
 	case "pending":
-		// A change of the login was interrupted: the pending login works, so it is the OLT's login now.
+		// A change of the login was interrupted: the pending login works, so it is the OLT's login now. It may never have
+		// been saved on the OLT (the server stopped before `write`): save it first, or a restart of the OLT would bring
+		// back the old login, which the server no longer keeps.
+		if err := o.sess.Save(ctx); err != nil {
+			s.markAdopt(o.e.ID, store.AdoptFailed, "The OLT works with the generated login of an interrupted change but would not save its configuration; the server tries again on its next check.", errText(err))
+			return "", err
+		}
 		if err := s.adoptPending(o.e.ID, by); err != nil {
 			return "", err
 		}
 		return "secured", nil
+	case "stored":
+		// The stored login works, so an interrupted change (a pending pair) did not take: forget it.
+		if p := o.st.Settings.Adopt; p.PendingPass != "" || p.PendingEn != "" {
+			_ = s.setAdopt(o.e.ID, func(a *store.OLTAdopt, e *store.Equipment, d *store.Data) { a.PendingPass, a.PendingEn = "", "" })
+		}
 	}
 	_ = s.setAdopt(o.e.ID, func(a *store.OLTAdopt, e *store.Equipment, d *store.Data) {
 		a.Adopted = true

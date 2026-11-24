@@ -515,6 +515,83 @@ func TestInterruptedChangeIsRecoveredFromThePendingPair(t *testing.T) {
 	if _, login, enable := a.opened(t); login != pend || enable != pendEn {
 		t.Fatal("the pending pair did not become the stored login")
 	}
+	// The interrupted change may never have been saved on the OLT: the recovery saves it.
+	if a.f.Writes() < 1 {
+		t.Fatal("the recovered login was not saved on the OLT")
+	}
+}
+
+// A stored login that works means an interrupted change did not take: the pending pair is forgotten.
+func TestStalePendingPairIsDroppedWhenTheStoredLoginWorks(t *testing.T) {
+	a := newAdoptEnv(t)
+	a.f.SetCreds("admin", "owner-typed-pass", "")
+	if err := a.svc.SetCredentials(oltID, "admin", "owner-typed-pass", "", "olga"); err != nil {
+		t.Fatal(err)
+	}
+	pend, _ := GenPassword()
+	sp, _ := a.box.SealAAD(pend, mgmtAAD)
+	if err := a.svc.setAdopt(oltID, func(x *store.OLTAdopt, e *store.Equipment, d *store.Data) { x.PendingPass = sp }); err != nil {
+		t.Fatal(err)
+	}
+	a.adopt(t)
+	if ad := a.adoptState(); !ad.Adopted || ad.PendingPass != "" {
+		t.Fatalf("%+v", ad)
+	}
+}
+
+// The owner's login has no enable password and the new login does not verify: the old login is put back, and the
+// generated enable password (which the OLT now has, with nothing known to restore) is kept by the server.
+func TestSecureFailureWithNoKnownEnableKeepsTheGeneratedEnable(t *testing.T) {
+	a := newAdoptEnv(t)
+	a.f.SetCreds("admin", "owner-typed-pass", "")
+	if err := a.svc.SetCredentials(oltID, "admin", "owner-typed-pass", "", "olga"); err != nil {
+		t.Fatal(err)
+	}
+	a.adopt(t)
+	if !a.adoptState().Adopted {
+		t.Fatalf("not adopted: %+v", a.adoptState())
+	}
+	a.f.BlockNewPass = true
+	if _, err := a.svc.Secure(context.Background(), oltID, "olga"); err == nil || !strings.Contains(err.Error(), "restored") {
+		t.Fatalf("got %v", err)
+	}
+	u, p, en := a.f.Creds()
+	if u != "admin" || p != "owner-typed-pass" || en == "" {
+		t.Fatalf("the OLT: %q %q %q", u, p, en)
+	}
+	_, login, enable := a.opened(t)
+	if login != "owner-typed-pass" || enable != en {
+		t.Fatalf("the server does not know the OLT's enable password now (stored %q)", enable)
+	}
+	if ad := a.adoptState(); ad.PendingPass != "" || ad.PendingEn != "" || ad.Secured {
+		t.Fatalf("%+v", ad)
+	}
+	if err := a.svc.Poll(context.Background(), oltID, true); err != nil {
+		t.Fatalf("poll after the failed secure: %v", err)
+	}
+	a.noLeak(t, "owner-typed-pass", en)
+}
+
+// A factory OLT has no address in the inventory yet; when the port shows nothing, the server still knocks once through
+// the forwarded port so that the router learns the OLT's MAC.
+func TestFactoryOLTWithNoAddressIsKnockedFor(t *testing.T) {
+	a := newAdoptEnv(t)
+	var dials int
+	a.rows = nil
+	a.rebuild(func(o *Options) {
+		dial := o.Dial
+		o.Dial = func(ctx context.Context, n, ad string) (net.Conn, error) {
+			a.mu2.Lock()
+			dials++
+			a.rows = []SeenMAC{{MAC: oltMAC, IP: "192.168.8.200", Status: "reachable"}}
+			a.mu2.Unlock()
+			return dial(ctx, n, ad)
+		}
+	})
+	a.adopt(t)
+	if dials == 0 || !a.adoptState().MACSeen || !a.adoptState().Secured {
+		t.Fatalf("dials %d, %+v", dials, a.adoptState())
+	}
 }
 
 func TestRevealIsAuditedAndSecretFree(t *testing.T) {
@@ -693,5 +770,14 @@ func TestFactoryPasswordIsNotShownAnywhere(t *testing.T) {
 	}
 	if Redact("login admin "+factoryPass) == "" {
 		t.Fatal("unreachable")
+	}
+}
+
+func TestDefaultCommunitiesFoundAnywhereInTheLine(t *testing.T) {
+	for _, out := range []string{"public ro\nprivate rw\n", "Community: public\nCommunity: private\n", "Index  Name     Access\n1      public   ro\n2      private  rw\n"} {
+		def, _ := defaultCommunities(out)
+		if strings.Join(def, ",") != "public,private" {
+			t.Errorf("%q: got %v", out, def)
+		}
 	}
 }

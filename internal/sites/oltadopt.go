@@ -106,6 +106,11 @@ func PlanOLTAdopt(eff store.Site, oltIP, serverIP string) (OLTAdoptPlan, error) 
 	if !net.Contains(oa) || oa == net.Addr() || oa == lastAddr(net) || oa == pfx.Addr() {
 		return p, fmt.Errorf("the OLT address %s must be a host address inside %s other than the router's %s", oa, net, pfx.Addr())
 	}
+	// The forwarded port is 22000 + the last octet; the OLT management VLAN (oltmgmt.go) uses 22002-22006 (OLTs at .2 to
+	// .6 of its /29) on the same tunnel address, so an OLT here must not end in .0 to .6.
+	if oa.As4()[3] <= 6 {
+		return p, fmt.Errorf("the OLT address %s must not end in .0 to .6 (those forwarded ports belong to the OLT management VLAN): use .7 to .254, like the factory %s", oa, DefaultOLTFactoryIP)
+	}
 	if _, err := netip.ParseAddr(serverIP); err != nil {
 		return p, fmt.Errorf("the server tunnel address %q is not an address", serverIP)
 	}

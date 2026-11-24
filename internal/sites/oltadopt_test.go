@@ -165,6 +165,8 @@ func TestPlanOLTAdoptRefusals(t *testing.T) {
 		"no tunnel":      func(s *store.Site) (string, string) { s.TunnelIP = ""; return "", "10.99.0.1" },
 		"bad server ip":  func(s *store.Site) (string, string) { return "", "x" },
 		"too big prefix": func(s *store.Site) (string, string) { s.OLTMgmtNet = "10.0.0.1/8"; return "", "10.99.0.1" },
+		// 22000+.2..6 are the forwarded ports of the OLT management VLAN on the same tunnel address
+		"vlan98 port clash": func(s *store.Site) (string, string) { return "192.168.8.3", "10.99.0.1" },
 	}
 	for name, mod := range cases {
 		s := base

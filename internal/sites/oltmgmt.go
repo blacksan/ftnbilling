@@ -183,8 +183,10 @@ func (p OLTMgmtPlan) Snippet(parent string) string {
 	for _, l := range p.SetupLines(parent) {
 		b.WriteString(l + "\n")
 	}
-	b.WriteString(`/ip/firewall/filter remove [find where comment~"^ftn: olt"]` + "\n")
-	b.WriteString(`/ip/firewall/nat remove [find where comment~"^ftn: olt"]` + "\n")
+	// "^ftn: olt " with the space: the rows of the OLT management port ("ftn: oltm ...", oltadopt.go) are not this
+	// snippet's and must survive a paste (without them the port's address would stay and its drop rules would be gone).
+	b.WriteString(`/ip/firewall/filter remove [find where comment~"^ftn: olt "]` + "\n")
+	b.WriteString(`/ip/firewall/nat remove [find where comment~"^ftn: olt "]` + "\n")
 	fwd, in, nat := p.Rules()
 	for _, r := range fwd {
 		b.WriteString(fmt.Sprintf(`/ip/firewall/filter add %s place-before=[find where comment="ftn: wg no forward in"] comment="%s"`+"\n", r.Args(), rq(r.Comment)))
