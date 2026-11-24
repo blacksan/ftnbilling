@@ -17,12 +17,14 @@
 </div>
 
 <h3>Things to look at</h3>
-{{range $R.Flags}}<div class="flag {{.Level}}"><b>{{if eq .Level "warn"}}Check: {{else if eq .Level "ok"}}Fine: {{else}}Waiting for data: {{end}}{{.Title}}.</b> {{.Text}}<div class="muted">Rule: {{.Rule}}.</div></div>{{end}}
+{{range $R.Flags}}{{if eq .Level "warn"}}<div class="flag warn"><b>Check: {{.Title}}.</b> {{.Text}}</div>{{end}}{{end}}
+{{range $R.Flags}}{{if and (ne .Level "warn") (ne .Level "ok")}}<div class="flag nodata"><b>Waiting for data: {{.Title}}.</b> {{.Text}}</div>{{end}}{{end}}
+{{range $R.Flags}}{{if eq .Level "ok"}}<div class="flag ok compact"><b>Fine: {{.Title}}.</b> {{.Text}}</div>{{end}}{{end}}
 
 <h3>Throughput over time</h3>
 <div class="grid2">
 <div class="card"><b>WAN (to Safaricom)</b><div class="muted">Download = received on {{.Data.Cfg.WAN}}, upload = sent. Dashed line = capacity.</div>{{.Data.WANChart}}</div>
-<div class="card"><b>OLT uplink ({{.Data.Cfg.OLT}})</b><div class="muted">Traffic between the router and the router. Link size {{f0 .Data.Cfg.OLTCapMbps}} Mbps.</div>{{.Data.OLTChart}}</div>
+<div class="card"><b>OLT uplink ({{.Data.Cfg.OLT}})</b><div class="muted">Traffic between the router and the OLT. Link size {{f0 .Data.Cfg.OLTCapMbps}} Mbps.</div>{{.Data.OLTChart}}</div>
 </div>
 
 <h3>Houses</h3>
@@ -49,12 +51,13 @@
 {{range $R.Ports}}<tr><td><b>{{.Name}}</b></td><td>{{.Role}}</td><td>{{if .Running}}up{{else}}down{{end}}</td><td class="n">{{f1 .RxMbps}} / {{f1 .TxMbps}}</td><td class="n">{{f1 .PeakRxMbps}} / {{f1 .PeakTxMbps}}</td><td class="n">{{if ge .UtilPct 0.0}}{{f1 .UtilPct}}% of {{f0 .CapacityMbps}}{{else}}-{{end}}</td></tr>
 {{else}}<tr><td colspan="6">No port data yet.</td></tr>{{end}}</table></div>
 
-<h3>How to read this</h3>
-<div class="card muted">
+<details class="card howto"><summary>How these are measured</summary>
+<div class="muted">
 <p><b>Download</b> is traffic to the house, <b>upload</b> is from it. Per-house bytes come from the router's per-house queue counters once a minute; a restart of this app can lose up to a minute. <b>Time at cap</b> is the share of the house's online time in which its download averaged 90% or more of its package speed. Houses above {{f0 (index .Data.C "CapShare")}}% (after at least {{index .Data.C "MinOnline"}} minutes online) are upgrade candidates.</p>
 <p><b>Services</b> come from the router's traffic-flow export and are guessed from DNS names, then from ports. They are a good guide, not an exact count: devices that use their own encrypted DNS (DNS-over-HTTPS) show up as "HTTPS (other)", and the router must not fast-track customer traffic or it is invisible to traffic-flow.</p>
 <p><b>Fair-use limit</b> counts WAN download plus upload for the calendar month (EAT) since this app began collecting; it turns amber above {{f0 (index .Data.C "FUPWarn")}}%. The projection assumes the average pace so far continues.</p>
-<p>Flag thresholds: WAN above {{f0 (index .Data.C "WANUtil")}}% for {{index .Data.C "WANHours"}} or more hours in 7 days; houses above {{f0 (index .Data.C "CapShare")}}% of time at cap; loss above {{f0 (index .Data.C "Loss")}}%.</p></div>
+<p>Flag thresholds: WAN above {{f0 (index .Data.C "WANUtil")}}% for {{index .Data.C "WANHours"}} or more hours in 7 days; houses above {{f0 (index .Data.C "CapShare")}}% of time at cap; loss above {{f0 (index .Data.C "Loss")}}%.</p></div></details>
+
 {{template "afoot" .}}{{end}}
 
 {{define "admin_metrics_flat"}}{{template "ahead" .}}{{$R := .Data.Row}}{{$P := .Data.Period}}

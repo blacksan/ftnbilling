@@ -61,7 +61,7 @@ internal fun ClientRow(
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                StatusDot(c.online, size = 12.dp, describe = false)
+                StatusDot(c.online, size = 12.dp)
                 Column(Modifier.weight(1f)) {
                     Text(c.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     val who = listOf(c.tenant, c.hostName.takeIf { c.isFlat }).filter { !it.isNullOrBlank() }.joinToString(" - ")
@@ -74,7 +74,6 @@ internal fun ClientRow(
             }
             ChipRow(horizontalPadding = 0.dp) {
                 if (!c.isFlat) StatusChip("Unregistered", Tone.Warn)
-                StatusChip(if (c.online) "Online" else "Offline", if (c.online) Tone.Good else Tone.Neutral)
                 if (c.vendor.isNotBlank()) StatusChip(c.vendor, Tone.Neutral)
                 if (c.suspendedOnRouter) StatusChip("Walled", Tone.Bad)
                 if (c.isFlat && !c.inSync) StatusChip("Out of sync", Tone.Warn)

@@ -82,6 +82,9 @@ func (s *Server) liveRows(sc scope) liveSet {
 			}
 		}
 		for _, u := range s.svc.Unregistered(id, true) {
+			if u.Class.IsEquipment() {
+				continue // an OLT or other equipment is not a customer
+			}
 			ls.Rows = append(ls.Rows, liveRow{SiteID: id, Kind: "unregistered", MAC: u.MAC, IP: u.IP, Flat: u.MAC, Tenant: firstNonEmpty(u.Vendor, u.HostName), Router: names[id], Href: "/admin/devices"})
 			ls.Unregistered++
 		}

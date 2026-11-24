@@ -786,6 +786,9 @@ type ClientInput struct {
 	// as a new device (it comes back only when the device opens the portal again, which clears the dismissal).
 	Dismissed []string
 	Tables    LiveTables
+	// IsEquipment, when set, says a MAC is network equipment (an OLT, a router interface, an ONU not in stock): it is
+	// not a customer or a new device, so it is left out of the list like the New devices page leaves out its actions.
+	IsEquipment func(mac string) bool
 }
 
 // MergeClients joins accounts, unregistered devices and the router's tables.
@@ -878,7 +881,7 @@ func MergeClients(in ClientInput) []Client {
 	var devs []Client
 	addDev := func(d ClientDevice) {
 		mac, _ := store.CanonMAC(d.MAC)
-		if mac == "" || macs[mac] {
+		if mac == "" || macs[mac] || (in.IsEquipment != nil && in.IsEquipment(mac)) {
 			return
 		}
 		macs[mac] = true
