@@ -68,7 +68,7 @@ data class EquipmentUiState(
     /** The title of the screen at this level. */
     val title: String
         get() = when (level) {
-            EquipmentLevel.Root -> "Equipment"
+            EquipmentLevel.Root -> "Equipment tree"
             EquipmentLevel.Router -> if (routerId == UNPLACED) "Not placed" else router?.name ?: "Router"
             EquipmentLevel.Olt -> olt?.name ?: "OLT"
             EquipmentLevel.Pon -> "PON port $ponPort"

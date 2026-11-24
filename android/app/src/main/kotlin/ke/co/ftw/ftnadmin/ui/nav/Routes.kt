@@ -18,8 +18,6 @@ import kotlinx.serialization.Serializable
 
 @Serializable data class AddCustomerRoute(val routerId: String? = null, val mac: String? = null)
 
-@Serializable data object RoutersRoute
-
 @Serializable data class RouterRoute(val id: String)
 
 @Serializable data object AddRouterRoute
@@ -46,8 +44,14 @@ import kotlinx.serialization.Serializable
 /** The ONUs (TR-069) of one router. */
 @Serializable data class OnusRoute(val routerId: String)
 
-/** The equipment hierarchy: router, OLT, PON port, ONU, house. */
-@Serializable data object EquipmentRoute
+/**
+ * Equipment: one screen with four tabs, Routers, OLT, ONU and Other. [tab] is an [ke.co.ftw.ftnadmin.ui.equipment.EquipmentTab]
+ * key ("routers", "olt", "onu", "other"); anything else opens Routers. Switching tabs stays on the one back-stack entry.
+ */
+@Serializable data class EquipmentRoute(val tab: String = "routers")
+
+/** The equipment hierarchy: router, OLT, PON port, ONU, house (the Tree view of Equipment). */
+@Serializable data object EquipmentTreeRoute
 
 /** Add (id = null) or edit an OLT; [routerId] preselects the router when added from a router's page. */
 @Serializable data class OltFormRoute(val id: String? = null, val routerId: String? = null)

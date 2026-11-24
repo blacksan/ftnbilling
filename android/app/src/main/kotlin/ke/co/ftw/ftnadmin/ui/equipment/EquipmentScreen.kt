@@ -168,7 +168,7 @@ private fun Node(title: String, subtitle: String, onClick: () -> Unit) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun OltNode(o: TreeOlt, onClick: () -> Unit) {
+internal fun OltNode(o: TreeOlt, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(o.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
@@ -207,7 +207,7 @@ private fun PonNode(p: TreePon, onClick: () -> Unit) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun OnuNode(onu: TreeOnu, canWrite: Boolean, onMove: (TreeOnu) -> Unit, onOpenAccount: (String) -> Unit) {
+internal fun OnuNode(onu: TreeOnu, canWrite: Boolean, onMove: (TreeOnu) -> Unit, onOpenAccount: (String) -> Unit, placement: String = "") {
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(onu.title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
@@ -216,9 +216,14 @@ private fun OnuNode(onu: TreeOnu, canWrite: Boolean, onMove: (TreeOnu) -> Unit, 
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (placement.isNotBlank()) Text(placement, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (onu.status.isNotBlank()) StatusChip(onuStatusLabel(onu.status), Tone.Neutral)
                 StatusChip(if (onu.online) "Online" else "Offline", if (onu.online) Tone.Good else Tone.Neutral)
                 onu.tr069?.let { StatusChip(if (it.heldBack) "TR-069 held back" else "TR-069", if (it.heldBack) Tone.Warn else Tone.Neutral) }
+            }
+            onu.tr069?.lastInform?.takeIf { it.isNotBlank() }?.let {
+                Text("TR-069 last check-in: ${it.take(16).replace('T', ' ')}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             val h = onu.house
             if (h != null) {
@@ -239,7 +244,7 @@ private fun OnuNode(onu: TreeOnu, canWrite: Boolean, onMove: (TreeOnu) -> Unit, 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MoveSheetContent(m: MoveSheet, olts: List<TreeOlt>, vm: EquipmentViewModel) {
+internal fun MoveSheetContent(m: MoveSheet, olts: List<TreeOlt>, vm: EquipmentViewModel) {
     ModalBottomSheet(onDismissRequest = vm::cancelMove, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
             Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),

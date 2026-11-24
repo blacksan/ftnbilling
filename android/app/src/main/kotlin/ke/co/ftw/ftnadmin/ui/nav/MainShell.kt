@@ -47,7 +47,6 @@ import ke.co.ftw.ftnadmin.ui.newdevices.NewDevicesScreen
 import ke.co.ftw.ftnadmin.ui.payments.PaymentFilter
 import ke.co.ftw.ftnadmin.ui.payments.PaymentsScreen
 import ke.co.ftw.ftnadmin.ui.routers.RouterDetailScreen
-import ke.co.ftw.ftnadmin.ui.routers.RoutersScreen
 import ke.co.ftw.ftnadmin.ui.routers.setup.SetupScreen
 import ke.co.ftw.ftnadmin.ui.settings.SettingsScreen
 import kotlin.reflect.KClass
@@ -134,10 +133,24 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
                 onOpen = openAccount,
                 onAdd = { nav.navigate(AddCustomerRoute()) },
                 onApartments = { nav.navigate(ApartmentsRoute) },
-                onEquipment = { nav.navigate(EquipmentRoute) },
+                onEquipment = { nav.navigate(EquipmentRoute()) },
             )
         }
-        composable<EquipmentRoute> {
+        composable<EquipmentRoute> { e ->
+            ke.co.ftw.ftnadmin.ui.equipment.EquipmentTabsScreen(
+                user = user,
+                initialTab = ke.co.ftw.ftnadmin.ui.equipment.EquipmentTab.fromKey(e.toRoute<EquipmentRoute>().tab),
+                onBack = { nav.popBackStack() },
+                onOpenRouter = { nav.navigate(RouterRoute(it)) },
+                onAddRouter = { nav.navigate(AddRouterRoute) },
+                onAddOlt = { nav.navigate(OltFormRoute(routerId = it)) },
+                onEditOlt = { nav.navigate(OltFormRoute(id = it)) },
+                onAddOnu = { nav.navigate(OnuRegisterRoute) },
+                onOpenAccount = openAccount,
+                onTree = { nav.navigate(EquipmentTreeRoute) },
+            )
+        }
+        composable<EquipmentTreeRoute> {
             ke.co.ftw.ftnadmin.ui.equipment.EquipmentScreen(
                 user = user,
                 onBack = { nav.popBackStack() },
@@ -165,7 +178,7 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
                 onAlerts = openAlerts,
                 onSetupChecks = { nav.navigate(SetupRoute(it)) },
                 onRouterSetup = { nav.navigate(RouterRoute(it)) },
-                onRouters = { nav.navigate(RoutersRoute) },
+                onEquipment = { nav.navigate(EquipmentRoute()) },
                 onApartments = { nav.navigate(ApartmentsRoute) },
                 onAlertList = { nav.navigate(AlertsRoute) },
                 onSettings = { nav.navigate(SettingsRoute) },
@@ -186,14 +199,6 @@ private fun Destinations(nav: NavHostController, user: UserInfo) {
                 mac = r.mac,
                 onBack = { nav.popBackStack() },
                 onOpenAccount = openAccount,
-            )
-        }
-        composable<RoutersRoute> {
-            RoutersScreen(
-                user = user,
-                onBack = { nav.popBackStack() },
-                onOpen = { nav.navigate(RouterRoute(it)) },
-                onAdd = { nav.navigate(AddRouterRoute) },
             )
         }
         composable<RouterRoute> { e ->

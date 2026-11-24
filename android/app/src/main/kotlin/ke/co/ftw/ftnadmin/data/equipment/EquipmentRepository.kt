@@ -1,6 +1,7 @@
 package ke.co.ftw.ftnadmin.data.equipment
 
 import ke.co.ftw.ftnadmin.core.network.ApiClient
+import ke.co.ftw.ftnadmin.data.onu.RegisterItem
 import ke.co.ftw.ftnadmin.data.putIfNotBlank
 import ke.co.ftw.ftnadmin.domain.ItemList
 import kotlinx.serialization.json.JsonArray
@@ -12,6 +13,9 @@ import kotlinx.serialization.json.put
 /** The equipment hierarchy: router > OLT > PON port > ONU > house. No router is written to by any of these calls. */
 class EquipmentRepository(private val api: ApiClient) {
     suspend fun tree(): EquipmentTree = api.get("equipment", "tree")
+
+    /** Every item of the equipment register, any kind (the Other tab keeps what is not an OLT or an ONU). */
+    suspend fun items(): List<RegisterItem> = api.get<ItemList<RegisterItem>>("equipment").items
 
     suspend fun olts(siteId: String? = null): List<Olt> =
         api.get<ItemList<Olt>>("olts", query = mapOf("site" to siteId)).items

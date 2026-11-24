@@ -76,41 +76,27 @@ import ke.co.ftw.ftnadmin.ui.common.formatBps
 import ke.co.ftw.ftnadmin.ui.common.vmFactory
 import java.util.Locale
 
+/**
+ * The Routers tab of Equipment: the router list of [vm], pull to refresh. The Equipment screen owns the top bar and the
+ * "Add router" button (it changes with the tab), so this is only the list. [contentPadding] is the room under the FAB.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RoutersScreen(user: UserInfo, onBack: () -> Unit, onOpen: (String) -> Unit, onAdd: () -> Unit) {
-    val container = LocalContainer.current
-    val vm: RoutersViewModel = viewModel(factory = vmFactory { RoutersViewModel(container.sites) })
+fun RoutersTab(vm: RoutersViewModel, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
     val ui by vm.state.collectAsStateWithLifecycle()
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = { AppTopBar("Routers", onBack = onBack) },
-        floatingActionButton = {
-            if (user.isOwner) {
-                ExtendedFloatingActionButton(
-                    onClick = onAdd,
-                    icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                    text = { Text("Add router", fontWeight = FontWeight.ExtraBold, maxLines = 1, softWrap = false) },
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-            }
-        },
-    ) { inner ->
-        when (val s = ui.sites) {
-            Loadable.Loading -> CenteredLoading(Modifier.padding(inner))
-            is Loadable.Failed -> ErrorState(s.message, vm::retry, Modifier.padding(inner))
-            is Loadable.Ready -> PullToRefreshBox(ui.refreshing, vm::refresh, Modifier.padding(inner).fillMaxSize()) {
-                if (s.value.isEmpty()) {
-                    EmptyState("No routers linked yet.")
-                } else {
-                    LazyColumn(
-                        Modifier.fillMaxSize(),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        items(s.value, key = { it.key }) { site -> RouterRow(site) { onOpen(site.key) } }
-                    }
+    when (val s = ui.sites) {
+        Loadable.Loading -> CenteredLoading(modifier)
+        is Loadable.Failed -> ErrorState(s.message, vm::retry, modifier)
+        is Loadable.Ready -> PullToRefreshBox(ui.refreshing, vm::refresh, modifier.fillMaxSize()) {
+            if (s.value.isEmpty()) {
+                EmptyState("No routers linked yet.")
+            } else {
+                LazyColumn(
+                    Modifier.fillMaxSize(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(s.value, key = { it.key }) { site -> RouterRow(site) { onOpen(site.key) } }
                 }
             }
         }
