@@ -405,6 +405,7 @@
             step(form, "status");
             $("[data-join-cmd]", form).value = j.command || ""; $("[data-join-cmd2]", form).value = j.command_nocheck || "";
             var vr = $("[data-view-router]", form); if (vr && j.url) vr.href = j.url;
+            if (j.warning) { var lw = el("div", "flash bad", j.warning); lw.setAttribute("role", "alert"); var jt = $("[data-join-text]", form); jt.parentNode.insertBefore(lw, jt); }
             if (!j.command) { $("[data-join-text]", form).textContent = j.note || "Router created. Open it to make the join command."; $("[data-join-spin]", form).hidden = true; }
             else pollJoin(form, j.id);
           }
@@ -554,7 +555,7 @@
         else {
           /* the OLT uplink is not switched off here (it can be enabled): give the OLT role to another port first */
           if (p.can_disable !== false) { var b = el("button", "ghost sm", p.disabled ? "Enable" : "Disable"); b.type = "button"; b.onclick = function () { toggle(p); }; act.appendChild(b); }
-          else { act.appendChild(el("span", "muted", "OLT port: can\u2019t be switched off here. Give the OLT role to another port first.")); }
+          else if (p.role === "olt") { act.appendChild(el("span", "muted", "OLT port: can\u2019t be switched off here. Give the OLT role to another port first.")); }
           if (p.role_options && p.role_options.length) {
             var sel = el("select"); sel.setAttribute("aria-label", "Change the role of " + p.name);
             var o0 = el("option", "", "Change role…"); o0.value = ""; sel.appendChild(o0);

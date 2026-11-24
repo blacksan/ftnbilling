@@ -123,6 +123,9 @@ func TestPortsFlow_VanishedPortsListedAndClearable(t *testing.T) {
 	if !p.Missing || len(p.RoleOptions) != 1 || p.RoleOptions[0] != PortRoleUnused {
 		t.Fatalf("vanished customer port row: %+v", p)
 	}
+	if p.Role == PortRoleOLT || p.CanDisable {
+		t.Fatalf("a vanished customer port is not the OLT port and cannot be switched off: %+v", p) // the tab names the OLT only by role
+	}
 	if _, err := f.m.ChangePort(ctx, s.ID, "ether4", PortChange{Role: sp("unused")}, operWho); err != nil {
 		t.Fatalf("clearing a vanished port: %v", err)
 	}

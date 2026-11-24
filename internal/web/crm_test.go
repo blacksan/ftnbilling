@@ -3,6 +3,7 @@ package web_test
 import (
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -318,5 +319,59 @@ func TestAccountPageListsTheDevicesOnTheAccount(t *testing.T) {
 	}
 	if strings.Contains(page, "Equipment at this") {
 		t.Error("the old card title is still there")
+	}
+}
+
+// A house that already has a customer can be given a new record made from its Details: the Customer
+// record card posts the tenant, phone and WhatsApp whether or not a customer is linked.
+func TestReplaceLinkedCustomerWithRecordFromDetails(t *testing.T) {
+	a := newApp(t, false)
+	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"Flat 4C"}, "mac": {mac1}})
+	acct := a.account(t, "Flat 4C")
+	a.adminPost(t, "/admin/customers/save", url.Values{"name": {"Old Tenant"}, "phone": {"0712345678"}})
+	a.adminPost(t, "/admin/accounts/customer", url.Values{"id": {acct.ID}, "customer": {a.customerID(t, "Old Tenant")}, "move_in": {"2026-10-01"}})
+	a.adminPost(t, "/admin/accounts/update", url.Values{"id": {acct.ID}, "tenant": {"New Tenant"}, "phone": {"0722000111"}, "wa_same": {"1"}})
+	acct = a.account(t, "Flat 4C")
+	page := a.adminGet(t, "/admin/accounts/view?code="+acct.Code)
+	for _, want := range []string{`name="name" value="New Tenant"`, `name="phone" value="` + acct.Phone + `"`, `name="wa_same" value="1"`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("the customer card does not post %s while a customer is linked", want)
+		}
+	}
+	// the posted form: no customer chosen
+	if l := a.adminPost(t, "/admin/accounts/customer", url.Values{"id": {acct.ID}, "customer": {""}, "name": {"New Tenant"}, "phone": {acct.Phone}, "wa_same": {"1"}, "move_in": {"2026-11-01"}}); !strings.Contains(l, "Customer linked") {
+		t.Fatal(l)
+	}
+	if got := a.account(t, "Flat 4C"); got.CustomerID != a.customerID(t, "New Tenant") {
+		t.Fatalf("not linked to the new record: %+v", got)
+	}
+}
+
+// The account Notes field is editable on the web through the Details form.
+func TestAccountNotesEditableOnWeb(t *testing.T) {
+	a := newApp(t, false)
+	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"Flat 5D"}, "mac": {mac1}, "notes": {"legacy note"}})
+	acct := a.account(t, "Flat 5D")
+	if p := a.adminGet(t, "/admin/accounts/view?code="+acct.Code); !strings.Contains(p, `<textarea name="notes"`) || !strings.Contains(p, "legacy note") {
+		t.Fatal("the Details form does not offer the notes")
+	}
+	a.adminPost(t, "/admin/accounts/update", url.Values{"id": {acct.ID}, "tenant": {"T"}, "notes": {"fixed note"}})
+	if got := a.account(t, "Flat 5D"); got.Notes != "fixed note" {
+		t.Fatalf("notes %q", got.Notes)
+	}
+	a.adminPost(t, "/admin/accounts/update", url.Values{"id": {acct.ID}, "tenant": {"T"}, "notes": {""}})
+	if got := a.account(t, "Flat 5D"); got.Notes != "" {
+		t.Fatalf("notes not cleared: %q", got.Notes)
+	}
+}
+
+// The Ports tab says "OLT port" only for the OLT port; a vanished port that cannot be switched off says nothing.
+func TestPortsTabOLTMessageOnlyForOLT(t *testing.T) {
+	js, err := os.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(js), `else if (p.role === "olt") { act.appendChild(el("span", "muted", "OLT port:`) {
+		t.Error("the OLT message is not limited to the OLT port")
 	}
 }

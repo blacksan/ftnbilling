@@ -258,10 +258,10 @@ func (s *Server) adminSiteCreate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if jerr != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": st.ID, "name": st.Name, "url": dest,
-			"note": "Router created, but no join line could be made: " + jerr.Error()})
+			"note": "Router created, but no join line could be made: " + jerr.Error(), "warning": strings.TrimSpace(linkNote)})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": st.ID, "name": st.Name, "command": cmd, "command_nocheck": noCheck, "expires_at": exp, "url": dest})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": st.ID, "name": st.Name, "command": cmd, "command_nocheck": noCheck, "expires_at": exp, "url": dest, "warning": strings.TrimSpace(linkNote)})
 }
 
 func (s *Server) siteByID(id string) (store.Site, bool) {

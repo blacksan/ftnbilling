@@ -77,7 +77,7 @@
 <div class="two"><label class="field">Tenant<input name="tenant" value="{{$A.Tenant}}"></label><label class="field">Phone<input name="phone" value="{{$A.Phone}}" inputmode="tel"></label><label class="field">WhatsApp<input name="whatsapp" value="{{$A.WhatsApp}}" inputmode="tel" placeholder="e.g. 0712 345 678"></label></div>
 <label class="ck"><input type="checkbox" name="wa_same" value="1"{{if $A.WASamePhone}} checked{{end}}> WhatsApp is the same as the phone</label>
 <label class="ck"><input type="checkbox" name="wa_optout" value="1"{{if $A.WAOptOut}} checked{{end}}> Tenant opted out of WhatsApp messages</label>
-<input type="hidden" name="notes" value="{{$A.Notes}}"><div><button>Save details</button></div></form></section>
+<label class="field">Notes<textarea name="notes" rows="2" maxlength="300">{{$A.Notes}}</textarea></label><div><button>Save details</button></div></form></section>
 <div class="stack-col">
 {{template "onu_card" .}}
 <section class="panel{{if .Data.OLTMACWarn}} hl{{end}}" id="replace-ont"><h2>Replace the ONU</h2><p class="muted" style="margin:6px 0 10px">Updates the router to the new ONU's WAN MAC and ends the session on the old one.</p>
