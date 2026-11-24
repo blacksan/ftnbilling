@@ -240,6 +240,24 @@ func (m *Manager) OLTReach(d *store.Data, e store.Equipment, s store.OLTSettings
 	return net.JoinHostPort(host, strconv.Itoa(port)), nil
 }
 
+// OLTSSHSource is the address the OLT sees the server's SSH sessions come from, for the login access list. Through the OLT
+// management port the router masquerades the sessions, so it is the router's own address on that port. On the older VLAN 98
+// path (the manual option) there is no masquerade rule: the session arrives with the server's tunnel address.
+func (m *Manager) OLTSSHSource(d *store.Data, e store.Equipment, s store.OLTSettings) (string, error) {
+	site, ok := d.Sites[e.SiteID]
+	if !ok || site.Removed {
+		return "", errors.New("the OLT is not on a router")
+	}
+	if !s.Adopt.Manual && m.onAdoptNet(site, e.MgmtIP) {
+		p, err := PlanOLTAdopt(m.Effective(site), e.MgmtIP, ServerTunnelIP(m.pfx))
+		if err != nil {
+			return "", err
+		}
+		return p.RouterIP, nil
+	}
+	return ServerTunnelIP(m.pfx), nil
+}
+
 // onAdoptNet: the site has an OLT management port and the address is empty or inside that port's subnet.
 func (m *Manager) onAdoptNet(site store.Site, mgmtIP string) bool {
 	if site.OLTMgmtPort == "" {

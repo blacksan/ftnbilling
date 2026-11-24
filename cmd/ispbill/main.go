@@ -193,7 +193,7 @@ func run(log *slog.Logger) error {
 		if box, err := secretbox.New(cfg.DataKey); err != nil {
 			log.Error("OLT management is off", "err", err)
 		} else {
-			oltSvc := olt.New(olt.Options{Store: st, Box: box, Reach: mgr.OLTReach, Alert: webSrv.OLTAlert, Log: log,
+			oltSvc := olt.New(olt.Options{Store: st, Box: box, Reach: mgr.OLTReach, SSHSource: mgr.OLTSSHSource, Alert: webSrv.OLTAlert, Log: log,
 				// The router's OLT management port: what is on it, and the rules that let only the server reach the OLT.
 				PortSeen: func(ctx context.Context, siteID string) (olt.PortSeen, error) {
 					v, err := mgr.OLTMgmtSeen(ctx, siteID)

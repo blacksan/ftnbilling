@@ -307,7 +307,7 @@ func (s *Server) adoptionJSON(id string) map[string]any {
 	a := st.Settings.Adopt
 	return map[string]any{"stage": v.Stage, "next": v.Note, "error": v.Error, "manual": v.Manual, "port": v.Port, "steps": steps, "checked_at": tp(v.CheckedAt),
 		"mac_seen": a.MACSeen, "ssh_reached": a.SSHOK, "serial_ok": a.SerialOK, "credentials": map[string]any{"stored": v.HasLogin, "source": a.CredSource, "need_login": v.NeedLogin},
-		"secured": v.Secured, "secured_at": tp(a.SecuredAt), "can_secure": v.CanSecure, "snmp_off": a.SNMPOff, "snmp_note": v.SNMPNote, "access_list_note": v.ACLNote}
+		"secured": v.Secured, "secured_at": tp(a.SecuredAt), "can_secure": v.CanSecure, "snmp_off": a.SNMPOff, "snmp_note": v.SNMPNote, "access_list_note": v.ACLNote, "access_list_done": a.ACLDone, "access_list_rules": nz(v.ACLRules), "access_list_finding": v.ACLFinding}
 }
 
 func (s *Server) apiOLTAdoption(w http.ResponseWriter, r *http.Request, c *apiCtx) {
@@ -358,7 +358,7 @@ func (s *Server) apiOLTSecure(w http.ResponseWriter, r *http.Request, c *apiCtx)
 		s.apiOLTErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"secured": true, "enable_checked": res.EnableChecked, "snmp_removed": nz(res.SNMPRemoved), "snmp_note": res.SNMPNote, "access_list_note": res.ACLNote})
+	writeJSON(w, http.StatusOK, map[string]any{"secured": true, "enable_checked": res.EnableChecked, "snmp_removed": nz(res.SNMPRemoved), "snmp_note": res.SNMPNote, "access_list_note": res.ACLNote, "access_list_done": res.ACLDone, "access_list_rules": nz(res.ACLRules), "access_list_finding": res.ACLFinding})
 }
 
 func (s *Server) apiOLTCredentials(w http.ResponseWriter, r *http.Request, c *apiCtx) {

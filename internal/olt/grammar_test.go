@@ -300,3 +300,44 @@ func TestDialectLinesInBenchGrammar(t *testing.T) {
 	q := d.PONReadQuery(1)
 	checkLines(t, g, "PON read", q.Cmds)
 }
+
+// The SSH restriction and the SNMP removal use only lines of the bench grammar (`find login-access-list`, V1.0.5), and
+// the running configuration of the bench shows the factory lines in the same form.
+func TestGrammarSecureACLAndSNMP(t *testing.T) {
+	g := loadGrammar(t)
+	d := VSOL()
+	plan, err := d.SecureACLPlan("192.168.8.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := []string{plan.Permit, plan.Deny4, plan.Deny6, plan.Enable, "no " + plan.Deny4, "no " + plan.Deny6, "no " + plan.Permit,
+		"no snmp-server community public", ShowACLCmd, ShowSNMPCmd}
+	for _, l := range lines {
+		if g.match("config", l) == "" {
+			t.Errorf("not in the bench grammar: %q", l)
+		}
+		if strings.HasPrefix(l, "show ") {
+			continue
+		}
+		if !d.SecureLineOK(l, false) {
+			t.Errorf("not an exact secure shape: %q", l)
+		}
+	}
+	// The factory lines of the bench running configuration parse as rules and are the shapes of the fixture.
+	raw, err := os.ReadFile("testdata/bench-running-config.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := ParseACL(string(raw), "")
+	got := strings.Join(st.RuleStrings(), "|")
+	if got != "deny telnet 0.0.0.0 0.0.0.0|ipv6 deny telnet ::/0|deny snmp 0.0.0.0 0.0.0.0|ipv6 deny snmp ::/0" || st.Enabled == nil || !*st.Enabled {
+		t.Fatalf("the bench running configuration parsed as %q enabled=%v", got, st.Enabled)
+	}
+	// The bench capture of `find login-access-list`.
+	for _, l := range []string{"login-access-list enable", "login-access-list disable", "login-access-list clear", "login-access-list deny telnet 0.0.0.0 0.0.0.0",
+		"login-access-list ipv6 deny telnet ::/0", "no login-access-list deny snmp 0.0.0.0 0.0.0.0", "no login-access-list ipv6 deny ssh ::/0"} {
+		if g.match("config", l) == "" {
+			t.Errorf("not in the bench grammar: %q", l)
+		}
+	}
+}

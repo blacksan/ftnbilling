@@ -223,13 +223,13 @@ func TestDenylistBenchGrammar(t *testing.T) {
 		"terminal monitor", "terminal width 100", "terminal length 25", "terminal", "term len 0", "ssh 10.0.0.1", "telnet 10.0.0.1", "watchfrr x", "output file",
 		// the config-mode top-level words
 		"reboot", "exec ls", "download x", "upload x", "upgrade x", "software x", "password x", "user manager", "line vty", "sshd", "ssh", "telnet", "tacacs",
-		"login-access-list deny ssh 0.0.0.0 0.0.0.0", "set x", "schedule x", "clean x", "clear x", "save", "time x", "timezone x", "dst x", "ntp x", "remote x",
+		"login-access-list deny ssh 0.0.0.0 0.0.0.0", "login-access-list permit ssh 10.0.0.1 255.255.255.255", "login-access-list ipv6 deny ssh ::/0", "login-access-list enable", "login-access-list disable", "login-access-list clear", "set x", "schedule x", "clean x", "clear x", "save", "time x", "timezone x", "dst x", "ntp x", "remote x",
 		"router ospf", "route-map x", "frr x", "zebra x", "bfd", "mpls x", "evpn", "vrf x", "pseudowire x", "nexthop-group x", "allow-external-route-update",
 		"key chain x", "monitor session 1", "service integrated-vtysh-config", "snmp x", "snmp-server community public ro", "web x", "ip route 10.0.0.0/8 1.2.3.4",
 		"ip address 1.2.3.4/24 extra", "ip ssh", "interface wan", "interface wan 1", "int wan", "hostname x", "domainname x", "del onu application 1", "del onu preset-profile 1",
 		"remove x", "enable password x", "enable", "en",
 		// Undoing a denied command, taking VLANs off ports, port mode changes, several ONUs at once.
-		"no login-access-list deny telnet 0.0.0.0 0.0.0.0", "no login-access-list enable", "no snmp-server community private", "no sshd", "no ssh",
+		"no login-access-list deny telnet 0.0.0.0 0.0.0.0", "no login-access-list enable", "no login-access-list permit ssh 10.0.0.1 255.255.255.255", "no login-access-list deny ssh 0.0.0.0 0.0.0.0", "no login-access-list ipv6 deny ssh ::/0", "no snmp-server community private", "no sshd", "no ssh",
 		"no service integrated-vtysh-config", "no telnet", "no tacacs", "no hostname", "no ntp x", "no web", "no time", "no line vty",
 		"no vlan 100", "no vlan 99", "no vlan 98", "no vl 100", "no switchport hybrid vlan 98", "no swi hybrid vlan 99", "switchport mode access",
 		"switchport access vlan 5", "switchport trunk vlan 5", "no onu 1-64", "no onu 1,2", "no onu 1-64 profile", "no shutdown",

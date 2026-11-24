@@ -39,6 +39,10 @@ type Options struct {
 	// Reach gives the address to dial for an OLT (the router's tunnel address and the forwarded port).
 	Reach func(d *store.Data, e store.Equipment, s store.OLTSettings) (string, error)
 	Dial  DialFunc
+	// SSHSource gives the address the OLT sees the server's SSH sessions coming from: the router's address on its OLT
+	// management port (the router masquerades the sessions), or on the VLAN 98 path whatever source that path presents.
+	// The SSH restriction of Secure permits exactly this host. Nil: the restriction is skipped.
+	SSHSource func(d *store.Data, e store.Equipment, s store.OLTSettings) (string, error)
 	// Alert tells the owners (subject, message); never carries a secret.
 	Alert       func(subject, msg string)
 	Now         func() time.Time

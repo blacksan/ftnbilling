@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,8 @@ type OLT struct {
 	NoOptical bool
 	// FailOn: a command containing this text answers with a "% Invalid input" line.
 	FailOn string
+	// DropOn: a command containing this text closes the session that sent it, without an answer (a session the OLT drops).
+	DropOn string
 	// MaxPON bounds interface gpon 0/N.
 	Secret string // appears in the running config as "password <Secret>"
 
@@ -55,9 +58,23 @@ type OLT struct {
 	// Communities are the SNMP communities (default public and private).
 	Communities []string
 
+	// ClientAddr is the address the fake treats every new login as coming from (default 192.168.8.1, the router's address on
+	// its OLT management port: the router masquerades the server's sessions). The login access list is applied to NEW logins
+	// only; a session that is already open stays open.
+	ClientAddr string
+	// ACLMatch is how the rules combine for one source: "" = a matching permit wins (order does not matter), "first" = the
+	// first matching rule decides, "last" = the last one does. No matching rule allows.
+	ACLMatch string
+	// ACLShow selects the layout of `show login-access-list`: "" = a status line and a table, "lines" = config lines.
+	ACLShow string
+	// ACLNoState leaves `login-access-list enable|disable` out of the running configuration (a firmware that does not print it).
+	ACLNoState bool
+
 	SSHAddr, TelnetAddr string
 	HostKeyFP           string
 
+	acl      []aclRule
+	aclOff   bool
 	mu       sync.Mutex
 	lines    []string
 	attempts []Attempt
@@ -98,7 +115,7 @@ func New() (*OLT, error) {
 	o.HostKeyFP = ssh.FingerprintSHA256(signer.PublicKey())
 	o.Communities = []string{"public", "private"}
 	cfg := &ssh.ServerConfig{PasswordCallback: func(c ssh.ConnMetadata, p []byte) (*ssh.Permissions, error) {
-		if o.login(c.User(), string(p)) {
+		if o.login(c.User(), string(p), "ssh") {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("denied")
@@ -144,10 +161,14 @@ func (o *OLT) Close() {
 }
 
 // login checks a login and records the attempt.
-func (o *OLT) login(user, pass string) bool {
+func (o *OLT) login(user, pass, proto string) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	ok := user == o.User && pass == o.Pass && !o.blocked[pass]
+	if ok && !o.aclAllows(proto) {
+		ok = false
+		o.events = append(o.events, "acl refused "+proto+" from "+o.client())
+	}
 	o.attempts = append(o.attempts, Attempt{user, pass, ok})
 	o.events = append(o.events, fmt.Sprintf("login %s %v", user, ok))
 	return ok
@@ -240,6 +261,16 @@ func (o *OLT) running() string {
 			b.WriteString("exit\n")
 		}
 	}
+	for _, r := range o.acl {
+		b.WriteString("login-access-list " + r.String() + "\n")
+	}
+	switch {
+	case o.ACLNoState:
+	case o.aclOff:
+		b.WriteString("login-access-list disable\n")
+	default:
+		b.WriteString("login-access-list enable\n")
+	}
 	return b.String()
 }
 
@@ -290,7 +321,7 @@ func (o *OLT) serveTelnet(c net.Conn) {
 	if b, err := br.Peek(1); err == nil && b[0] == '\n' {
 		_, _ = br.ReadByte() // the LF of the CR LF that ended the password
 	}
-	if !o.login(u, p) {
+	if !o.login(u, p, "telnet") {
 		fmt.Fprint(c, "\r\nLogin incorrect\r\n")
 		return
 	}
@@ -454,6 +485,8 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 		unknown := "% Unknown command.\n"
 		switch {
 		case line == "":
+		case o.DropOn != "" && strings.Contains(line, o.DropOn):
+			return
 		case o.FailOn != "" && strings.Contains(line, o.FailOn):
 			out = "% Invalid input detected at '^' marker.\n"
 		case strings.Contains(line, "badcmd"):
@@ -613,10 +646,21 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 			out = o.userLine(fields, line)
 		case config && len(stack) == 0 && line == "show snmp-server community":
 			o.mu.Lock()
+			if len(o.Communities) > 0 {
+				out = "community               access\n"
+			}
 			for _, c := range o.Communities {
-				out += c + " ro\n"
+				acc := "ro"
+				if c == "private" {
+					acc = "rw"
+				}
+				out += fmt.Sprintf(" %-25s %s \n", c, acc)
 			}
 			o.mu.Unlock()
+		case config && len(stack) == 0 && line == "show login-access-list":
+			out = o.showACL()
+		case config && len(stack) == 0 && (fields[0] == "login-access-list" || len(fields) > 1 && fields[0] == "no" && fields[1] == "login-access-list"):
+			out = o.aclLine(fields)
 		case config && len(stack) == 0 && len(fields) == 4 && fields[0] == "no" && fields[1] == "snmp-server" && fields[2] == "community":
 			o.mu.Lock()
 			var keep []string
@@ -823,4 +867,213 @@ func (o *OLT) userLine(f []string, line string) string {
 		return o.User + " admin\n"
 	}
 	return "% Unknown command.\n"
+}
+
+// ---- the login access list ------------------------------------------------------------------------------------------
+
+type aclRule struct {
+	v6            bool
+	action, proto string
+	addr, mask    string
+}
+
+func (r aclRule) String() string {
+	s := r.action + " " + r.proto + " " + r.addr
+	if r.mask != "" {
+		s += " " + r.mask
+	}
+	if r.v6 {
+		s = "ipv6 " + s
+	}
+	return s
+}
+
+func (o *OLT) client() string {
+	if o.ClientAddr != "" {
+		return o.ClientAddr
+	}
+	return "192.168.8.1"
+}
+
+// aclAllows says whether a new login over proto from the client address is allowed (the caller holds the lock).
+func (o *OLT) aclAllows(proto string) bool {
+	if o.aclOff {
+		return true
+	}
+	src, err := netip.ParseAddr(o.client())
+	if err != nil {
+		return true
+	}
+	match := func(r aclRule) bool {
+		if r.v6 || r.proto != proto {
+			return false
+		}
+		a, err1 := netip.ParseAddr(r.addr)
+		m, err2 := netip.ParseAddr(r.mask)
+		if err1 != nil || err2 != nil {
+			return false
+		}
+		s4, a4, m4 := src.As4(), a.As4(), m.As4()
+		for i := 0; i < 4; i++ {
+			if s4[i]&m4[i] != a4[i]&m4[i] {
+				return false
+			}
+		}
+		return true
+	}
+	allowed, decided := true, false
+	for _, r := range o.acl {
+		if !match(r) {
+			continue
+		}
+		switch o.ACLMatch {
+		case "first":
+			if !decided {
+				allowed, decided = r.action == "permit", true
+			}
+		case "last":
+			allowed, decided = r.action == "permit", true
+		default:
+			if r.action == "permit" {
+				return true
+			}
+			allowed, decided = false, true
+		}
+	}
+	return allowed
+}
+
+func (o *OLT) showACL() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var b strings.Builder
+	if o.ACLShow == "lines" {
+		for _, r := range o.acl {
+			b.WriteString("login-access-list " + r.String() + "\n")
+		}
+		if o.aclOff {
+			b.WriteString("login-access-list disable\n")
+		} else {
+			b.WriteString("login-access-list enable\n")
+		}
+		return b.String()
+	}
+	if o.aclOff {
+		b.WriteString("Login access list: disabled\n")
+	} else {
+		b.WriteString("Login access list: enabled\n")
+	}
+	b.WriteString("Type    Service  Address                Mask\n")
+	for _, r := range o.acl {
+		ver := "ipv4"
+		if r.v6 {
+			ver = "ipv6"
+		}
+		fmt.Fprintf(&b, "%-7s %-8s %-22s %s\n", r.action, r.proto, r.addr, r.mask)
+		_ = ver
+	}
+	return b.String()
+}
+
+// aclLine runs `[no] login-access-list ...` (the grammar the bench printed).
+func (o *OLT) aclLine(f []string) string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	no := f[0] == "no"
+	if no {
+		f = f[1:]
+	}
+	f = f[1:] // after login-access-list
+	if len(f) == 1 && !no {
+		switch f[0] {
+		case "enable":
+			o.aclOff = false
+			return ""
+		case "disable":
+			o.aclOff = true
+			return ""
+		case "clear":
+			o.acl = nil
+			return ""
+		}
+	}
+	r := aclRule{}
+	if len(f) > 0 && f[0] == "ipv6" {
+		r.v6, f = true, f[1:]
+	}
+	need := 3
+	if !r.v6 {
+		need = 4
+	}
+	if len(f) != need || (f[0] != "permit" && f[0] != "deny") || !(f[1] == "telnet" || f[1] == "web" || f[1] == "snmp" || f[1] == "ssh") {
+		return "% Unknown command.\n"
+	}
+	r.action, r.proto, r.addr = f[0], f[1], f[2]
+	if !r.v6 {
+		r.mask = f[3]
+		if a, err := netip.ParseAddr(r.addr); err != nil || !a.Is4() {
+			return "% Invalid input detected at '^' marker.\n"
+		}
+		if a, err := netip.ParseAddr(r.mask); err != nil || !a.Is4() {
+			return "% Invalid input detected at '^' marker.\n"
+		}
+	}
+	for i, x := range o.acl {
+		if x == r {
+			if no {
+				o.acl = append(o.acl[:i:i], o.acl[i+1:]...)
+				return ""
+			}
+			return "% Rule already exist.\n"
+		}
+	}
+	if no {
+		return "% Rule not exist.\n"
+	}
+	o.acl = append(o.acl, r)
+	return ""
+}
+
+// ACLRules are the login-access-list rules now configured, as the running configuration prints them (after the leading
+// "login-access-list ").
+func (o *OLT) ACLRules() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var out []string
+	for _, r := range o.acl {
+		out = append(out, r.String())
+	}
+	return out
+}
+
+// ACLEnabled says whether the login access list is on.
+func (o *OLT) ACLEnabled() bool { o.mu.Lock(); defer o.mu.Unlock(); return !o.aclOff }
+
+// SetACLEnabled switches the list on or off (a factory-reset OLT with the list off).
+func (o *OLT) SetACLEnabled(on bool) { o.mu.Lock(); o.aclOff = !on; o.mu.Unlock() }
+
+// FactoryACL installs the bench OLT's factory login access list: telnet and snmp denied from everywhere, the list on. (Off by
+// default so that the telnet tests can log in.)
+func (o *OLT) FactoryACL() {
+	o.mu.Lock()
+	o.acl = []aclRule{{false, "deny", "telnet", "0.0.0.0", "0.0.0.0"}, {true, "deny", "telnet", "::/0", ""},
+		{false, "deny", "snmp", "0.0.0.0", "0.0.0.0"}, {true, "deny", "snmp", "::/0", ""}}
+	o.aclOff = false
+	o.mu.Unlock()
+}
+
+// SetRunningACL adds a rule ("deny web 0.0.0.0 0.0.0.0", "ipv6 deny web ::/0") as if the owner had put it there.
+func (o *OLT) SetRunningACL(rule string) {
+	f := strings.Fields(rule)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	r := aclRule{}
+	if f[0] == "ipv6" {
+		r.v6, f = true, f[1:]
+	}
+	r.action, r.proto, r.addr = f[0], f[1], f[2]
+	if len(f) > 3 {
+		r.mask = f[3]
+	}
+	o.acl = append(o.acl, r)
 }

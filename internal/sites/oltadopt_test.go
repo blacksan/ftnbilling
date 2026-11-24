@@ -176,3 +176,37 @@ func TestPlanOLTAdoptRefusals(t *testing.T) {
 		}
 	}
 }
+
+// The address the OLT sees the server's SSH sessions come from (the login access list permits exactly it): the router's
+// address on the OLT management port (the router masquerades the session), and on the VLAN 98 path, which has no
+// masquerade, the server's tunnel address.
+func TestOLTSSHSource(t *testing.T) {
+	f, s, _ := portsRig(t)
+	setOLTPort(t, f, s.ID, "ether5")
+	oltRow := store.Equipment{SiteID: s.ID, Kind: store.KindOLT}
+	f.st.View(func(d *store.Data) {
+		got, err := f.m.OLTSSHSource(d, oltRow, store.OLTSettings{})
+		if err != nil || got != "192.168.8.1" {
+			t.Fatalf("port path: %q %v", got, err)
+		}
+		// An address inside the port's subnet is the same path; the OLT address does not change the source.
+		oltRow.MgmtIP = "192.168.8.200"
+		if got, err = f.m.OLTSSHSource(d, oltRow, store.OLTSettings{}); err != nil || got != "192.168.8.1" {
+			t.Fatalf("port path with address: %q %v", got, err)
+		}
+		// The manual path (VLAN 98): the server's tunnel address.
+		var set store.OLTSettings
+		set.Adopt.Manual = true
+		if got, err = f.m.OLTSSHSource(d, oltRow, set); err != nil || got != ServerTunnelIP(f.m.pfx) {
+			t.Fatalf("manual path: %q %v", got, err)
+		}
+		// An address outside the port's subnet is the VLAN 98 path too.
+		oltRow.MgmtIP = "10.7.3.2"
+		if got, err = f.m.OLTSSHSource(d, oltRow, store.OLTSettings{}); err != nil || got != ServerTunnelIP(f.m.pfx) {
+			t.Fatalf("vlan path: %q %v", got, err)
+		}
+		if _, err = f.m.OLTSSHSource(d, store.Equipment{SiteID: "nope"}, store.OLTSettings{}); err == nil {
+			t.Fatal("no router, no source")
+		}
+	})
+}

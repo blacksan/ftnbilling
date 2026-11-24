@@ -563,6 +563,8 @@ type AdoptView struct {
 	CanSecure          bool // the server has identified the OLT and may replace its login
 	NeedLogin          bool // the owner must type a login
 	SNMPNote, ACLNote  string
+	ACLRules           []string // login-access-list rules read back from the OLT
+	ACLFinding         string
 	HasLogin           bool
 }
 
@@ -589,6 +591,7 @@ func (s *Service) AdoptView(id string) (AdoptView, bool) {
 	a := st.Settings.Adopt
 	v.Stage, v.Note, v.Error, v.Manual, v.CheckedAt, v.Secured = a.Stage, a.Note, a.Error, a.Manual, a.CheckedAt, a.Secured
 	v.Port, v.SNMPNote, v.ACLNote = site.OLTMgmtPort, a.SNMPNote, a.ACLNote
+	v.ACLRules, v.ACLFinding = a.ACLRules, a.ACLFinding
 	v.HasLogin = e.MgmtUser != "" && e.MgmtPass != ""
 	step := func(label, state, detail string) { v.Steps = append(v.Steps, AdoptStep{label, state, detail}) }
 	yn := func(b bool) string {
@@ -646,6 +649,8 @@ func (s *Service) AdoptView(id string) (AdoptView, bool) {
 		acl := "off"
 		if a.ACLDone {
 			acl = "ok"
+		} else if strings.HasPrefix(a.ACLNote, "Couldn't restrict SSH") {
+			acl = "fail"
 		}
 		step("SSH access list", acl, firstNonEmpty(a.ACLNote, "Not done yet."))
 	}

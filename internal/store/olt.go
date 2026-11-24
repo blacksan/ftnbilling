@@ -104,7 +104,9 @@ type OLTAdopt struct {
 	SNMPNote    string    `json:"snmp_note,omitempty"`
 	ACLNote     string    `json:"acl_note,omitempty"`
 	ACLDone     bool      `json:"acl_done,omitempty"`
-	AlertedAt   time.Time `json:"alerted_at,omitempty"` // the last "possible OLT" alert
+	ACLRules    []string  `json:"acl_rules,omitempty"`   // the login-access-list rules read back from the OLT
+	ACLFinding  string    `json:"acl_finding,omitempty"` // what the list still leaves open (web)
+	AlertedAt   time.Time `json:"alerted_at,omitempty"`  // the last "possible OLT" alert
 	RevealedAt  time.Time `json:"revealed_at,omitempty"`
 	RevealedBy  string    `json:"revealed_by,omitempty"`
 	PendingPass string    `json:"pending_pass,omitempty"` // sealed: a new login password being set (crash recovery)

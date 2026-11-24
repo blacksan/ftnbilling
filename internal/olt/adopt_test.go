@@ -30,6 +30,7 @@ type aenv struct {
 const (
 	benchSerial = "V2609170360"
 	oltMAC      = "48:21:B8:10:D7:72"
+	routerAddr  = "192.168.8.1" // the router's address on its OLT management port: what the OLT sees the server's sessions as
 )
 
 func newAdoptEnv(t *testing.T) *aenv {
@@ -37,6 +38,7 @@ func newAdoptEnv(t *testing.T) *aenv {
 	e := newEnv(t)
 	a := &aenv{env: e, logs: &bytes.Buffer{}}
 	e.f.SetCreds(factoryUser, factoryPass, "")
+	e.f.FactoryACL()
 	if err := e.st.Update(func(d *store.Data) error {
 		s := d.Sites[siteID]
 		s.OLTMgmtPort = "ether5"
@@ -67,6 +69,7 @@ func (a *aenv) rebuild(mut func(*Options)) {
 			var d net.Dialer
 			return d.DialContext(ctx, n, ad)
 		},
+		SSHSource: func(d *store.Data, eq store.Equipment, s store.OLTSettings) (string, error) { return routerAddr, nil },
 		Alert: func(subject, msg string) {
 			a.env.mu.Lock()
 			a.env.alerts = append(a.env.alerts, subject+": "+msg)
@@ -191,13 +194,17 @@ func TestAdoptFactoryDefaultSecuresVerifiesThenWrites(t *testing.T) {
 	if a.f.Writes() < 2 {
 		t.Fatalf("%d writes", a.f.Writes())
 	}
-	// The ACL step is skipped with a visible note, and nothing dangerous was sent.
-	if ad.ACLDone || !strings.Contains(ad.ACLNote, "TODO(bench)") {
+	// SSH is restricted to the router's address, verified with a new session, then saved; telnet, snmp and web rules are untouched.
+	if !ad.ACLDone || !strings.Contains(ad.ACLNote, routerAddr) {
 		t.Fatalf("ACL note: %q done=%v", ad.ACLNote, ad.ACLDone)
+	}
+	checkACLRules(t, a.f.ACLRules(), routerAddr)
+	if !a.f.ACLEnabled() {
+		t.Fatal("the access list is off")
 	}
 	for _, l := range a.f.Lines() {
 		low := strings.ToLower(l)
-		if strings.HasPrefix(low, "login-access-list") || strings.HasPrefix(low, "sshd") || strings.Contains(low, "disable") {
+		if strings.HasPrefix(low, "sshd") || strings.Contains(low, "disable") || (strings.Contains(low, "login-access-list") && !strings.HasPrefix(low, "show ") && !aclSecureLine(low, routerAddr)) {
 			t.Fatalf("a line that must never be sent: %q", l)
 		}
 	}
@@ -631,8 +638,8 @@ func TestAdoptViewChecklist(t *testing.T) {
 			t.Fatalf("%s is %q: %+v", l, states[l], v.Steps)
 		}
 	}
-	if states["SSH access list"] != "off" {
-		t.Fatalf("the access list step must show as skipped: %+v", v.Steps)
+	if states["SSH access list"] != "ok" {
+		t.Fatalf("the access list step must be done: %+v", v.Steps)
 	}
 	if v.Stage != store.AdoptSecured || !v.Secured {
 		t.Fatalf("%+v", v)
@@ -666,6 +673,8 @@ func TestSecureShapesAreTheOnlyUserPasswordSNMPLines(t *testing.T) {
 	for _, l := range []string{
 		"user login-password admin " + good, "user enable-password admin " + good, "user manager", "user delete admin",
 		"no snmp-server community public", "snmp-server community public rw", "login-access-list deny ssh 0.0.0.0 0.0.0.0", "sshd disable", "sshd enable",
+		"login-access-list permit ssh 10.0.0.1 255.255.255.255", "login-access-list ipv6 deny ssh ::/0", "login-access-list enable", "no login-access-list permit ssh 10.0.0.1 255.255.255.255",
+		"no login-access-list deny ssh 0.0.0.0 0.0.0.0", "no login-access-list ipv6 deny ssh ::/0",
 		"password " + good, "enable password " + good,
 	} {
 		if err := s.Config(ctx(t), []string{l}); !errors.Is(err, ErrDenied) {
@@ -680,7 +689,14 @@ func TestSecureShapesAreTheOnlyUserPasswordSNMPLines(t *testing.T) {
 		{"user login-password admin " + good + " extra"}, {"user login-password ad;min " + good},
 		{"user role admin admin enable-password " + good}, {"user add bob login-password " + good},
 		{"no snmp-server community foo"}, {"no snmp-server community"}, {"snmp-server community public rw"},
-		{"login-access-list deny ssh 0.0.0.0 0.0.0.0"}, {"login-access-list permit ssh 10.0.0.1 255.255.255.255"},
+		{"login-access-list deny telnet 0.0.0.0 0.0.0.0"}, {"login-access-list permit telnet 10.0.0.1 255.255.255.255"}, {"login-access-list deny web 0.0.0.0 0.0.0.0"},
+		{"login-access-list deny snmp 0.0.0.0 0.0.0.0"}, {"login-access-list ipv6 deny telnet ::/0"}, {"login-access-list ipv6 deny web ::/0"}, {"login-access-list ipv6 deny snmp ::/0"},
+		{"no login-access-list deny telnet 0.0.0.0 0.0.0.0"}, {"no login-access-list ipv6 deny snmp ::/0"}, {"no login-access-list deny web 0.0.0.0 0.0.0.0"},
+		{"login-access-list disable"}, {"login-access-list clear"}, {"no login-access-list enable"},
+		{"login-access-list permit ssh 10.0.0.1 255.255.255.0"}, {"login-access-list permit ssh 999.0.0.1 255.255.255.255"}, {"login-access-list permit ssh 10.0.0.1 255.255.255.255 "}, {"login-access-list  permit ssh 10.0.0.1 255.255.255.255"}, {"login-access-list permit ssh 0.0.0.0 0.0.0.0"}, {"login-access-list permit ssh 10.0.0.1"},
+		{"login-access-list deny ssh 10.0.0.1 255.255.255.255"}, {"login-access-list deny ssh 0.0.0.0 0.0.0.0 extra"}, {"login-access-list ipv6 deny ssh fe80::/10"},
+		{"login-access-list ipv6 permit ssh ::/0"}, {"login-access-list permit ssh 10.0.0.1 255.255.255.255\nlogin-access-list deny telnet 0.0.0.0 0.0.0.0"},
+		{"no login-access-list permit ssh 10.0.0.1 255.255.255.0"},
 		{"user login-password admin " + good + "\nreboot"}, {"write erase"}, {"reboot"},
 		{"user manager", "user login-password admin " + good, "reboot"},
 	} {
@@ -779,5 +795,25 @@ func TestDefaultCommunitiesFoundAnywhereInTheLine(t *testing.T) {
 		if strings.Join(def, ",") != "public,private" {
 			t.Errorf("%q: got %v", out, def)
 		}
+	}
+}
+
+// aclSecureLine reports whether a login-access-list line is one of the exact shapes of the SSH restriction (or its undo).
+func aclSecureLine(l, src string) bool {
+	l = strings.TrimPrefix(l, "no ")
+	switch l {
+	case "login-access-list permit ssh " + src + " 255.255.255.255", "login-access-list deny ssh 0.0.0.0 0.0.0.0", "login-access-list ipv6 deny ssh ::/0", "login-access-list enable":
+		return true
+	}
+	return false
+}
+
+// checkACLRules: the factory telnet/snmp denies are untouched, and the three SSH rules are there.
+func checkACLRules(t *testing.T, got []string, src string) {
+	t.Helper()
+	want := []string{"deny telnet 0.0.0.0 0.0.0.0", "ipv6 deny telnet ::/0", "deny snmp 0.0.0.0 0.0.0.0", "ipv6 deny snmp ::/0",
+		"permit ssh " + src + " 255.255.255.255", "deny ssh 0.0.0.0 0.0.0.0", "ipv6 deny ssh ::/0"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("access list rules:\n got %q\nwant %q", got, want)
 	}
 }
