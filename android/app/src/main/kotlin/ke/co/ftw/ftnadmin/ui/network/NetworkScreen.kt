@@ -43,6 +43,10 @@ import ke.co.ftw.ftnadmin.ui.common.StatusDot
 import ke.co.ftw.ftnadmin.ui.common.TabScaffold
 import ke.co.ftw.ftnadmin.ui.common.vmFactory
 
+/**
+ * The Network screen: Map (Google Maps, one pin per apartment), List (the same data as cards, with Open in Google Maps)
+ * and Live (the router-by-router clients and interfaces this screen showed before the map).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NetworkScreen(
@@ -50,6 +54,7 @@ fun NetworkScreen(
     onAlerts: () -> Unit,
     onOpenCustomer: (String) -> Unit,
     onCreateCustomer: (routerId: String, mac: String) -> Unit,
+    links: NetworkLinks,
 ) {
     val container = LocalContainer.current
     val vm: NetworkViewModel = viewModel(
@@ -57,7 +62,9 @@ fun NetworkScreen(
             NetworkViewModel(container.routerLive, container.accounts, container.newDevices, container.routerContext.selection)
         },
     )
+    val mapVm: NetworkMapViewModel = viewModel(factory = vmFactory { NetworkMapViewModel(container.networkMap) })
     val ui by vm.state.collectAsStateWithLifecycle()
+    val mapUi by mapVm.state.collectAsStateWithLifecycle()
     val snack = remember { SnackbarHostState() }
     LaunchedEffect(ui.message) {
         ui.message?.let {
@@ -65,22 +72,50 @@ fun NetworkScreen(
             vm.clearMessage()
         }
     }
+    LaunchedEffect(mapUi.message) {
+        mapUi.message?.let {
+            snack.showSnackbar(it)
+            mapVm.clearMessage()
+        }
+    }
 
     TabScaffold(title = "Network", onAlerts = onAlerts, snackbarHost = { SnackbarHost(snack) }) { inner ->
-        val id = ui.routerId
-        if (id == null) {
-            PickRouter(Modifier.padding(inner))
-        } else {
-            Column(Modifier.padding(inner).fillMaxSize()) {
-                ChipRow(Modifier.padding(bottom = 4.dp)) {
-                    NetworkTab.entries.forEach { t ->
-                        FilterChip(selected = ui.tab == t, onClick = { vm.setTab(t) }, label = { ChipLabel(t.label) })
-                    }
+        Column(Modifier.padding(inner).fillMaxSize()) {
+            ChipRow(Modifier.padding(bottom = 4.dp)) {
+                NetworkMode.entries.forEach { m ->
+                    FilterChip(selected = mapUi.mode == m, onClick = { mapVm.setMode(m) }, label = { ChipLabel(m.label) })
                 }
-                when (ui.tab) {
-                    NetworkTab.Clients -> ClientsPane(ui, vm, user, id, onOpenCustomer, onCreateCustomer)
-                    NetworkTab.Interfaces -> InterfacesPane(ui, vm)
+            }
+            when (mapUi.mode) {
+                NetworkMode.Live -> LivePane(ui, vm, user, onOpenCustomer, onCreateCustomer)
+                else -> NetworkMapPane(mapUi, mapVm, user.canWrite, links)
+            }
+        }
+    }
+}
+
+/** The router-by-router view (clients and interfaces of the selected router). */
+@Composable
+private fun LivePane(
+    ui: NetworkUiState,
+    vm: NetworkViewModel,
+    user: UserInfo,
+    onOpenCustomer: (String) -> Unit,
+    onCreateCustomer: (routerId: String, mac: String) -> Unit,
+) {
+    val id = ui.routerId
+    if (id == null) {
+        PickRouter(Modifier)
+    } else {
+        Column(Modifier.fillMaxSize()) {
+            ChipRow(Modifier.padding(bottom = 4.dp)) {
+                NetworkTab.entries.forEach { t ->
+                    FilterChip(selected = ui.tab == t, onClick = { vm.setTab(t) }, label = { ChipLabel(t.label) })
                 }
+            }
+            when (ui.tab) {
+                NetworkTab.Clients -> ClientsPane(ui, vm, user, id, onOpenCustomer, onCreateCustomer)
+                NetworkTab.Interfaces -> InterfacesPane(ui, vm)
             }
         }
     }
