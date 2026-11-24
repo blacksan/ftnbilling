@@ -20,6 +20,9 @@ MapLibre GL JS 6 ships ES modules only: the old UMD `maplibre-gl.js` and `maplib
 builds are gone (v5.24.1 is the last line that has them). The v6 bundle uses no `eval` or `new Function`, so it runs under
 `script-src 'self'`, and its worker is a module worker loaded from this origin (`worker-src 'self'`, no `blob:`).
 `netmap.js` loads the library with a dynamic `import()` of the versioned URL and points `setWorkerUrl` at the worker here.
+A dedicated worker runs under the CSP sent with its own script, not the page's, so the server gives
+`maplibre-gl-worker.mjs` (and only it) a policy whose connect-src allows tiles.openfreemap.org (`cspMapWorker` in
+`security_headers.go`); renaming or moving the worker file means updating `mapWorkerPath` there.
 The `.map` source maps and `-dev` builds are not vendored (the `sourceMappingURL` comment at the end of the two scripts
 then 404s in the browser's devtools, which is harmless).
 
@@ -27,4 +30,5 @@ then 404s in the browser's devtools, which is harmless).
 
 In an empty scratch directory: `npm pack maplibre-gl@<version>` (never run its scripts), compare the sha512 of the `.tgz`
 with `npm view maplibre-gl@<version> dist.integrity`, copy the four files above over these, and update this file.
-Run `go test ./internal/web/` (the Network tests check the files are present and that `netmap.js` builds no HTML).
+Run `go test ./internal/web/` (the Network tests check the files are present, that their sha256 match the table above,
+that the worker carries its CSP, and that `netmap.js` builds no HTML).

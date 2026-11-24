@@ -23,6 +23,7 @@ const (
 //   - script-src stays 'self': the library is an ES module with no eval or new Function, loaded by a dynamic import()
 //     from /static, and no inline script is needed. There is no 'unsafe-eval', no 'unsafe-inline' and no remote script.
 //   - worker-src 'self': the tile worker is the self-hosted maplibre-gl-worker.mjs (a module worker), so blob: is not needed.
+//     The worker runs under the CSP of its own response (cspMapWorker), which is where its tile fetches are allowed.
 //   - connect-src adds https://tiles.openfreemap.org: the style JSON, the TileJSON and the .pbf tiles, the sprite sheet
 //     and the glyph (font) ranges are all fetched by XHR/fetch from that one host.
 //   - img-src adds https://tiles.openfreemap.org (the sprite sheet is decoded from a fetched blob, hence blob:) and keeps data:
@@ -36,6 +37,17 @@ const cspNetwork = "default-src 'self'; script-src 'self'; " +
 	"connect-src 'self' https://tiles.openfreemap.org; " +
 	"worker-src 'self'; " +
 	"form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+
+// cspMapWorker is the policy of the MapLibre tile worker script itself. A dedicated worker is governed by the CSP
+// delivered with its own script response, not by the page that started it (CSP3, and what Firefox and current Chrome
+// do), and /static otherwise gets cspPages (connect-src 'self'), under which the worker's fetches of the vector tiles
+// and glyphs from tiles.openfreemap.org would be refused and the map would stay blank. So the worker file, and only it,
+// carries the map's connect-src; it runs no eval (script-src 'self' blocks the importScripts fallback it never uses).
+const cspMapWorker = "default-src 'none'; script-src 'self'; connect-src 'self' https://tiles.openfreemap.org; " +
+	"img-src 'self' data: blob: https://tiles.openfreemap.org; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+
+// mapWorkerPath is where netmap.js points setWorkerUrl (static/vendor/maplibre).
+const mapWorkerPath = "/static/vendor/maplibre/maplibre-gl-worker.mjs"
 
 // networkCSP is cspNetwork with the remote WebFig host in form-action when it is on (like adminCSP).
 func (s *Server) networkCSP() string {
@@ -67,6 +79,10 @@ func (s *Server) securityHeaders(h http.Header, r *http.Request) {
 	if p == "/admin/network" {
 		// OpenFreeMap needs no key and no Referer, so the site-wide Referrer-Policy (same-origin) stays.
 		h.Set("Content-Security-Policy", s.networkCSP())
+		return
+	}
+	if p == mapWorkerPath {
+		h.Set("Content-Security-Policy", cspMapWorker)
 		return
 	}
 	if strings.HasPrefix(p, "/admin") {

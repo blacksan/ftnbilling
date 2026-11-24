@@ -1,6 +1,8 @@
 package web_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -293,7 +295,7 @@ func TestNetworkPageLoadsMapFromSelfHostedScripts(t *testing.T) {
 			t.Errorf("netmap.js lacks %s", want)
 		}
 	}
-	// the vendored library is served from this origin with a script content type, under the page's CSP
+	// the vendored library is served from this origin with a script content type
 	for _, f := range []struct{ path, ct string }{
 		{"/static/vendor/maplibre/maplibre-gl.mjs", "text/javascript"},
 		{"/static/vendor/maplibre/maplibre-gl-worker.mjs", "text/javascript"},
@@ -303,6 +305,39 @@ func TestNetworkPageLoadsMapFromSelfHostedScripts(t *testing.T) {
 		r.Body.Close()
 		if r.StatusCode != 200 || !strings.HasPrefix(r.Header.Get("Content-Type"), f.ct) || r.Header.Get("X-Content-Type-Options") != "nosniff" {
 			t.Errorf("%s: %d %q", f.path, r.StatusCode, r.Header.Get("Content-Type"))
+		}
+		// A dedicated worker runs under the CSP of its own script response, so the worker file (and no other static
+		// file) must let it fetch the tiles and glyphs; the rest of /static keeps the plain policy.
+		c := r.Header.Get("Content-Security-Policy")
+		isWorker := strings.HasSuffix(f.path, "-worker.mjs")
+		if isWorker && (!strings.Contains(c, "connect-src 'self' https://tiles.openfreemap.org;") || strings.Contains(c, "unsafe") || !strings.Contains(c, "default-src 'none'")) {
+			t.Errorf("worker CSP %q", c)
+		}
+		if !isWorker && strings.Contains(c, "openfreemap") {
+			t.Errorf("%s carries the map worker policy: %s", f.path, c)
+		}
+	}
+	for _, p := range []string{"/static/app.js", "/static/netmap.js", "/static/vendor/maplibre/maplibre-gl-worker.mjs.map"} {
+		r := a.admin("GET", p, nil)
+		r.Body.Close()
+		if c := r.Header.Get("Content-Security-Policy"); strings.Contains(c, "openfreemap") {
+			t.Errorf("%s carries the map worker policy: %s", p, c)
+		}
+	}
+	// The vendored files are exactly the ones whose sha256 the vendor README records (copied from the npm tarball whose
+	// integrity matches the registry): a changed byte must come with an updated README.
+	readme, err := os.ReadFile("static/vendor/maplibre/README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"maplibre-gl.mjs", "maplibre-gl-worker.mjs", "maplibre-gl.css", "LICENSE"} {
+		b, err := os.ReadFile("static/vendor/maplibre/" + f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(b)
+		if row := "| `" + f + "` |"; !strings.Contains(string(readme), row) || !strings.Contains(string(readme), "`"+hex.EncodeToString(sum[:])+"`") {
+			t.Errorf("%s: sha256 %x is not the one in vendor/maplibre/README.md", f, sum)
 		}
 	}
 	// no remote script or CSS host in the vendored bundle's code paths we rely on (eval-free, so script-src 'self' holds)
