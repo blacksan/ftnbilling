@@ -172,6 +172,38 @@ func (s *Server) payRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /pay/find", s.payFind)
 	mux.HandleFunc("POST /pay/start", s.payStart)
 	mux.HandleFunc("POST /pay/voucher", s.payVoucher)
+	mux.HandleFunc("GET /pay/again", s.payAgain)
+	// A reload or a shared link opens these forms' addresses with GET: take the visitor to the page, not to a bare 405.
+	for _, p := range []string{"/pay/find", "/pay/start", "/pay/voucher"} {
+		mux.HandleFunc("GET "+p, toPay)
+	}
+}
+
+// payAgain is "Try again" after a payment that failed or timed out: the package step of the same account with the
+// same package chosen and the same paying number (the order id is the visitor's own receipt of that attempt).
+func (s *Server) payAgain(w http.ResponseWriter, r *http.Request) {
+	p := s.payBase(r)
+	o, ok := s.svc.GetOrder(r.FormValue("order"))
+	if !ok || !payFindLimiter(p).allow(limitKey(realIP(r))) {
+		toPay(w, r)
+		return
+	}
+	a, ok := s.svc.GetAccount(o.AccountID)
+	if open, found := s.svc.AccountByCode(a.Code); !ok || !found || open.ID != a.ID {
+		toPay(w, r)
+		return
+	}
+	r.Form.Set("phone_src", "")
+	r.Form.Del("phone")
+	if n := normOrEmpty(a.Phone); o.Phone != "" && o.Phone != n {
+		r.Form.Set("phone_src", "other")
+		r.Form.Set("phone", localPhone(o.Phone))
+	} else if n != "" {
+		r.Form.Set("phone_src", "file")
+	} else if o.Phone != "" {
+		r.Form.Set("phone", localPhone(o.Phone))
+	}
+	s.payChoose(w, r, p, a, true, http.StatusOK, "", o.PackageID)
 }
 
 // payPage is everything the public payment page shows. It never carries a

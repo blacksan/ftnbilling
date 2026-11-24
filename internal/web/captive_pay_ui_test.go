@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"ispbill/internal/billing"
 	"ispbill/internal/store"
 )
 
@@ -97,5 +98,60 @@ func TestPayPriceAndMpesaWording(t *testing.T) {
 	_, html, _ = c.pay(t, "/pay/find", url.Values{"code": {c.acct.Code}})
 	if !strings.Contains(html, "Top up or change package") || strings.Contains(html, "Your internet is paused") {
 		t.Errorf("an active account is not paused:\n%s", html)
+	}
+}
+
+// "Try again" after a failed payment comes back to the same account with the same package and paying number chosen.
+func TestPayTryAgainIsPrefilled(t *testing.T) {
+	c := newCaptive(t, true)
+	day := c.pkg("1 Day")
+	o, err := c.svc.CreateOrder(billing.OrderInput{AccountID: c.acct.ID, PackageID: day, Phone: "254799111222", Method: "mpesa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.svc.FailOrder(t.Context(), o.ID, billing.ReasonPromptNotSent); err != nil {
+		t.Fatal(err)
+	}
+	wait := body(t, c.visit("GET", "/portal/wait?order="+o.ID, "isp.ftw.co.ke", nil))
+	if !strings.Contains(wait, `href="/pay/again?order=`+o.ID+`"`) {
+		t.Fatalf("Try again does not carry the order:\n%s", wait)
+	}
+	r := c.visit("GET", "/pay/again?order="+o.ID, "isp.ftw.co.ke", nil)
+	html := body(t, r)
+	if r.StatusCode != 200 || !strings.Contains(html, "Flat 4B") || !strings.Contains(html, `value="`+day+`" checked`) ||
+		!strings.Contains(html, `value="0799111222"`) || !strings.Contains(html, `value="other" checked`) {
+		t.Errorf("not prefilled: %d\n%s", r.StatusCode, html)
+	}
+	// An unknown order goes to the landing page.
+	r = c.visit("GET", "/pay/again?order=nope", "isp.ftw.co.ke", nil)
+	r.Body.Close()
+	if r.StatusCode != 303 || r.Header.Get("Location") != "/pay" {
+		t.Errorf("unknown order: %d %s", r.StatusCode, r.Header.Get("Location"))
+	}
+}
+
+// The form addresses opened with GET (history, a shared link, a reload) lead back to the payment page.
+func TestPayFormAddressesRedirectOnGet(t *testing.T) {
+	c := newCaptive(t, true)
+	for _, p := range []string{"/pay/start", "/pay/find", "/pay/voucher"} {
+		r := c.visit("GET", p, "isp.ftw.co.ke", nil)
+		r.Body.Close()
+		if r.StatusCode != 303 || r.Header.Get("Location") != "/pay" {
+			t.Errorf("GET %s: %d %q", p, r.StatusCode, r.Header.Get("Location"))
+		}
+	}
+}
+
+// After a voucher the success page does not talk about Paybill; after an M-Pesa payment it does.
+func TestSuccessPageAfterVoucherHasNoPaybill(t *testing.T) {
+	c := newCaptive(t, true)
+	_, vs, err := c.svc.GenerateVouchers(c.pkg("1 Day"), c.site.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, resp := c.pay(t, "/pay/voucher", url.Values{"code": {c.acct.Code}, "voucher": {vs[0].Code}})
+	html := body(t, c.visit("GET", resp.Header.Get("Location"), "isp.ftw.co.ke", nil))
+	if strings.Contains(html, "Paybill") || !strings.Contains(html, "Your account number") || !strings.Contains(html, c.acct.Code) {
+		t.Errorf("success after a voucher:\n%s", html)
 	}
 }
