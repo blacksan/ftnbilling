@@ -75,6 +75,13 @@
   });
   var rs = $("#router-switch");
   if (rs) rs.addEventListener("change", function () { location.href = "/admin/site/select?site=" + enc(rs.value) + "&next=" + enc(rs.getAttribute("data-next") || "/admin"); });
+  /* tab strips: bring the current tab into view and fade the edge that has more */
+  $$(".tabs").forEach(function (t) {
+    function edges() { t.classList.toggle("more-l", t.scrollLeft > 4); t.classList.toggle("more-r", t.scrollLeft + t.clientWidth < t.scrollWidth - 4); }
+    var cur = t.querySelector("[aria-current],[aria-selected=true],.on");
+    if (cur && t.scrollWidth > t.clientWidth) t.scrollLeft = Math.max(0, cur.offsetLeft - (t.clientWidth - cur.offsetWidth) / 2);
+    edges(); t.addEventListener("scroll", edges, { passive: true }); window.addEventListener("resize", edges);
+  });
   $$("select[data-goto]").forEach(function (s) { s.addEventListener("change", function () { location.href = s.value; }); });
 
   if (location.search.indexOf("add=1") >= 0) { var ar = $("#addrouter"); if (ar) setTimeout(function () { openDlg(ar); }, 50); }
