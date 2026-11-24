@@ -84,7 +84,7 @@ func (d *Data) WipeReport() WipeReport {
 		Delete: []WipeItem{
 			{WipeRouters, len(d.Sites)}, {WipePackages, len(d.Packages)}, {WipeCustomers, len(d.Customers)},
 			{WipeAccounts, len(d.Accounts) + len(d.ClosedAccounts)}, {WipeTenancies, len(d.Tenancies)},
-			{WipeEquipment, len(d.Equipment)}, {WipeEquipmentEvents, len(d.EquipmentEvents)}, {WipeApartments, len(d.Apartments) + len(d.ApartmentSites)},
+			{WipeEquipment, len(d.Equipment) + len(d.OLTStates)}, {WipeEquipmentEvents, len(d.EquipmentEvents)}, {WipeApartments, len(d.Apartments) + len(d.ApartmentSites)},
 			{WipeOrders, len(d.Orders)}, {WipeVouchers, len(d.Vouchers)}, {WipePayments, len(d.Payments)},
 			{WipeDevices, len(d.Devices)}, {WipeRegistrations, len(d.Registrations)}, {WipeONUs, len(d.ONUs) + len(d.ONUTasks)}, {WipeTasks, len(d.Tasks)}, {WipeEvents, len(d.Events)}, {WipeNotes, len(d.Notes)},
 			{WipeRouterSettings, rs}, {WipeSessions, len(d.AdminSessions)}, {WipePhones, len(d.APIDevices)},

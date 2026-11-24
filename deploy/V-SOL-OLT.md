@@ -51,3 +51,15 @@ Items marked **[UNVERIFIED]** come from SmartOLT and V-SOL blog pages, forum pos
 9. The bench box is 2.4 GHz only (SSID1 to SSID4 all 2.4 GHz): the Wi-Fi card should show one band and the server should write only SSID1 (check that SSID2 to SSID4 are left alone).
 6. Does option 43 work, and what do option 60 and option 82 contain?
 7. Which parameter path takes a web-admin password?
+
+## Letting the server manage the OLT (OLT management)
+
+The server can log in to the OLT over SSH (Telnet as a fallback), back up its configuration, read ONU state and optics, and, if the owner switches it on for that OLT, configure it and authorise ONUs that are in the inventory. See `docs/api/v9-olt.md` for the API and the web page "Manage this OLT" (Equipment, OLT) for the owner's side.
+
+- **Path.** Server, WireGuard, router, OLT-management VLAN (98 by default) on the OLT uplink. The page "Adopt this OLT" shows a one-time paste for the router (generated, nothing to type by hand) and a one-time paste for the OLT console that creates the management address and login. Only the server (10.99.0.1) can reach the OLT; the router drops it from VLAN 99, the customer LAN, the admin port and the unregistered pool.
+- **Not automatic from 192.168.8.200.** A factory OLT answers on its factory address only on its own port and without the router path, so the server cannot reach it cleanly without touching the router's WAN or routes, which the server never does. Adoption is the paste-once console snippet.
+- **Host key.** Pinned on first use; the fingerprint is shown to the owner to compare with the OLT.
+- **Off by default.** Reading is always allowed once the login is saved. Configuring needs the owner to switch "Let the server configure this OLT" on (password asked again) and to mark the dialect as checked after comparing the Plan preview with the OLT.
+- **Backups.** Taken before every change, the last 20 kept, secrets redacted when shown.
+- **Still manual.** The ACS URL and login in the ONU service profile's TR069 tab (OLT web UI).
+- **[UNVERIFIED] on the bench.** All V-SOL command strings live in one table (`internal/olt/vsol_dialect.go`, marked `TODO(bench)`). Compare with `show running-config` of the bench OLT before marking the dialect as checked.

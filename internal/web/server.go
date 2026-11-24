@@ -23,6 +23,7 @@ import (
 	"ispbill/internal/authn"
 	"ispbill/internal/billing"
 	"ispbill/internal/config"
+	"ispbill/internal/olt"
 	"ispbill/internal/payments"
 	"ispbill/internal/settings"
 	"ispbill/internal/sites"
@@ -53,6 +54,7 @@ type Server struct {
 	testRL    *limiter // settings test buttons
 	stkRL     *limiter // KES 1 test payments
 	revealRL  *limiter // OLT login password reveals, per owner
+	oltRL     *limiter // OLT permission steps (password re-entry), per owner
 	toolRL    *limiter // ping, traceroute, console
 	toolSem   chan struct{}
 	toolRun   ToolRunner // runs ping and traceroute from this server; nil = the real programs
@@ -67,6 +69,7 @@ type Server struct {
 	searchRL  *limiter     // search, by signed-in user (web and API)
 	refreshRL *limiter     // /api/v1/auth/refresh by client address
 	acs       *acs.Service // nil = ONU management off
+	olt       *olt.Service // nil = OLT management off
 	reboots   rebootGuard  // one router reboot per 10 minutes per router (api_live.go)
 
 	wf webfigState
@@ -82,7 +85,7 @@ type onlineEntry struct {
 
 func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map[string]payments.Provider, mpesa *payments.Mpesa, mgr *sites.Manager, log *slog.Logger) *Server {
 	s := &Server{cfg: cfg, st: st, svc: svc, providers: providers, mpesa: mpesa, mgr: mgr, log: log,
-		rl: newLimiter(15, time.Minute), joinRL: newLimiter(10, time.Minute), testRL: newLimiter(5, time.Minute), stkRL: newLimiter(3, 10*time.Minute), revealRL: newLimiter(5, 10*time.Minute), toolRL: newLimiter(30, time.Minute), toolSem: make(chan struct{}, 2), findRL: newLimiter(5, time.Minute), online: map[string]onlineEntry{}}
+		rl: newLimiter(15, time.Minute), joinRL: newLimiter(10, time.Minute), testRL: newLimiter(5, time.Minute), stkRL: newLimiter(3, 10*time.Minute), revealRL: newLimiter(5, 10*time.Minute), oltRL: newLimiter(30, 10*time.Minute), toolRL: newLimiter(30, time.Minute), toolSem: make(chan struct{}, 2), findRL: newLimiter(5, time.Minute), online: map[string]onlineEntry{}}
 	s.auth = newAdminAuth(s)
 	if p, err := netip.ParsePrefix(cfg.WGSubnet); err == nil {
 		s.wgNet = p.Masked()

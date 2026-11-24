@@ -90,6 +90,12 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 			By: "brian", Attempts: 2, CreatedAt: at, StartedAt: at, FinishedAt: at, AfterReboot: true, PassLeaf: "PreSharedKey.1.KeyPassphrase", ConfirmedAt: at, ConfirmedBy: "brian"}
 		d.OUICache["00:25:9E"] = store.OUIEntry{Prefix: "00:25:9E", Vendor: "Example Maker Ltd", Found: true, CheckedAt: at}
 		d.OUICache["AC:DE:48"] = store.OUIEntry{Prefix: "AC:DE:48", Found: false, CheckedAt: at}
+		d.OLTStates["e1"] = store.OLTState{ID: "e1", Updated: at,
+			Settings: store.OLTSettings{Proto: "ssh", Port: 2222, EnablePass: "c2VhbGVk", HostKey: "SHA256:abc", HostKeyAt: at, MgmtVLAN: 98, UplinkPort: "0/1", InternetVLAN: 100,
+				Provisioning: true, ProvisioningBy: "brian", ProvisioningAt: at, DialectChecked: true, CheckedBy: "brian", CheckedAt: at},
+			Status:  store.OLTStatus{At: at, OK: true, Version: "V1600GS", Raw: "x", ONUs: []store.OLTONU{{PON: 1, ID: 1, Serial: "VSOL00000001", State: "online", Online: true, RxPower: "-20.1", Distance: "120"}}},
+			Found:   []store.OLTFound{{PON: 1, Serial: "VSOL00000002", FirstSeen: at, LastSeen: at, Verdict: store.OLTFoundUnknown, AlertedAt: at}},
+			Backups: []store.OLTBackup{{ID: "b1", At: at, Why: "manual", By: "brian", Size: 5, Sealed: true, Text: "c2VhbGVk"}}}
 		d.Notes["n1"] = store.Note{ID: "n1", CustomerID: "c1", AccountID: "a1", SiteID: "s111111", EquipmentID: "e1", Text: "hello", Time: at}
 		d.Settings["wa.token"] = store.Setting{Key: "wa.token", Value: "c2VhbGVk", Enc: true, UpdatedAt: at}
 		d.Settings["wa.lang"] = store.Setting{Key: "wa.lang", Value: "sw", UpdatedAt: at}

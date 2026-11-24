@@ -16,7 +16,7 @@ import (
 
 // Tables lists every data table in report order.
 var Tables = []string{"sites", "apartments", "apartment_sites", "packages", "customers", "equipment", "accounts", "tenancies", "orders", "vouchers",
-	"payments", "devices", "registrations", "onus", "onu_tasks", "oui_cache", "tasks", "equipment_events", "notes", "settings", "events", "admin_users", "admin_sessions", "api_devices"}
+	"payments", "devices", "registrations", "onus", "onu_tasks", "oui_cache", "olt_states", "tasks", "equipment_events", "notes", "settings", "events", "admin_users", "admin_sessions", "api_devices"}
 
 // Counts are row counts per table plus the sum of applied payments.
 type Counts struct {
@@ -38,7 +38,7 @@ func CountsOf(d *store.Data) Counts {
 		"accounts": len(d.Accounts) + len(d.ClosedAccounts), "tenancies": len(d.Tenancies), "apartments": len(d.Apartments), "apartment_sites": len(d.ApartmentSites),
 		"orders": len(d.Orders), "vouchers": len(d.Vouchers), "payments": len(d.Payments), "devices": len(d.Devices), "tasks": len(d.Tasks),
 		"equipment_events": len(d.EquipmentEvents), "notes": len(d.Notes), "settings": len(d.Settings), "events": len(d.Events),
-		"admin_users": len(d.AdminUsers), "admin_sessions": len(d.AdminSessions), "api_devices": len(d.APIDevices), "registrations": len(d.Registrations), "onus": len(d.ONUs), "onu_tasks": len(d.ONUTasks), "oui_cache": len(d.OUICache),
+		"admin_users": len(d.AdminUsers), "admin_sessions": len(d.AdminSessions), "api_devices": len(d.APIDevices), "registrations": len(d.Registrations), "onus": len(d.ONUs), "onu_tasks": len(d.ONUTasks), "oui_cache": len(d.OUICache), "olt_states": len(d.OLTStates),
 	}, Closed: len(d.ClosedAccounts), MACConflicts: len(d.MACConflicts())}
 	for _, p := range d.Payments {
 		if p.Status == store.PayApplied {
@@ -257,6 +257,9 @@ func (b *Backend) Import(ctx context.Context, d *store.Data, opt ImportOptions) 
 		return want, err
 	}
 	if err := copyRows(ctx, tx, ouiCacheC, mapVals(d.OUICache)); err != nil {
+		return want, err
+	}
+	if err := copyRows(ctx, tx, oltStatesC, mapVals(d.OLTStates)); err != nil {
 		return want, err
 	}
 	if err := copyRows(ctx, tx, tasksC, mapVals(d.Tasks)); err != nil {

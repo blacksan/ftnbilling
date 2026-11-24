@@ -19,6 +19,7 @@ func (s *Server) oltRoutes(get, post func(string, http.HandlerFunc)) {
 	get("/admin/olts/view", s.adminOLTView)
 	post("/admin/olts/save", s.adminOLTSave)
 	post("/admin/olts/reveal", s.adminOLTReveal)
+	s.oltRoutes2(get, post)
 }
 
 // treeFor builds the equipment tree for the routers the admin may see. Equipment with no router shows only in the

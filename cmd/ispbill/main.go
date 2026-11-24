@@ -21,7 +21,9 @@ import (
 	"ispbill/internal/billing"
 	"ispbill/internal/config"
 	"ispbill/internal/metrics"
+	"ispbill/internal/olt"
 	"ispbill/internal/payments"
+	"ispbill/internal/secretbox"
 	"ispbill/internal/settings"
 	"ispbill/internal/sites"
 	"ispbill/internal/store"
@@ -181,6 +183,18 @@ func run(log *slog.Logger) error {
 					errc <- err
 				}
 			}()
+		}
+	}
+	if len(cfg.DataKey) > 0 {
+		// OLT management: reads and (only when an owner allows it per OLT) configures OLTs over the tunnel. It needs
+		// DATA_KEY to open the OLT passwords; with no OLT configured it does nothing.
+		if box, err := secretbox.New(cfg.DataKey); err != nil {
+			log.Error("OLT management is off", "err", err)
+		} else {
+			oltSvc := olt.New(olt.Options{Store: st, Box: box, Reach: mgr.OLTReach, Alert: webSrv.OLTAlert, Log: log})
+			webSrv.SetOLT(oltSvc)
+			wg.Add(1)
+			go func() { defer wg.Done(); oltSvc.Run(ctx) }()
 		}
 	}
 	wg.Add(1)
