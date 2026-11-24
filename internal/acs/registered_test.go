@@ -437,3 +437,29 @@ func TestHeldResetDoesNotMoveTheRecord(t *testing.T) {
 		t.Fatalf("held, but the record moved: %+v", o)
 	}
 }
+
+func TestTrustedMACIsClearedWhenTheONUIsUnlinked(t *testing.T) {
+	f := newFixture(t)
+	f.strict(true)
+	f.inventory("SNUNL", "", farMAC20, "a1")
+	c := newZTE(t, f, "SNUNL", "10.6.3.20")
+	_ = c.session("0 BOOTSTRAP")
+	o := f.onuBySerial("SNUNL")
+	if err := f.svc.TrustONU("owner", "", o.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.onuBySerial("SNUNL").Sec.MACTrusted; got != leaseMAC20 {
+		t.Fatalf("not trusted: %q", got)
+	}
+	if err := f.svc.UnlinkONU("owner", "", o.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.onuBySerial("SNUNL"); got.Sec.MACTrusted != "" || !got.State.Returned {
+		t.Fatalf("trust survived the unlink: %+v returned=%v", got.Sec, got.State.Returned)
+	}
+	// the same lease MAC no longer passes: the next check-in waits for the owner again
+	_ = c.session("2 PERIODIC")
+	if got := f.onuBySerial("SNUNL"); got.Sec.MACCheck != store.MACWaiting {
+		t.Fatalf("still let through after the unlink: %+v", got.Sec)
+	}
+}

@@ -544,11 +544,26 @@ func (d *Data) ReleaseONU(onuID string, now time.Time, by string) (ONUTask, bool
 	}
 	d.CancelONUTasks(o.ID, TaskWiFi, now, "the ONU left this house")
 	o.AccountID, o.Link = "", ""
+	o.Sec.MACTrusted = "" // the owner's "Trust this ONU" was for the box at that house, not for whoever gets it next
 	o.State.Returned, o.State.ReturnedAt = true, nt(now)
 	o.State.AppliedFor, o.State.AppliedAt = "", time.Time{}
 	d.ONUs[o.ID] = o
 	t := d.QueueONUTask(o, TaskFactoryReset, by, now)
 	return t, true
+}
+
+// ClearMACTrust drops the owner's "Trust this ONU" override (ONUSec.MACTrusted) on every ONU row of these serials, so
+// the registered-MAC check applies again. Used when the register item leaves service or its WAN MAC changes.
+func (d *Data) ClearMACTrust(serials ...string) int {
+	n := 0
+	for _, o := range d.ONUsOfSerial(serials...) {
+		if o.Sec.MACTrusted != "" {
+			o.Sec.MACTrusted = ""
+			d.ONUs[o.ID] = o
+			n++
+		}
+	}
+	return n
 }
 
 // ONUsOfSerial finds every ONU row whose serial is serial (normalised), for the returned equipment item.

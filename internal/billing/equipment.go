@@ -140,6 +140,9 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 			}
 		}
 		oldSite := e.SiteID
+		if exists && e.Kind == store.KindONT && !strings.EqualFold(e.MAC, mac) {
+			d.ClearMACTrust(e.Serial, e.GPONSerial, serial, gpon) // a trusted MAC was trusted against the old WAN MAC
+		}
 		e.Kind, e.Serial, e.MAC, e.GPONSerial = kind, serial, mac, gpon
 		e.Model, e.Firmware, e.Notes = cleanText(in.Model, 60), cleanText(in.Firmware, 40), cleanText(in.Notes, 300)
 		if e.AccountID == "" {
@@ -259,6 +262,9 @@ func returnLocked(d *store.Data, key string, e store.Equipment, status, note str
 				d.ReleaseONU(o.ID, now, "system")
 			}
 		}
+	}
+	if e.Kind == store.KindONT && status != store.EqInstalled {
+		d.ClearMACTrust(e.Serial, e.GPONSerial) // out of service (also when it was not at a house): no trusted MAC survives
 	}
 	e.AccountID, e.Status, e.UpdatedAt = "", status, now
 	if status != store.EqInstalled && !(e.Kind == store.KindOLT && status == store.EqFaulty) {
