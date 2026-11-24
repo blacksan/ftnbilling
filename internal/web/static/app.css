@@ -384,6 +384,11 @@ body.auth img.qr{display:block;margin:12px auto;width:220px;height:220px;image-r
 body.auth .codes{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2);margin:var(--sp-3) 0;font:500 var(--fs-14) var(--f-mono)}
 body.auth summary{margin-top:var(--sp-4);font-size:var(--fs-13);color:var(--muted)}
 body.auth p.back{text-align:center;margin-top:var(--sp-4)}
+/* sign-in pages: finger-sized controls, and no break inside "sign-in" / "6-digit" */
+body.auth input,body.auth button,body.auth .btn{min-height:44px}
+body.auth summary{min-height:44px;padding:var(--sp-3) 0;box-sizing:border-box;margin-top:0}
+body.auth p.back a{display:inline-flex;align-items:center;min-height:44px}
+body.auth .nb{white-space:nowrap}
 
 /* ---- responsive --------------------------------------------------------------------------------- */
 @media(max-width:1100px){.grid.c21{grid-template-columns:1fr}.kbtn{min-width:0}.kbtn span{display:none}.kbtn kbd{margin-left:0}}

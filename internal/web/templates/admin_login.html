@@ -6,12 +6,12 @@
 <p><a class="btn alt" href="{{.Back}}">{{.BackLabel}}</a></p></div></main></body></html>{{end}}
 
 {{define "admin_login"}}{{template "authhead" .}}
-<h1>Admin sign-in</h1><p class="muted">For {{.Brand}} staff.</p>
+<h1>Admin <span class="nb">sign-in</span></h1><p class="muted">For {{.Brand}} staff.</p>
 {{if .Error}}<div class="err" role="alert">{{.Error}}</div>{{end}}
 <form method="post" action="/admin/login" autocomplete="on"><input type="hidden" name="_csrf" value="{{.CSRF}}">{{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}
 <label>User name<input name="username" value="{{.Username}}" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus></label>
 <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
-<details><summary>First sign-in? Enter the setup code</summary>
+<details><summary>First <span class="nb">sign-in</span>? Enter the setup code</summary>
 <label>Setup code<input name="setup_code" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="xxxx-xxxx-xxxx-xxxx"></label>
 <p class="muted">The setup code was printed when the server was installed. It is only needed until you have set up the authenticator.</p></details>
 <button type="submit">Continue</button></form>
@@ -21,7 +21,7 @@
 <h1>Authenticator code</h1><p class="muted">Signing in as <b>{{.Username}}</b>.</p>
 {{if .Error}}<div class="err" role="alert">{{.Error}}</div>{{end}}
 <form method="post" action="/admin/login/totp"><input type="hidden" name="_csrf" value="{{.CSRF}}">{{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}
-<label>6-digit code<input name="code" inputmode="numeric" pattern="[0-9 ]*" autocomplete="one-time-code" autofocus maxlength="12"></label>
+<label><span class="nb">6-digit</span> code<input name="code" inputmode="numeric" pattern="[0-9 ]*" autocomplete="one-time-code" autofocus maxlength="12"></label>
 <button type="submit">Sign in</button></form>
 <details><summary>Lost your phone? Use a recovery code</summary>
 <form method="post" action="/admin/login/totp"><input type="hidden" name="_csrf" value="{{.CSRF}}">{{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}
@@ -42,7 +42,7 @@
 {{if .Secret}}<p>1. Scan this code with the app:</p><img class="qr" src="/admin/security/enrol/qr.png" alt="QR code for the authenticator app" width="220" height="220">
 <details><summary>Cannot scan? Type the key instead</summary><p><code>{{.Secret}}</code></p><p class="muted">Time based, 6 digits, 30 seconds.</p></details>
 <form method="post" action="/admin/security/enrol"><input type="hidden" name="_csrf" value="{{.CSRF}}">
-<label>2. Enter the 6-digit code it shows<input name="code" inputmode="numeric" pattern="[0-9 ]*" autocomplete="one-time-code" autofocus maxlength="12" required></label>
+<label>2. Enter the <span class="nb">6-digit</span> code it shows<input name="code" inputmode="numeric" pattern="[0-9 ]*" autocomplete="one-time-code" autofocus maxlength="12" required></label>
 <button type="submit">Finish set-up</button></form>{{end}}
 <form method="post" action="/admin/logout"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button type="submit" class="alt">Cancel</button></form>
 {{end}}
