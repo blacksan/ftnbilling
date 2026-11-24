@@ -18,29 +18,27 @@ const (
 		"connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
 )
 
-// cspNetwork is the admin policy plus what the Google Maps JavaScript API needs, and only for the Network page and
-// only when a key is set (see networkCSP). The host lists follow Google's "allowlist CSP" for the Maps JavaScript API
-// (developers.google.com/maps/documentation/javascript/content-security-policy): script-src *.googleapis.com
-// *.gstatic.com *.google.com *.ggpht.com *.googleusercontent.com blob:, connect-src *.googleapis.com *.google.com
-// *.gstatic.com data: blob:, worker-src blob:, frame-src *.google.com. Both of Google's documented policies (strict and
-// allowlist) carry 'unsafe-eval' in script-src, so it is kept here, on this page only. 'unsafe-inline' is NOT given to
-// script (Google's allowlist example has it, but this page runs no inline script: the Maps loader is a script element
-// created by /static/netmap.js, and every map/DOM text is set with textContent). style-src keeps 'unsafe-inline' (the
-// admin policy already has it, and the Maps library styles its controls inline).
-const cspNetwork = "default-src 'self'; script-src 'self' 'unsafe-eval' https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.ggpht.com https://*.googleusercontent.com blob:; " +
-	"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-	"img-src 'self' data: blob: https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.googleusercontent.com; " +
-	"font-src 'self' https://fonts.gstatic.com; " +
-	"connect-src 'self' https://*.googleapis.com https://*.google.com https://*.gstatic.com data: blob:; " +
-	"worker-src blob:; frame-src https://*.google.com; " +
+// cspNetwork is the admin policy plus what the Network page's map needs, and only for /admin/network. The map is
+// MapLibre GL JS 6 (static/vendor/maplibre, served from this origin) with OpenFreeMap vector tiles, so:
+//   - script-src stays 'self': the library is an ES module with no eval or new Function, loaded by a dynamic import()
+//     from /static, and no inline script is needed. There is no 'unsafe-eval', no 'unsafe-inline' and no remote script.
+//   - worker-src 'self': the tile worker is the self-hosted maplibre-gl-worker.mjs (a module worker), so blob: is not needed.
+//   - connect-src adds https://tiles.openfreemap.org: the style JSON, the TileJSON and the .pbf tiles, the sprite sheet
+//     and the glyph (font) ranges are all fetched by XHR/fetch from that one host.
+//   - img-src adds https://tiles.openfreemap.org (the sprite sheet is decoded from a fetched blob, hence blob:) and keeps data:
+//     (MapLibre's own control icons are data: SVG in its CSS).
+//   - style-src is the admin one ('unsafe-inline' is already there; the map sets inline styles on its markers and canvas).
+//   - font-src stays 'self': map text is drawn from SDF glyphs on a canvas, not web fonts.
+const cspNetwork = "default-src 'self'; script-src 'self'; " +
+	"style-src 'self' 'unsafe-inline'; " +
+	"img-src 'self' data: blob: https://tiles.openfreemap.org; " +
+	"font-src 'self'; " +
+	"connect-src 'self' https://tiles.openfreemap.org; " +
+	"worker-src 'self'; " +
 	"form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
 
-// networkCSP is cspNetwork for the Network page when a Maps key is set, else the normal admin policy (the page then
-// shows the list view and loads nothing from Google).
+// networkCSP is cspNetwork with the remote WebFig host in form-action when it is on (like adminCSP).
 func (s *Server) networkCSP() string {
-	if s.live().GoogleMapsAPIKey == "" {
-		return s.adminCSP()
-	}
 	return strings.Replace(cspNetwork, "form-action 'self'", "form-action 'self'"+s.webFigFormAction(), 1)
 }
 
@@ -66,11 +64,9 @@ func (s *Server) securityHeaders(h http.Header, r *http.Request) {
 		h.Set("Content-Security-Policy", cspStrict)
 		return
 	}
-	if p == "/admin/network" && s.live().GoogleMapsAPIKey != "" {
+	if p == "/admin/network" {
+		// OpenFreeMap needs no key and no Referer, so the site-wide Referrer-Policy (same-origin) stays.
 		h.Set("Content-Security-Policy", s.networkCSP())
-		// A key restricted by HTTP referrer needs the page's origin on the requests to Google: with the site-wide
-		// "same-origin" policy they carry no Referer and Google refuses the key (RefererNotAllowedMapError).
-		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		return
 	}
 	if strings.HasPrefix(p, "/admin") {

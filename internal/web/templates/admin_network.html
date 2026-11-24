@@ -32,8 +32,9 @@
 {{template "stat" (dict "K" "Router down" "V" .Data.Net.Down "S" "apartments" "Icon" "warn" "Tone" (cond (gt .Data.Net.Down 0) "bad" "ok"))}}
 {{template "stat" (dict "K" "Some offline" "V" .Data.Net.Partial "S" "apartments" "Icon" "warn" "Tone" "info")}}
 </div>
-{{if and (eq .Data.View "map") .Data.MapsKeySet}}
-<div class="netwrap" id="netwrap" data-json="/admin/network/map.json" data-key="{{.Data.MapsKey}}">
+{{if .Data.MapOn}}
+<link rel="stylesheet" href="{{static "vendor/maplibre/maplibre-gl.css"}}">
+<div class="netwrap" id="netwrap" data-json="/admin/network/map.json" data-basemap="{{.Data.MapStyle}}" data-lib="{{static "vendor/maplibre/maplibre-gl.mjs"}}" data-worker="{{static "vendor/maplibre/maplibre-gl-worker.mjs"}}">
 <div class="netmap" id="netmap" role="application" aria-label="Map of the apartments"><p class="muted netloading" id="netloading">Loading the map...</p></div>
 <aside class="netpanel" id="netpanel" role="dialog" aria-label="Equipment at this apartment" aria-modal="false" hidden>
 <div class="netpanel-h"><h2 id="netpanel-title"></h2><button type="button" class="ibtn" id="netpanel-close" aria-label="Close">&times;</button></div>
@@ -45,8 +46,8 @@
 {{template "net_nogps" .}}
 <script src="{{static "netmap.js"}}" defer></script>
 {{else}}
-{{if not .Data.MapsKeySet}}<section class="panel netnote" id="net-nokey"><h2>The map is not switched on</h2>
-<p>This is the same information as a list, with a "View on Google Maps" link for each apartment. To get the map, add a Google Maps browser key{{if .IsOwner}}: <a href="/admin/settings/maps">Settings, Maps</a>{{else}} (an owner does this in Settings, Maps){{end}}. The key is made in Google Cloud Console: enable the <b>Maps JavaScript API</b>, create an API key, restrict it to websites (HTTP referrers) = this admin address and to the Maps JavaScript API only. The steps are in <code>deploy/README.md</code>, "Network map".</p></section>{{end}}
+{{if and (eq .Data.View "map") (eq .Data.Net.WithGPS 0)}}<section class="panel netnote" id="net-nogps-note"><h2>No apartment has a GPS point yet</h2>
+<p>The map appears as soon as one does. Until then this is the same information as a list, with a "View on Google Maps" link for each apartment once it has a point. Add the point in the apartment's form (GPS location).</p></section>{{end}}
 {{template "net_nogps" .}}
 {{if .Data.Net.Apartments}}<div class="netgrid">{{range .Data.Net.Apartments}}{{if .HasGPS}}{{template "net_card" .}}{{end}}{{end}}</div>
 {{else}}{{template "empty" (dict "Title" "No apartments yet." "Text" "Add an apartment with its GPS point and it appears here." "Acts" (acts "Add apartment|/admin/apartments/new"))}}{{end}}

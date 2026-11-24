@@ -14,16 +14,13 @@ import (
 	"ispbill/internal/store"
 )
 
-const testMapsKey = "AIzaSyTestKeyTestKeyTestKeyTestKey12345"
-
 // netRig is the OLT story (Block A with an OLT on PON 1, an ONU in house A1) plus a second apartment with no GPS.
-// The first apartment gets a GPS point; key sets the Google Maps key.
-func netRig(t *testing.T, key string) *app {
+// The first apartment gets a GPS point.
+func netRig(t *testing.T) *app {
 	t.Helper()
 	a := newAppCfg(t, false, func(c *config.Config) {
 		c.ACSListen, c.ACSCRPorts, c.ACSInformInterval, c.ACSMaxPerRouter = "10.99.0.1:7547", []int{7547, 30005}, 300, 200
 		c.WGSubnet = "10.99.0.0/24"
-		c.GoogleMapsAPIKey = key
 	})
 	a.makeOLT(t, nil)
 	oid := a.oltID(t)
@@ -66,9 +63,8 @@ func netRig(t *testing.T, key string) *app {
 }
 
 type netJSON struct {
-	MapsKeySet bool `json:"maps_key_set"`
-	WithGPS    int  `json:"with_gps"`
-	NoGPS      int  `json:"without_gps"`
+	WithGPS    int `json:"with_gps"`
+	NoGPS      int `json:"without_gps"`
 	Apartments []struct {
 		Name, State string
 		HasGPS      bool     `json:"has_gps"`
@@ -104,7 +100,7 @@ func getNetJSON(t *testing.T, a *app) (netJSON, string) {
 }
 
 func TestNetworkMapJSONContent(t *testing.T) {
-	a := netRig(t, testMapsKey)
+	a := netRig(t)
 	raw := a.adminGet(t, "/admin/network/map.json")
 	var generic struct {
 		Apartments []map[string]any `json:"apartments"`
@@ -139,7 +135,7 @@ func TestNetworkMapJSONContent(t *testing.T) {
 		}
 	}
 	j, _ := getNetJSON(t, a)
-	if j.WithGPS != 1 || j.NoGPS != 1 || !j.MapsKeySet {
+	if j.WithGPS != 1 || j.NoGPS != 1 {
 		t.Errorf("counts: %+v", j)
 	}
 	for _, ap := range j.Apartments {
@@ -156,7 +152,7 @@ func TestNetworkMapJSONContent(t *testing.T) {
 }
 
 func TestNetworkMarkerStatePausedRouterIsPartial(t *testing.T) {
-	a := netRig(t, testMapsKey)
+	a := netRig(t)
 	if err := a.st.Update(func(d *store.Data) error {
 		st := d.Sites[a.site]
 		st.Disabled = true
@@ -177,7 +173,7 @@ func TestNetworkMarkerStatePausedRouterIsPartial(t *testing.T) {
 }
 
 func TestNetworkMapJSONRoles(t *testing.T) {
-	a := netRig(t, testMapsKey)
+	a := netRig(t)
 	// signed out: not served
 	r, err := a.cl.Get(a.ts.URL + "/admin/network/map.json")
 	if err != nil {
@@ -206,37 +202,46 @@ func TestNetworkMapJSONRoles(t *testing.T) {
 	}
 }
 
-// The Network page, and only it, gets the Google Maps policy, and only when a key is set.
+// The Network page, and only it, gets the map policy: OpenFreeMap tiles and the self-hosted MapLibre worker.
 func TestNetworkCSPRelaxedOnlyOnNetworkPage(t *testing.T) {
-	a := netRig(t, testMapsKey)
+	a := netRig(t)
 	csp := func(p string) (string, http.Header) {
 		r := a.admin("GET", p, nil)
 		r.Body.Close()
 		return r.Header.Get("Content-Security-Policy"), r.Header
 	}
 	net, h := csp("/admin/network")
-	// Google's documented allowlist for the Maps JavaScript API (minus 'unsafe-inline' for script).
-	for _, want := range []string{"script-src 'self' 'unsafe-eval' https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.ggpht.com https://*.googleusercontent.com blob:;",
-		"img-src 'self' data: blob: https://*.googleapis.com https://*.gstatic.com https://*.google.com",
-		"connect-src 'self' https://*.googleapis.com https://*.google.com https://*.gstatic.com data: blob:;", "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", "font-src 'self' https://fonts.gstatic.com",
-		"worker-src blob:", "frame-src https://*.google.com", "frame-ancestors 'none'", "object-src 'none'"} {
+	for _, want := range []string{"default-src 'self'", "script-src 'self';", "style-src 'self' 'unsafe-inline';",
+		"img-src 'self' data: blob: https://tiles.openfreemap.org;", "font-src 'self';",
+		"connect-src 'self' https://tiles.openfreemap.org;", "worker-src 'self';",
+		"frame-ancestors 'none'", "object-src 'none'", "base-uri 'self'"} {
 		if !strings.Contains(net, want) {
 			t.Errorf("network CSP lacks %q: %s", want, net)
 		}
 	}
+	// no eval, no inline or blob script, no Google, no wildcard, no http:, no frames
+	for _, bad := range []string{"unsafe-eval", "google", "gstatic", "googleapis", "http:", "*", "frame-src", "wasm-unsafe-eval"} {
+		if strings.Contains(net, bad) {
+			t.Errorf("network CSP has %q: %s", bad, net)
+		}
+	}
 	scriptSrc := net[strings.Index(net, "script-src"):]
 	scriptSrc = scriptSrc[:strings.Index(scriptSrc, ";")]
-	if strings.Contains(scriptSrc, "unsafe-inline") || strings.Contains(scriptSrc, "http:") || strings.Contains(scriptSrc, " *") {
-		t.Errorf("network CSP allows inline or any-host script: %s", scriptSrc)
+	if scriptSrc != "script-src 'self'" {
+		t.Errorf("script-src %q", scriptSrc)
 	}
-	if rp := h.Get("Referrer-Policy"); rp != "strict-origin-when-cross-origin" {
-		t.Errorf("a referrer-restricted key needs the origin: Referrer-Policy %q", rp)
+	if strings.Count(net, "openfreemap.org") != 2 {
+		t.Errorf("tiles host should appear in img-src and connect-src only: %s", net)
+	}
+	// the site-wide referrer policy stays: OpenFreeMap needs no Referer
+	if rp := h.Get("Referrer-Policy"); rp != "same-origin" {
+		t.Errorf("Referrer-Policy %q", rp)
 	}
 	// everything else keeps the strict policy and referrer policy
-	for _, p := range []string{"/admin", "/admin/network/map.json", "/admin/equipment", "/admin/apartments", "/admin/live", "/admin/map", "/admin/settings/maps", "/admin/network/", "/admin/networks"} {
+	for _, p := range []string{"/admin", "/admin/network/map.json", "/admin/equipment", "/admin/apartments", "/admin/live", "/admin/map", "/admin/settings", "/admin/network/", "/admin/networks"} {
 		got, hh := csp(p)
-		if strings.Contains(got, "google") || strings.Contains(got, "gstatic") {
-			t.Errorf("%s: CSP mentions Google: %s", p, got)
+		if strings.Contains(got, "openfreemap") || strings.Contains(got, "worker-src") {
+			t.Errorf("%s: CSP carries the map policy: %s", p, got)
 		}
 		if p != "/admin/network/" && p != "/admin/networks" && !strings.Contains(got, "script-src 'self';") {
 			t.Errorf("%s: CSP changed: %s", p, got)
@@ -245,40 +250,29 @@ func TestNetworkCSPRelaxedOnlyOnNetworkPage(t *testing.T) {
 			t.Errorf("%s: Referrer-Policy %q", p, hh.Get("Referrer-Policy"))
 		}
 	}
-	// the login page and the API stay strict
+	// the login page and the portal stay as they were
 	for _, p := range []string{"/admin/login", "/portal"} {
 		r, _ := a.cl.Get(a.ts.URL + p)
 		r.Body.Close()
-		if c := r.Header.Get("Content-Security-Policy"); strings.Contains(c, "google") {
+		if c := r.Header.Get("Content-Security-Policy"); strings.Contains(c, "openfreemap") {
 			t.Errorf("%s: %s", p, c)
 		}
 	}
 }
 
-func TestNetworkCSPUnchangedWithoutKey(t *testing.T) {
-	a := netRig(t, "")
-	r := a.admin("GET", "/admin/network", nil)
-	r.Body.Close()
-	c := r.Header.Get("Content-Security-Policy")
-	if strings.Contains(c, "google") || !strings.Contains(c, "script-src 'self';") {
-		t.Errorf("no key, but the CSP changed: %s", c)
-	}
-	if r.Header.Get("Referrer-Policy") != "same-origin" {
-		t.Error("referrer policy changed without a key")
-	}
-}
-
-func TestNetworkPageWithKeyLoadsMapFromExternalScript(t *testing.T) {
-	a := netRig(t, testMapsKey)
+func TestNetworkPageLoadsMapFromSelfHostedScripts(t *testing.T) {
+	a := netRig(t)
 	h := a.adminGet(t, "/admin/network")
 	m := mainOf(h)
-	for _, want := range []string{`id="netwrap"`, `data-json="/admin/network/map.json"`, `data-key="` + testMapsKey + `"`, `/static/netmap.js`, `id="net-nogps"`, "No location yet"} {
+	for _, want := range []string{`id="netwrap"`, `data-json="/admin/network/map.json"`, `data-basemap="https://tiles.openfreemap.org/styles/positron"`,
+		`data-lib="/static/vendor/maplibre/maplibre-gl.mjs?v=`, `data-worker="/static/vendor/maplibre/maplibre-gl-worker.mjs?v=`,
+		`href="/static/vendor/maplibre/maplibre-gl.css?v=`, `/static/netmap.js`, `id="net-nogps"`, "No location yet"} {
 		if !strings.Contains(h, want) {
 			t.Errorf("page lacks %q", want)
 		}
 	}
-	if strings.Contains(h, "maps.googleapis.com") {
-		t.Error("the Maps script must be added by netmap.js, not written in the page")
+	if strings.Contains(h, "googleapis") || strings.Contains(h, "data-key") {
+		t.Error("Google Maps leftovers on the page")
 	}
 	if strings.Contains(m, "<script>") || strings.Contains(strings.ToLower(m), " onclick=") {
 		t.Error("inline script on the Network page")
@@ -289,39 +283,96 @@ func TestNetworkPageWithKeyLoadsMapFromExternalScript(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := string(js)
-	for _, bad := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function"} {
+	for _, bad := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "google.maps", "googleapis"} {
 		if strings.Contains(src, bad) {
 			t.Errorf("netmap.js uses %s", bad)
 		}
 	}
-	for _, want := range []string{"textContent", "maps.googleapis.com/maps/api/js?key=", "callback=", "importLibrary"} {
+	for _, want := range []string{"textContent", "import(libURL)", "setWorkerUrl", "cluster: true", "clusterProperties", "safeHref"} {
 		if !strings.Contains(src, want) {
 			t.Errorf("netmap.js lacks %s", want)
 		}
 	}
+	// the vendored library is served from this origin with a script content type, under the page's CSP
+	for _, f := range []struct{ path, ct string }{
+		{"/static/vendor/maplibre/maplibre-gl.mjs", "text/javascript"},
+		{"/static/vendor/maplibre/maplibre-gl-worker.mjs", "text/javascript"},
+		{"/static/vendor/maplibre/maplibre-gl.css", "text/css"},
+	} {
+		r := a.admin("GET", f.path, nil)
+		r.Body.Close()
+		if r.StatusCode != 200 || !strings.HasPrefix(r.Header.Get("Content-Type"), f.ct) || r.Header.Get("X-Content-Type-Options") != "nosniff" {
+			t.Errorf("%s: %d %q", f.path, r.StatusCode, r.Header.Get("Content-Type"))
+		}
+	}
+	// no remote script or CSS host in the vendored bundle's code paths we rely on (eval-free, so script-src 'self' holds)
+	for _, f := range []string{"static/vendor/maplibre/maplibre-gl.mjs", "static/vendor/maplibre/maplibre-gl-worker.mjs"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, bad := range []string{"new Function(", "googleapis.com"} {
+			if strings.Contains(string(b), bad) {
+				t.Errorf("%s contains %s", f, bad)
+			}
+		}
+		// The worker has one globalThis.eval: the fallback of importScriptInWorkers() for a classic worker, which only runs
+		// for a custom plugin script (e.g. an RTL text plugin) that this page never loads. Any other eval is new: look at it.
+		if n := strings.Count(string(b), "eval("); n != strings.Count(string(b), "globalThis.eval(") {
+			t.Errorf("%s has an eval( that is not the known importScripts fallback", f)
+		}
+	}
+	for _, f := range []string{"static/vendor/maplibre/LICENSE", "static/vendor/maplibre/README.md"} {
+		if _, err := os.Stat(f); err != nil {
+			t.Error(err)
+		}
+	}
 }
 
-func TestNetworkNoKeyFallbackRendersListWithGoogleMapsLinks(t *testing.T) {
-	a := netRig(t, "")
-	h := a.adminGet(t, "/admin/network")
+func TestNetworkListViewRendersListWithGoogleMapsLinks(t *testing.T) {
+	a := netRig(t)
+	h := a.adminGet(t, "/admin/network?view=list")
 	m := mainOf(h)
-	for _, want := range []string{"The map is not switched on", "Maps JavaScript API", "/admin/settings/maps",
+	for _, want := range []string{
 		`href="https://www.google.com/maps/search/?api=1&amp;query=-1.2864,36.8172"`, "View on Google Maps", "Open apartment", "Block A", "Ngong Road, Nairobi",
 		" active of 1", "Block A OLT", "ONUs online", "ZTENET01", "Jane Wanjiru", "CRS326"} {
 		if !strings.Contains(m, want) {
-			t.Errorf("fallback list lacks %q", want)
+			t.Errorf("list view lacks %q", want)
 		}
 	}
-	if strings.Contains(m, `id="netwrap"`) || strings.Contains(h, "netmap.js") {
-		t.Error("the map markup is there without a key")
+	if strings.Contains(m, `id="netwrap"`) || strings.Contains(h, "netmap.js") || strings.Contains(h, "maplibre") {
+		t.Error("the map markup is on the list view")
 	}
-	if strings.Contains(h, testMapsKey) {
-		t.Error("key on a page without one")
+	if strings.Contains(m, "not switched on") || strings.Contains(m, "browser key") {
+		t.Error("key wording is still on the page")
+	}
+}
+
+func TestNetworkWithoutAnyGPSShowsNoteNotMap(t *testing.T) {
+	a := netRig(t)
+	if err := a.st.Update(func(d *store.Data) error {
+		for id, ap := range d.Apartments {
+			ap.Lat, ap.Lng = nil, nil
+			d.Apartments[id] = ap
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := a.adminGet(t, "/admin/network")
+	m := mainOf(h)
+	if strings.Contains(m, `id="netwrap"`) || strings.Contains(h, "netmap.js") {
+		t.Error("a map with nothing to show")
+	}
+	for _, want := range []string{"No apartment has a GPS point yet", `id="net-nogps"`, "Add GPS"} {
+		if !strings.Contains(m, want) {
+			t.Errorf("page lacks %q", want)
+		}
 	}
 }
 
 func TestNetworkListsApartmentsWithoutGPSWithAddLink(t *testing.T) {
-	a := netRig(t, testMapsKey)
+	a := netRig(t)
 	h := mainOf(a.adminGet(t, "/admin/network"))
 	i := strings.Index(h, `id="net-nogps"`)
 	if i < 0 {
@@ -340,7 +391,7 @@ func TestNetworkListsApartmentsWithoutGPSWithAddLink(t *testing.T) {
 }
 
 func TestNetworkNavSeparateFromEquipmentAndOldPagesReachable(t *testing.T) {
-	a := netRig(t, "")
+	a := netRig(t)
 	nav := navOf(a.adminGet(t, "/admin/network"))
 	if !strings.Contains(nav, `<a class="nav" href="/admin/network" aria-current="page">`) {
 		t.Errorf("Network not highlighted: %s", nav)
@@ -362,28 +413,20 @@ func TestNetworkNavSeparateFromEquipmentAndOldPagesReachable(t *testing.T) {
 	}
 }
 
-func TestSettingsMapsPageAndRegistry(t *testing.T) {
-	a := netRig(t, "")
-	h := a.adminGet(t, "/admin/settings/maps")
-	for _, want := range []string{"Maps JavaScript API", "Websites"} {
-		if !strings.Contains(h, want) {
-			t.Errorf("settings page lacks %q", want)
+func TestGoogleMapsKeySettingIsGone(t *testing.T) {
+	a := netRig(t)
+	r := a.admin("GET", "/admin/settings/maps", nil)
+	r.Body.Close()
+	if r.StatusCode != 404 {
+		t.Errorf("/admin/settings/maps: %d", r.StatusCode)
+	}
+	if _, ok := settings.Lookup("maps.google_key"); ok {
+		t.Error("maps.google_key is still a setting")
+	}
+	for _, p := range []string{"/admin/settings", "/admin/network"} {
+		if h := a.adminGet(t, p); strings.Contains(h, "/admin/settings/maps") || strings.Contains(h, "Google Maps browser key") {
+			t.Errorf("%s still points at the Maps settings", p)
 		}
-	}
-	def, ok := settings.Lookup("maps.google_key")
-	if !ok || def.Env != "GOOGLE_MAPS_API_KEY" || def.Secret {
-		t.Fatalf("registry: %+v", def)
-	}
-	for _, bad := range []string{"not a key!", "short", strings.Repeat("A", 90), "AIza\nxxxxxxxxxxxxxxxxxxxxxxxx"} {
-		if _, err := def.Norm(bad); err == nil {
-			t.Errorf("accepted %q", bad)
-		}
-	}
-	if v, err := def.Norm("  " + testMapsKey + " "); err != nil || v != testMapsKey {
-		t.Errorf("good key: %q %v", v, err)
-	}
-	if v, err := def.Norm(""); err != nil || v != "" {
-		t.Errorf("empty key: %q %v", v, err)
 	}
 }
 
@@ -409,7 +452,10 @@ func TestAPINetworkMapForAndroid(t *testing.T) {
 			t.Fatalf("%d %s", res.Status, res.Raw)
 		}
 		raw := string(res.Raw)
-		for _, want := range []string{`"apartments":[`, `"has_gps":true`, `"has_gps":false`, `"maps_key_set":false`, `"with_gps":1`, `"maps_url":"https://www.google.com/maps/search/?api=1\u0026query=-1.3,36.8"`} {
+		if strings.Contains(raw, "maps_key_set") {
+			t.Errorf("API map still has maps_key_set: %s", raw)
+		}
+		for _, want := range []string{`"apartments":[`, `"has_gps":true`, `"has_gps":false`, `"with_gps":1`, `"maps_url":"https://www.google.com/maps/search/?api=1\u0026query=-1.3,36.8"`} {
 			if !strings.Contains(raw, want) {
 				t.Errorf("API map lacks %q: %s", want, raw)
 			}
