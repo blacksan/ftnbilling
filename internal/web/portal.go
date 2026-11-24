@@ -63,7 +63,7 @@ func (s *Server) portalWait(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/portal/success?order="+o.ID, http.StatusSeeOther)
 		return
 	}
-	s.render(w, "wait", map[string]any{"Brand": s.cfg.BrandName, "SiteName": s.siteName(o.SiteID), "Order": o, "Test": o.Method == "test",
+	s.render(w, "wait", map[string]any{"Brand": s.cfg.BrandName, "SiteName": s.apartmentName(s.orderApartment(o.AccountID)), "Order": o, "Test": o.Method == "test",
 		"Contacts": s.contacts(o.SiteID)})
 }
 
@@ -93,7 +93,7 @@ func (s *Server) portalSuccess(w http.ResponseWriter, r *http.Request) {
 	s.st.View(func(d *store.Data) { pkg = d.Packages[a.PackageID] })
 	c := s.contacts(o.SiteID)
 	s.render(w, "success", map[string]any{
-		"Brand": s.cfg.BrandName, "SiteName": s.siteName(o.SiteID), "Acct": a, "Pkg": pkg,
+		"Brand": s.cfg.BrandName, "SiteName": s.apartmentName(a.ApartmentID), "Acct": a, "Pkg": pkg,
 		"Support": c.Words(), "Contacts": c, "Expires": a.ExpiresAt, "Order": o.ID,
 	})
 }
@@ -103,8 +103,8 @@ func jsonStr(s string) string {
 	return string(b)
 }
 
-// siteName returns a building's name ("" if unknown).
-func (s *Server) siteName(id string) (name string) {
-	s.st.View(func(d *store.Data) { name = d.Sites[id].Name })
-	return
+// orderApartment is the apartment of an order's account ("" if unknown).
+func (s *Server) orderApartment(accountID string) string {
+	a, _ := s.svc.GetAccount(accountID)
+	return a.ApartmentID
 }

@@ -174,12 +174,15 @@ func (s *Server) regBase(r *http.Request) regPage {
 		p.Contacts = s.contacts("")
 	case 1:
 		site := sites[0]
-		p.Detected, p.SiteName, p.site = true, site.Name, site
+		p.Detected, p.site = true, site
 		s.st.View(func(d *store.Data) {
 			for _, id := range d.SiteApartmentIDs(site.ID) {
 				p.Apartments = append(p.Apartments, payChoice{ID: id, Name: d.Apartments[id].Name})
 			}
 		})
+		if len(p.Apartments) == 1 { // the router's own name is internal: show an apartment name only when there is one
+			p.SiteName = p.Apartments[0].Name
+		}
 		p.Contacts = s.contacts(site.ID)
 	default:
 		// Two routers behind one address: reveal no apartment name, ask for free text.

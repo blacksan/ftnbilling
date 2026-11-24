@@ -277,7 +277,8 @@ func (s *Server) payBase(r *http.Request) payPage {
 		Test:  s.providers["test"] != nil && s.providers["test"].Enabled()}
 	siteID := ""
 	if st, ok := s.siteByAddr(realIP(r)); ok {
-		p.Site, p.SiteName, p.Detected = st.ID, st.Name, true
+		p.Site, p.Detected = st.ID, true
+		p.SiteName = s.onlyApartmentName(st.ID)
 		siteID = st.ID
 	}
 	p.Contacts = s.contacts(siteID)
@@ -364,9 +365,8 @@ func (s *Server) payChoose(w http.ResponseWriter, r *http.Request, p payPage, a 
 	if byCode {
 		p.Code, p.ExpiresAt, p.State = a.Code, a.ExpiresAt, billing.AccountState(a, s.svc.Now())
 	}
+	p.SiteName = s.apartmentName(a.ApartmentID)
 	s.st.View(func(d *store.Data) {
-		st := d.Sites[a.SiteID]
-		p.SiteName = st.Name
 		p.Groups = packageGroups(d.EffectivePackages(a.SiteID))
 	})
 	if a.Suspended {
@@ -594,3 +594,14 @@ func normOrEmpty(p string) string {
 
 // nbsp keeps a date or a name in one piece when a line wraps.
 func nbsp(s string) string { return strings.ReplaceAll(s, " ", "\u00a0") }
+
+// onlyApartmentName is what a visitor sees under the logo before the account is known: the apartment (building)
+// name when the router serves exactly one, otherwise nothing. The router's own name is internal and never shown.
+func (s *Server) onlyApartmentName(siteID string) (name string) {
+	s.st.View(func(d *store.Data) {
+		if ids := d.SiteApartmentIDs(siteID); len(ids) == 1 {
+			name = d.Apartments[ids[0]].Name
+		}
+	})
+	return name
+}
