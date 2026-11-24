@@ -46,3 +46,24 @@ func TestPayShowsApartmentNotRouterName(t *testing.T) {
 	_, _, resp := c.pay(t, "/pay/start", url.Values{"code": {c.acct.Code}, "package": {c.pkg("1 Day")}, "method": {"mpesa"}, "phone_src": {"file"}})
 	check("wait", body(t, c.visit("GET", resp.Header.Get("Location"), "isp.ftw.co.ke", nil)))
 }
+
+// "4B" finds "Flat 4B": case, spaces and a leading word (Flat, House, Hse, No.) do not matter, and the typed value
+// stays in the box after a miss.
+func TestPayFindsHouseNumberLoosely(t *testing.T) {
+	c := newCaptive(t, true)
+	for _, typed := range []string{"Flat 4B", "4B", "4b", " 4 b ", "House 4B", "hse 4b", "No. 4B", "flat4b", "Flat-4B"} {
+		st, html, _ := c.pay(t, "/pay/find", url.Values{"code": {typed}})
+		if st != 200 || !strings.Contains(html, "Choose a package") {
+			t.Errorf("%q not found: %d", typed, st)
+		}
+		if strings.Contains(html, c.acct.Code) {
+			t.Errorf("%q: the account code must not appear when found by house number", typed)
+		}
+	}
+	for _, typed := range []string{"4C", "B4", "Flat"} {
+		st, html, _ := c.pay(t, "/pay/find", url.Values{"code": {typed}})
+		if st != 404 || !strings.Contains(html, `value="`+typed+`"`) || !strings.Contains(html, "could not find") {
+			t.Errorf("%q: %d (typed value must stay in the box)", typed, st)
+		}
+	}
+}

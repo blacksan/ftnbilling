@@ -306,7 +306,75 @@ func (s *Server) payAccount(site, text, apartmentID string) (a store.Account, by
 		return store.Account{}, false, false, nil
 	}
 	a, ok, ambiguous = s.resolveFlat(site, text, apartmentID)
+	if !ok && len(ambiguous) == 0 {
+		a, ok, ambiguous = s.resolveFlatLoose(site, text, apartmentID)
+	}
 	return a, false, ok, ambiguous
+}
+
+// unitWords are the words a house number is often written with ("Flat 2A", "Hse 2A", "No. 2A"): the visitor may
+// leave them out, or add them where the owner did not.
+var unitWords = []string{"flat", "house", "hse", "unit", "apt", "apartment", "door", "room", "no", "number", "nr"}
+
+// looseUnitKey reduces a house number to its core for a forgiving match: "Flat 2A", "House 2a", "hse2a", "No. 2 A"
+// and "2A" all become "2a". Case, spaces, dots, dashes and a leading word are ignored.
+func looseUnitKey(s string) string {
+	s = strings.ToLower(strings.NewReplacer(".", " ", ",", " ", "#", " ", ":", " ", "/", " ", "-", " ", "_", " ").Replace(s))
+	f := strings.Fields(s)
+	for len(f) > 1 && isUnitWord(f[0]) {
+		f = f[1:]
+	}
+	k := strings.Join(f, "")
+	for _, w := range unitWords { // "flat2a" written without a space
+		if r, ok := strings.CutPrefix(k, w); ok && r != "" && r[0] >= '0' && r[0] <= '9' {
+			return r
+		}
+	}
+	return k
+}
+
+func isUnitWord(w string) bool {
+	for _, u := range unitWords {
+		if w == u {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveFlatLoose is the second try of a house-number lookup, after the exact one found nothing: it compares
+// looseUnitKey of what was typed with that of each open account of the router. A match in two apartments comes back
+// as ambiguous (the visitor is asked which apartment); two matches inside one apartment are never guessed.
+func (s *Server) resolveFlatLoose(siteID, text, apartmentID string) (a store.Account, ok bool, ambiguous []store.Account) {
+	key := looseUnitKey(text)
+	if key == "" {
+		return store.Account{}, false, nil
+	}
+	var hits []store.Account
+	s.st.View(func(d *store.Data) {
+		for _, x := range d.AccountList() {
+			if x.SiteID != siteID || (apartmentID != "" && x.ApartmentID != apartmentID) {
+				continue
+			}
+			if looseUnitKey(x.Unit) == key || looseUnitKey(x.Flat) == key {
+				hits = append(hits, x)
+			}
+		}
+	})
+	seen := map[string]bool{}
+	for _, h := range hits {
+		if seen[h.ApartmentID] {
+			return store.Account{}, false, nil // two houses of one apartment read the same: do not guess
+		}
+		seen[h.ApartmentID] = true
+	}
+	switch len(hits) {
+	case 0:
+		return store.Account{}, false, nil
+	case 1:
+		return hits[0], true, nil
+	}
+	return store.Account{}, false, hits
 }
 
 func (s *Server) payFail(w http.ResponseWriter, r *http.Request, code int, p payPage, msg string) {
@@ -328,18 +396,25 @@ func (s *Server) payFind(w http.ResponseWriter, r *http.Request) {
 		s.payFail(w, r, http.StatusTooManyRequests, p, "Too many attempts. Wait a minute and try again.")
 		return
 	}
+	p.Typed = strings.TrimSpace(r.FormValue("code"))
+	if len(p.Typed) > 40 {
+		p.Typed = p.Typed[:40]
+	}
 	a, byCode, ok, amb := s.payAccount(p.Site, r.FormValue("code"), r.FormValue("apartment_id"))
 	if len(amb) > 0 {
-		// The same label is used in more than one apartment of this router: ask which one, never guess.
-		p.Typed = strings.TrimSpace(r.FormValue("code"))
+		// The same house number is used in more than one apartment of this router: ask which one, never guess.
 		for _, x := range amb {
 			p.Choices = append(p.Choices, payChoice{ID: x.ApartmentID, Name: s.apartmentName(x.ApartmentID)})
 		}
-		s.payFail(w, r, http.StatusConflict, p, "More than one house on this network has that number. Choose your apartment, or enter your account number.")
+		s.payFail(w, r, http.StatusConflict, p, "")
 		return
 	}
 	if !ok {
-		s.payFail(w, r, http.StatusNotFound, p, "We could not find that account. Check the account number, or call "+p.Support+".")
+		msg := "We could not find that account. Check the number, or call " + p.Support + "."
+		if p.Detected {
+			msg = "We could not find that account. Check the account number or house number, or call " + p.Support + "."
+		}
+		s.payFail(w, r, http.StatusNotFound, p, msg)
 		return
 	}
 	s.payChoose(w, r, p, a, byCode, http.StatusOK, "", "")

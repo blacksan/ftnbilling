@@ -24,14 +24,19 @@
 <form method="post" action="/pay/voucher"><input type="hidden" name="_pcsrf" value="{{.CSRF}}"><input type="hidden" name="tok" value="{{.Tok}}">
 <input type="text" name="voucher" placeholder="Voucher code" autocapitalize="characters" autocomplete="off" required maxlength="40">
 <button type="submit" class="grey">Redeem voucher</button></form></div>
+{{else if .Choices}}
+<div class="card"><b>Which apartment are you in?</b>
+<p class="muted">More than one apartment on this network has a house numbered <b>{{.Typed}}</b>. Tap yours.</p></div>
+<form method="post" action="/pay/find"><input type="hidden" name="_pcsrf" value="{{.CSRF}}"><input type="hidden" name="code" value="{{.Typed}}">
+{{range .Choices}}<button type="submit" name="apartment_id" value="{{.ID}}" class="alt">{{.Name}}</button>
+{{end}}</form>
+<p class="center"><a class="tap" href="/pay">Use my account number instead</a></p>
 {{else}}
 <div class="card"><b>{{if .Detected}}Your internet is paused{{else}}Pay for your internet{{end}}</b>
-<p class="muted">Enter your account number{{if .Detected}} (or your house number, for example 3B){{end}} to pay with M-Pesa. Your internet comes back within a minute of paying.</p></div>
+<p class="muted">Enter your account number{{if .Detected}} or your house number, for example 3B{{end}} to pay with M-Pesa. Your internet comes back within a minute of paying.</p></div>
 {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
 <form method="post" action="/pay/find"><input type="hidden" name="_pcsrf" value="{{.CSRF}}">
-{{if .Choices}}<input type="hidden" name="code" value="{{.Typed}}">
-<select name="apartment_id" required aria-label="Apartment">{{range .Choices}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select>
-{{else}}<input type="text" name="code" placeholder="Account number" autocapitalize="characters" autocomplete="off" required maxlength="40">{{end}}
+<input type="text" name="code" placeholder="{{if .Detected}}Account number or house number{{else}}Account number{{end}}" value="{{.Typed}}" aria-label="{{if .Detected}}Account number or house number{{else}}Account number{{end}}" autocapitalize="characters" autocomplete="off" required maxlength="40">
 <button type="submit">Continue</button></form>
 {{end}}
 {{if and (not .Found) .Detected}}<div class="card"><b>New here?</b><p class="muted">If you do not have an account yet, register and we will set you up.</p><a class="btn alt" href="/pay/register">Register for internet</a></div>{{end}}

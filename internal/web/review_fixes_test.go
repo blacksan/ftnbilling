@@ -45,13 +45,18 @@ func TestSameUnitInTwoApartmentsOfOneRouterIsAskedNotGuessed(t *testing.T) {
 	// /pay: the visitor is asked for the apartment.
 	r := m.payPost("/pay/find", url.Values{"code": {"a1"}})
 	html := body(t, r)
-	if r.StatusCode != 409 || !strings.Contains(html, "Choose your apartment") || !strings.Contains(html, "Riverside Annex") || !strings.Contains(html, `name="apartment_id"`) {
+	if r.StatusCode != 409 || !strings.Contains(html, "Which apartment are you in?") || !strings.Contains(html, "Riverside Annex") || !strings.Contains(html, `name="apartment_id"`) || strings.Contains(html, "enter your account number") || strings.Contains(html, `name="code" placeholder`) {
 		t.Fatalf("ambiguous label: %d %s", r.StatusCode, html)
+	}
+	// A loose spelling of the house number asks the same question (buttons, one per apartment).
+	r = m.payPost("/pay/find", url.Values{"code": {"House a 1"}})
+	if html = body(t, r); r.StatusCode != 409 || strings.Count(html, `name="apartment_id"`) != 2 {
+		t.Fatalf("loose spelling of an ambiguous label: %d %s", r.StatusCode, html)
 	}
 	// With the apartment it resolves to that account only.
 	r = m.payPost("/pay/find", url.Values{"code": {"A1"}, "apartment_id": {p2}})
 	html = body(t, r)
-	if r.StatusCode != 200 || strings.Contains(html, "Choose your apartment") {
+	if r.StatusCode != 200 || strings.Contains(html, "Which apartment are you in?") {
 		t.Fatalf("with the apartment: %d %s", r.StatusCode, html)
 	}
 	if strings.Contains(html, a1.Code) {
