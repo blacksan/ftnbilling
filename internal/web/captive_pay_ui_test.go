@@ -155,3 +155,13 @@ func TestSuccessPageAfterVoucherHasNoPaybill(t *testing.T) {
 		t.Errorf("success after a voucher:\n%s", html)
 	}
 }
+
+// Registration hints are helper text under the field (visible whole), not long placeholders that get cut off.
+func TestRegisterHintsAreHelperText(t *testing.T) {
+	c := newCaptive(t, true)
+	html := body(t, c.visit("GET", "/pay/register", "isp.ftw.co.ke", nil))
+	if strings.Contains(html, `placeholder="as shown`) || strings.Contains(html, `placeholder="for example`) ||
+		!strings.Contains(html, `class="hint">As shown in your phone's <span class="nb">Wi-Fi</span> settings, for example Wanjiru`) {
+		t.Errorf("hints:\n%s", html)
+	}
+}

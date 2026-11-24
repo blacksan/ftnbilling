@@ -33,7 +33,7 @@ button.grey{background:var(--surface-3);color:var(--ink);border-color:var(--surf
 .pill.active::before{background:var(--ok)}.pill.new::before{background:var(--brand)}
 .pill.suspended{background:var(--bad-soft);color:var(--bad);border-color:transparent}.pill.suspended::before{background:var(--bad)}
 .muted{color:var(--muted);font-size:var(--fs-14)}
-details summary{padding:var(--sp-2) 0;color:var(--brand-ink);cursor:pointer;font-weight:500}
+details summary{display:list-item;min-height:44px;padding:var(--sp-3) 0;box-sizing:border-box;color:var(--brand-ink);cursor:pointer;font-weight:500}
 .brandbar{display:flex;align-items:center;gap:var(--sp-3);margin:var(--sp-2) 0 var(--sp-3);padding:var(--sp-4);border-radius:var(--r2);color:var(--on-side);background:var(--side)}
 .brandbar img{height:44px;width:auto;display:block}
 .brandbar small{display:block;color:var(--side-mut);font-size:var(--fs-13);font-weight:400}
@@ -50,8 +50,8 @@ details summary{padding:var(--sp-2) 0;color:var(--brand-ink);cursor:pointer;font
 select{width:100%;font:inherit;font-size:var(--fs-16);min-height:48px;padding:0 var(--sp-3);color:var(--ink);background:var(--surface);border:1px solid var(--field);border-radius:var(--r1)}
 .fld{display:block;margin:var(--sp-3) 0 0;font-size:var(--fs-14);color:var(--muted)}
 .fld input,.fld select{margin-top:var(--sp-1);color:var(--ink)}
-.ck{display:flex;gap:var(--sp-2);align-items:flex-start;margin:var(--sp-3) 0;font-size:var(--fs-14)}
-.ck input{width:22px;height:22px;flex:none;accent-color:var(--brand)}
+.ck{display:flex;gap:var(--sp-3);align-items:center;min-height:48px;margin:var(--sp-2) 0;padding:var(--sp-2) 0;font-size:var(--fs-14)}
+.ck input{width:24px;height:24px;flex:none;accent-color:var(--brand)}
 .hp{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}
 input[type=text]:focus-visible,input[type=tel]:focus-visible,select:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
 /* The other-number box belongs to "Pay with another number" and shows only then. A browser without :has() keeps it visible. */
@@ -64,3 +64,5 @@ a.tap{display:inline-flex;align-items:center;min-height:44px;padding:0 var(--sp-
 .lead{font-weight:600;margin:var(--sp-2) 0 0}
 .pkg strong{color:var(--ink);font-weight:600}
 .pkg.info{background:var(--surface-2)}
+.hint{display:block;margin-top:var(--sp-1);font-size:var(--fs-13);color:var(--muted);line-height:1.35}
+.pkg{min-height:48px}
