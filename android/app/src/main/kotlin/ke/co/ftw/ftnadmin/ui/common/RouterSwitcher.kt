@@ -40,12 +40,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import ke.co.ftw.ftnadmin.R
 import ke.co.ftw.ftnadmin.domain.Site
 import ke.co.ftw.ftnadmin.ui.theme.AppTheme
 
@@ -57,9 +60,19 @@ fun statusDotColor(online: Boolean?): Color = when (online) {
     null -> MaterialTheme.colorScheme.outline
 }
 
+/** The dot says its state to TalkBack; where it sits beside the same word, pass [describe] = false. */
 @Composable
-fun StatusDot(online: Boolean?, modifier: Modifier = Modifier, size: androidx.compose.ui.unit.Dp = 10.dp) {
-    Surface(modifier.size(size), shape = CircleShape, color = statusDotColor(online)) {}
+fun StatusDot(online: Boolean?, modifier: Modifier = Modifier, size: androidx.compose.ui.unit.Dp = 10.dp, describe: Boolean = true) {
+    val words = stringResource(onlineStateRes(online))
+    val m = if (describe) modifier.semantics { contentDescription = words } else modifier
+    Surface(m.size(size), shape = CircleShape, color = statusDotColor(online)) {}
+}
+
+/** The word for an online state: Online, Offline, or Unknown when not known. */
+fun onlineStateRes(online: Boolean?): Int = when (online) {
+    true -> R.string.state_online
+    false -> R.string.state_offline
+    null -> R.string.state_unknown
 }
 
 /**
@@ -75,7 +88,9 @@ fun RouterSwitcher(modifier: Modifier = Modifier) {
     val list: List<Site> = (routers as? Loadable.Ready)?.value.orEmpty()
     val current = list.firstOrNull { it.key == selection }
     val allOnline: Boolean? = if (list.isEmpty()) null else list.all { it.online }
-    val label = current?.label ?: "All routers"
+    val label = current?.label ?: stringResource(R.string.all_routers)
+    val stateWord = stringResource(onlineStateRes(current?.online ?: allOnline))
+    val switchDesc = stringResource(R.string.router_switcher_desc, label, stateWord)
 
     Box(modifier) {
         Surface(
@@ -83,23 +98,23 @@ fun RouterSwitcher(modifier: Modifier = Modifier) {
             shape = MaterialTheme.shapes.extraLarge,
             color = MaterialTheme.colorScheme.secondaryContainer,
             contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-            modifier = Modifier.semantics { contentDescription = "Router: $label. Tap to switch." },
+            modifier = Modifier.semantics { contentDescription = switchDesc },
         ) {
             Row(
                 Modifier.padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp).widthIn(max = 260.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                StatusDot(current?.online ?: allOnline)
+                StatusDot(current?.online ?: allOnline, describe = false)
                 Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 Icon(Icons.Default.ArrowDropDown, contentDescription = null)
             }
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(
-                text = { Text("All routers", fontWeight = FontWeight.Bold) },
+                text = { Text(stringResource(R.string.all_routers), fontWeight = FontWeight.Bold) },
                 leadingIcon = { StatusDot(allOnline) },
-                trailingIcon = { if (selection == null) Icon(Icons.Default.Check, contentDescription = "Selected") },
+                trailingIcon = { if (selection == null) Icon(Icons.Default.Check, contentDescription = stringResource(R.string.selected)) },
                 onClick = {
                     ctx.select(null)
                     open = false
@@ -109,7 +124,7 @@ fun RouterSwitcher(modifier: Modifier = Modifier) {
                 DropdownMenuItem(
                     text = { Text(r.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     leadingIcon = { StatusDot(r.online) },
-                    trailingIcon = { if (r.key == selection) Icon(Icons.Default.Check, contentDescription = "Selected") },
+                    trailingIcon = { if (r.key == selection) Icon(Icons.Default.Check, contentDescription = stringResource(R.string.selected)) },
                     onClick = {
                         ctx.select(r.key)
                         open = false
@@ -129,7 +144,7 @@ private fun AlertsBell(onClick: () -> Unit) {
     val count = (routers as? Loadable.Ready)?.value.orEmpty().filter { selection == null || it.key == selection }.sumOf { it.openAlerts }
     IconButton(onClick = onClick) {
         BadgedBox(badge = { if (count > 0) Badge { Text(if (count > 99) "99+" else count.toString()) } }) {
-            Icon(Icons.Default.Notifications, contentDescription = if (count > 0) "Alerts, $count open" else "Alerts")
+            Icon(Icons.Default.Notifications, contentDescription = if (count > 0) pluralStringResource(R.plurals.alerts_open_desc, count, count) else stringResource(R.string.alerts))
         }
     }
 }
