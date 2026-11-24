@@ -17,6 +17,9 @@ jobs:
       - if: ${{ hashFiles('modules.patch') != '' }}
         uses: actions/upload-artifact@v4
         with: { name: modules-patch, path: modules.patch }
+      # Also print it (gzip + base64) so it can be applied where artifact downloads are not reachable.
+      - if: ${{ hashFiles('modules.patch') != '' }}
+        run: 'echo "MODULES_PATCH_B64_BEGIN"; gzip -9 < modules.patch | base64 -w0; echo; echo "MODULES_PATCH_B64_END"'
       - run: test ! -s modules.patch
   test:
     runs-on: ubuntu-latest
