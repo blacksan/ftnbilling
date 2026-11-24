@@ -561,7 +561,11 @@ func (c *Collector) flags(r *Report, now time.Time) {
 		if busy >= QoEWANHours {
 			f.Level, f.Text = "warn", fmt.Sprintf("The WAN was above %.0f%% for %d hours this week. Customers may feel slow at those times.", QoEWANUtilPct, busy)
 		} else {
-			f.Level, f.Text = "ok", fmt.Sprintf("The WAN was above %.0f%% for %d hour(s) this week.", QoEWANUtilPct, busy)
+			if busy == 0 {
+				f.Level, f.Text = "ok", fmt.Sprintf("The WAN has not been above %.0f%% this week.", QoEWANUtilPct)
+			} else {
+				f.Level, f.Text = "ok", fmt.Sprintf("The WAN was above %.0f%% for %d hour(s) this week.", QoEWANUtilPct, busy)
+			}
 		}
 	}
 	r.Flags = append(r.Flags, f)

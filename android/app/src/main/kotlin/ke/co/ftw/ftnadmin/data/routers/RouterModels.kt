@@ -151,6 +151,11 @@ data class Client(
     @SerialName("usage_month_bytes") val usageMonthBytes: Long = 0,
     @SerialName("suspended_on_router") val suspendedOnRouter: Boolean = false,
     @SerialName("in_sync") val inSync: Boolean = true,
+    /** Register label of an unregistered device that is an ONU ("ONU <model> · <serial>"), blank otherwise. */
+    val equipment: String = "",
+    @SerialName("equipment_id") val equipmentId: String = "",
+    /** That ONU is not in stock: no Create customer (attach it to a house on the web's New devices page). */
+    @SerialName("not_creatable") val notCreatable: Boolean = false,
 ) {
     val isFlat: Boolean get() = kind != ClientKind.UNREGISTERED
 

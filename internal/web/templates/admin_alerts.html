@@ -21,11 +21,11 @@
 
 <h3>Rules and settings</h3>
 <form method="post" action="/admin/alerts/settings" class="card"><input type="hidden" name="_csrf" value="{{.CSRF}}">
-<div class="tw" style="border:0"><table><tr><th>On</th><th>Rule</th><th>Fires when</th><th class="n">Threshold</th><th class="n">For (minutes)</th></tr>
-{{range .Data.Rules}}<tr><td><input type="checkbox" name="rule_{{.Key}}_on" value="1"{{if .R.Enabled}} checked{{end}}></td><td><b>{{.Label}}</b></td>
-<td class="muted">{{if eq .Key "offline"}}the router API does not answer{{else if eq .Key "wan_sat"}}WAN use is at or above the threshold{{else if eq .Key "loss"}}packet loss is at or above the threshold{{else if eq .Key "latency"}}round trip is at or above the threshold{{else}}the OLT port is not running{{end}}</td>
-<td class="n">{{if .HasThreshold}}<input name="rule_{{.Key}}_thr" value="{{.R.Threshold}}" size="5" style="text-align:right"> <span class="muted">{{.Unit}}</span>{{else}}<span class="muted">-</span>{{end}}</td>
-<td class="n"><input name="rule_{{.Key}}_hold" value="{{.R.HoldMin}}" size="4" style="text-align:right"></td></tr>{{end}}</table></div>
+<div class="tw" style="border:0"><table class="rs"><thead><tr><th>On</th><th>Rule</th><th>Fires when</th><th>Threshold</th><th>For (minutes)</th></tr></thead><tbody>
+{{range .Data.Rules}}<tr><td data-label="On"><input type="checkbox" name="rule_{{.Key}}_on" value="1"{{if .R.Enabled}} checked{{end}}></td><td data-label="Rule"><b>{{.Label}}</b></td>
+<td class="muted wrap" data-label="Fires when">{{if eq .Key "offline"}}the router API does not answer{{else if eq .Key "wan_sat"}}WAN use is at or above the threshold{{else if eq .Key "loss"}}packet loss is at or above the threshold{{else if eq .Key "latency"}}round trip is at or above the threshold{{else}}the OLT port is not running{{end}}</td>
+<td class="thr" data-label="Threshold">{{if .HasThreshold}}<span class="thrbox"><input class="num" name="rule_{{.Key}}_thr" value="{{.R.Threshold}}" inputmode="decimal" aria-label="{{.Label}} threshold"><span class="muted">{{.Unit}}</span></span>{{else}}<span class="muted">-</span>{{end}}</td>
+<td class="thr" data-label="For (minutes)"><span class="thrbox"><input class="num" name="rule_{{.Key}}_hold" value="{{.R.HoldMin}}" inputmode="numeric" aria-label="{{.Label}} minutes"></span></td></tr>{{end}}</tbody></table></div>
 <div class="mt-3 row">
 <span class="muted" style="align-self:center">Send alerts by</span>
 <label class="ck"><input type="checkbox" name="ch_email" value="1"{{if .Data.Set.Email}} checked{{end}}> email</label>
@@ -33,7 +33,7 @@
 <div class="mt-3 row">
 <label>Cooldown per alert (minutes)<input name="cooldown" value="{{.Data.Set.CooldownMin}}" size="5"></label>
 <label class="ck"><input type="checkbox" name="repeat_on" value="1"{{if .Data.Set.RepeatEnabled}} checked{{end}}> repeat while still firing, every</label>
-<label class="ck"><input name="repeat_hours" value="{{.Data.Set.RepeatHours}}" size="3"> hours</label></div>
+<label class="inl"><input class="num" name="repeat_hours" value="{{.Data.Set.RepeatHours}}" inputmode="numeric"> hours</label></div>
 <div class="mt-3 row">
 <label>Tell tenants about an outage<select name="notice"><option value="off"{{if eq .Data.Set.OutageNotice "off"}} selected{{end}}>never</option><option value="manual"{{if eq .Data.Set.OutageNotice "manual"}} selected{{end}}>when I press the button</option><option value="auto"{{if eq .Data.Set.OutageNotice "auto"}} selected{{end}}>automatically</option></select></label>
 <label>Automatic notice after (minutes down)<input name="auto_min" value="{{.Data.Set.AutoMin}}" size="5"></label>

@@ -160,7 +160,9 @@ Interface {"name","type","running":true,"disabled":false,"comment","mac","mtu":0
 Client {"kind":"flat|unregistered","account_id":"","code":"","flat":"","tenant":"","state":"",
  "mac","vendor","host_name","ip","online":true,"lease_status":"bound|waiting|none","last_seen":null,
  "port":"","queue_limit":"","down_bps":0,"up_bps":0,"usage_today_bytes":0,"usage_month_bytes":0,
- "suspended_on_router":false,"in_sync":true}
+ "suspended_on_router":false,"in_sync":true,"equipment":"","equipment_id":"","not_creatable":false}
+ (an OLT or a router interface is never a client; an unregistered ONU of the register carries `equipment` (its label)
+ and `equipment_id`, and `not_creatable:true` when it is not in stock; the last three are left out when empty)
 Overview {"greeting_period":"morning|afternoon|evening|late","setup":{"done":0,"total":0,"pct":0,"steps":[{"key","title","done":true,"href"}]},
  "revenue":{"today_kes":0,"yesterday_kes":0,"month_kes":0,"spark_7d":[]},"active":0,"online_now":0,
  "routers":{"total":0,"online":0},"today":[{"time","kind","text","account_id","router_id"}],

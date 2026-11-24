@@ -750,6 +750,11 @@ type Client struct {
 	UsageMonthBytes   uint64  `json:"usage_month_bytes"`
 	SuspendedOnRouter bool    `json:"suspended_on_router"`
 	InSync            bool    `json:"in_sync"`
+	// Equipment is the register label of an unregistered device that is an ONU ("ONU <model> · <serial>"),
+	// EquipmentID its item; NotCreatable: that ONU is not in stock, so Create customer is not offered.
+	Equipment    string `json:"equipment,omitempty"`
+	EquipmentID  string `json:"equipment_id,omitempty"`
+	NotCreatable bool   `json:"not_creatable,omitempty"`
 }
 
 // ClientCounts are the totals of the whole list, before q/kind/online filters.
@@ -786,6 +791,11 @@ type ClientInput struct {
 	// as a new device (it comes back only when the device opens the portal again, which clears the dismissal).
 	Dismissed []string
 	Tables    LiveTables
+	// Classify, when set, classes a device MAC (billing.Service.ClassifyMAC). Network equipment (an OLT, a router
+	// interface) is not a customer or a new device and is left out; an ONU of the register is listed with its label,
+	// and without Create customer when it is not in stock. Account rows are never classed: an account's MAC is the
+	// WAN MAC of the ONU installed for it, and that is the house.
+	Classify func(mac string) billing.DeviceClass
 }
 
 // MergeClients joins accounts, unregistered devices and the router's tables.
@@ -881,9 +891,18 @@ func MergeClients(in ClientInput) []Client {
 		if mac == "" || macs[mac] {
 			return
 		}
+		var cl billing.DeviceClass
+		if in.Classify != nil {
+			if cl = in.Classify(mac); cl.IsEquipment() {
+				return
+			}
+		}
 		macs[mac] = true
 		c := Client{Kind: "unregistered", MAC: mac, Vendor: firstNonEmpty(d.Vendor, billing.Vendor(mac)), HostName: d.HostName, IP: d.IP,
 			LeaseStatus: "none", InSync: true}
+		if cl.Class == billing.ClassONU {
+			c.Equipment, c.EquipmentID, c.NotCreatable = cl.Label, cl.EquipmentID, !cl.Creatable
+		}
 		if l, ok := leaseByMAC[mac]; ok {
 			c.HostName = firstNonEmpty(c.HostName, l.Host)
 			c.IP = firstNonEmpty(l.IP, c.IP)
