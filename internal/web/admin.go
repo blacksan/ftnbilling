@@ -145,7 +145,9 @@ func (s *Server) page(r *http.Request, active string) adminPage {
 	p.CanWrite = p.Role == store.RoleOwner || p.Role == store.RoleOperator
 	p.Initial = initialOf(p.User)
 	if p.CanWrite {
-		p.Data["RouterDefaults"] = sites.ApplyDefaults(s.cfg, store.Site{Mode: store.SiteModeWG})
+		rd := sites.ApplyDefaults(s.cfg, store.Site{Mode: store.SiteModeWG})
+		p.Data["RouterDefaults"] = rd
+		p.Data["RouterPortsNotice"], p.Data["RouterPasteHint"] = sites.PortsOffNotice(rd), sites.PasteAdminHint(rd)
 		p.Data["JoinTTL"] = int(s.cfg.JoinTokenTTL.Minutes())
 		p.Data["AptOpts"] = s.apartmentOptions()
 		p.Data["ONUStock"] = s.onuStock()

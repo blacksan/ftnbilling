@@ -140,7 +140,7 @@
 {{if .Data.Regs}}<section class="panel" id="registrations"><h2>Waiting for approval <span class="n">{{len .Data.Regs}}</span></h2>
 <p class="muted">These people registered on the payment page. Pick the device they are using, then approve. Their device stays offline until you do. Devices are listed with the one first seen closest to the request first; one is ticked only when it is the only device first seen within 10 minutes of the request.</p>
 {{if $.Data.RegGroups}}{{if .CanWrite}}<div class="row">{{range $.Data.RegGroups}}<form method="post" action="/admin/registrations/reject-all" data-confirm="Reject all {{.N}} waiting registrations of {{.SiteName}}? Their details are erased."><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="site" value="{{if .SiteID}}{{.SiteID}}{{else}}none{{end}}"><button class="ghost sm">Reject all {{.N}} for {{.SiteName}}</button></form>{{end}}</div>{{end}}{{end}}
-<div class="tw top"><table class="rs"><thead><tr><th>Who</th><th>Where</th><th>When</th><th>Device and decision</th></tr></thead><tbody>
+<div class="tw atop"><table class="rs"><thead><tr><th>Who</th><th>Where</th><th>When</th><th>Device and decision</th></tr></thead><tbody>
 {{range $g := .Data.Regs}}<tr><td class="who"><b>{{$g.Name}}</b><span class="muted">{{phone $g.Phone}}{{if $g.Email}} &middot; {{$g.Email}}{{end}}</span>{{if $g.DeviceName}}<span class="muted">Device name given: {{$g.DeviceName}}</span>{{end}}</td>
 <td class="who" data-label="Where">{{if $g.Unassigned}}<b>{{$g.Building}}</b><span>{{house $g.Unit}}</span><span>no router yet</span>{{else}}<b>{{$g.ApartmentName}}</b><span>{{house $g.Unit}}</span>{{if $d.Data.ShowSite}}<span>{{$g.SiteName}}</span>{{end}}{{end}}</td>
 <td data-label="When">{{eats $g.CreatedAt}}</td>
@@ -305,7 +305,7 @@
 {{define "admin_settings"}}{{template "ahead" .}}{{template "set_tabs" .}}
 <section class="panel"><h2>Sign-in</h2><p class="muted" style="margin:6px 0 0">Passwords, the authenticator, signed-in browsers and phones, and users are managed on <a href="/admin/security">Security</a>. Locked out? On the server run <code>sudo ftnbilling-admin-reset</code> (add <code>--generate</code> for a new random password).</p></section>
 <div class="grid c2">
-<section class="panel"><h2>Lifecycle rules</h2><table class="mt-2">
+<section class="panel"><h2>Lifecycle rules</h2><table class="mt-2 kvt">
 <tr><td>Reminder before expiry</td><td>{{if .Data.Policy.ReminderDays}}{{.Data.Policy.ReminderDays}} days before (plans longer than that){{else}}off{{end}} <code>REMINDER_DAYS</code></td></tr>
 <tr><td>Reminder on expiry</td><td>{{if .Data.Policy.ReminderOnExpiry}}on{{else}}off{{end}} <code>REMINDER_ON_EXPIRY</code></td></tr>
 <tr><td>Reminder delivery</td><td>recorded on the overview, and sent to tenants who have a WhatsApp number when WhatsApp is set up (see Messages)</td></tr>
@@ -313,13 +313,13 @@
 <tr><td>Reconnection</td><td>automatic as soon as a payment is applied</td></tr>
 <tr><td>Upgrades</td><td>take effect immediately; the new plan's time is added from the current expiry</td></tr>
 <tr><td>Suspension</td><td>manual, from the subscriber page</td></tr></table></section>
-<section class="panel"><h2>Payments</h2><table class="mt-2">
+<section class="panel"><h2>Payments</h2><table class="mt-2 kvt">
 <tr><td>M-Pesa Daraja</td><td>{{if .Data.Mpesa}}enabled{{else}}disabled (credentials not set){{end}} <a href="/admin/settings/mpesa">M-Pesa settings</a></td></tr><tr><td>WhatsApp</td><td>{{if .Data.WAOn}}set up{{else}}not set up{{end}} <a href="/admin/settings/whatsapp">WhatsApp settings</a></td></tr><tr><td>Email</td><td>{{if .Data.EmailOn}}set up{{else}}not set up{{end}} <a href="/admin/settings/email">Email settings</a></td></tr>
 <tr><td>Test payments</td><td>{{if .Data.Cfg.TestMode}}<span class="bad">ON (free access!)</span>{{else}}off{{end}}</td></tr>
 <tr><td>Paybill account number</td><td>the house's account code</td></tr>
 <tr><td>Callback URLs</td><td>see <a href="/admin/settings/mpesa">M-Pesa settings</a></td></tr>
-<tr><td>Support phone shown</td><td>{{if .Data.Support}}{{.Data.Support}}{{else}}not set (SUPPORT_PHONE){{end}}</td></tr></table></section>
-<section class="panel"><h2>Database and backups</h2><table class="mt-2">
+<tr><td>Support phone shown</td><td>{{if .Data.Support}}{{phone .Data.Support}}{{else}}not set{{end}} <a href="/admin/settings/support">Support contacts</a></td></tr></table></section>
+<section class="panel"><h2>Database and backups</h2><table class="mt-2 kvt">
 <tr><td>Customer database</td><td>{{if eq .Data.DBKind "postgres"}}PostgreSQL{{else}}JSON file (set <code>DATABASE_URL</code> to use PostgreSQL){{end}}{{if .Data.DBErr}} <span class="bad">not healthy: {{.Data.DBErr}}</span>{{else}} <span class="ok">healthy</span>{{end}}</td></tr>
 {{with .Data.Backup}}{{if not .Present}}<tr><td>Backups</td><td class="muted">no status file yet (written by <code>ftnbilling-backup</code> after each dump)</td></tr>
 {{else if .ReadFailed}}<tr><td>Backups</td><td class="bad">backup-status.json could not be read</td></tr>
@@ -327,14 +327,14 @@
 <tr><td>Last restore drill</td><td>{{if .DrillAt.IsZero}}never{{else}}{{eat .DrillAt}}{{if .DrillOK}}{{if deref .DrillOK}} <span class="ok">passed</span>{{else}} <span class="bad">FAILED</span> {{.DrillMsg}}{{end}}{{end}}{{end}}</td></tr>
 <tr><td>Last Drive upload</td><td>{{if .UploadAt.IsZero}}never{{else}}{{eat .UploadAt}}{{if .UploadOK}}{{if deref .UploadOK}} <span class="ok">ok</span>{{else}} <span class="bad">FAILED</span>{{end}}{{end}}{{end}}</td></tr>
 {{if .Error}}<tr><td>Problem</td><td class="bad">{{.Error}}</td></tr>{{end}}{{end}}{{end}}</table></section>
-<section class="panel"><h2>Admin access</h2><table class="mt-2">
+<section class="panel"><h2>Admin access</h2><table class="mt-2 kvt">
 <tr><td>Admin access</td><td>public, with a password and an authenticator code (not from the routers' tunnel)</td></tr>
 <tr><td>Refused</td><td>router tunnels ({{.Data.WGSubnet}}) and the public internet</td></tr></table></section>
-<section class="panel"><h2>Router connections</h2><table class="mt-2">
+<section class="panel"><h2>Router connections</h2><table class="mt-2 kvt">
 <tr><td>Routers</td><td>each router has its own settings: <a href="/admin/routers">Routers</a></td></tr>
 <tr><td>WireGuard endpoint</td><td>{{if .Data.WGEndpoint}}{{.Data.WGEndpoint}}{{else}}not set{{end}} <code>WG_ENDPOINT</code></td></tr>
 <tr><td>Tunnel subnet</td><td>{{.Data.WGSubnet}} <code>WG_SUBNET</code></td></tr>
-<tr><td>Join command lifetime</td><td>{{.Data.JoinTTL}} <code>JOIN_TOKEN_TTL</code></td></tr>
+<tr><td>Join command lifetime</td><td>{{.Data.JoinMin}} minutes <code>JOIN_TOKEN_TTL</code></td></tr>
 <tr><td>NetFlow listener</td><td>{{.Data.Cfg.NetflowAddr}}{{if .Data.Stray}}, {{.Data.Stray}} packets from unknown sources dropped{{end}}</td></tr>
 <tr><td>Ping targets</td><td>{{range .Data.Cfg.PingTargets}}{{.}} {{end}}</td></tr></table></section>
 </div>
@@ -345,4 +345,4 @@
 <div class="vg">{{$d := .}}{{range .Vouchers}}<div class="v"><div class="vb"><img src="/brand/logo-dark-text.svg" alt="{{$d.Brand}}"></div><b>{{.Code}}</b>{{with index $d.Pkgs .PackageID}}{{.Name}} &middot; {{dur .DurationMin}} &middot; {{.SpeedMbps}} Mbps{{end}}</div>{{end}}</div>
 </body></html>{{end}}
 
-{{define "reg_cand"}}<label class="ck" style="display:block"><input type="radio" name="mac" value="{{.MAC}}"{{if .Likely}} checked{{end}}> <span class="mono" style="font-family:var(--f-mono)">{{.MAC}}</span> &middot; {{if .Vendor}}{{.Vendor}}{{else}}unknown{{end}}{{if .HostName}} &middot; <b>{{.HostName}}</b>{{end}}{{if .Port}} &middot; port {{.Port}}{{end}}{{if .Online}} &middot; online{{end}}<br><span class="muted">first seen {{eats .FirstSeen}} &middot; last seen {{eats .LastSeen}}{{if .NameMatch}} &middot; <b>matches the name given</b>{{end}}{{if .Likely}} &middot; likely{{end}}</span></label>{{end}}
+{{define "reg_cand"}}<label class="ck"><input type="radio" name="mac" value="{{.MAC}}"{{if .Likely}} checked{{end}}><span><span class="mono" style="font-family:var(--f-mono)">{{.MAC}}</span> &middot; {{if .Vendor}}{{.Vendor}}{{else}}unknown{{end}}{{if .HostName}} &middot; <b>{{.HostName}}</b>{{end}}{{if .Port}} &middot; port {{.Port}}{{end}}{{if .Online}} &middot; online{{end}}<br><span class="muted">first seen {{eats .FirstSeen}} &middot; last seen {{eats .LastSeen}}{{if .NameMatch}} &middot; <b>matches the name given</b>{{end}}{{if .Likely}} &middot; likely{{end}}</span></span></label>{{end}}

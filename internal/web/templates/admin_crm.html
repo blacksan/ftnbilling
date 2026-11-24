@@ -54,7 +54,7 @@
 {{if .Routers}}<label>Router<select name="router"><option value="">All</option>{{range .D.Data.Routers}}<option value="{{.ID}}"{{if eq .ID $.D.Data.Router}} selected{{end}}>{{.Name}}</option>{{end}}</select></label>{{end}}
 {{if .OLTs}}<label>OLT<select name="olt"><option value="">All</option>{{range .D.Data.OLTs}}<option value="{{.ID}}"{{if eq .ID $.D.Data.OLT}} selected{{end}}>{{oltLabel .}}</option>{{end}}</select></label>{{end}}
 <button>Filter</button>{{if .Active}} <a class="btn ghost sm" href="/admin/equipment?tab={{.Tab}}">Clear</a>{{end}}</form>
-<div class="tiles">{{range .D.Data.Statuses}}<div class="tile{{if eq . "faulty"}} warn{{end}}">{{eqStat .}}<b>{{index $.D.Data.Counts .}}</b></div>{{end}}</div>{{end}}
+<div class="tiles">{{range .D.Data.Statuses}}<div class="tile{{if eq . "faulty"}} bad{{end}}">{{eqStat .}}<b>{{index $.D.Data.Counts .}}</b></div>{{end}}</div>{{end}}
 
 {{define "admin_equipment_tree"}}{{template "ahead" .}}{{template "eq_tabs" .}}{{template "equip_tree" .}}{{template "afoot" .}}{{end}}
 
@@ -85,8 +85,8 @@
 <div class="card"><b>Add an ONU</b><form method="post" action="/admin/equipment/save" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="next" value="/admin/equipment?tab=onu"><input type="hidden" name="kind" value="ont">{{template "sitepick" .}}
 <label>Serial<input name="serial"></label><label>GPON serial<input name="gpon_serial" placeholder="only if different"></label><label>WAN MAC<input name="mac" placeholder="AA:BB:CC:DD:EE:FF"></label><label>Model<input name="model"></label><button>Add ONU</button></form>
 <p class="muted" style="margin:6px 0 0">An ONU starts in stock. The MAC must be the WAN MAC the router sees. The MAC printed on the label is often the LAN MAC: confirm it on the New devices page (or the lease) when the ONU first connects before saving the pair; TR-069 reports it too. Open an ONU to set its OLT and PON port.</p></div>
-<div class="card"><b>Import a list (CSV)</b><p class="muted" style="margin:4px 0">One ONU per line: <code>serial,mac,model[,gpon serial]</code>, or <code>ont,serial,mac,model</code>. A serial already in the register is skipped.</p>
-<form method="post" action="/admin/equipment/import"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="next" value="/admin/equipment?tab=onu"><textarea name="lines" rows="4" style="width:100%;font:13px monospace" placeholder="ZTEG12345678,AA:BB:CC:DD:EE:01,F601"></textarea><button>Import</button></form></div></div>{{end}}
+<div class="card"><b>Import a list (CSV)</b><p class="muted" style="margin:4px 0">The one import for every kind of equipment. One item per line: <code>kind,serial,mac,model[,gpon serial]</code>, with kind onu, switch, ap, splitter, ups ... A serial already in the register is skipped.</p>
+<form method="post" action="/admin/equipment/import"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="next" value="/admin/equipment?tab=onu"><textarea name="lines" rows="4" style="width:100%;font:13px monospace" placeholder="e.g. onu,ZTEG12345678,AA:BB:CC:DD:EE:01,F601"></textarea><div class="mt-2"><button>Import</button></div></form></div></div>{{end}}
 {{template "afoot" .}}{{end}}
 
 {{define "admin_equipment_other"}}{{template "ahead" .}}{{template "eq_tabs" .}}{{$d := .}}
@@ -99,8 +99,7 @@
 <div class="card"><b>Add an item</b><form method="post" action="/admin/equipment/save" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="next" value="/admin/equipment?tab=other">{{template "sitepick" .}}
 <label>Kind<select name="kind">{{range .Data.Kinds}}<option>{{.}}</option>{{end}}</select></label><label>Serial<input name="serial"></label><label>MAC<input name="mac" placeholder="AA:BB:CC:DD:EE:FF"></label><label>Model<input name="model"></label><button>Add item</button></form>
 <p class="muted" style="margin:6px 0 0">A router, switch or splitter added to a router is installed there. OLTs and ONUs have their own tabs.</p></div>
-<div class="card"><b>Import a list</b><p class="muted" style="margin:4px 0">One item per line: <code>kind,serial,mac,model</code>. A serial already in the register is skipped.</p>
-<form method="post" action="/admin/equipment/import"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="next" value="/admin/equipment?tab=other"><textarea name="lines" rows="4" style="width:100%;font:13px monospace" placeholder="switch,SW12345,AA:BB:CC:DD:EE:01,CRS326"></textarea><button>Import</button></form></div></div>{{end}}
+<div class="card"><b>Import a list</b><p class="muted" style="margin:4px 0">Lists of any equipment are imported in one place: the <a href="/admin/equipment?tab=onu#add">ONU tab</a>.</p></div></div>{{end}}
 {{template "afoot" .}}{{end}}
 
 {{define "admin_equipment_view"}}{{template "ahead" .}}{{$E := .Data.E}}{{$d := .}}

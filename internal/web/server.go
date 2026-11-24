@@ -99,11 +99,12 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 	s.refreshRL = newLimiter(30, time.Minute)
 	s.searchRL = newLimiter(searchPerMinute, time.Minute)
 	funcs := template.FuncMap{
-		"kes":      func(n int) string { return "KES " + groupInt(n) },
-		"num":      groupInt,
-		"house":    houseLabel,
-		"houseno":  houseNo,
-		"kindName": kindName,
+		"kes":        func(n int) string { return "KES " + groupInt(n) },
+		"num":        groupInt,
+		"setupState": sites.StateLabel,
+		"house":      houseLabel,
+		"houseno":    houseNo,
+		"kindName":   kindName,
 		"aptName": func(id string) string {
 			var n string
 			st.View(func(d *store.Data) { n = d.Apartments[id].Name })

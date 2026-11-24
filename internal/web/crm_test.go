@@ -189,10 +189,19 @@ func TestBuildingProfileAndContacts(t *testing.T) {
 		t.Fatalf("contacts save: %d", r.StatusCode)
 	}
 	page := a.adminGet(t, "/admin/routers/view?id="+a.site+"&tab=profile") + a.adminGet(t, "/admin/routers/view?id="+a.site)
-	for _, want := range []string{"Hatheru Road, Lavington", "2026-09-01", "geo:-1.2864,36.7677", "Revenue by month"} {
+	for _, want := range []string{"2026-09-01", "Revenue by month"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("building page lacks %q", want)
 		}
+	}
+	// The address and point are kept (the profile form carries them), but the apartment owns the location: no second set of GPS fields on the router.
+	if strings.Contains(page, `type="text" name="lat"`) || strings.Contains(page, "Open in maps") || strings.Contains(page, "Latitude") {
+		t.Error("the router page still has its own GPS fields")
+	}
+	var st store.Site
+	a.st.View(func(d *store.Data) { st = d.Sites[a.site] })
+	if st.Address != "Hatheru Road, Lavington" || st.Lat != -1.2864 {
+		t.Errorf("the saved router address or point was lost: %+v", st)
 	}
 }
 
