@@ -806,10 +806,12 @@ type DeviceClass struct {
 	NeverAsked bool
 }
 
-// IsEquipment says the device is network equipment that is not a customer's: an OLT, one of the router's own
-// interfaces, or an ONU that is not in stock. Such a MAC never offers Create customer and is not a client.
+// IsEquipment says the device is network equipment that is never a customer: an OLT or one of the router's own
+// interfaces. An ONU is not: its WAN MAC is the customer's MAC. An ONU of the register that is not in stock and has
+// no account here (returned, faulty, or another house's) is still listed, without Create customer, so it can be
+// attached or dismissed like on the New devices page.
 func (c DeviceClass) IsEquipment() bool {
-	return c.Class == ClassOLT || c.Class == ClassRouter || (c.Class == ClassONU && !c.Creatable)
+	return c.Class == ClassOLT || c.Class == ClassRouter
 }
 
 func classifyLocked(d *store.Data, dv store.Device, router bool) DeviceClass {

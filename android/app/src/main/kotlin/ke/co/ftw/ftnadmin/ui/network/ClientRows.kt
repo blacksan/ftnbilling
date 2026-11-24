@@ -61,7 +61,8 @@ internal fun ClientRow(
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                StatusDot(c.online, size = 12.dp)
+                // the dot says Online to TalkBack; offline is said (and shown) by the Offline chip below
+                StatusDot(c.online, size = 12.dp, describe = c.online)
                 Column(Modifier.weight(1f)) {
                     Text(c.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     val who = listOf(c.tenant, c.hostName.takeIf { c.isFlat }).filter { !it.isNullOrBlank() }.joinToString(" - ")
@@ -74,6 +75,8 @@ internal fun ClientRow(
             }
             ChipRow(horizontalPadding = 0.dp) {
                 if (!c.isFlat) StatusChip("Unregistered", Tone.Warn)
+                if (!c.online) StatusChip("Offline", Tone.Neutral)
+                if (c.equipment.isNotBlank()) StatusChip(c.equipment, Tone.Neutral)
                 if (c.vendor.isNotBlank()) StatusChip(c.vendor, Tone.Neutral)
                 if (c.suspendedOnRouter) StatusChip("Walled", Tone.Bad)
                 if (c.isFlat && !c.inSync) StatusChip("Out of sync", Tone.Warn)
@@ -100,7 +103,8 @@ internal fun ClientRow(
                                 OutlinedButton(onClick = onResync, enabled = !busy) { Text("Resync", maxLines = 1, softWrap = false) }
                                 TextButton(onClick = onChangeMac) { Text(stringResource(R.string.change_mac), maxLines = 2) }
                             } else if (!c.isFlat) {
-                                Button(onClick = onCreate) { Text("Create customer", maxLines = 1, softWrap = false) }
+                                // an ONU of the register that is not in stock is attached on the web, like New devices
+                                Button(onClick = onCreate, enabled = !c.notCreatable) { Text("Create customer", maxLines = 1, softWrap = false) }
                                 OutlinedButton(onClick = onDismiss, enabled = !busy) { Text("Dismiss", maxLines = 1, softWrap = false) }
                             }
                         }
