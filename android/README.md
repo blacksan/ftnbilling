@@ -91,38 +91,25 @@ the apartment and unit first (the router is automatic when the apartment has one
 another apartment from their page, and New devices shows "Belongs to ..." for a MAC of another apartment with
 a confirmed "Move customer here". The old router contacts screen is gone: contacts live on the apartment.
 
-## Network map (Google Maps)
+## Network map (MapLibre, OpenFreeMap)
 
-The Network tab has three views: **Map** (Google Maps, one pin per apartment with a GPS point), **List** (the same
-data as cards with "Open in Google Maps") and **Live** (the router-by-router clients and interfaces the tab showed
-before). Pins are Lattice Teal (all good), slate (some offline) or red (router down); tap a pin for a bottom sheet
-with the summary (houses active/total, online now, routers, OLTs and ONUs online, open alerts) and the equipment
-installed there, each row opening its screen (router, OLT form, customer, Equipment tab), plus Open apartment and
-Open in Google Maps (a `geo:` intent, with the Google Maps link as fallback). Apartments without a point are listed
-under the map ("No location yet") with Add GPS. Data comes from `GET /api/v1/network/map`. Pin colours are the one
-place colours are fixed in code (`MarkerState.argb()`): a map pin must look the same on every theme. Pins are not
-clustered on the phone.
+The Network tab has three views: **Map** (MapLibre Native on OpenFreeMap's calm "Positron" style, one pin per apartment
+with a GPS point), **List** (the same data as cards with "Open in Google Maps") and **Live** (the router-by-router clients
+and interfaces the tab showed before). Pins are Lattice Teal (all good), slate (some offline) or red (router down); pins
+close together merge into a count bubble in the worst state of its members, and tapping a bubble zooms in. Tap a pin for a
+bottom sheet with the summary (houses active/total, online now, routers, OLTs and ONUs online, open alerts) and the
+equipment installed there, each row opening its screen (router, OLT form, customer, Equipment tab), plus Open apartment and
+Open in Google Maps (a `geo:` intent, with the Google Maps link as fallback; this only opens the other app). Apartments
+without a point are listed under the map ("No location yet") with Add GPS. Data comes from `GET /api/v1/network/map`.
+Pin colours are the one place colours are fixed in code (`MarkerState.argb()`): a map pin must look the same on every theme.
 
-**The key.** The Maps SDK for Android needs an API key. It is read at build time from `MAPS_API_KEY`: pass
-`-PMAPS_API_KEY=AIza...` to Gradle, put it in `~/.gradle/gradle.properties`, or set the environment variable (or a line
-`MAPS_API_KEY=...` in the CI signing file). It goes into the manifest (`com.google.android.geo.API_KEY`) through a
-manifest placeholder; the default is empty, so CI and anyone else can build without it. A build without a key shows
-the List view with a note instead of the map (`BuildConfig.MAPS_KEY_SET`).
-
-Create and restrict the key (Google Cloud Console):
-
-1. Enable **Maps SDK for Android** (and nothing else) for the project; billing must be on.
-2. Credentials, Create credentials, API key. Application restrictions: **Android apps**.
-3. Add the package `ke.co.ftw.ftnadmin` with the **SHA-1** of the release signing certificate, and a second entry
-   `ke.co.ftw.ftnadmin.debug` with the SHA-1 of the debug keystore if you want the map in debug builds.
-   The release certificate's SHA-256 begins `B9:4C:E4:0D...` (full value above), but Google wants the **SHA-1**: get it
-   with `keytool -list -v -keystore <release keystore> -alias <alias>`, or from Play Console, Setup, App signing
-   (if Play App Signing is on, use the *app signing key* certificate). The app is installed from GitHub releases, so
-   the keystore's own SHA-1 is the one that matters.
-4. API restrictions: **Restrict key**, tick only **Maps SDK for Android**. Save; it can take a few minutes.
-
-This is a different key from the web one (the web key is restricted by HTTP referrer to the admin domain and to the Maps
-JavaScript API, see `deploy/README.md`).
+**No key, no account.** The style, tiles, fonts and icons come from `https://tiles.openfreemap.org` (HTTPS; the network
+security config needs no exception). The SDK is `org.maplibre.gl:android-sdk` (version in `gradle/libs.versions.toml`),
+used through an `AndroidView` rather than the community `maplibre-compose` wrapper, which is still young and moving fast;
+the screen needs one clustered GeoJSON source, four layers and three taps. The SDK's attribution button (OpenFreeMap,
+OpenMapTiles, OpenStreetMap) stays on. The old `MAPS_API_KEY` Gradle property, environment variable and manifest
+placeholder are gone; an old value is simply ignored. OpenFreeMap is a free community service: the map loads tiles only
+while the Map view is open.
 
 ## Security notes
 
@@ -138,7 +125,7 @@ JavaScript API, see `deploy/README.md`).
 - [ ] Sign in, then force-stop and reopen: still signed in. Sign out: the phone shows as revoked.
 - [ ] App lock: biometric or PIN prompt after the lock timeout.
 - [ ] Home shows the fleet and, per router, live numbers; pull to refresh works.
-- [ ] Network > Map (a build with a Maps key): pins in teal, slate and red; tap one for the sheet; its rows open the router, OLT, customer and Equipment screens; Open in Google Maps works; apartments without GPS are under "No location yet". Without a key the Map chip shows the list and a note. List and Live chips still work.
+- [ ] Network > Map: the base map loads (positron grey, attribution button bottom right); pins in teal, slate and red; zoom out and close pins merge into a count bubble, tap it to zoom in; tap a pin for the sheet; its rows open the router, OLT, customer and Equipment screens; Open in Google Maps works; apartments without GPS are under "No location yet". List and Live chips still work.
 - [ ] Router page shows the tunnel address and the remote WinBox line (or the "No report" line).
 - [ ] Router page (owner): "Open WebFig" opens the browser at the admin's step-up page (only when the server has WEBFIG_DOMAIN; operators and viewers do not see it).
 - [ ] A release build offers an update when a higher `android-v*` release exists, downloads it,

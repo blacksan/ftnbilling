@@ -87,7 +87,7 @@ class NetworkMapTest {
         assertTrue("state condition not reached: ${flow.value}", cond(flow.value))
     }
 
-    private val mapJson = """{"maps_key_set":false,"with_gps":2,"without_gps":1,"down":1,"partial":0,"ok":1,"apartments":[
+    private val mapJson = """{"with_gps":2,"without_gps":1,"down":1,"partial":0,"ok":1,"apartments":[
       {"id":"a1","name":"Hilltop","address":"Ngong Road","has_gps":true,"lat":-1.2864,"lng":36.8172,"state":"ok",
        "maps_url":"https://www.google.com/maps/search/?api=1&query=-1.2864,36.8172",
        "houses":{"active":8,"total":10,"online":6},

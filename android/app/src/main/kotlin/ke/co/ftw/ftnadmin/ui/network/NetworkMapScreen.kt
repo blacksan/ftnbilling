@@ -1,8 +1,5 @@
 package ke.co.ftw.ftnadmin.ui.network
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,7 +14,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Place
@@ -37,23 +33,35 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.google.android.gms.maps.CameraUpdateFactory
-import com.google.android.gms.maps.model.LatLng
-import com.google.android.gms.maps.model.LatLngBounds
-import com.google.maps.android.compose.GoogleMap
-import com.google.maps.android.compose.MapUiSettings
-import com.google.maps.android.compose.MarkerComposable
-import com.google.maps.android.compose.rememberCameraPositionState
-import com.google.maps.android.compose.rememberMarkerState
-import ke.co.ftw.ftnadmin.BuildConfig
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import org.maplibre.android.MapLibre
+import org.maplibre.android.camera.CameraUpdateFactory
+import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngBounds
+import org.maplibre.android.maps.MapLibreMap
+import org.maplibre.android.maps.MapView
+import org.maplibre.android.maps.Style
+import org.maplibre.android.style.expressions.Expression
+import org.maplibre.android.style.layers.CircleLayer
+import org.maplibre.android.style.layers.PropertyFactory
+import org.maplibre.android.style.layers.SymbolLayer
+import org.maplibre.android.style.sources.GeoJsonOptions
+import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.geojson.Feature
+import org.maplibre.geojson.FeatureCollection
+import org.maplibre.geojson.Point
 import ke.co.ftw.ftnadmin.data.networkmap.NetApartment
 import ke.co.ftw.ftnadmin.ui.apartments.openMap
 import ke.co.ftw.ftnadmin.ui.common.CenteredLoading
@@ -83,76 +91,189 @@ fun NetworkMapPane(ui: NetworkMapUiState, vm: NetworkMapViewModel, canWrite: Boo
         is Loadable.Ready -> when {
             d.value.apartments.isEmpty() -> EmptyState("No apartments yet. Add an apartment with its GPS point and it appears here.")
             // The map is not inside pull-to-refresh: dragging the map down must pan it, not reload.
-            ui.mode == NetworkMode.MapView && BuildConfig.MAPS_KEY_SET && ui.located.isNotEmpty() ->
+            ui.mode == NetworkMode.MapView && ui.located.isNotEmpty() ->
                 Column(Modifier.fillMaxSize()) {
                     Box(Modifier.weight(1f).fillMaxWidth()) { MapView(ui.located, onSelect = vm::select, onBackground = vm::dismiss) }
                     if (ui.unlocated.isNotEmpty()) NoLocationPanel(ui.unlocated, canWrite, links, Modifier.fillMaxWidth())
                 }
             else -> PullToRefreshBox(ui.refreshing, vm::refresh, Modifier.fillMaxSize()) {
-                ApartmentList(ui, vm, canWrite, links, showKeyNote = ui.mode == NetworkMode.MapView)
+                ApartmentList(ui, vm, canWrite, links, showNoGpsNote = ui.mode == NetworkMode.MapView)
             }
         }
     }
     ui.selected?.let { a -> ApartmentSheet(a, canWrite, links, onDismiss = vm::dismiss) }
 }
 
-/** The Google map: one pin per apartment, teal / slate / red by [markerState]. A tap selects the apartment. */
+/** OpenFreeMap's calm light style: no key, no account. Its sprite, glyphs and tiles are all on tiles.openfreemap.org. */
+private const val STYLE_URL = "https://tiles.openfreemap.org/styles/positron"
+private const val SOURCE = "apartments"
+private const val L_CLUSTER = "apartments-cluster"
+private const val L_COUNT = "apartments-count"
+private const val L_PIN = "apartments-pin"
+private const val L_DOT = "apartments-dot"
+private const val CLUSTER_MAX_ZOOM = 17
+private const val MAX_ZOOM = 19.0
+private const val TAP_SLOP_DP = 24f
+
+/** One feature per apartment with a point; `rank` lets a cluster take the worst state of its members. */
+private fun featuresOf(located: List<NetApartment>): FeatureCollection =
+    FeatureCollection.fromFeatures(
+        located.mapNotNull { a ->
+            val p = a.point ?: return@mapNotNull null
+            Feature.fromGeometry(Point.fromLngLat(p.lng, p.lat)).also {
+                it.addStringProperty("id", a.id)
+                it.addNumberProperty("rank", a.marker.rank)
+            }
+        },
+    )
+
+/** `match(rank)` over the Lattice Teal / slate / red set of [argb]: the same colours as the web map. */
+private fun colourByRank(): Expression {
+    val stops = MarkerState.entries.flatMap { listOf(Expression.literal(it.rank), Expression.color(it.argb().toInt())) }
+    return Expression.match(Expression.get("rank"), Expression.color(MarkerState.Unknown.argb().toInt()), *stops.toTypedArray())
+}
+
+/**
+ * The map: MapLibre Native in an AndroidView on the OpenFreeMap style. Pins are circle layers on one clustered GeoJSON source
+ * (teal / slate / red by [MarkerState], a white ring and centre like before); close pins merge into a count bubble in the
+ * worst state of its members. A tap on a pin selects the apartment, a tap on a bubble zooms in, a tap elsewhere dismisses.
+ *
+ * AndroidView over the stable SDK is used instead of the community maplibre-compose wrapper: the wrapper is a young,
+ * fast-moving multiplatform library, and everything needed here (one source, four layers, three taps) is a screenful of calls.
+ */
 @Composable
 private fun MapView(located: List<NetApartment>, onSelect: (String) -> Unit, onBackground: () -> Unit) {
-    val camera = rememberCameraPositionState()
-    var loaded by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val mapView = remember {
+        MapLibre.getInstance(context)
+        MapView(context)
+    }
+    var map by remember { mutableStateOf<MapLibreMap?>(null) }
+    var styled by remember { mutableStateOf(false) }
+    val select by rememberUpdatedState(onSelect)
+    val dismiss by rememberUpdatedState(onBackground)
+    val density = context.resources.displayMetrics.density
+
+    DisposableEffect(lifecycle, mapView) {
+        mapView.onCreate(null)
+        val observer = LifecycleEventObserver { _, e ->
+            when (e) {
+                Lifecycle.Event.ON_START -> mapView.onStart()
+                Lifecycle.Event.ON_RESUME -> mapView.onResume()
+                Lifecycle.Event.ON_PAUSE -> mapView.onPause()
+                Lifecycle.Event.ON_STOP -> mapView.onStop()
+                else -> Unit
+            }
+        }
+        lifecycle.addObserver(observer)
+        // The composable can enter after the activity is already started or resumed.
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) mapView.onStart()
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) mapView.onResume()
+        onDispose {
+            lifecycle.removeObserver(observer)
+            if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) mapView.onPause()
+            if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) mapView.onStop()
+            mapView.onDestroy()
+        }
+    }
+
+    LaunchedEffect(mapView) {
+        mapView.getMapAsync { m ->
+            m.setMaxZoomPreference(MAX_ZOOM)
+            m.uiSettings.isRotateGesturesEnabled = false
+            m.uiSettings.isTiltGesturesEnabled = false
+            m.setStyle(Style.Builder().fromUri(STYLE_URL)) { style ->
+                style.addSource(
+                    GeoJsonSource(
+                        SOURCE, FeatureCollection.fromFeatures(emptyList<Feature>()),
+                        GeoJsonOptions()
+                            .withCluster(true).withClusterRadius(44).withClusterMaxZoom(CLUSTER_MAX_ZOOM)
+                            .withClusterProperty("rank", Expression.max(Expression.accumulated(), Expression.get("rank")), Expression.get("rank")),
+                    ),
+                )
+                style.addLayer(
+                    CircleLayer(L_CLUSTER, SOURCE).withFilter(Expression.has("point_count")).withProperties(
+                        PropertyFactory.circleColor(colourByRank()),
+                        PropertyFactory.circleRadius(18f),
+                        PropertyFactory.circleStrokeColor(android.graphics.Color.WHITE),
+                        PropertyFactory.circleStrokeWidth(3f),
+                    ),
+                )
+                style.addLayer(
+                    SymbolLayer(L_COUNT, SOURCE).withFilter(Expression.has("point_count")).withProperties(
+                        PropertyFactory.textField(Expression.toString(Expression.get("point_count"))),
+                        PropertyFactory.textFont(arrayOf("Noto Sans Bold")),
+                        PropertyFactory.textSize(14f),
+                        PropertyFactory.textColor(android.graphics.Color.WHITE),
+                        PropertyFactory.textAllowOverlap(true),
+                        PropertyFactory.textIgnorePlacement(true),
+                    ),
+                )
+                style.addLayer(
+                    CircleLayer(L_PIN, SOURCE).withFilter(Expression.not(Expression.has("point_count"))).withProperties(
+                        PropertyFactory.circleColor(colourByRank()),
+                        PropertyFactory.circleRadius(13f),
+                        PropertyFactory.circleStrokeColor(android.graphics.Color.WHITE),
+                        PropertyFactory.circleStrokeWidth(3f),
+                    ),
+                )
+                style.addLayer(
+                    CircleLayer(L_DOT, SOURCE).withFilter(Expression.not(Expression.has("point_count"))).withProperties(
+                        PropertyFactory.circleColor(android.graphics.Color.WHITE),
+                        PropertyFactory.circleRadius(4f),
+                    ),
+                )
+                m.addOnMapClickListener { at ->
+                    val pt = m.projection.toScreenLocation(at)
+                    val slop = TAP_SLOP_DP * density / 2
+                    val box = android.graphics.RectF(pt.x - slop, pt.y - slop, pt.x + slop, pt.y + slop)
+                    val pin = m.queryRenderedFeatures(box, L_PIN).firstOrNull()
+                    val bubble = m.queryRenderedFeatures(box, L_CLUSTER).firstOrNull()
+                    when {
+                        pin != null -> pin.getStringProperty("id")?.let { select(it) } ?: dismiss()
+                        bubble != null -> {
+                            val src = style.getSourceAs<GeoJsonSource>(SOURCE)
+                            val zoom = src?.getClusterExpansionZoom(bubble)?.toDouble() ?: (m.cameraPosition.zoom + 2)
+                            val center = (bubble.geometry() as? Point)?.let { LatLng(it.latitude(), it.longitude()) } ?: at
+                            m.animateCamera(CameraUpdateFactory.newLatLngZoom(center, minOf(zoom, MAX_ZOOM)))
+                        }
+                        else -> dismiss()
+                    }
+                    true
+                }
+                map = m
+                styled = true
+            }
+        }
+    }
+
     val ids = located.map { it.id }
-    LaunchedEffect(loaded, ids) {
-        if (!loaded) return@LaunchedEffect
+    LaunchedEffect(styled, located) {
+        val m = map ?: return@LaunchedEffect
+        if (!styled) return@LaunchedEffect
+        m.getStyle { it.getSourceAs<GeoJsonSource>(SOURCE)?.setGeoJson(featuresOf(located)) }
+    }
+    LaunchedEffect(styled, ids) {
+        val m = map ?: return@LaunchedEffect
+        if (!styled) return@LaunchedEffect
         val points = located.mapNotNull { a -> a.point?.let { LatLng(it.lat, it.lng) } }
         if (points.isEmpty()) return@LaunchedEffect
-        camera.move(
+        m.moveCamera(
             if (points.size == 1) {
-                CameraUpdateFactory.newLatLngZoom(points[0], 16f)
+                CameraUpdateFactory.newLatLngZoom(points[0], 16.0)
             } else {
-                val b = LatLngBounds.builder()
-                points.forEach { b.include(it) }
-                CameraUpdateFactory.newLatLngBounds(b.build(), 120)
+                CameraUpdateFactory.newLatLngBounds(LatLngBounds.Builder().includes(points).build(), (60 * density).toInt())
             },
         )
     }
-    GoogleMap(
-        modifier = Modifier.fillMaxSize(),
-        cameraPositionState = camera,
-        uiSettings = MapUiSettings(zoomControlsEnabled = false, mapToolbarEnabled = false),
-        onMapLoaded = { loaded = true },
-        onMapClick = { onBackground() },
-    ) {
-        located.forEach { a ->
-            val p = a.point ?: return@forEach
-            val state = a.marker
-            MarkerComposable(
-                a.id, state,
-                state = rememberMarkerState(key = a.id, position = LatLng(p.lat, p.lng)),
-                title = a.name,
-                onClick = {
-                    onSelect(a.id)
-                    true
-                },
-            ) { Pin(state) }
-        }
-    }
+
+    AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
 }
 
-/** The pin: a coloured dot with a white ring and a white centre. The colour is never the only signal: the sheet says the state in words. */
+/** The List view, and what the Map view shows when no apartment has a point yet. */
 @Composable
-private fun Pin(state: MarkerState) {
-    Box(
-        Modifier.size(30.dp).background(Color(state.argb()), CircleShape).border(BorderStroke(3.dp, Color.White), CircleShape),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(Modifier.size(8.dp).background(Color.White, CircleShape))
-    }
-}
-
-/** The List view, and what the Map view shows when there is no Maps key or no apartment has a point yet. */
-@Composable
-private fun ApartmentList(ui: NetworkMapUiState, vm: NetworkMapViewModel, canWrite: Boolean, links: NetworkLinks, showKeyNote: Boolean) {
+private fun ApartmentList(ui: NetworkMapUiState, vm: NetworkMapViewModel, canWrite: Boolean, links: NetworkLinks, showNoGpsNote: Boolean) {
     val context = LocalContext.current
     val (down, partial, ok) = stateCounts(ui.apartments)
     LazyColumn(
@@ -160,14 +281,10 @@ private fun ApartmentList(ui: NetworkMapUiState, vm: NetworkMapViewModel, canWri
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (showKeyNote) {
+        if (showNoGpsNote) {
             item(key = "note") {
                 Text(
-                    if (!BuildConfig.MAPS_KEY_SET) {
-                        "The map is off in this build: it has no Google Maps key. This is the same information as a list; tap Open in Google Maps on a row. How to add a key is in android/README.md."
-                    } else {
-                        "No apartment has a GPS point yet, so there is nothing to put on the map."
-                    },
+                    "No apartment has a GPS point yet, so there is nothing to put on the map.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

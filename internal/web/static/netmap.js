@@ -1,7 +1,9 @@
-/* The Network page's Google map. External file: the admin CSP allows no inline script, and on this one page it also
-   allows https://maps.googleapis.com. The loader below creates the Maps <script> itself (key + callback), so nothing
-   is inline. Every name, address and serial comes from user-entered data: it is only ever put on the page with
-   textContent and setAttribute on links we vet (safeHref), never as HTML. */
+/* The Network page's map: MapLibre GL JS (vendored in /static/vendor/maplibre) on OpenFreeMap tiles; no key, no account.
+   External file: the admin CSP allows no inline script. The library is an ES module loaded with a dynamic import() of
+   the versioned URL in data-lib, and its tile worker is the self-hosted module worker in data-worker, so the page needs
+   no eval, no blob script and no remote script (see cspNetwork in security_headers.go). Every name, address and serial
+   comes from user-entered data: it is only ever put on the page with textContent and setAttribute on links we vet
+   (safeHref), never as HTML. */
 (function () {
   "use strict";
   var wrap = document.getElementById("netwrap");
@@ -14,13 +16,18 @@
   var panelBody = document.getElementById("netpanel-body");
   var panelClose = document.getElementById("netpanel-close");
   var hoverCard = document.getElementById("nethover");
-  var key = wrap.getAttribute("data-key") || "";
+  var styleURL = wrap.getAttribute("data-basemap") || "";
+  var libURL = wrap.getAttribute("data-lib") || "";
+  var workerURL = wrap.getAttribute("data-worker") || "";
   var jsonURL = wrap.getAttribute("data-json") || "/admin/network/map.json";
   var canHover = !!(window.matchMedia && window.matchMedia("(hover: hover) and (pointer: fine)").matches);
   var STATE_LABEL = { ok: "All good", partial: "Some offline", down: "Router down", unknown: "No router" };
   var RANK = { down: 3, partial: 2, ok: 1, unknown: 0 };
-  var CLUSTER_PX = 44;
-  var NO_CLUSTER_ZOOM = 18;
+  var RANK_STATE = ["unknown", "ok", "partial", "down"]; // the index is RANK; GeoJSON carries the number so a cluster can take the max
+  var SRC = "apartments";
+  var CLUSTER_RADIUS_PX = 44;
+  var CLUSTER_MAX_ZOOM = 17;  // from zoom 18 every apartment is its own pin
+  var MAX_ZOOM = 19;
 
   // ---- small DOM helpers (text only) -------------------------------------------------------------
   function el(tag, cls, text) {
@@ -29,7 +36,7 @@
     if (text !== undefined && text !== null) n.textContent = String(text);
     return n;
   }
-  // Only our own pages and Google Maps links become hrefs.
+  // Only our own pages and Google Maps links (the optional "View on Google Maps" action) become hrefs.
   function safeHref(u) {
     if (typeof u !== "string") return "#";
     if (u.charAt(0) === "/" && u.charAt(1) !== "/" && u.charAt(1) !== "\\") return u;
@@ -220,122 +227,133 @@
     svg.appendChild(p); svg.appendChild(c);
     return svg;
   }
-  function worst(items) {
-    var s = "unknown";
-    items.forEach(function (a) { if ((RANK[a.state] || 0) > (RANK[s] || 0)) s = a.state; });
-    return s;
+
+  function pinNode(a) {
+    var b = el("button", "netpin net-" + a.state);
+    b.type = "button";
+    b.setAttribute("aria-label", a.name + ", " + (STATE_LABEL[a.state] || a.state));
+    b.appendChild(pinSVG());
+    b.addEventListener("click", function (e) { e.stopPropagation(); openPanel(a, b); });
+    b.addEventListener("mouseenter", function () { showHover(a, b); });
+    b.addEventListener("mouseleave", hideHover);
+    b.addEventListener("blur", hideHover);
+    return b;
   }
 
-  // Greedy clustering in screen pixels: the first unassigned marker takes every other marker within CLUSTER_PX.
-  // Pure (points are {x, y, item}), so it needs no map. Exposed for the page's own tests.
-  function clusterPoints(points, radius) {
-    var used = new Array(points.length), out = [];
-    for (var i = 0; i < points.length; i++) {
-      if (used[i]) continue;
-      var group = [points[i]];
-      used[i] = true;
-      for (var j = i + 1; j < points.length; j++) {
-        if (used[j]) continue;
-        var dx = points[i].x - points[j].x, dy = points[i].y - points[j].y;
-        if (dx * dx + dy * dy <= radius * radius) { used[j] = true; group.push(points[j]); }
-      }
-      out.push(group);
-    }
-    return out;
-  }
-  window.ftnNetCluster = clusterPoints;
+  function start(ml, apartments) {
+    var byID = {};
+    var features = apartments.map(function (a) {
+      byID[a.id] = a;
+      return {
+        type: "Feature",
+        properties: { id: a.id, rank: RANK[a.state] || 0 },
+        geometry: { type: "Point", coordinates: [a.lng, a.lat] }
+      };
+    });
 
-  function start(apartments) {
-    var gm = window.google.maps;
-    gm.importLibrary("maps").then(function () {
-      if (loading) loading.remove();
-      var map = new gm.Map(mapEl, {
-        center: { lat: apartments[0].lat, lng: apartments[0].lng }, zoom: 13,
-        mapTypeControl: false, streetViewControl: false, fullscreenControl: true, clickableIcons: false
+    var map = new ml.Map({
+      container: mapEl,
+      style: styleURL,
+      center: [apartments[0].lng, apartments[0].lat],
+      zoom: 13,
+      maxZoom: MAX_ZOOM,
+      // The style's own attribution (OpenFreeMap, OpenMapTiles, OpenStreetMap) stays open, not folded into an "i" button.
+      attributionControl: { compact: false, customAttribution: "<a href=\"https://openfreemap.org\" target=\"_blank\" rel=\"noopener\">OpenFreeMap</a> <a href=\"https://www.openmaptiles.org/\" target=\"_blank\" rel=\"noopener\">\u00a9 OpenMapTiles</a> Data from <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap</a>" },
+      dragRotate: false,
+      pitchWithRotate: false,
+      touchPitch: false
+    });
+    map.touchZoomRotate.disableRotation();
+    map.addControl(new ml.NavigationControl({ showCompass: false }), "top-right");
+    map.addControl(new ml.ScaleControl({ unit: "metric" }), "bottom-left");
+
+    var styleLoaded = false;
+    map.on("error", function () {
+      // A tile or glyph failing later is not fatal; a style that never loaded (offline, blocked) leaves nothing to show.
+      if (styleLoaded) return;
+      try { map.remove(); } catch (e) { /* already gone */ }
+      showFallback("The base map could not be loaded (offline, or tiles.openfreemap.org is blocked).");
+    });
+    map.on("click", function () { closePanel(); hideHover(); });
+
+    var markers = {};
+    function updateMarkers() {
+      if (!styleLoaded || !map.getSource(SRC) || !map.isSourceLoaded(SRC)) return;
+      var seen = {};
+      map.querySourceFeatures(SRC).forEach(function (f) {
+        var p = f.properties || {};
+        var id = p.cluster ? "c" + p.cluster_id : "a" + p.id;
+        if (seen[id]) return; // the same feature comes once per tile it touches
+        seen[id] = true;
+        if (markers[id]) return;
+        var coords = f.geometry.coordinates.slice();
+        var node, anchor;
+        if (p.cluster) {
+          var n = Number(p.point_count) || 0;
+          node = el("button", "netbubble net-" + (RANK_STATE[p.rank] || "unknown"), n);
+          node.type = "button";
+          node.setAttribute("aria-label", plural(n, "apartment", "apartments") + " here, zoom in");
+          anchor = "center";
+          (function (clusterID, at) {
+            node.addEventListener("click", function (e) {
+              e.stopPropagation();
+              map.getSource(SRC).getClusterExpansionZoom(clusterID).then(function (z) {
+                map.easeTo({ center: at, zoom: Math.min(z, MAX_ZOOM) });
+              });
+            });
+          })(p.cluster_id, coords);
+        } else {
+          var a = byID[p.id];
+          if (!a) return;
+          node = pinNode(a);
+          anchor = "bottom";
+        }
+        markers[id] = new ml.Marker({ element: node, anchor: anchor }).setLngLat(coords).addTo(map);
       });
-      var bounds = new gm.LatLngBounds();
-      apartments.forEach(function (a) { bounds.extend({ lat: a.lat, lng: a.lng }); });
-      map.fitBounds(bounds, 56);
-      gm.event.addListenerOnce(map, "idle", function () { if (map.getZoom() > 17) map.setZoom(17); });
-      map.addListener("click", function () { closePanel(); hideHover(); });
+      Object.keys(markers).forEach(function (id) {
+        if (!seen[id]) { markers[id].remove(); delete markers[id]; }
+      });
+    }
 
-      class Layer extends gm.OverlayView {
-        constructor() { super(); this.root = null; this.nodes = {}; }
-        onAdd() {
-          this.root = el("div", "netlayer");
-          this.getPanes().overlayMouseTarget.appendChild(this.root);
-        }
-        onRemove() { if (this.root && this.root.parentNode) this.root.parentNode.removeChild(this.root); this.root = null; }
-        draw() {
-          var proj = this.getProjection();
-          if (!proj || !this.root) return;
-          var points = apartments.map(function (a) {
-            var p = proj.fromLatLngToDivPixel(new gm.LatLng(a.lat, a.lng));
-            return { x: p.x, y: p.y, item: a };
-          });
-          var groups = map.getZoom() >= NO_CLUSTER_ZOOM ? points.map(function (p) { return [p]; }) : clusterPoints(points, CLUSTER_PX);
-          var seen = {}, self = this;
-          groups.forEach(function (g) {
-            var id = g.map(function (p) { return p.item.id; }).sort().join("|");
-            seen[id] = true;
-            var node = self.nodes[id];
-            if (!node) { node = self.nodes[id] = g.length === 1 ? self.pin(g[0].item) : self.bubble(g); self.root.appendChild(node); }
-            var x = 0, y = 0;
-            g.forEach(function (p) { x += p.x; y += p.y; });
-            node.style.left = Math.round(x / g.length) + "px";
-            node.style.top = Math.round(y / g.length) + "px";
-          });
-          Object.keys(this.nodes).forEach(function (id) {
-            if (!seen[id]) { self.nodes[id].remove(); delete self.nodes[id]; }
-          });
-        }
-        pin(a) {
-          var b = el("button", "netpin net-" + a.state);
-          b.type = "button";
-          b.setAttribute("aria-label", a.name + ", " + (STATE_LABEL[a.state] || a.state));
-          b.appendChild(pinSVG());
-          b.addEventListener("click", function (e) { e.stopPropagation(); openPanel(a, b); });
-          b.addEventListener("mouseenter", function () { showHover(a, b); });
-          b.addEventListener("mouseleave", hideHover);
-          b.addEventListener("blur", hideHover);
-          return b;
-        }
-        bubble(g) {
-          var items = g.map(function (p) { return p.item; });
-          var b = el("button", "netbubble net-" + worst(items), items.length);
-          b.type = "button";
-          b.setAttribute("aria-label", plural(items.length, "apartment", "apartments") + " here, zoom in");
-          b.addEventListener("click", function (e) {
-            e.stopPropagation();
-            var bb = new gm.LatLngBounds();
-            items.forEach(function (a) { bb.extend({ lat: a.lat, lng: a.lng }); });
-            map.fitBounds(bb, 80);
-            // markers on the same spot never separate by zooming: open the first
-            gm.event.addListenerOnce(map, "idle", function () { if (map.getZoom() >= NO_CLUSTER_ZOOM - 1) map.setZoom(NO_CLUSTER_ZOOM); });
-          });
-          return b;
-        }
+    map.on("load", function () {
+      styleLoaded = true;
+      if (loading) loading.remove();
+      map.addSource(SRC, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: features },
+        cluster: true,
+        clusterRadius: CLUSTER_RADIUS_PX,
+        clusterMaxZoom: CLUSTER_MAX_ZOOM,
+        clusterProperties: { rank: ["max", ["get", "rank"]] }
+      });
+      // The pins and bubbles are DOM buttons (keyboard and screen-reader reachable), drawn by updateMarkers from what the
+      // source says is on screen. A source with no layer loads no tiles, so one invisible layer keeps it live.
+      map.addLayer({ id: "apartments-live", type: "circle", source: SRC, paint: { "circle-radius": 1, "circle-opacity": 0 } });
+      if (apartments.length > 1) {
+        var bounds = new ml.LngLatBounds();
+        apartments.forEach(function (a) { bounds.extend([a.lng, a.lat]); });
+        map.fitBounds(bounds, { padding: 56, maxZoom: 17, duration: 0 });
+      } else {
+        map.jumpTo({ center: [apartments[0].lng, apartments[0].lat], zoom: 16 });
       }
-      new Layer().setMap(map);
-    }, function () { showFallback("The Google Maps library did not load."); });
+      map.on("sourcedata", function (e) { if (e.sourceId === SRC && e.isSourceLoaded) updateMarkers(); });
+      map.on("moveend", updateMarkers);
+      updateMarkers();
+    });
   }
 
-  // ---- load the data, then the Maps script ------------------------------------------------------------
-  window.gm_authFailure = function () {
-    showFallback("Google refused the key. Check that the Maps JavaScript API is enabled for it, that billing is on, and that its website restriction matches this address (https://your-admin-domain/*).");
-  };
-
+  // ---- load the data, then the library ----------------------------------------------------------------
   fetch(jsonURL, { credentials: "same-origin", headers: { Accept: "application/json" } })
     .then(function (r) { if (!r.ok) throw new Error("status " + r.status); return r.json(); })
     .then(function (data) {
       var apts = (data.apartments || []).filter(function (a) { return a.has_gps && typeof a.lat === "number" && typeof a.lng === "number"; });
       if (!apts.length) { showFallback("No apartment has a GPS point yet, so there is nothing to put on the map. Add GPS to an apartment first."); return; }
-      window.__ftnNetMapReady = function () { start(apts); };
-      var s = document.createElement("script");
-      s.async = true;
-      s.src = "https://maps.googleapis.com/maps/api/js?key=" + encodeURIComponent(key) + "&loading=async&v=weekly&callback=__ftnNetMapReady";
-      s.onerror = function () { showFallback("The Google Maps script could not be loaded (offline, or blocked)."); };
-      document.head.appendChild(s);
+      return import(libURL).then(function (mod) {
+        var ml = mod.Map ? mod : mod.default;
+        if (!ml || !ml.Map) throw new Error("no Map in the library");
+        if (workerURL) ml.setWorkerUrl(new URL(workerURL, window.location.href).href);
+        start(ml, apts);
+      }, function () { showFallback("The map library could not be loaded."); });
     })
     .catch(function () { showFallback("The network data could not be loaded. Reload the page, or show the list."); });
 })();

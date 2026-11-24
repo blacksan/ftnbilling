@@ -34,12 +34,11 @@ func TestNetMarkerState(t *testing.T) {
 	}
 }
 
-func TestNetworkCSPOnlyWithKeyAndKeepsWebFigFormAction(t *testing.T) {
+func TestNetworkCSPKeepsWebFigFormAction(t *testing.T) {
 	s := &Server{}
-	if got := s.networkCSP(); got != cspAdmin {
-		t.Fatalf("no key must give the admin policy: %s", got)
+	if got := s.networkCSP(); !contains(got, "form-action 'self';") {
+		t.Fatalf("plain form-action: %s", got)
 	}
-	s.cfg.GoogleMapsAPIKey = "AIzaSyTestKeyTestKeyTestKeyTestKey12345"
 	s.cfg.WebFigDomain = "tech.example.co.ke"
 	got := s.networkCSP()
 	if want := "form-action 'self' https://tech.example.co.ke;"; !contains(got, want) {

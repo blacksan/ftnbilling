@@ -51,7 +51,7 @@ import ke.co.ftw.ftnadmin.ui.common.onlineStateRes
 import ke.co.ftw.ftnadmin.ui.common.vmFactory
 
 /**
- * The Network screen: Map (Google Maps, one pin per apartment), List (the same data as cards, with Open in Google Maps)
+ * The Network screen: Map (MapLibre on OpenFreeMap, one pin per apartment, clustered), List (the same data as cards, with Open in Google Maps)
  * and Live (the router-by-router clients and interfaces this screen showed before the map).
  */
 @OptIn(ExperimentalMaterial3Api::class)

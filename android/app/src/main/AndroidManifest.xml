@@ -20,11 +20,6 @@
         android:theme="@style/Theme.FtnAdmin"
         android:usesCleartextTraffic="false">
 
-        <!-- Maps SDK key for the Network screen; empty when the build had none (the screen then shows a list). -->
-        <meta-data
-            android:name="com.google.android.geo.API_KEY"
-            android:value="${MAPS_API_KEY}" />
-
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|uiMode|density|layoutDirection|locale"

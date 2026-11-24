@@ -12,11 +12,12 @@ import (
 	"ispbill/internal/store"
 )
 
-// The Network page: every apartment (building) on a Google map, with the equipment installed there. It is
+// The Network page: every apartment (building) on a map (MapLibre GL JS, OpenFreeMap tiles: no key, no account),
+// with the equipment installed there. It is
 // separate from Equipment (the registers): Equipment is the list of things, Network is where they are.
 //
-//	/admin/network            the map (Maps JavaScript API) when GOOGLE_MAPS_API_KEY is set, else the list view
-//	/admin/network?view=list  the same data as cards, with "View on Google Maps" links (also the no-key fallback)
+//	/admin/network            the map whenever an apartment has a GPS point, else the list view
+//	/admin/network?view=list  the same data as cards, with "View on Google Maps" links
 //	/admin/network/map.json   the data both views and static/netmap.js read (any signed-in role, like the routers list)
 //
 // The old pages stay: Live now (/admin/live) and the server drawing (/admin/map, "Topology") are tabs of this page.
@@ -99,7 +100,6 @@ type netApt struct {
 }
 
 type netMapData struct {
-	MapsKeySet bool     `json:"maps_key_set"`
 	Apartments []netApt `json:"apartments"`
 	WithGPS    int      `json:"with_gps"`
 	NoGPS      int      `json:"without_gps"`
@@ -142,9 +142,14 @@ func netMarkerState(routers []netRouter, onusOnline, onusTotal int) string {
 	return netOK
 }
 
+// netMapStyleURL is the OpenFreeMap style the map draws (no key, no account). Positron is the calm light grey one: the
+// apartment markers (teal, slate, red) are the only saturated colours on it, which Liberty's coloured land use and
+// buildings would compete with. Its sprite, glyphs and tiles are all on the same host the CSP allows (see cspNetwork).
+const netMapStyleURL = "https://tiles.openfreemap.org/styles/positron"
+
 // networkData builds the page and the JSON for the routers a request may see.
 func (s *Server) networkData(ctx context.Context, sc scope) netMapData {
-	out := netMapData{MapsKeySet: s.live().GoogleMapsAPIKey != "", Apartments: []netApt{}}
+	out := netMapData{Apartments: []netApt{}}
 	states := s.siteStates(ctx, sc.Sites)
 	tree := s.treeFor(sc)
 	sums := s.svc.Apartments()
@@ -336,13 +341,14 @@ func (s *Server) adminNetwork(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	d := s.networkData(ctx, s.scopeOf(r))
 	view := "map"
-	if r.URL.Query().Get("view") == "list" || !d.MapsKeySet {
+	if r.URL.Query().Get("view") == "list" {
 		view = "list"
 	}
 	p.Data["Net"] = d
 	p.Data["View"] = view
-	p.Data["MapsKeySet"] = d.MapsKeySet
-	p.Data["MapsKey"] = s.live().GoogleMapsAPIKey
+	// The map shows whenever some apartment has a GPS point; without one the page explains and shows the lists.
+	p.Data["MapStyle"] = netMapStyleURL
+	p.Data["MapOn"] = view == "map" && d.WithGPS > 0
 	p.Data["NetTabs"] = []netTab{
 		{"map", "Map", "/admin/network", view == "map"},
 		{"list", "List", "/admin/network?view=list", view == "list"},
@@ -360,11 +366,10 @@ func (s *Server) adminNetwork(w http.ResponseWriter, r *http.Request) {
 }
 
 // apiNetworkMap is GET /api/v1/network/map: the same data as /admin/network/map.json for the Android app (every
-// building, like the other API lists). maps_key_set is always false here: the app has its own key.
+// building, like the other API lists).
 func (s *Server) apiNetworkMap(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 	ctx, cancel := context.WithTimeout(r.Context(), routeros.DefaultTimeout)
 	defer cancel()
 	d := s.networkData(ctx, scope{All: true, Sites: s.liveSites("")})
-	d.MapsKeySet = false
 	writeJSON(w, http.StatusOK, d)
 }

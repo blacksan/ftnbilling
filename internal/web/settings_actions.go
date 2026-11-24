@@ -414,15 +414,6 @@ func (s *Server) settingsSaveSupport(w http.ResponseWriter, r *http.Request) {
 	s.back(w, r, to, savedMsg(ch))
 }
 
-func (s *Server) settingsSaveMaps(w http.ResponseWriter, r *http.Request) {
-	to := "/admin/settings/maps"
-	ch, ok := s.saveSection(w, r, settings.SecMaps, to)
-	if !ok {
-		return
-	}
-	s.back(w, r, to, savedMsg(ch))
-}
-
 func (s *Server) settingsSaveEmail(w http.ResponseWriter, r *http.Request) {
 	to := "/admin/settings/email"
 	ch, ok := s.saveSection(w, r, settings.SecEmail, to)

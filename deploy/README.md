@@ -49,24 +49,15 @@ To preview without changing anything: `DRY_RUN=1` (works without root and prints
 curl -fsSL -H "Authorization: Bearer $GH" https://raw.githubusercontent.com/blacksan/ftnbilling/main/deploy/install.sh | DRY_RUN=1 bash
 ```
 
-Options (environment variables): `DOMAIN`, `GH_TOKEN`, `VERSION` (a release tag; default is the latest release), `FROM_SOURCE=1` (build on the server instead of using a release), `NO_POSTGRES=1`, `NO_FIREWALL=1`, `DRY_RUN=1`, `PUBLIC_IP`, `ADMIN_PASS`, `BRAND_NAME`, `SUPPORT_PHONE`, `SUPPORT_EMAIL`, `SUPPORT_WHATSAPP`, `WG_PORT`, `WG_SUBNET`, `MGMT_PORT` (UDP, default 51821) and `MGMT_SUBNET` (default `10.98.0.0/24`) for remote WinBox, `WEBFIG_DOMAIN` for remote WebFig (below), `MAC_VENDOR_LOOKUP` and `MAC_VENDOR_DAILY` (below), `GOOGLE_MAPS_API_KEY` (the Network map, below), `SWAP_MB`. The header of `install.sh` lists them.
+Options (environment variables): `DOMAIN`, `GH_TOKEN`, `VERSION` (a release tag; default is the latest release), `FROM_SOURCE=1` (build on the server instead of using a release), `NO_POSTGRES=1`, `NO_FIREWALL=1`, `DRY_RUN=1`, `PUBLIC_IP`, `ADMIN_PASS`, `BRAND_NAME`, `SUPPORT_PHONE`, `SUPPORT_EMAIL`, `SUPPORT_WHATSAPP`, `WG_PORT`, `WG_SUBNET`, `MGMT_PORT` (UDP, default 51821) and `MGMT_SUBNET` (default `10.98.0.0/24`) for remote WinBox, `WEBFIG_DOMAIN` for remote WebFig (below), `MAC_VENDOR_LOOKUP` and `MAC_VENDOR_DAILY` (below), `SWAP_MB`. The header of `install.sh` lists them.
 
-### Network map (Google Maps)
+### Network map
 
-**Admin > Network** draws every apartment that has a GPS point on Google Maps; hovering a marker shows a summary and clicking it opens the equipment installed there. It needs a Google Maps *browser* key. Without one the page still works as a list with a "View on Google Maps" link per apartment.
+**Admin > Network** draws every apartment that has a GPS point on a map (MapLibre GL JS with [OpenFreeMap](https://openfreemap.org/) tiles, the calm "Positron" style); hovering a marker shows a summary and clicking it opens the equipment installed there. **There is nothing to set up: no API key, no account, no billing.** The page shows the map as soon as one apartment has a GPS point; `?view=list` (the List tab) is the same data as cards, with a "View on Google Maps" link per apartment that opens that point in Google Maps' own app or site.
 
-Create the key (once):
+What it loads, so you can allow it on a locked-down network: the map library is served by this server (`/static/vendor/maplibre/`, version and checksums in its `README.md`); the browser fetches the style, tiles, fonts and icons from `https://tiles.openfreemap.org` only. The Network page (and only that page) widens the Content-Security-Policy by exactly that host (`connect-src` and `img-src`) and `worker-src 'self'`; it needs no `unsafe-eval` and no other host, and every other page is unchanged. If the browser cannot reach that host, the page says so and offers the list. OpenFreeMap is a free community service, so keep the map for admins (a handful of page views, not a public embed) and consider [sponsoring it](https://openfreemap.org/).
 
-1. In [Google Cloud Console](https://console.cloud.google.com/) pick or create a project and make sure billing is enabled (Maps has a monthly free credit; a few admins opening one page is far below it).
-2. **APIs and Services > Library**: enable **Maps JavaScript API**. Enable nothing else.
-3. **APIs and Services > Credentials > Create credentials > API key**.
-4. Edit the key. **Application restrictions: Websites**, then add the admin address with `/*`, for example `https://isp.ftw.co.ke/*` (add `https://<DOMAIN>/*` only; not the WebFig host).
-5. **API restrictions: Restrict key**, tick only **Maps JavaScript API**. Save (it can take a few minutes to apply).
-6. Give it to the server, either way:
-   - installer: run it again with `GOOGLE_MAPS_API_KEY=AIza...` added to the line you installed with (a later run without it keeps the key), or
-   - **Admin > Settings > Maps** (owners): paste it and save; no restart. Settings win over the env file.
-
-The key is a browser key, so it is **not a secret**: anyone who opens the Network page can read it. That is why the referrer and API restrictions in steps 4 and 5 matter; never reuse a key that has other APIs enabled. The Network page (and only that page) relaxes the Content-Security-Policy to let the browser load `https://maps.googleapis.com` and the map tiles; every other page is unchanged.
+An older install may still have `GOOGLE_MAPS_API_KEY` in its env file or a Maps value saved in Settings: both are ignored now and can be deleted (the Settings > Maps page is gone).
 
 ### Support contacts on the captive pages
 
