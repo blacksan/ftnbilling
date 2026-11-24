@@ -3,6 +3,7 @@ package olt
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -26,20 +27,32 @@ func (s *Service) mayConfigure(st store.OLTState) error {
 }
 
 // readyAdds are the found ONUs the plan authorises: verdict ready (their serial is in the inventory, given to a house
-// that this OLT and PON serve).
-func readyAdds(st store.OLTState, retryAfter time.Duration, now time.Time) []DesiredONU {
+// that this OLT and PON serve). The verdict stored by the last poll is not trusted on its own: the inventory may have
+// changed since (the ONU retired, given to another house, moved to another OLT), so each one is classified again
+// against the data now, and only a serial that is still ready, for the same inventory item, is added.
+func readyAdds(d *store.Data, olt store.Equipment, st store.OLTState, retryAfter time.Duration, now time.Time) []DesiredONU {
 	var out []DesiredONU
 	for _, f := range st.Found {
-		if f.Verdict != store.OLTFoundReady || f.PON <= 0 {
+		if f.Verdict != store.OLTFoundReady || f.PON <= 0 || !serialOK(f.Serial) {
 			continue
 		}
 		if !f.TriedAt.IsZero() && now.Sub(f.TriedAt) < retryAfter {
 			continue
 		}
-		out = append(out, DesiredONU{PON: f.PON, Serial: f.Serial, EquipmentID: f.EquipmentID, Label: f.Detail})
+		v, label, eid := Classify(d, olt, Found{PON: f.PON, Serial: f.Serial})
+		if v != VerdictReady || eid != f.EquipmentID {
+			continue
+		}
+		out = append(out, DesiredONU{PON: f.PON, Serial: f.Serial, EquipmentID: eid, Label: label})
 	}
 	return out
 }
+
+// serialOK: a GPON serial as the auto-find parser reads it (4 letters, 8 hex digits). Nothing else is ever put into
+// an "onu add" line.
+func serialOK(s string) bool { return gponSerialRE.MatchString(s) }
+
+var gponSerialRE = regexp.MustCompile(`^[A-Z]{4}[0-9A-F]{8}$`)
 
 // computePlan reads the running configuration inside a session and builds the plan.
 func (s *Service) computePlan(ctx context.Context, o *opened) (Plan, *Running, error) {
@@ -54,7 +67,7 @@ func (s *Service) computePlan(ctx context.Context, o *opened) (Plan, *Running, e
 	s.o.Store.View(func(d *store.Data) {
 		e := d.Equipment[o.e.ID]
 		st := d.OLTStateOf(o.e.ID)
-		want, notes, derr = BuildDesired(d, e, st, run, readyAdds(st, 0, s.now()), false)
+		want, notes, derr = BuildDesired(d, e, st, run, readyAdds(d, e, st, 0, s.now()), false)
 	})
 	if derr != nil {
 		return Plan{}, nil, derr
@@ -110,11 +123,16 @@ func (s *Service) applyPlan(ctx context.Context, o *opened, p Plan, why, by stri
 		return res, fmt.Errorf("the configuration could not be saved first, nothing was changed: %w", err)
 	}
 	res.Backup = b.ID
+	// From the first configuration line on, the batch runs to its end (or its first refused line) even when the web
+	// request that started it is cancelled or times out: stopping half way would leave a half-made ONU or VLAN in the
+	// running configuration, unsaved. The OLT's own per-command timeouts still apply.
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+	defer cancel()
 	before := len(o.sess.Transcript)
-	cerr := o.sess.Config(ctx, cmds)
-	res.Sent = cmds
+	n, cerr := o.sess.ConfigN(wctx, cmds)
+	res.Sent = cmds[:n]
 	if cerr == nil {
-		cerr = o.sess.Save(ctx)
+		cerr = o.sess.Save(wctx)
 	}
 	res.Entries = append([]Entry(nil), o.sess.Transcript[before:]...)
 	if cerr != nil {
@@ -127,7 +145,7 @@ func (s *Service) applyPlan(ctx context.Context, o *opened, p Plan, why, by stri
 	// The ONUs it authorised are placed on this OLT before the check, so that the check looks at their services too.
 	s.afterApply(o, p)
 	// Verify: read it back; nothing the plan wanted may be missing.
-	text, err := o.sess.Show(ctx, s.o.Dialect.RunningCmd)
+	text, err := o.sess.Show(wctx, s.o.Dialect.RunningCmd)
 	if err == nil {
 		run := ParseRunning(text)
 		s.o.Store.View(func(d *store.Data) { res.Remaining = verify(d, run) })
@@ -203,7 +221,9 @@ func (s *Service) afterApply(o *opened, p Plan) {
 // base configuration (VLANs, profiles) must already be there, else the ONUs wait.
 func (s *Service) autoProvision(ctx context.Context, o *opened) {
 	var ready []DesiredONU
-	s.o.Store.View(func(d *store.Data) { ready = readyAdds(d.OLTStateOf(o.e.ID), 30*time.Minute, s.now()) })
+	s.o.Store.View(func(d *store.Data) {
+		ready = readyAdds(d, d.Equipment[o.e.ID], d.OLTStateOf(o.e.ID), 30*time.Minute, s.now())
+	})
 	if len(ready) > 8 {
 		ready = ready[:8]
 	}

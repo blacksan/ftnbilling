@@ -141,6 +141,69 @@ func TestTestConnectionAndPin(t *testing.T) {
 	if _, err := e.svc.TestConnection(context.Background(), oltID, "owner"); err == nil || !strings.Contains(err.Error(), "host key") {
 		t.Fatalf("a changed host key was accepted: %v", err)
 	}
+	// The owners are told, once while the mismatch lasts, and the pin is kept.
+	if a := e.alertText(); strings.Count(a, "SSH host key changed") != 1 {
+		t.Fatalf("host key alert: %q", a)
+	}
+	if err := e.svc.Poll(context.Background(), oltID, true); err == nil {
+		t.Fatal("a poll logged in with the changed host key")
+	}
+	if a := e.alertText(); strings.Count(a, "SSH host key changed") != 1 {
+		t.Fatalf("host key alerted again: %q", a)
+	}
+	if st := e.state(); st.Settings.HostKey != e.f.HostKeyFP {
+		t.Fatalf("the pin changed: %q", st.Settings.HostKey)
+	}
+	if len(f2.Lines()) != 0 {
+		t.Fatalf("lines were sent to the OLT with the wrong host key: %v", f2.Lines())
+	}
+}
+
+// A serial found ready at the last poll is classified again when the plan is made: an ONU retired (or given to another
+// house) since is not added from the stale verdict.
+func TestStaleReadyVerdictIsCheckedAgain(t *testing.T) {
+	e := newEnv(t)
+	e.f.SetRunning(base)
+	e.f.AutoFind = [][2]string{{"1", "VSOL00000001"}}
+	if err := e.svc.Poll(context.Background(), oltID, true); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.state(); len(st.Found) != 1 || st.Found[0].Verdict != store.OLTFoundReady {
+		t.Fatalf("found: %+v", st.Found)
+	}
+	p, _, err := e.svc.Plan(context.Background(), oltID)
+	if err != nil || len(p.Adds) != 1 {
+		t.Fatalf("plan before the change: %+v %v", p.Adds, err)
+	}
+	_ = e.st.Update(func(d *store.Data) error {
+		x := d.Equipment["ont1"]
+		x.Status = store.EqRetired
+		d.Equipment["ont1"] = x
+		return nil
+	})
+	if p, _, err = e.svc.Plan(context.Background(), oltID); err != nil || len(p.Adds) != 0 {
+		t.Fatalf("a retired ONU is still planned: %+v %v", p.Adds, err)
+	}
+}
+
+// The inventory serial is matched whatever its case and spacing (the TR-069 serial bug: "sndup" vs "SNDUP").
+func TestInventorySerialCaseInsensitive(t *testing.T) {
+	e := newEnv(t)
+	_ = e.st.Update(func(d *store.Data) error {
+		x := d.Equipment["ont1"]
+		x.Serial = " vsol 00000001 "
+		d.Equipment["ont1"] = x
+		return nil
+	})
+	e.f.SetRunning(base)
+	e.f.AutoFind = [][2]string{{"1", "vsol00000001"}}
+	if err := e.svc.Poll(context.Background(), oltID, true); err != nil {
+		t.Fatal(err)
+	}
+	st := e.state()
+	if len(st.Found) != 1 || st.Found[0].Serial != "VSOL00000001" || st.Found[0].Verdict != store.OLTFoundReady || st.Found[0].EquipmentID != "ont1" {
+		t.Fatalf("found: %+v", st.Found)
+	}
 }
 
 func TestPollParsesAndClassifies(t *testing.T) {

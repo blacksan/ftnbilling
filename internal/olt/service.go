@@ -214,6 +214,9 @@ func (s *Service) withSession(ctx context.Context, id string, wait bool, fn func
 	sess, err := Open(cctx, s.o.Dialect, Target{Addr: addr, Proto: st.Settings.ProtoOrDefault(), User: e.MgmtUser, Pass: pass, Enable: enable,
 		PinnedKey: st.Settings.HostKey, Protect: st.Settings.MgmtVLANOrDefault()}, s.o.Dial)
 	if err != nil {
+		if errors.Is(err, ErrHostKey) {
+			s.hostKeyAlert(id, st)
+		}
 		return err
 	}
 	defer sess.Close()
@@ -229,6 +232,25 @@ func (s *Service) withSession(ctx context.Context, id string, wait bool, fn func
 	}
 	sess.DisablePaging(cctx)
 	return fn(&opened{sess: sess, e: e, st: st})
+}
+
+// hostKeyAlert tells the owners that an OLT answered with another SSH host key than the pinned one (a replaced OLT, or
+// somebody in the path). The server refused to log in. One alert while the mismatch lasts: the poll's error text
+// marks it as sent.
+func (s *Service) hostKeyAlert(id string, st store.OLTState) {
+	if st.Status.Error == errText(ErrHostKey) {
+		return
+	}
+	var label string
+	_ = s.upd(id, func(d *store.Data, e store.Equipment, st *store.OLTState) {
+		label = store.OLTLabel(e)
+		st.Status.At, st.Status.OK, st.Status.Error = s.now(), false, errText(ErrHostKey)
+		s.audit(d, e, "system", "OLT "+label+": SSH host key mismatch, login refused (pinned "+st.Settings.HostKey+")")
+	})
+	if s.o.Alert != nil {
+		s.o.Alert("OLT "+label+": SSH host key changed", "The OLT answered with a different SSH host key than the one pinned, so the server did not log in. "+
+			"If the OLT was replaced, an owner can forget the pinned key on its management page; otherwise check the path to it.")
+	}
 }
 
 // ---- test, status, poll --------------------------------------------------------------------------------------------
