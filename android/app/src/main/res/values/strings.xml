@@ -101,8 +101,51 @@
     <string name="collapse">Collapse</string>
     <string name="expand">Expand</string>
     <string name="change_mac">Change MAC</string>
+    <string name="unmatched">Unmatched</string>
+    <string name="record_payment">Record payment</string>
+    <string name="today">Today</string>
+    <string name="no_unmatched_payments">No unmatched payments.</string>
+    <string name="no_payments_yet">No payments yet.</string>
+    <string name="assign_to_house">Assign to a house</string>
+    <string name="record_a_payment">Record a payment</string>
+    <string name="record_anyway">Record anyway</string>
+    <string name="record">Record</string>
+    <string name="amount_kes">Amount (KES)</string>
+    <string name="mpesa_code_optional">M-Pesa code (optional)</string>
+    <string name="plan_to_apply">Plan to apply (optional)</string>
+    <string name="record_it_anyway">%1$s Record it anyway?</string>
+    <string name="assign_amount">Assign %1$s</string>
+    <string name="assign">Assign</string>
+    <string name="search_accounts">Search accounts</string>
+    <string name="search_accounts_hint">House number, tenant or phone</string>
+    <string name="suggested">(suggested)</string>
+    <string name="no_mac_yet">no MAC yet</string>
+    <string name="no_matching_accounts">No matching accounts.</string>
+    <string name="no_plans_available">No plans available.</string>
+    <string name="apartment_field_desc">Apartment: %1$s</string>
+    <string name="none">none</string>
+    <string name="choose_an_apartment">Choose an apartment</string>
+    <string name="apartment">Apartment</string>
+    <string name="search_apartments">Search apartments</string>
+    <string name="no_apartments_yet">No apartments yet.</string>
+    <string name="no_apartment_matches">No apartment matches.</string>
+    <string name="add_customer">Add customer</string>
+    <string name="search_customers">Search customers</string>
+    <string name="search_customers_hint">House number, name, phone, MAC or code</string>
+    <string name="apartments">Apartments</string>
+    <string name="equipment">Equipment</string>
+    <string name="no_customers_yet">No customers yet.</string>
+    <string name="no_customers_match">No customers match.</string>
     <plurals name="alerts_open_desc">
         <item quantity="one">Alerts, %d open</item>
         <item quantity="other">Alerts, %d open</item>
+    </plurals>
+    <plurals name="payments_total">
+        <item quantity="one">%1$d payment, %2$s</item>
+        <item quantity="other">%1$d payments, %2$s</item>
+    </plurals>
+    <plurals name="more_matches_narrow">
+        <item quantity="one">%d more match. Type to narrow the list.</item>
+        <item quantity="other">%d more matches. Type to narrow the list.</item>
     </plurals>
 </resources>
