@@ -163,12 +163,14 @@ func run(log *slog.Logger) error {
 	webSrv.SetSettings(setm)
 	mp.SetAlert(webSrv.PaymentAlert)
 	webSrv.SetOps(ops)
+	var acsSvc *acs.Service
 	if cfg.ACSEnabled() && len(cfg.DataKey) == 0 {
 		// ACS_LISTEN defaults on; an older install without DATA_KEY keeps running with ONU management off.
 		log.Warn("ONU management (TR-069 ACS) is off: it needs DATA_KEY to seal Wi-Fi passwords and logins")
 	} else if cfg.ACSEnabled() {
 		// The built-in TR-069 ACS (ONU management). It listens on the tunnel address only.
-		acsSvc, err := acs.New(acs.Options{Store: st, Cfg: cfg, Log: log, DataKey: cfg.DataKey, Lease: svc.ONUMgmtLease,
+		var err error
+		acsSvc, err = acs.New(acs.Options{Store: st, Cfg: cfg, Log: log, DataKey: cfg.DataKey, Lease: svc.ONUMgmtLease,
 			Alert: webSrv.ONUAlert})
 		if err != nil {
 			// Billing keeps running; only ONU management stays off (the message says why and what to do).
@@ -191,7 +193,19 @@ func run(log *slog.Logger) error {
 		if box, err := secretbox.New(cfg.DataKey); err != nil {
 			log.Error("OLT management is off", "err", err)
 		} else {
-			oltSvc := olt.New(olt.Options{Store: st, Box: box, Reach: mgr.OLTReach, Alert: webSrv.OLTAlert, Log: log})
+			oltSvc := olt.New(olt.Options{Store: st, Box: box, Reach: mgr.OLTReach, Alert: webSrv.OLTAlert, Log: log, ACS: func() *olt.ACS {
+				// The ACS address and the shared first-contact login the ONUs are given (a Pri profile on the OLT). Nil when the
+				// ACS is off or has no login yet.
+				if acsSvc == nil {
+					return nil
+				}
+				user, pass, err := acsSvc.Credentials()
+				if err != nil {
+					return nil
+				}
+				_, url := mgr.ACSAddress()
+				return &olt.ACS{URL: url, User: user, Pass: pass, InformSeconds: cfg.ACSInformInterval}
+			}})
 			webSrv.SetOLT(oltSvc)
 			wg.Add(1)
 			go func() { defer wg.Done(); oltSvc.Run(ctx) }()

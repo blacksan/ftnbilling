@@ -46,6 +46,9 @@ type Options struct {
 	MaxSessions int           // at once, over all OLTs (default 3)
 	Interval    time.Duration // poll interval (default 5 minutes)
 	Dialect     *Dialect
+	// ACS gives the address and the shared first-contact login of the TR-069 ACS (nil result: none). The login is a secret:
+	// it only ever goes into the lines sent to the OLT.
+	ACS func() *ACS
 	// Timeout is the time one command may take (default 20 s).
 	Timeout time.Duration
 }
@@ -257,21 +260,23 @@ func (s *Service) hostKeyAlert(id string, st store.OLTState) {
 
 // TestConnection logs in and reads "show version". The result is kept as the OLT's status.
 func (s *Service) TestConnection(ctx context.Context, id, by string) (string, error) {
-	var ver string
+	var vi VersionInfo
 	err := s.withSession(ctx, id, true, func(o *opened) error {
-		out, err := o.sess.Show(ctx, s.o.Dialect.VersionCmd)
+		out, err := o.sess.ShowAt(ctx, s.o.Dialect.VersionMode, s.o.Dialect.VersionCmd)
 		if err != nil {
 			return err
 		}
-		ver = ParseVersion(out)
+		vi = ParseVersion(out)
 		return nil
 	})
+	ver := vi.Summary()
 	_ = s.upd(id, func(d *store.Data, e store.Equipment, st *store.OLTState) {
 		st.Status.At = s.now()
 		if err != nil {
 			st.Status.OK, st.Status.Error = false, errText(err)
 		} else {
 			st.Status.OK, st.Status.Error, st.Status.Version = true, "", ver
+			st.Status.Model, st.Status.DeviceSerial, st.Status.HWVersion, st.Status.SWVersion = vi.Model, vi.Serial, vi.Hardware, vi.Software
 		}
 		if by != "" {
 			res := "worked"
@@ -346,54 +351,99 @@ func (s *Service) Poll(ctx context.Context, id string, wait bool) error {
 }
 
 type pollResult struct {
-	version string
-	found   []Found
-	onus    []store.OLTONU
-	raw     string
+	version  VersionInfo
+	found    []Found
+	onus     []store.OLTONU
+	findings []string
+	raw      string
 }
 
 func (s *Service) readAll(ctx context.Context, o *opened) (pollResult, error) {
 	var r pollResult
 	dl := s.o.Dialect
-	out, err := o.sess.Show(ctx, dl.VersionCmd)
+	out, err := o.sess.ShowAt(ctx, dl.VersionMode, dl.VersionCmd)
 	if err != nil {
 		return r, err
 	}
 	r.version = ParseVersion(out)
-	if out, err = o.sess.Show(ctx, dl.AutoFindCmd); err != nil {
-		return r, err
-	}
-	r.found = ParseAutoFind(out)
 	var raw []string
 	n := o.e.PONPorts
 	if n <= 0 {
 		n = 4
 	}
+	seen := map[string]bool{}
 	for pon := 1; pon <= n && pon <= 64; pon++ {
-		sout, err := o.sess.Query(ctx, dl.StateQuery(pon))
-		if err != nil {
-			raw = append(raw, fmt.Sprintf("PON %d state: %s", pon, errText(err)))
+		outs, err := o.sess.QueryEach(ctx, dl.PONReadQuery(pon))
+		if err != nil && len(outs) == 0 {
+			raw = append(raw, fmt.Sprintf("PON %d: %s", pon, errText(err)))
+			if errors.Is(err, ErrTimeout) || errors.Is(err, context.Canceled) {
+				return r, err
+			}
 			continue
 		}
-		rows, bad := ParseONUState(pon, sout)
-		r.onus = append(r.onus, rows...)
+		by := map[string]CmdOut{}
+		for _, c := range outs {
+			by[Norm(c.Cmd)] = c
+		}
+		get := func(cmd string) (string, bool) {
+			c, ok := by[Norm(cmd)]
+			return c.Out, ok && c.Err == nil
+		}
+		// The ONU table first; the state table adds to it. Each is read leniently: what cannot be read is shown as it came.
+		rows, bad := ParseONUInfo(pon, outOf(by, dl.CmdInfo, &raw, pon))
 		if bad != "" {
-			raw = append(raw, fmt.Sprintf("PON %d state, not understood:\n%s", pon, bad))
+			raw = append(raw, fmt.Sprintf("PON %d onu info, not understood:\n%s", pon, bad))
 		}
-		if len(rows) == 0 {
-			continue
+		if st, ok := get(dl.CmdState); ok {
+			var bad string
+			rows, bad = MergeState(rows, pon, st)
+			if bad != "" {
+				raw = append(raw, fmt.Sprintf("PON %d state, not understood:\n%s", pon, bad))
+			}
+		} else if c, there := by[Norm(dl.CmdState)]; there && c.Err != nil {
+			raw = append(raw, fmt.Sprintf("PON %d state: %s", pon, errText(c.Err)))
 		}
-		oout, err := o.sess.Query(ctx, dl.OpticalQuery(pon))
-		if err != nil {
-			raw = append(raw, fmt.Sprintf("PON %d optics: %s", pon, errText(err)))
-			continue
+		if len(rows) > 0 {
+			if op, ok := get(dl.CmdOptical); ok {
+				if bad := MergeOptical(rows, pon, op); bad != "" {
+					raw = append(raw, fmt.Sprintf("PON %d optics, not understood:\n%s", pon, bad))
+				}
+			} else if c, there := by[Norm(dl.CmdOptical)]; there && c.Err != nil {
+				raw = append(raw, fmt.Sprintf("PON %d optics: %s", pon, errText(c.Err)))
+			}
+			if dist, ok := get(dl.CmdDistance); ok {
+				MergeDistance(rows, pon, dist)
+			}
 		}
-		if bad := MergeOptical(r.onus, pon, oout); bad != "" {
-			raw = append(raw, fmt.Sprintf("PON %d optics, not understood:\n%s", pon, bad))
+		r.onus = append(r.onus, rows...)
+		if af, ok := get(dl.CmdAutoFind); ok {
+			for _, f := range ParseAutoFindOn(pon, af) {
+				if k := fmt.Sprint(f.PON) + "|" + f.Serial; !seen[k] {
+					seen[k] = true
+					r.found = append(r.found, f)
+				}
+			}
 		}
+	}
+	// The OLT's own settings worth knowing (best effort: a failure here is not a failed poll).
+	if txt, err := s.readRunning(ctx, o.sess); err == nil {
+		r.findings = ParseRunning(txt).Findings()
 	}
 	r.raw = clip(Redact(strings.Join(raw, "\n")), 4000)
 	return r, nil
+}
+
+// outOf is the output of a command of a Query, noting a refusal in raw.
+func outOf(by map[string]CmdOut, cmd string, raw *[]string, pon int) string {
+	c, ok := by[Norm(cmd)]
+	if !ok {
+		return ""
+	}
+	if c.Err != nil {
+		*raw = append(*raw, fmt.Sprintf("PON %d %s: %s", pon, cmd, errText(c.Err)))
+		return ""
+	}
+	return c.Out
 }
 
 // record stores a poll's result, classifies what was found and sends the (rate-limited) alerts.
@@ -403,7 +453,17 @@ func (s *Service) record(id string, r pollResult) {
 	_ = s.upd(id, func(d *store.Data, e store.Equipment, st *store.OLTState) {
 		olt = store.OLTLabel(e)
 		now := s.now()
-		st.Status = store.OLTStatus{At: now, OK: true, Version: r.version, ONUs: r.onus, Raw: r.raw}
+		st.Status = store.OLTStatus{At: now, OK: true, Version: r.version.Summary(), Model: r.version.Model, DeviceSerial: r.version.Serial,
+			HWVersion: r.version.Hardware, SWVersion: r.version.Software, ONUs: r.onus, Raw: r.raw, Findings: r.findings}
+		// ONUs that are on the OLT but not in the inventory: listed for the owner, never touched.
+		for _, o := range r.onus {
+			if o.Serial == "" {
+				continue
+			}
+			if _, ok := d.ONTBySerial(o.Serial); !ok {
+				st.Status.Findings = append(st.Status.Findings, fmt.Sprintf("ONU %s (PON %d, ID %d) is on the OLT but not in the inventory. The server never removes it.", o.Serial, o.PON, o.ID))
+			}
+		}
 		old := map[string]store.OLTFound{}
 		for _, f := range st.Found {
 			old[fmt.Sprint(f.PON)+"|"+f.Serial] = f
@@ -455,7 +515,7 @@ func (s *Service) newBackup(running, why, by string) store.OLTBackup {
 
 // backupIn reads the running configuration inside an open session and saves it.
 func (s *Service) backupIn(ctx context.Context, o *opened, why, by string) (store.OLTBackup, string, error) {
-	out, err := o.sess.Show(ctx, s.o.Dialect.RunningCmd)
+	out, err := s.readRunning(ctx, o.sess)
 	if err != nil {
 		return store.OLTBackup{}, "", err
 	}

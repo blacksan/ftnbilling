@@ -6,6 +6,8 @@
 {{if not .Data.Configured}}<p class="muted">Set the OLT's management IP, login name and password on the <a href="/admin/olts/view?id={{$E.ID}}">OLT details</a> page first, then give it an address with <a href="/admin/olts/adopt?id={{$E.ID}}">Adopt this OLT</a>.</p>
 {{else if $st.Status.At.IsZero}}<p class="muted">The server has not read this OLT yet. Use Test connection.</p>
 {{else if $st.Status.OK}}<p><span class="pill live">connected</span> <span class="muted">{{$st.Status.Version}}</span></p>
+{{if .Data.Note}}<p><span class="eqwarn" role="note">{{.Data.Note}}</span></p>{{end}}
+{{range $st.Status.Findings}}<p><span class="eqwarn" role="note">{{.}}</span></p>{{end}}
 <p><b>{{.Data.Online}}</b> of {{.Data.Total}} ONU{{if ne .Data.Total 1}}s{{end}} online</p>
 {{else}}<p><span class="pill suspended">not reachable</span> <span class="muted">{{$st.Status.Error}}</span></p>{{end}}
 {{if .CanWrite}}{{if .Data.Configured}}<div class="row mt-2">

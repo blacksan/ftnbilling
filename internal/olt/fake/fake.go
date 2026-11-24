@@ -1,6 +1,9 @@
-// Package fake is a small fake V-SOL OLT command line, served over SSH and Telnet, for tests. It emulates prompts,
-// enable, configuration modes, pagination, an error line, the auto-find list and "onu add", and it records every line
-// it receives. Its output formats are the dialect's best guess, not the real OLT's.
+// Package fake is a small fake V-SOL OLT command line, served over SSH and Telnet, for tests. It follows the grammar
+// the bench OLT (V1600GS-R, V1.0.5) printed: SSH lands at "gpon-olt#" (privileged), "show version" and "show
+// running-config" work in configuration mode only, "show onu ..." and "onu ..." only inside "interface gpon 0/N"
+// (prompt "gpon-olt(config-pon-0/1)#"), profiles are entered with "profile <kind> name X" and left with "commit" and
+// "exit", and "onu add" prints the serial back in lower-case hex. It records every line it receives. The output of
+// the state and distance tables is a guess (the bench did not show them).
 package fake
 
 import (
@@ -21,13 +24,15 @@ import (
 type OLT struct {
 	User, Pass, EnablePass string
 	Host                   string // prompt name, default gpon-olt
-	Version                string
+	Version                string // the text "show version" prints (default: the bench's)
 	// AutoFind is what "show onu auto-find" lists: {pon, serial}.
 	AutoFind [][2]string
 	// PageLines paginates "show running-config" with --More-- every n lines (0 = off).
 	PageLines int
 	// NoPagingCmd makes "terminal length 0" an error (the usual case on an unknown firmware).
 	NoPagingCmd bool
+	// NoOptical makes "show onu optical-info" an error.
+	NoOptical bool
 	// FailOn: a command containing this text answers with a "% Invalid input" line.
 	FailOn string
 	// MaxPON bounds interface gpon 0/N.
@@ -42,6 +47,15 @@ type OLT struct {
 	closeF []func()
 }
 
+// BenchVersion is what "show version" printed on the bench OLT.
+const BenchVersion = `  Olt Serial Number:           V2609170360
+  Olt Device Model:            V1600GS-R
+  Hardware Version:            V7.1.1
+  Software Version:            V1.0.5
+  Software Created Time:       Tue, 14 Jul 2026 14:35:36 
+  Copyright 2020-2026
+`
+
 type block struct {
 	header string
 	lines  []string
@@ -49,7 +63,7 @@ type block struct {
 
 // New starts the fake on loopback ports.
 func New() (*OLT, error) {
-	o := &OLT{User: "admin", Pass: "olt-pass", Host: "gpon-olt", Version: "V-SOL V1600GS-R fake 1.0", Secret: "s3cr3t-hash"}
+	o := &OLT{User: "admin", Pass: "olt-pass", Host: "gpon-olt", Version: BenchVersion, Secret: "s3cr3t-hash"}
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
@@ -269,7 +283,7 @@ func readLine(r io.Reader) string {
 	}
 }
 
-// cli is the command loop. telnet only changes nothing here; both transports speak the same.
+// cli is the command loop. Both transports speak the same.
 func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 	in := make(chan byte, 4096)
 	go func() {
@@ -282,8 +296,9 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 			in <- one[0]
 		}
 	}()
-	enabled, config := false, false
-	var stack []string // contexts below config: interface gpon 0/1, vlan 98, profile ...
+	// SSH lands privileged on the bench; with an enable password set the fake starts at the user prompt instead.
+	enabled, config := o.EnablePass == "", false
+	var stack []string // contexts below config: interface gpon 0/1, vlan 98, profile line name x ...
 	curBlock := func() *block {
 		hdr := ""
 		if len(stack) > 0 {
@@ -298,10 +313,33 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 		o.blocks = append(o.blocks, b)
 		return b
 	}
+	// ponOf is the PON port number of the current context (0 = not inside a PON interface).
+	ponOf := func() int {
+		if len(stack) == 0 {
+			return 0
+		}
+		f := strings.Fields(stack[len(stack)-1])
+		if len(f) == 3 && f[0] == "interface" && f[1] == "gpon" {
+			var n int
+			fmt.Sscanf(f[2], "0/%d", &n)
+			return n
+		}
+		return 0
+	}
 	prompt := func() string {
 		switch {
 		case config && len(stack) > 0:
-			return o.Host + "(config-" + strings.ReplaceAll(strings.Fields(stack[len(stack)-1])[0], "/", "-") + ")# "
+			f := strings.Fields(stack[len(stack)-1])
+			name := f[0]
+			switch {
+			case ponOf() > 0:
+				name = "pon-" + f[2]
+			case f[0] == "profile":
+				name = f[1] + "-profile"
+			case len(f) > 1:
+				name = f[0] + "-" + strings.ReplaceAll(f[1], "/", "-")
+			}
+			return o.Host + "(config-" + name + ")# "
 		case config:
 			return o.Host + "(config)# "
 		case enabled:
@@ -337,13 +375,19 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 		o.mu.Unlock()
 		fields := strings.Fields(strings.ToLower(line))
 		out := ""
+		pon := ponOf()
+		unknown := "% Unknown command.\n"
 		switch {
 		case line == "":
 		case o.FailOn != "" && strings.Contains(line, o.FailOn):
 			out = "% Invalid input detected at '^' marker.\n"
 		case strings.Contains(line, "badcmd"):
-			out = "% Unknown command.\n"
+			out = unknown
 		case fields[0] == "enable":
+			if config {
+				out = unknown
+				break
+			}
 			if o.EnablePass != "" {
 				w("Password: ")
 				p := ""
@@ -372,7 +416,7 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 			enabled = true
 		case fields[0] == "configure":
 			if !enabled {
-				out = "% Unknown command.\n"
+				out = unknown
 			} else {
 				config = true
 			}
@@ -391,11 +435,21 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 			}
 		case line == "terminal length 0":
 			if o.NoPagingCmd {
-				out = "% Unknown command.\n"
+				out = unknown
 			}
+		case line == "show":
+			out = "% Command incomplete: show\n"
 		case line == "show version":
-			out = o.Version + "\nuptime 1 day\n"
+			if !config {
+				out = unknown // bench: not valid at the # prompt
+			} else {
+				out = o.Version
+			}
 		case line == "show running-config":
+			if !config {
+				out = unknown
+				break
+			}
 			out = o.running()
 			if o.PageLines > 0 {
 				lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
@@ -415,47 +469,70 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 				}
 				out = ""
 			}
+		case strings.HasPrefix(line, "show onu ") && pon == 0:
+			out = unknown // the "show onu" tables exist inside a PON interface only
 		case line == "show onu auto-find":
 			var b strings.Builder
-			b.WriteString("OnuIndex        Sn              State\n-----------------------------------\n")
 			o.mu.Lock()
 			for _, f := range o.AutoFind {
-				fmt.Fprintf(&b, "GPON0/%s:--     %s    unknown\n", f[0], f[1])
+				if f[0] == fmt.Sprint(pon) {
+					fmt.Fprintf(&b, "GPON0/%s:--     %s    unknown\n", f[0], f[1])
+				}
+			}
+			o.mu.Unlock()
+			out = b.String() // nothing pending prints nothing
+		case line == "show onu info":
+			var b strings.Builder
+			o.mu.Lock()
+			for _, on := range o.onus(pon) {
+				fmt.Fprintf(&b, "GPON0/%d:%d  V414                 %-22s sn      %s\n", pon, on.id, on.profile, on.serial)
 			}
 			o.mu.Unlock()
 			out = b.String()
 		case line == "show onu state":
 			var b strings.Builder
 			b.WriteString("OnuIndex   Admin State  OMCC State  Phase State\n")
-			pon := ""
-			if len(stack) > 0 {
-				pon = strings.TrimPrefix(strings.Fields(stack[len(stack)-1])[len(strings.Fields(stack[len(stack)-1]))-1], "0/")
-			}
 			o.mu.Lock()
-			for _, bl := range o.blocks {
-				if bl.header == "interface gpon 0/"+pon {
-					for _, l := range bl.lines {
-						f := strings.Fields(l)
-						if len(f) >= 7 && f[0] == "onu" && f[1] == "add" {
-							fmt.Fprintf(&b, "GPON0/%s:%s   enable       enable      working\n", pon, f[2])
-						}
-					}
-				}
+			for _, on := range o.onus(pon) {
+				fmt.Fprintf(&b, "GPON0/%d:%d   enable       enable      working\n", pon, on.id)
+			}
+			o.mu.Unlock()
+			out = b.String()
+		case line == "show onu distance":
+			var b strings.Builder
+			o.mu.Lock()
+			for _, on := range o.onus(pon) {
+				fmt.Fprintf(&b, "GPON0/%d:%d   %d m\n", pon, on.id, 120+on.id)
 			}
 			o.mu.Unlock()
 			out = b.String()
 		case line == "show onu optical-info":
-			out = "% Unknown command.\n"
-		case line == "write" || line == "write memory":
-			out = "Saving... OK\n"
-		case config && (fields[0] == "interface" || fields[0] == "vlan" || fields[0] == "profile"):
+			if o.NoOptical {
+				out = unknown
+				break
+			}
+			var b strings.Builder
 			o.mu.Lock()
-			stack = append(stack, line)
-			curBlock()
-			if fields[0] == "vlan" || (fields[0] == "interface" && len(fields) > 1 && fields[1] == "vlan") {
-				// a vlan line is a one-line block when nothing is put under it
+			for _, on := range o.onus(pon) {
+				fmt.Fprintf(&b, "ONU ID                     : %d\nAlarm                      : enable\nRx optical level(ONU)      : -8.94\n"+
+					"Lower rx optical threshold : ont internal policy\nTx optical level           : 2.55 \nONU response time          : 0\n"+
+					"Power feed voltage         : 3.30(V) \nLaser bias current         : 8.160(mA) \nTemperature                : 24.465(C) \n\n", on.id)
 			}
 			o.mu.Unlock()
+			out = b.String()
+		case line == "write" || line == "write memory":
+			out = "Saving... OK\n"
+		case config && (fields[0] == "interface" || fields[0] == "vlan" && len(fields) == 2 || fields[0] == "profile"):
+			o.mu.Lock()
+			hdr := line
+			if fields[0] == "profile" {
+				hdr = o.profileHeader(fields)
+			}
+			stack = append(stack, hdr)
+			curBlock()
+			o.mu.Unlock()
+		case config && len(stack) > 0 && pon > 0:
+			out = o.ponLine(pon, line, fields, curBlock())
 		case config:
 			o.mu.Lock()
 			b := curBlock()
@@ -465,15 +542,139 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 					dup = true
 				}
 			}
-			if !dup && fields[0] != "commit" {
+			if !dup {
 				b.lines = append(b.lines, line)
 			}
 			o.mu.Unlock()
 		default:
-			out = "% Unknown command.\n"
+			out = unknown
 		}
 		w(out)
 		w(prompt())
 		_ = time.Now
 	}
+}
+
+type fakeONU struct {
+	id      int
+	profile string
+	serial  string
+}
+
+// onus lists the "onu add" lines of a PON interface (the caller holds the lock).
+func (o *OLT) onus(pon int) []fakeONU {
+	var res []fakeONU
+	for _, bl := range o.blocks {
+		if bl.header != fmt.Sprintf("interface gpon 0/%d", pon) {
+			continue
+		}
+		for _, l := range bl.lines {
+			f := strings.Fields(l)
+			if len(f) >= 7 && f[0] == "onu" && f[1] == "add" {
+				var id int
+				fmt.Sscan(f[2], &id)
+				res = append(res, fakeONU{id, f[4], f[6]})
+			}
+		}
+	}
+	return res
+}
+
+// profileHeader gives a profile the header the bench config shows: "profile dba id 10 name dba_1g".
+func (o *OLT) profileHeader(f []string) string {
+	kind, name := "", ""
+	if len(f) > 1 {
+		kind = f[1]
+	}
+	for i, x := range f {
+		if x == "name" && i+1 < len(f) {
+			name = f[i+1]
+		}
+	}
+	for _, b := range o.blocks {
+		bf := strings.Fields(b.header)
+		if len(bf) >= 5 && bf[0] == "profile" && bf[1] == kind && bf[len(bf)-1] == name {
+			return b.header
+		}
+	}
+	n := 1
+	for _, b := range o.blocks {
+		if bf := strings.Fields(b.header); len(bf) > 1 && bf[0] == "profile" && bf[1] == kind {
+			n++
+		}
+	}
+	return fmt.Sprintf("profile %s id %d name %s", kind, n, name)
+}
+
+// hasProfile reports whether a profile of that kind and name exists (the caller holds the lock).
+func (o *OLT) hasProfile(kind, name string) bool {
+	for _, b := range o.blocks {
+		bf := strings.Fields(b.header)
+		if len(bf) >= 5 && bf[0] == "profile" && bf[1] == kind && bf[len(bf)-1] == name {
+			return true
+		}
+	}
+	return false
+}
+
+// ponLine handles a configuration line inside a PON interface.
+func (o *OLT) ponLine(pon int, line string, f []string, b *block) string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	add := func(l string) {
+		for _, x := range b.lines {
+			if x == l {
+				return
+			}
+		}
+		b.lines = append(b.lines, l)
+	}
+	switch {
+	case line == "no onu auto-learn":
+		var keep []string
+		for _, l := range b.lines {
+			if l != "onu auto-learn" {
+				keep = append(keep, l)
+			}
+		}
+		b.lines = keep
+	case len(f) >= 7 && f[0] == "onu" && f[1] == "add" && f[5] == "sn":
+		for _, on := range o.onus(pon) {
+			if fmt.Sprint(on.id) == f[2] || strings.EqualFold(on.serial, f[6]) {
+				return "% ONU already exist.\n"
+			}
+		}
+		orig := strings.Fields(line)
+		sn := orig[6]
+		if len(sn) > 4 { // the bench OLT prints the hex digits in lower case
+			sn = sn[:4] + strings.ToLower(sn[4:])
+		}
+		add(fmt.Sprintf("onu add %s profile %s sn %s", f[2], orig[4], sn))
+	case len(f) == 3 && f[0] == "no" && f[1] == "onu":
+		var keep []string
+		for _, l := range b.lines {
+			lf := strings.Fields(l)
+			if len(lf) > 1 && lf[0] == "onu" && (lf[1] == f[2] || lf[1] == "add" && len(lf) > 2 && lf[2] == f[2]) {
+				continue
+			}
+			keep = append(keep, l)
+		}
+		b.lines = keep
+	case len(f) == 6 && f[0] == "onu" && f[2] == "profile" && f[4] == "name":
+		if !o.hasProfile(f[3], f[5]) {
+			return "% Profile not exist.\n"
+		}
+		add(line)
+	case line == "plug_and_play disable":
+		var keep []string
+		for _, l := range b.lines {
+			if !strings.HasPrefix(l, "plug_and_play") {
+				keep = append(keep, l)
+			}
+		}
+		b.lines = keep
+	default:
+		add(line)
+	}
+	return ""
 }

@@ -73,7 +73,7 @@ type Session struct {
 	Timeout  time.Duration // per command (default 20 s)
 	// Protect is the management VLAN: nothing may be removed under it.
 	Protect int
-	inMgmt  bool
+	cs      cstate // where the lines sent so far have left the CLI (inside the management interface, inside a sub-mode)
 
 	Transcript []Entry
 	// NewHostKey is the fingerprint seen when none was pinned (the caller pins it).
@@ -353,15 +353,38 @@ func (s *Session) lower(ctx context.Context) {
 			return
 		}
 	}
-	s.inMgmt = false
+	s.cs = cstate{}
 }
 
 // Commands -------------------------------------------------------------------------------------------------------------
 
-// check applies the denylist and the management-path protection to a line about to be sent.
-func (s *Session) check(line string) error { return s.checkIn(line, s.inMgmt) }
+// cstate is what the denylist needs to know about where a line will run: inside the management interface, inside a
+// sub-mode (an interface, a VLAN or a profile; a few words mean something else there), and in configuration mode at all.
+type cstate struct{ mgmt, sub, config bool }
 
-func (s *Session) checkIn(line string, inMgmt bool) error {
+// check applies the denylist and the management-path protection to a line about to be sent.
+func (s *Session) check(line string) error {
+	cs := s.cs
+	cs.config = s.mode == ModeConfig
+	// The sub-mode exceptions ("service" inside a line profile) also need the OLT's own prompt to say it is in a
+	// sub-mode: a line that left the sub-mode by itself (or a prompt the tracking did not expect) must not let a top-level
+	// word through.
+	cs.sub = cs.sub && promptInSubMode(s.prompt)
+	return s.checkIn(line, cs)
+}
+
+// promptInSubMode reports whether a configuration prompt names a sub-mode: "gpon-olt(config-pon-0/1)#", not
+// "gpon-olt(config)#".
+func promptInSubMode(p string) bool {
+	i, j := strings.IndexByte(p, '('), strings.LastIndexByte(p, ')')
+	if i < 0 || j <= i {
+		return false
+	}
+	in := strings.ToLower(p[i+1 : j])
+	return in != "config" && in != "cfg"
+}
+
+func (s *Session) checkIn(line string, cs cstate) error {
 	// One line is one command: a line break (or any other control character) inside it would let a value smuggle a
 	// second command past the checks below.
 	for _, c := range line {
@@ -384,16 +407,48 @@ func (s *Session) checkIn(line string, inMgmt bool) error {
 	if len(f) == 0 {
 		return nil
 	}
-	if prefixOfAny(f[0], s.d.DenyVerbs, 1) {
-		return &DeniedError{Line: line, Why: "a denied command (or an abbreviation of one)"}
-	}
-	for _, w := range f {
-		if prefixOfAny(w, s.d.DenyAnywhere, 3) {
-			return &DeniedError{Line: line, Why: "a denied word (or an abbreviation of one)"}
+	allowed := false
+	for _, re := range s.d.AllowLines {
+		if re.MatchString(n) {
+			allowed = true
 		}
+	}
+	if !allowed {
+		skipVerb := cs.sub && inList(f[0], s.d.SubVerbsOK)
+		if !skipVerb && prefixOfAny(f[0], s.d.DenyVerbs, 1) {
+			return &DeniedError{Line: line, Why: "a denied command (or an abbreviation of one)"}
+		}
+		if cs.config && isPrefix(f[0], "enable", 2) {
+			return &DeniedError{Line: line, Why: "enable in configuration mode changes the enable password"}
+		}
+		for _, w := range f {
+			if prefixOfAny(w, s.d.DenyAnywhere, 3) {
+				return &DeniedError{Line: line, Why: "a denied word (or an abbreviation of one)"}
+			}
+		}
+	}
+	// terminal: only the paging length may be set.
+	if isPrefix(f[0], "terminal", 2) && n != Norm(s.d.NoPaging) {
+		return &DeniedError{Line: line, Why: "terminal settings other than the paging length"}
 	}
 	if isPrefix(f[0], "write", 1) && len(f) > 1 && !inList(f[1], s.d.WriteArgsOK) {
 		return &DeniedError{Line: line, Why: "write to elsewhere"}
+	}
+	if isPrefix(f[0], "interface", 2) && len(f) > 1 && isPrefix(f[1], "wan", 1) {
+		return &DeniedError{Line: line, Why: "the OLT's own WAN interface"}
+	}
+	// "onu all ..." and "no onu all": every ONU at once. Neither is ever sent.
+	if t := onuTarget(f); t != "" && isPrefix(t, "all", 2) {
+		return &DeniedError{Line: line, Why: "an action on all ONUs at once"}
+	}
+	// "onu <list> deactivate|disable|standy" takes ONUs out of service.
+	if f[0] == "onu" && len(f) > 2 && prefixOfAny(f[2], []string{"deactivate", "disable", "standy"}, 3) {
+		return &DeniedError{Line: line, Why: "taking an ONU out of service"}
+	}
+	// The plan only ever uses hybrid ports and adds VLANs to them: a port mode change or a VLAN taken off a port (the
+	// uplink carries the management VLAN) is never sent.
+	if isPrefix(f[0], "switchport", 3) && len(f) > 1 && !isPrefix(f[1], "hybrid", 1) {
+		return &DeniedError{Line: line, Why: "a port mode change"}
 	}
 	if f[0] == "no" && len(f) > 1 {
 		switch {
@@ -403,17 +458,41 @@ func (s *Session) checkIn(line string, inMgmt bool) error {
 			return &DeniedError{Line: line, Why: "removal of the management address or route"}
 		case isPrefix(f[1], "interface", 2) && len(f) > 2 && prefixOfAny(f[2], []string{"vlan", "vlanif"}, 1):
 			return &DeniedError{Line: line, Why: "removal of a VLAN interface"}
+		// "no login-access-list ...", "no snmp-server ...", "no sshd", "no service ...": undoing a denied top-level
+		// command is as denied as the command.
+		case prefixOfAny(f[1], s.d.DenyVerbs, 1):
+			return &DeniedError{Line: line, Why: "removal of a system, login or access setting"}
+		// A plan never removes a VLAN or takes one off a port.
+		case isPrefix(f[1], "vlan", 2), isPrefix(f[1], "switchport", 3):
+			return &DeniedError{Line: line, Why: "removal of a VLAN"}
+		// "no onu 1-64", "no onu 1,2,3": one ONU at a time only.
+		case f[1] == "onu" && len(f) > 2 && onuListRE.MatchString(f[2]):
+			return &DeniedError{Line: line, Why: "removal of several ONUs at once"}
 		}
 	}
 	if s.Protect > 0 {
 		if f[0] == "no" && len(f) >= 3 && isPrefix(f[1], "vlan", 2) && vlanListHas(f[2], s.Protect) {
 			return &DeniedError{Line: line, Why: "removal of the management VLAN"}
 		}
-		if inMgmt && f[0] == "no" {
+		if cs.mgmt && f[0] == "no" {
 			return &DeniedError{Line: line, Why: "a removal inside the management interface"}
 		}
 	}
 	return nil
+}
+
+// onuListRE is an ONU list of more than one ONU ("1-64", "1,2", "3,5-9").
+var onuListRE = regexp.MustCompile(`^\d+([,-]\d*)+$`)
+
+// onuTarget is the ONU list word of "onu <list> ..." or "no onu <list> ..." ("" for other lines).
+func onuTarget(f []string) string {
+	switch {
+	case len(f) > 1 && f[0] == "onu":
+		return f[1]
+	case len(f) > 2 && f[0] == "no" && f[1] == "onu":
+		return f[2]
+	}
+	return ""
 }
 
 // isPrefix reports whether w (at least min letters) is the start of word: how the CLI reads an abbreviation.
@@ -460,21 +539,23 @@ func vlanListHas(arg string, v int) bool {
 	return false
 }
 
-func (s *Session) track(line string) { s.inMgmt = s.trackIn(line, s.inMgmt) }
+func (s *Session) track(line string) { s.cs = s.trackIn(line, s.cs) }
 
-// trackIn is the "inside the management interface" state after a line.
-func (s *Session) trackIn(line string, inMgmt bool) bool {
+// trackIn is the state after a line.
+func (s *Session) trackIn(line string, cs cstate) cstate {
 	f := strings.Fields(Norm(line))
 	if len(f) == 0 {
-		return inMgmt
+		return cs
 	}
 	switch {
 	case len(f) >= 3 && isPrefix(f[0], "interface", 2) && isPrefix(f[1], "vlan", 1):
-		return s.Protect > 0 && f[2] == fmt.Sprint(s.Protect)
-	case isPrefix(f[0], "interface", 2), f[0] == "exit", f[0] == "end", f[0] == "vlan", f[0] == "profile":
-		return false
+		return cstate{mgmt: s.Protect > 0 && f[2] == fmt.Sprint(s.Protect), sub: true}
+	case isPrefix(f[0], "interface", 2), f[0] == "profile", f[0] == "vlan" && len(f) == 2:
+		return cstate{sub: true}
+	case f[0] == "exit", f[0] == "end", f[0] == "vlan":
+		return cstate{}
 	}
-	return inMgmt
+	return cs
 }
 
 // exec sends one line (already checked unless trusted) and returns what the OLT printed before its next prompt.
@@ -527,10 +608,20 @@ func failed(re *regexp.Regexp, out string) bool {
 
 // Show runs one read-only command at the privileged prompt and returns its output.
 func (s *Session) Show(ctx context.Context, cmd string) (string, error) {
-	if err := s.raise(ctx, ModePriv); err != nil {
+	return s.ShowAt(ctx, ModePriv, cmd)
+}
+
+// ShowAt runs one read-only command in the given mode (a version or a running configuration may only exist in
+// configuration mode on some firmware) and leaves configuration mode again.
+func (s *Session) ShowAt(ctx context.Context, mode Mode, cmd string) (string, error) {
+	if err := s.raise(ctx, mode); err != nil {
 		return "", err
 	}
-	return s.show(ctx, cmd)
+	out, err := s.show(ctx, cmd)
+	if mode == ModeConfig {
+		s.lower(ctx)
+	}
+	return out, err
 }
 
 func (s *Session) show(ctx context.Context, cmd string) (string, error) {
@@ -549,26 +640,48 @@ func (s *Session) show(ctx context.Context, cmd string) (string, error) {
 	return out, nil
 }
 
-// Query runs a Query (a read-only sequence that may sit in configuration mode) and returns the output of its show
-// commands. It always leaves configuration mode afterwards.
-func (s *Session) Query(ctx context.Context, q Query) (string, error) {
+// CmdOut is what one command of a Query printed.
+type CmdOut struct {
+	Cmd string
+	Out string
+	Err error // a refusal by the OLT (*CmdError); other errors end the Query
+}
+
+// QueryEach runs a Query (a read-only sequence that may sit in configuration mode) and returns each command's own
+// output. A command the OLT refuses does not stop the rest; a lost connection or a timeout does. It always leaves
+// configuration mode afterwards.
+func (s *Session) QueryEach(ctx context.Context, q Query) ([]CmdOut, error) {
 	if err := s.raise(ctx, q.Mode); err != nil {
-		return "", err
+		return nil, err
 	}
-	var b bytes.Buffer
-	var firstErr error
+	var res []CmdOut
+	var hard error
 	for _, c := range q.Cmds {
 		out, err := s.show(ctx, c)
-		if err != nil {
-			firstErr = err
+		var ce *CmdError
+		if err != nil && !errors.As(err, &ce) {
+			hard = err
 			break
 		}
-		if strings.HasPrefix(Norm(c), "show") {
-			b.WriteString(out + "\n")
-		}
+		res = append(res, CmdOut{Cmd: c, Out: out, Err: err})
 	}
 	s.lower(ctx)
-	return b.String(), firstErr
+	return res, hard
+}
+
+// Query runs a Query and returns the output of its show commands, joined. The first refusal ends it.
+func (s *Session) Query(ctx context.Context, q Query) (string, error) {
+	outs, err := s.QueryEach(ctx, q)
+	var b bytes.Buffer
+	for _, o := range outs {
+		if o.Err != nil {
+			return b.String(), o.Err
+		}
+		if strings.HasPrefix(Norm(o.Cmd), "show") {
+			b.WriteString(o.Out + "\n")
+		}
+	}
+	return b.String(), err
 }
 
 // DisablePaging tries the dialect's no-paging command once; a failure is ignored.
@@ -593,8 +706,10 @@ func (s *Session) Config(ctx context.Context, lines []string) error {
 // ConfigN is Config that also says how many of the lines were sent to the OLT (the refused one included).
 func (s *Session) ConfigN(ctx context.Context, lines []string) (int, error) {
 	// Check every line before any is sent: a denied line must stop the batch before it changes anything.
-	in := s.inMgmt
+	in := s.cs
+	in.config = true
 	for _, l := range lines {
+		in.config = true
 		if err := s.checkIn(l, in); err != nil {
 			return 0, err
 		}
@@ -637,4 +752,4 @@ func (s *Session) Save(ctx context.Context) error {
 // Redact hides what looks like a secret in text that is shown or stored.
 func Redact(s string) string { return redactRE.ReplaceAllString(s, "${1}<redacted>") }
 
-var redactRE = regexp.MustCompile(`(?im)\b((?:enable\s+)?(?:password|passwd|pwd|secret|community|auth-key|priv-key|key-string|key|md5|sha|encrypted|cipher|psk)\b\s*(?:\d\s+)?(?:=\s*|:\s*)?)\S+`)
+var redactRE = regexp.MustCompile(`(?im)\b((?:enable\s+)?(?:username|password|passwd|pwd|secret|community|auth-key|priv-key|key-string|key|md5|sha|encrypted|cipher|psk)\b\s*(?:\d\s+)?(?:=\s*|:\s*)?)\S+`)

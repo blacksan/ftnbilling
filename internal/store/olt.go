@@ -63,6 +63,9 @@ type OLTONU struct {
 	Online   bool   `json:"online"`
 	RxPower  string `json:"rx_power,omitempty"` // dBm as printed
 	TxPower  string `json:"tx_power,omitempty"`
+	Voltage  string `json:"voltage,omitempty"`  // V
+	Bias     string `json:"bias,omitempty"`     // mA
+	Temp     string `json:"temp,omitempty"`     // C
 	Distance string `json:"distance,omitempty"` // metres as printed
 	LastDown string `json:"last_down,omitempty"`
 }
@@ -73,7 +76,14 @@ type OLTStatus struct {
 	OK      bool      `json:"ok"`
 	Error   string    `json:"error,omitempty"`
 	Version string    `json:"version,omitempty"`
-	ONUs    []OLTONU  `json:"onus,omitempty"`
+	// What "show version" printed, one field each (empty when the OLT did not say).
+	Model        string `json:"model,omitempty"`
+	DeviceSerial string `json:"device_serial,omitempty"`
+	HWVersion    string `json:"hw_version,omitempty"`
+	SWVersion    string `json:"sw_version,omitempty"`
+	// Findings are things the last read noticed about the OLT's own settings (read only; the server never changes them).
+	Findings []string `json:"findings,omitempty"`
+	ONUs     []OLTONU `json:"onus,omitempty"`
 	// Raw is the part of the OLT's answer that could not be parsed (capped), shown to the owner as it came.
 	Raw string `json:"raw,omitempty"`
 }

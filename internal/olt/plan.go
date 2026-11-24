@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -19,10 +21,16 @@ type Desired struct {
 	MgmtGateway      string
 	Uplink           string
 	DBA              string
-	DBAAssured       int
 	DBAMax           int
-	ONUProfile       string
-	ONUs             []DesiredONU
+	LineProfile      string // bound to every ONU
+	SrvProfile       string // bound to every ONU
+	PriProfile       string // bound to ONUs the plan authorises
+	ONUProfile       string // the "onu add ... profile" name (an existing OLT profile)
+	// ACS is the address and login ONUs are given for TR-069 (nil: no TR-069 lines are planned).
+	ACS *ACS
+	// Provisioning is on for this OLT: only then does the plan include turning off the OLT's own auto-learn.
+	Provisioning bool
+	ONUs         []DesiredONU
 	// OnlyONUs leaves the base configuration (VLANs, profiles, uplink, management address) out of the plan: the
 	// automatic ONU add changes nothing but ONUs.
 	OnlyONUs bool
@@ -73,10 +81,29 @@ func (p Plan) Commands() []string {
 	return out
 }
 
-// Hash identifies the command list: an apply names the hash the owner looked at.
+// Hash identifies the command list: an apply names the hash the owner looked at. It is taken over the redacted lines,
+// so a secret in a line is not what the hash is made of.
 func (p Plan) Hash() string {
-	h := sha256.Sum256([]byte(strings.Join(p.Commands(), "\n")))
+	h := sha256.Sum256([]byte(strings.Join(redactAll(p.Commands()), "\n")))
 	return hex.EncodeToString(h[:8])
+}
+
+// Display is the plan as it may be shown or stored: every secret in a line (the ACS login) is hidden.
+func (p Plan) Display() Plan {
+	q := p
+	q.Steps = make([]Step, len(p.Steps))
+	for i, s := range p.Steps {
+		q.Steps[i] = Step{Title: s.Title, Lines: redactAll(s.Lines)}
+	}
+	return q
+}
+
+func redactAll(l []string) []string {
+	out := make([]string, len(l))
+	for i, x := range l {
+		out[i] = Redact(x)
+	}
+	return out
 }
 
 // MaxONUID is the highest ONU id on a PON port (GPON: 128 per port on the V1600G).
@@ -118,12 +145,23 @@ func (d *Dialect) BuildPlan(want Desired, run *Running) Plan {
 		}
 	}
 	add("VLANs", vl)
-	// Profiles.
+	// Profiles. Existing ones (the bench OLT has dba_1g, srv_hgu and line_hgu) are used as they are, never edited.
 	if want.DBA != "" && !run.HasBlock("profile dba name "+want.DBA) {
-		add("DBA profile "+want.DBA, d.DBALines(want.DBA, want.DBAAssured, want.DBAMax))
+		add("DBA profile "+want.DBA, d.DBALines(want.DBA, want.DBAMax))
 	}
-	if want.ONUProfile != "" && !run.HasBlock("profile onu name "+want.ONUProfile) {
-		add("ONU profile "+want.ONUProfile+" (HGU, VEIP)", d.ONUProfileLines(want.ONUProfile))
+	if want.LineProfile != "" && !run.HasBlock("profile line name "+want.LineProfile) {
+		add("Line profile "+want.LineProfile, d.LineProfileLines(want.LineProfile, want.DBA, want.InternetVLAN, want.TR069VLAN))
+	}
+	if want.SrvProfile != "" && !run.HasBlock("profile srv name "+want.SrvProfile) {
+		add("Service profile "+want.SrvProfile+" (HGU, VEIP)", d.SrvProfileLines(want.SrvProfile))
+	}
+	if want.PriProfile != "" && !run.HasBlock("profile pri name "+want.PriProfile) {
+		add("Pri profile "+want.PriProfile+" (WAN, TR-069)", d.PriProfileLines(want.PriProfile, want.InternetVLAN, want.TR069VLAN, want.ACS))
+	} else if want.PriProfile != "" {
+		// A profile is never edited, so one that a stopped batch left half made would stay so: say what it lacks.
+		if miss := missingProfileLines(run, d.PriProfileLines(want.PriProfile, want.InternetVLAN, want.TR069VLAN, want.ACS)); miss > 0 {
+			p.Warnings = append(p.Warnings, fmt.Sprintf("The Pri profile %s on the OLT does not show %d of the lines the server makes it with (a change that stopped half way, or made by hand). New ONUs bound to it get what it has. Check it with \"show profile pri name %s\"; to have the server make it again, remove it on the OLT console first.", want.PriProfile, miss, want.PriProfile))
+		}
 	}
 	// Uplink tagging and PVID.
 	if want.Uplink != "" {
@@ -163,18 +201,88 @@ func (d *Dialect) BuildPlan(want Desired, run *Running) Plan {
 			add("Management address", append(append([]string{hdr}, miss...), "exit"))
 		}
 		for _, l := range lines[len(blk)+2:] { // global lines after the block (the default route)
-			if !run.Has("", l) {
-				add("Management route", []string{l})
+			if run.Has("", l) {
+				continue
 			}
+			// A second default route next to one the OLT already has would split (or take over) the way back to
+			// whoever manages it now: it is left to the owner.
+			if gw := defaultRouteOf(run); gw != "" && strings.HasPrefix(Norm(l), "ip route 0.0.0.0/0 ") {
+				p.Warnings = append(p.Warnings, fmt.Sprintf("The OLT already has a default route (via %s); the plan does not add one via %s. Change it on the OLT console if it is wrong.", gw, want.MgmtGateway))
+				continue
+			}
+			add("Management route", []string{l})
+		}
+	}
+	// The OLT's own auto-learn authorises any ONU that plugs in, which defeats "never add an unknown ONU".
+	var learn []int
+	for pon := range run.AutoLearn {
+		learn = append(learn, pon)
+	}
+	for pon := range run.PlugPlay {
+		if !run.AutoLearn[pon] {
+			learn = append(learn, pon)
+		}
+	}
+	sort.Ints(learn)
+	for _, pon := range learn {
+		if want.Provisioning {
+			add(fmt.Sprintf("PON %d: stop the OLT authorising ONUs by itself", pon), d.AutoLearnOffLines(pon))
+		} else {
+			p.Warnings = append(p.Warnings, fmt.Sprintf("Auto-learn is on: the OLT accepts any ONU by itself (PON %d). With provisioning on, the plan turns it off.", pon))
 		}
 	}
 	p = d.buildONUs(want, run, p)
-	if want.TR069VLAN > 0 {
-		p.Notes = append(p.Notes, d.TR069Note)
-	} else {
+	switch {
+	case want.TR069VLAN > 0 && want.ACS != nil:
+		p.Notes = append(p.Notes, fmt.Sprintf("TR-069: new ONUs get the Pri profile %s (a TR-069 WAN on VLAN %d and the ACS address and login; the login is hidden here). ONUs already on the OLT get the same as per-ONU lines.", want.PriProfile, want.TR069VLAN))
+	case want.TR069VLAN > 0:
+		p.Notes = append(p.Notes, "The ACS is not running or has no login yet, so the plan has no TR-069 lines.")
+	default:
 		p.Notes = append(p.Notes, "This router has no ONU management network (VLAN 99) yet: the ONUs get no TR-069 service until it is set up on the router's ONUs tab.")
 	}
 	return p
+}
+
+// missingProfileLines counts the lines of a profile (header ... commit, exit) its block in the running configuration
+// lacks. The TR-069 login line is compared without its values (the running configuration may hide them).
+func missingProfileLines(run *Running, lines []string) int {
+	if len(lines) == 0 {
+		return 0
+	}
+	have := run.Blocks[Norm(lines[0])]
+	n := 0
+	for _, l := range lines[1:] {
+		nl := Norm(l)
+		if nl == "commit" || nl == "exit" {
+			continue
+		}
+		found := false
+		for _, h := range have {
+			if h == nl || strings.HasPrefix(nl, "tr069_mng enable ") && strings.HasPrefix(h, "tr069_mng enable ") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			n++
+		}
+	}
+	return n
+}
+
+// defaultRouteOf is the gateway of a default route in the running configuration ("" when there is none), in either
+// form the grammar has: "ip route 0.0.0.0/0 GW" or "ip route 0.0.0.0 0.0.0.0 GW".
+func defaultRouteOf(run *Running) string {
+	for _, l := range run.Global {
+		f := strings.Fields(l)
+		switch {
+		case len(f) >= 4 && f[0] == "ip" && f[1] == "route" && f[2] == "0.0.0.0/0":
+			return f[3]
+		case len(f) >= 5 && f[0] == "ip" && f[1] == "route" && f[2] == "0.0.0.0" && f[3] == "0.0.0.0":
+			return f[4]
+		}
+	}
+	return ""
 }
 
 // missingBlock returns the block (header ... exit) with only the lines the running config lacks, or nil.
@@ -244,13 +352,38 @@ func (d *Dialect) buildONUs(want Desired, run *Running, p Plan) Plan {
 				used[pon] = append(used[pon], id)
 				lines = append(lines, d.ONUAddLine(id, want.ONUProfile, o.Serial))
 				p.Adds = append(p.Adds, PlanAdd{PON: pon, ID: id, Serial: o.Serial, EquipmentID: o.EquipmentID, Label: o.Label})
+				// New ONUs get everything from the profiles: the line profile (T-CONT, gemport, services), the service
+				// profile (VEIP) and the Pri profile (internet WAN, TR-069 WAN and ACS login).
+				if want.LineProfile != "" {
+					lines = append(lines, d.ONUBindLine(id, "line", want.LineProfile))
+				}
+				if want.SrvProfile != "" {
+					lines = append(lines, d.ONUBindLine(id, "srv", want.SrvProfile))
+				}
+				if want.PriProfile != "" {
+					lines = append(lines, d.ONUBindLine(id, "pri", want.PriProfile))
+				}
+				if descWord(o.Label) != "" {
+					lines = append(lines, d.ONUDescLine(id, o.Label))
+				}
+				continue
 			} else if id == 0 {
 				continue
 			}
-			for _, l := range d.ONUServiceLines(id, want.DBA, want.InternetVLAN, want.TR069VLAN) {
-				if o.Add || !run.Has(hdr, l) {
+			// An ONU that is on the OLT already keeps what it has; only what is missing is added. It is not given the
+			// Pri profile (its own WAN lines would be doubled): the TR-069 WAN is added to it line by line.
+			if want.LineProfile != "" {
+				if l := d.ONUBindLine(id, "line", want.LineProfile); !run.Has(hdr, l) {
 					lines = append(lines, l)
 				}
+			}
+			if want.SrvProfile != "" {
+				if l := d.ONUBindLine(id, "srv", want.SrvProfile); !run.Has(hdr, l) {
+					lines = append(lines, l)
+				}
+			}
+			if want.ACS != nil && want.TR069VLAN > 0 {
+				lines = append(lines, d.existingONUTR069(id, run, pon, want)...)
 			}
 		}
 		if len(lines) > 0 {
@@ -258,4 +391,51 @@ func (d *Dialect) buildONUs(want Desired, run *Running, p Plan) Plan {
 		}
 	}
 	return p
+}
+
+var (
+	wanIdxRE = regexp.MustCompile(`\bwan_adv index (\d+)\b`)
+	wanTRRE  = regexp.MustCompile(`\bwan_adv index \d+ route mode tr069\b`)
+)
+
+// existingONUTR069 is what an ONU that is already on the OLT lacks for TR-069: a TR-069 WAN and the OMCI TR-069 login.
+func (d *Dialect) existingONUTR069(id int, run *Running, pon int, want Desired) []string {
+	var lines []string
+	for _, e := range run.ONUs[pon] {
+		if e.ID == id {
+			lines = e.Lines
+		}
+	}
+	hasWAN, hasMng, top, adds := false, false, 0, 0
+	for _, l := range lines {
+		if l == fmt.Sprintf("onu %d pri wan_adv add route", id) || l == fmt.Sprintf("onu %d pri wan_adv add bridge", id) {
+			adds++
+		}
+		if strings.HasPrefix(l, fmt.Sprintf("onu %d profile pri ", id)) {
+			return nil // bound to a Pri profile: the profile has the TR-069 WAN
+		}
+		if wanTRRE.MatchString(l) {
+			hasWAN = true
+		}
+		if strings.HasPrefix(l, fmt.Sprintf("onu %d pri tr069_mng enable", id)) {
+			hasMng = true
+		}
+		if m := wanIdxRE.FindStringSubmatch(l); m != nil {
+			if n, _ := strconv.Atoi(m[1]); n > top {
+				top = n
+			}
+		}
+	}
+	all := d.ONUWANLines(id, top+1, want.TR069VLAN, *want.ACS)
+	switch {
+	case hasWAN && hasMng:
+		return nil
+	case hasWAN: // the WAN is there, the login is not: the last line
+		return all[len(all)-1:]
+	case adds > top:
+		// A WAN was added but never given an index line (a batch that stopped right after "wan_adv add"): that WAN is
+		// index top+1, so it is configured instead of adding another one.
+		return all[1:]
+	}
+	return all
 }

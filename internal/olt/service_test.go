@@ -112,16 +112,32 @@ func (e *env) enable(t *testing.T) {
 	}
 }
 
-// base is a running configuration that already has the profiles, as after a first Apply.
+// base is a running configuration that already has the profiles, as on the bench (dba_1g, srv_hgu, line_hgu) and
+// after a first Apply (the Pri profile and the VLANs).
 const base = `vlan 100
 vlan 99
 vlan 98
-profile dba name ftn_dba
-  type 3 assured 10000 maximum 1000000
-exit
-profile onu name ftn_hgu
-  port-num veip 1
-exit
+profile dba id 10 name dba_1g
+  type 4 maximum 1000000
+  commit
+profile srv id 10 name srv_hgu
+  portvlan veip 1 mode transparent
+  commit
+profile line id 10 name line_hgu
+  tcont 1 dba dba_1g
+  gemport 1 tcont 1 gemport_name gem_1
+  service internet_mgmt gemport 1 tag 99,100
+  service-port 1 gemport 1 uservlan 100 vlan 100
+  service-port 2 gemport 1 uservlan 99 vlan 99
+  commit
+profile pri id 1 name ftn_pri
+  wan_adv add route
+  wan_adv index 1 route mode internet mtu 1500
+  wan_adv index 1 route ipv4 dhcp nat enable
+  wan_adv index 1 vlan tag wan_vlan 100 0 qos enable
+  wan_adv index 1 bind lan lan1 lan2 lan3 lan4
+  wan_adv index 1 bind ssid ssid1
+  commit
 `
 
 func TestTestConnectionAndPin(t *testing.T) {
@@ -133,6 +149,12 @@ func TestTestConnectionAndPin(t *testing.T) {
 	st := e.state()
 	if !st.Status.OK || st.Settings.HostKey != e.f.HostKeyFP {
 		t.Fatalf("status %+v pin %q", st.Status, st.Settings.HostKey)
+	}
+	if s := st.Status; s.Model != "V1600GS-R" || s.SWVersion != "V1.0.5" || s.HWVersion != "V7.1.1" || s.DeviceSerial != "V2609170360" {
+		t.Fatalf("version fields not recorded: %+v", s)
+	}
+	if n := e.svc.Dialect().VersionNote(st.Status.Model, st.Status.SWVersion); n != "" {
+		t.Fatalf("the bench OLT got a version warning: %s", n)
 	}
 	// A different host key later is refused.
 	e.f.Close()
@@ -208,7 +230,7 @@ func TestInventorySerialCaseInsensitive(t *testing.T) {
 
 func TestPollParsesAndClassifies(t *testing.T) {
 	e := newEnv(t)
-	e.f.SetRunning(base + "interface gpon 0/1\n  onu add 5 profile ftn_hgu sn VSOL00000009\n")
+	e.f.SetRunning(base + "interface gpon 0/1\n  onu add 5 profile default sn VSOL00000009\n")
 	e.f.AutoFind = [][2]string{{"1", "VSOL00000001"}, {"1", "VSOL99999999"}, {"1", "VSOL00000002"}, {"1", "VSOL00000003"}}
 	if err := e.svc.Poll(context.Background(), oltID, true); err != nil {
 		t.Fatal(err)
@@ -229,8 +251,16 @@ func TestPollParsesAndClassifies(t *testing.T) {
 			t.Errorf("%s: want %s got %s (%+v)", k, v, verdict[k], st.Found)
 		}
 	}
-	if len(st.Status.ONUs) != 1 || st.Status.ONUs[0].ID != 5 || !st.Status.ONUs[0].Online {
+	if len(st.Status.ONUs) != 1 || st.Status.ONUs[0].ID != 5 || !st.Status.ONUs[0].Online || st.Status.ONUs[0].Serial != "VSOL00000009" {
 		t.Errorf("onu state: %+v", st.Status.ONUs)
+	} else if o := st.Status.ONUs[0]; o.RxPower != "-8.94" || o.TxPower != "2.55" || o.Temp != "24.465" || o.Distance != "125" {
+		t.Errorf("optics and distance: %+v", o)
+	}
+	if f := strings.Join(st.Status.Findings, "\n"); !strings.Contains(f, "VSOL00000009") || !strings.Contains(f, "not in the inventory") {
+		t.Errorf("an ONU on the OLT that is not in the inventory is not listed: %v", st.Status.Findings)
+	}
+	if strings.Contains(strings.Join(e.f.Lines(), "\n"), "no onu") {
+		t.Error("a poll removed an ONU")
 	}
 	a := e.alertText()
 	if !strings.Contains(a, "VSOL99999999") || !strings.Contains(a, "NOT added") || !strings.Contains(a, "VSOL00000002") {
@@ -283,7 +313,7 @@ func TestProvisioningOffWritesNothing(t *testing.T) {
 func TestAutoAddsInventoryOnCorrectPON(t *testing.T) {
 	e := newEnv(t)
 	// ONU id 1 and 2 are taken on PON 1: the next free is 3.
-	e.f.SetRunning(base + "interface gpon 0/1\n  onu add 1 profile ftn_hgu sn VSOL00000071\n  onu add 2 profile ftn_hgu sn VSOL00000072\n")
+	e.f.SetRunning(base + "interface gpon 0/1\n  onu add 1 profile default sn VSOL00000071\n  onu add 2 profile default sn VSOL00000072\n")
 	e.f.AutoFind = [][2]string{{"1", "VSOL00000001"}, {"1", "VSOL99999999"}, {"1", "VSOL00000002"}}
 	e.enable(t)
 	if err := e.svc.Poll(context.Background(), oltID, true); err != nil {
@@ -291,7 +321,7 @@ func TestAutoAddsInventoryOnCorrectPON(t *testing.T) {
 	}
 	lines := e.f.Lines()
 	joined := strings.Join(lines, "\n")
-	if !strings.Contains(joined, "onu add 3 profile ftn_hgu sn VSOL00000001") {
+	if !strings.Contains(joined, "onu add 3 profile default sn VSOL00000001") {
 		t.Fatalf("the inventory ONU was not added with the next free id:\n%s", joined)
 	}
 	for _, bad := range []string{"VSOL99999999", "VSOL00000002", "onu add 4"} {
@@ -300,7 +330,7 @@ func TestAutoAddsInventoryOnCorrectPON(t *testing.T) {
 		}
 	}
 	// services, save, and a backup was read before the first config line
-	for _, want := range []string{"onu 3 tcont 1 dba ftn_dba", "onu 3 service 1 gemport 1 vlan 100", "onu 3 service 2 gemport 2 vlan 99", "write"} {
+	for _, want := range []string{"onu 3 profile line name line_hgu", "onu 3 profile srv name srv_hgu", "onu 3 profile pri name ftn_pri", "onu 3 desc Maple_Gardens_A1", "write"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing %q in\n%s", want, joined)
 		}
@@ -334,7 +364,7 @@ func TestAutoAddsInventoryOnCorrectPON(t *testing.T) {
 
 // writeLine is a line that changes the OLT (the read-only queries enter an interface to show a table, which is not one).
 func writeLine(l string) bool {
-	for _, p := range []string{"onu ", "vlan", "profile", "no ", "ip route", "switchport", "ipaddress", "write", "interface vlan", "interface gigabit"} {
+	for _, p := range []string{"onu ", "vlan", "profile", "no ", "ip route", "ip address", "switchport", "plug_and_play", "write", "interface vlan", "interface gigabit"} {
 		if strings.HasPrefix(l, p) {
 			return true
 		}
@@ -399,9 +429,10 @@ func TestApplyBacksUpFirstAndErrorAborts(t *testing.T) {
 	cmds := p.Commands()
 	// The plan creates the VLANs, profiles, uplink tagging and the management address.
 	all := strings.Join(cmds, "\n")
-	for _, want := range []string{"vlan 100", "vlan 99", "vlan 98", "profile dba name ftn_dba", "profile onu name ftn_hgu", "interface gigabitethernet 0/1",
+	for _, want := range []string{"vlan 100", "vlan 99", "vlan 98", "profile dba name dba_1g", "profile line name line_hgu", "profile srv name srv_hgu", "profile pri name ftn_pri",
+		"interface gigabitEthernet 0/1",
 		"switchport hybrid vlan 100 untagged", "switchport hybrid pvid vlan 100", "switchport hybrid vlan 99 tagged", "switchport hybrid vlan 98 tagged",
-		"interface vlan 98", "ipaddress 10.7.1.2 255.255.255.248", "ip route 0.0.0.0 0.0.0.0 10.7.1.1"} {
+		"interface vlan 98", "ip address 10.7.1.2/29", "ip route 0.0.0.0/0 10.7.1.1"} {
 		if !strings.Contains(all, want) {
 			t.Errorf("plan lacks %q:\n%s", want, all)
 		}
@@ -417,7 +448,7 @@ func TestApplyBacksUpFirstAndErrorAborts(t *testing.T) {
 		}
 	}
 	// An error on one line aborts the rest, saves nothing, and leaves an audit entry and an alert.
-	e.f.FailOn = "profile onu name"
+	e.f.FailOn = "profile srv name"
 	e.f.Reset()
 	res, err := e.svc.Apply(context.Background(), oltID, h, "owner")
 	if err == nil {
@@ -439,7 +470,7 @@ func TestApplyBacksUpFirstAndErrorAborts(t *testing.T) {
 		t.Fatal("no backup before the change")
 	}
 	a := e.auditText()
-	if !strings.Contains(a, "FAILED") || !strings.Contains(a, "profile onu name ftn_hgu") {
+	if !strings.Contains(a, "FAILED") || !strings.Contains(a, "profile srv name srv_hgu") {
 		t.Fatalf("audit: %s", a)
 	}
 	if !strings.Contains(e.alertText(), "configuration stopped") {
@@ -515,7 +546,7 @@ func TestSecretsNeverInAuditAlertsOrBackupText(t *testing.T) {
 
 func TestRemoveNeedsPlanAndConfirm(t *testing.T) {
 	e := newEnv(t)
-	e.f.SetRunning(base + "interface gpon 0/1\n  onu add 3 profile ftn_hgu sn VSOL00000001\n")
+	e.f.SetRunning(base + "interface gpon 0/1\n  onu add 3 profile default sn VSOL00000001\n")
 	e.enable(t)
 	p, h, err := e.svc.PlanRemove(context.Background(), oltID, "VSOL00000001")
 	if err != nil || !strings.Contains(strings.Join(p.Commands(), "\n"), "no onu 3") {
