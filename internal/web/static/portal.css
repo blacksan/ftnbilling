@@ -66,3 +66,4 @@ a.tap{display:inline-flex;align-items:center;min-height:44px;padding:0 var(--sp-
 .pkg.info{background:var(--surface-2)}
 .hint{display:block;margin-top:var(--sp-1);font-size:var(--fs-13);color:var(--muted);line-height:1.35}
 .pkg{min-height:48px}
+.card a.tap{padding-left:0}

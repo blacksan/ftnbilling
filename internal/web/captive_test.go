@@ -332,7 +332,7 @@ func TestCaptiveExpiredFlatPaysWithMpesaAndComesBack(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("find: %d %s", code, html)
 	}
-	for _, want := range []string{"Flat 4B", "Plan ended", "Your internet is paused", "Choose a package", "Use the number on file", "07•• ••• 678", `Pay with <span class="nb">M-Pesa</span>`, "Mbps", "Have a voucher?"} {
+	for _, want := range []string{"Flat 4B", "Plan ended", "Your internet is paused", "Choose a package", "Use the number on file", "07•• ••• 678", `Pay with <span class="nb">M-Pesa</span></span></button>`, "Mbps", "Have a voucher?"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("package step lacks %q", want)
 		}

@@ -22,7 +22,7 @@
 {{if .PhoneMask}}<label class="pkg"><input type="radio" name="phone_src" value="file"{{if .UseFile}} checked{{end}}><b>Use the number on file</b><small>{{.PhoneMask}}</small></label>
 <label class="pkg"><input type="radio" name="phone_src" value="other"{{if not .UseFile}} checked{{end}}><b>Pay with another number</b></label>{{end}}
 <label class="otherphone"><span class="sr">Number that pays</span><input type="tel" name="phone" inputmode="tel" placeholder="07XX XXX XXX" value="{{.Phone}}" autocomplete="tel"{{if not .PhoneMask}} required{{end}}></label></div>
-{{if .Mpesa}}<button type="submit" name="method" value="mpesa">Pay with <span class="nb">M-Pesa</span></button>{{end}}
+{{if .Mpesa}}<button type="submit" name="method" value="mpesa"><span>Pay with <span class="nb">M-Pesa</span></span></button>{{end}}
 {{if .Test}}<button type="submit" name="method" value="test" class="alt">Test payment (no money)</button>{{end}}
 </form>
 {{template "voucher" .}}
