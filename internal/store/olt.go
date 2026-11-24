@@ -142,6 +142,9 @@ func (x OLTState) norm() OLTState {
 // Norm is the form the store keeps (for tests).
 func (x OLTState) Norm() OLTState { return x.norm() }
 
+// Clone copies the slices, so a copy can be changed without touching the stored value.
+func (x OLTState) Clone() OLTState { return cloneOLTState(x) }
+
 func cloneOLTState(x OLTState) OLTState {
 	x.Found = append([]OLTFound(nil), x.Found...)
 	x.Backups = append([]OLTBackup(nil), x.Backups...)
