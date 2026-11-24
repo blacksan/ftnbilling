@@ -47,7 +47,7 @@
 <label class="field">Internet VLAN on the OLT<input name="internet_vlan" type="number" min="0" max="4094" value="{{$S.InternetVLAN}}" placeholder="from the router"></label></div>
 <p class="muted">Login name and password are on the <a href="/admin/olts/view?id={{$E.ID}}">OLT details</a> page. The password and the enable password are stored encrypted and never shown. {{if $S.HostKey}}SSH host key pinned: <span class="mono">{{$S.HostKey}}</span> <label class="ck muted"><input type="checkbox" name="clear_hostkey" value="1"> forget it (after replacing the OLT)</label>{{else}}The SSH host key is pinned the first time the server connects, and shown here.{{end}}
 {{if .Data.HasEnable}} <label class="ck muted"><input type="checkbox" name="clear_enable" value="1"> remove the enable password</label>{{end}}</p>
-<div class="row mt-2"><button>Save</button></div></form></section>
+<div class="row mt-2"><label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button>Save</button></div></form></section>
 
 <section class="panel mt-3"><h2>Saved configurations</h2>
 <p class="muted">The last {{len .Data.Backups}} copies of the running configuration (at most 20), one before every change the server makes. Passwords and keys are hidden when shown.</p>

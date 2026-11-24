@@ -268,6 +268,30 @@ func TestOLTPagesOwnerOnlyNoSecretsNoInlineJS(t *testing.T) {
 	if !stt.Settings.Provisioning {
 		t.Fatal("not turned on")
 	}
+	// connection settings (protocol, host key, enable password) need the password again: a switch to Telnet or a
+	// forgotten host key is a downgrade
+	set := func(extra url.Values) url.Values {
+		v := url.Values{"id": {o.id}, "proto": {"telnet"}, "clear_hostkey": {"1"}}
+		for k, x := range extra {
+			v[k] = x
+		}
+		return v
+	}
+	o.st.View(func(d *store.Data) { stt = d.OLTStateOf(o.id) })
+	proto0 := stt.Settings.ProtoOrDefault()
+	if loc := post(ob, "/admin/olts/manage/settings", set(nil)); !strings.Contains(loc, "Error") {
+		t.Errorf("settings without the password: %s", loc)
+	}
+	if loc := post(pb, "/admin/olts/manage/settings", set(url.Values{"current_password": {longPW}})); !strings.Contains(loc, "only an owner") {
+		t.Errorf("operator settings: %s", loc)
+	}
+	o.st.View(func(d *store.Data) { stt = d.OLTStateOf(o.id) })
+	if stt.Settings.ProtoOrDefault() != proto0 {
+		t.Fatal("the protocol changed without the password")
+	}
+	if loc := post(ob, "/admin/olts/manage/settings", set(url.Values{"proto": {proto0}, "current_password": {o.ownerW.Pass}})); strings.Contains(loc, "Error") {
+		t.Errorf("settings with the password: %s", loc)
+	}
 	// backups: owner only, redacted, never cached
 	var bid string
 	o.st.View(func(d *store.Data) { bid = d.OLTStateOf(o.id).Backups[0].ID })

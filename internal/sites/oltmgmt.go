@@ -144,7 +144,10 @@ func (p OLTMgmtPlan) SetupLines(parent string) []string {
 	return []string{
 		fmt.Sprintf(`/ip/address remove [find where comment="%s"]`, OLTMgmtGatewayComment),
 		fmt.Sprintf(`/interface/vlan remove [find where name="%s"]`, p.Iface),
-		fmt.Sprintf(`/interface/vlan add name=%s vlan-id=%d interface=%s arp=reply-only comment="%s"`, p.Iface, p.VLAN, parent, OLTMgmtVLANComment),
+		// arp=enabled, not reply-only as on the ONU management VLAN: there the DHCP server adds an ARP entry per lease,
+		// here the OLTs have static addresses and no lease, so with reply-only the router could never learn an OLT's
+		// MAC and the forwarded connection would go nowhere. The VLAN is cut off by the firewall rules instead.
+		fmt.Sprintf(`/interface/vlan add name=%s vlan-id=%d interface=%s arp=enabled comment="%s"`, p.Iface, p.VLAN, parent, OLTMgmtVLANComment),
 		fmt.Sprintf(`/ip/address add address=%s interface=%s comment="%s"`, p.GatewayCIDR, p.Iface, OLTMgmtGatewayComment),
 	}
 }

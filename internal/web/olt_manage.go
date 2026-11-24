@@ -136,7 +136,8 @@ func (s *Server) adminOLTSettings(w http.ResponseWriter, r *http.Request) {
 	if _, _, ok := s.oltOf(w, r, id); !ok {
 		return
 	}
-	u, ok := s.ownerOnly(w, r, to)
+	// The password again: the protocol (Telnet is a downgrade), the pinned host key and the enable password are here.
+	u, ok := s.stepUp(w, r, to)
 	if !ok {
 		return
 	}

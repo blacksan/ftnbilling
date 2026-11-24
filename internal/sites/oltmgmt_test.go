@@ -97,7 +97,7 @@ func TestOLTMgmtSnippet(t *testing.T) {
 	p, _ := PlanOLTMgmt(oltSite(), 0, "10.99.0.1", []OLTTarget{{IP: "10.7.3.2", Proto: "ssh", Port: 22}})
 	s := p.Snippet("ether3")
 	for _, want := range []string{
-		`/interface/vlan add name=vlan98-olt vlan-id=98 interface=ether3 arp=reply-only comment="ftn: olt mgmt VLAN"`,
+		`/interface/vlan add name=vlan98-olt vlan-id=98 interface=ether3 arp=enabled comment="ftn: olt mgmt VLAN"`,
 		`/ip/address add address=10.7.3.1/29 interface=vlan98-olt comment="ftn: olt mgmt gateway"`,
 		`place-before=[find where comment="ftn: wg no forward in"]`,
 		`/ip/firewall/nat add chain=dstnat action=dst-nat protocol=tcp in-interface=wg-ftn src-address=10.99.0.1 dst-address=10.99.0.2 dst-port=22002 to-addresses=10.7.3.2 to-ports=22`,
