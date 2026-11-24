@@ -62,6 +62,10 @@
 #                the built-in table does not know, by asking api.macvendors.com from
 #                a background worker (only the first three bytes of the MAC leave the
 #                server). MAC_VENDOR_DAILY caps those requests a day (default 500).
+#   GOOGLE_MAPS_API_KEY  the browser key for the Network page's Google map (Maps
+#                JavaScript API, restricted by HTTP referrer to the admin domain). Not
+#                a secret. Unset = the Network page shows a list; a key set earlier is
+#                kept when a later run leaves it out. Settings > Maps edits it too.
 #   WEBFIG_DOMAIN e.g. tech.ftw.co.ke: opens a router's WebFig through this server, from
 #                the router page in the admin (owners only, after a fresh password and
 #                code). Needs its own DNS A record to this VPS (like DOMAIN) and DOMAIN
@@ -916,6 +920,11 @@ EOF
     setkv WEBFIG_LISTEN "127.0.0.1:$WEBFIG_PORT"
   elif [ "$WEBFIG_OFF" = 1 ] && grep -qs '^WEBFIG_DOMAIN=' "$ENVF"; then
     setkv WEBFIG_DOMAIN ""
+  fi
+  # Google Maps browser key for the Network page: written only when given (a key set earlier is kept).
+  if [ -n "${GOOGLE_MAPS_API_KEY:-}" ]; then
+    [[ $GOOGLE_MAPS_API_KEY =~ ^[A-Za-z0-9_-]{20,80}$ ]] || die "GOOGLE_MAPS_API_KEY must be the browser key from Google Cloud Console (letters, digits, - and _, about 39 characters starting AIza)"
+    setkv GOOGLE_MAPS_API_KEY "$GOOGLE_MAPS_API_KEY"
   fi
   # Online MAC-vendor lookup: the default is written once; a value given on this run is written.
   addkv MAC_VENDOR_LOOKUP "online"

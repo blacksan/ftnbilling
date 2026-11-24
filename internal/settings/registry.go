@@ -19,6 +19,7 @@ const (
 	SecMpesa    = "mpesa"
 	SecEmail    = "email"
 	SecSupport  = "support"
+	SecMaps     = "maps"
 )
 
 // Kind tells the page which input to draw.
@@ -213,6 +214,23 @@ func plain(max int, what string) func(string) (string, error) {
 	}
 }
 
+// mapsKey accepts a Google API key: letters, digits, - and _ (Google keys are 39 characters starting AIza).
+func mapsKey(v string) (string, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "", nil
+	}
+	if len(v) < 20 || len(v) > 80 {
+		return "", fmt.Errorf("the Google Maps key is usually 39 characters starting with AIza")
+	}
+	for _, r := range v {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return "", fmt.Errorf("the Google Maps key may hold only letters, digits, - and _")
+		}
+	}
+	return v, nil
+}
+
 // supportPhone accepts what people write on a door: digits, spaces, + and -.
 func supportPhone(v string) (string, error) {
 	v = strings.TrimSpace(v)
@@ -358,6 +376,11 @@ func buildRegistry() []Def {
 	g, s = str(func(c *config.Config) *string { return &c.SupportWhatsApp })
 	add(Def{Key: "support.whatsapp", Env: "SUPPORT_WHATSAPP", Section: SecSupport, Label: "Support WhatsApp number", Kind: KText, Placeholder: "254100133133",
 		Help: "International digits (0100133133 is turned into 254100133133). The \"WhatsApp us\" button opens a chat with it. Empty hides the button.", Norm: supportWhatsApp}, g, s)
+
+	// ---- Maps (the Network page)
+	g, s = str(func(c *config.Config) *string { return &c.GoogleMapsAPIKey })
+	add(Def{Key: "maps.google_key", Env: "GOOGLE_MAPS_API_KEY", Section: SecMaps, Label: "Google Maps browser key", Kind: KText, Placeholder: "AIza...",
+		Help: "Turns the Network page into a Google map. It is a browser key, so it is not secret, but restrict it in Google Cloud Console: Website restrictions (HTTP referrers) = this admin domain, and API restrictions = Maps JavaScript API only. Empty shows a list with Google Maps links instead.", Norm: mapsKey}, g, s)
 	return r
 }
 
