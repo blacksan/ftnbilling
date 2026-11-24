@@ -292,7 +292,7 @@ func (s *Server) accountCards(d map[string]any, a store.Account, sc scope) {
 				eq = append(eq, e)
 			case e.Kind == store.KindSplitter && e.SiteID == a.SiteID:
 				splitters = append(splitters, e)
-			case e.AccountID == "" && e.Status == store.EqInStock && e.Kind != store.KindSplitter:
+			case e.AccountID == "" && e.Status == store.EqInStock && e.Kind != store.KindSplitter && e.Kind != store.KindONT:
 				stock = append(stock, e)
 			}
 		}
@@ -342,8 +342,16 @@ func (s *Server) adminEquipmentView(w http.ResponseWriter, r *http.Request) {
 	var acct store.Account
 	var cust store.Customer
 	var accts []store.Account
+	aptNames := map[string]string{}
+	var ponMax int
 	s.st.View(func(d *store.Data) {
+		for _, a := range d.Apartments {
+			aptNames[a.ID] = a.Name
+		}
 		e, ok = d.Equipment[id]
+		if o, has := d.Equipment[e.OLTID]; has && e.OLTID != "" {
+			ponMax = o.PONPorts
+		}
 		if !ok {
 			return
 		}
@@ -377,10 +385,18 @@ func (s *Server) adminEquipmentView(w http.ResponseWriter, r *http.Request) {
 	p.Data["Kinds"], p.Data["Statuses"] = billing.EquipmentKinds, billing.EquipmentStatuses
 	p.Data["Sites"] = sc.Sites
 	p.Data["SiteName"] = p.Data["SiteNames"].(map[string]string)[e.SiteID]
+	var served []string
 	if e.Kind == store.KindONT {
 		p.Data["OLTs"] = s.oltChoices(sc)
-		p.Data["Place"] = s.svc.PlacementOf(e.ID)
+		pl := s.svc.PlacementOf(e.ID)
+		p.Data["Place"] = pl
+		served = pl.ApartmentIDs
 	}
+	if ponMax <= 0 {
+		ponMax = 64
+	}
+	p.Data["PONMax"] = ponMax
+	p.Data["AcctGroups"], p.Data["AcctFiltered"] = groupHouses(accts, aptNames, served)
 	s.render(w, "admin_equipment_view", p)
 }
 
@@ -573,4 +589,47 @@ func (s *Server) writePaymentsCSV(w http.ResponseWriter, rows []store.Payment, n
 			csvSafe(c.a.Flat), csvSafe(names[p.SiteID]), csvSafe(c.pkg), csvSafe(p.Phone), csvSafe(p.Name), csvSafe(p.BillRef), p.OrderID, csvSafe(c.cust), csvSafe(p.Note)})
 	}
 	cw.Flush()
+}
+
+// houseGroup is the houses of one apartment, for a grouped picker.
+type houseGroup struct {
+	Apt   string
+	Accts []store.Account
+}
+
+// groupHouses groups open houses by apartment (sorted by apartment name, then
+// house number). When served is not empty only those apartments are listed and
+// the second result is true: the picker then says it is filtered.
+func groupHouses(accts []store.Account, names map[string]string, served []string) ([]houseGroup, bool) {
+	only := map[string]bool{}
+	for _, id := range served {
+		only[id] = true
+	}
+	by := map[string]*houseGroup{}
+	var order []string
+	for _, a := range accts {
+		if len(only) > 0 && !only[a.ApartmentID] {
+			continue
+		}
+		key := a.ApartmentID
+		g, ok := by[key]
+		if !ok {
+			nm := names[key]
+			if nm == "" {
+				nm = "No apartment"
+			}
+			g = &houseGroup{Apt: nm}
+			by[key] = g
+			order = append(order, key)
+		}
+		g.Accts = append(g.Accts, a)
+	}
+	out := make([]houseGroup, 0, len(order))
+	for _, k := range order {
+		g := by[k]
+		sort.Slice(g.Accts, func(i, j int) bool { return g.Accts[i].Unit < g.Accts[j].Unit })
+		out = append(out, *g)
+	}
+	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Apt) < strings.ToLower(out[j].Apt) })
+	return out, len(only) > 0
 }

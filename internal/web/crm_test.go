@@ -118,7 +118,7 @@ func TestCustomersEquipmentSearchAndAccountCards(t *testing.T) {
 	// Search: phone (either spelling) and MAC land on the one match; a miss lists nothing.
 	// the phone belongs to the customer and (copied) to the flat: both are listed
 	for _, q := range []string{"0712345678", "%2B254712345678", "712345678"} {
-		if pg := a.adminGet(t, "/admin/search?q="+q); !strings.Contains(pg, "/admin/customers/view?id="+cid) || !strings.Contains(pg, "Flat 3B") {
+		if pg := a.adminGet(t, "/admin/search?q="+q); !strings.Contains(pg, "/admin/customers/view?id="+cid) || !strings.Contains(pg, "House 3B") {
 			t.Errorf("phone search %s: %.200s", q, pg)
 		}
 	}
@@ -156,11 +156,11 @@ func TestPaymentFiltersAndFilteredCSV(t *testing.T) {
 	a.adminPost(t, "/admin/payments/record", url.Values{"account": {acct.Code}, "trans": {"sgl7k2m9xa"}, "amount": {"3000"}, "phone": {"0712345678"}, "date": {"2026-11-16T18:30"}})
 	a.adminPost(t, "/admin/payments/record", url.Values{"account": {acct.Code}, "trans": {"sgl7k2m9xb"}, "amount": {"3000"}, "phone": {"0799999999"}, "date": {"2026-10-02T09:00"}})
 	all := a.adminGet(t, "/admin/payments")
-	if !strings.Contains(all, "SGL7K2M9XA") || !strings.Contains(all, "SGL7K2M9XB") || !strings.Contains(all, "KES 6000") {
+	if !strings.Contains(all, "SGL7K2M9XA") || !strings.Contains(all, "SGL7K2M9XB") || !strings.Contains(all, "KES 6,000") {
 		t.Error("unfiltered ledger or revenue total")
 	}
 	nov := a.adminGet(t, "/admin/payments?from=2026-11-01&to=2026-11-30")
-	if !strings.Contains(nov, "SGL7K2M9XA") || strings.Contains(nov, "SGL7K2M9XB") || !strings.Contains(nov, "KES 3000") {
+	if !strings.Contains(nov, "SGL7K2M9XA") || strings.Contains(nov, "SGL7K2M9XB") || !strings.Contains(nov, "KES 3,000") {
 		t.Error("date filter")
 	}
 	if q := a.adminGet(t, "/admin/payments?q=0799999999"); strings.Contains(q, "SGL7K2M9XA") || !strings.Contains(q, "SGL7K2M9XB") {

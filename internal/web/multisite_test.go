@@ -160,19 +160,19 @@ func TestAdminSwitcherFiltersLists(t *testing.T) {
 	m.svc.CreateAccount(billing.AccountInput{SiteID: B.ID, Flat: "Flat B2", MAC: "AA:BB:CC:00:00:02"})
 
 	html := m.adminGet(t, "/admin/accounts") // no cookie, two buildings: all
-	for _, f := range []string{"Flat A1", "Flat B1", "Flat B2", "<th>Router</th>"} {
+	for _, f := range []string{"House A1", "House B1", "House B2", "<th>Router</th>"} {
 		if !strings.Contains(html, f) {
 			t.Errorf("all view lacks %q", f)
 		}
 	}
 	m.selectSite(t, A.ID)
 	html = m.adminGet(t, "/admin/accounts")
-	if !strings.Contains(html, "Flat A1") || strings.Contains(html, "Flat B1") || strings.Contains(html, "<th>Building</th>") {
+	if !strings.Contains(html, "House A1") || strings.Contains(html, "House B1") || strings.Contains(html, "<th>Building</th>") {
 		t.Fatal("building A view is not filtered")
 	}
 	m.selectSite(t, B.ID)
 	html = m.adminGet(t, "/admin/accounts")
-	if strings.Contains(html, "Flat A1") || !strings.Contains(html, "Flat B2") {
+	if strings.Contains(html, "House A1") || !strings.Contains(html, "House B2") {
 		t.Fatal("building B view is not filtered")
 	}
 	// A new flat in this view lands in the selected building.

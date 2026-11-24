@@ -131,6 +131,8 @@ a.stat:hover{border-color:var(--line-strong)}
 .tabs a.tab:hover,.tabs button.tab:hover{background:none;color:var(--ink);filter:none}
 .tabs .tab .n{min-width:20px;padding:0 6px;border-radius:99px;background:var(--surface-3);color:var(--ink-2);font:500 var(--fs-12)/20px var(--f-sans);text-align:center;font-variant-numeric:tabular-nums}
 .tabs .tab[aria-current=page],.tabs .tab[aria-selected=true]{color:var(--brand-ink);border-bottom-color:var(--brand);font-weight:600}
+.panel h2 .n{display:inline-block;margin-left:6px;min-width:20px;padding:0 6px;border-radius:99px;background:var(--brand-soft);color:var(--brand-ink);font:500 var(--fs-12)/20px var(--f-sans);text-align:center;vertical-align:middle}
+.feed li span::first-letter{text-transform:uppercase}
 .tabs .tab[aria-current=page] .n,.tabs .tab[aria-selected=true] .n{background:var(--brand-soft);color:var(--brand-ink)}
 
 /* ---- panels, cards ----------------------------------------------------------- */
@@ -418,6 +420,7 @@ body.auth p.back{text-align:center;margin-top:var(--sp-4)}
 }
 @media(max-width:640px){
   .stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .stats>:last-child:nth-child(odd){grid-column:1/-1}
   .stat{padding:var(--sp-3);border-radius:var(--r2)}
   .stat .v{font-size:var(--fs-24)}.stat .k{font-size:var(--fs-12)}
   /* Phones: no room for a trend line beside the figures; the sub-line keeps the full width. */
