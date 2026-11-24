@@ -215,7 +215,7 @@ func TestSettingsPagesRender(t *testing.T) {
 	r := newSetRig(t)
 	for _, p := range []string{"/admin/settings", "/admin/settings/whatsapp", "/admin/settings/mpesa", "/admin/settings/email", "/admin/settings/equipment", "/admin/tools"} {
 		b := r.get(t, p)
-		if !strings.Contains(b, "Router tools") || !strings.Contains(b, "General and password") {
+		if !strings.Contains(b, "Router tools") || !strings.Contains(b, ">General</a>") {
 			t.Errorf("%s: sidebar or tabs missing", p)
 		}
 	}

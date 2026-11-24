@@ -76,6 +76,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	s.settingsRoutes(get, post)
 	s.crmRoutes(get, post)
 	s.apartmentRoutes(get, post)
+	s.networkRoutes(get)
 	s.metricsRoutes(get, post)
 	s.opsRoutes(get, post)
 	s.onuRoutes(get, post)
@@ -145,7 +146,9 @@ func (s *Server) page(r *http.Request, active string) adminPage {
 	p.CanWrite = p.Role == store.RoleOwner || p.Role == store.RoleOperator
 	p.Initial = initialOf(p.User)
 	if p.CanWrite {
-		p.Data["RouterDefaults"] = sites.ApplyDefaults(s.cfg, store.Site{Mode: store.SiteModeWG})
+		rd := sites.ApplyDefaults(s.cfg, store.Site{Mode: store.SiteModeWG})
+		p.Data["RouterDefaults"] = rd
+		p.Data["RouterPortsNotice"], p.Data["RouterPasteHint"] = sites.PortsOffNotice(rd), sites.PasteAdminHint(rd)
 		p.Data["JoinTTL"] = int(s.cfg.JoinTokenTTL.Minutes())
 		p.Data["AptOpts"] = s.apartmentOptions()
 		p.Data["ONUStock"] = s.onuStock()
@@ -487,7 +490,20 @@ func (s *Server) adminAccount(w http.ResponseWriter, r *http.Request) {
 		tab = "overview"
 	}
 	p.Data["Tab"] = tab
-	p.Detail, p.H1a, p.H1b, p.Lead = a.Flat, "", a.Flat+".", ""
+	who := a.Tenant
+	if who == "" {
+		who = houseLabel(a.Unit)
+	}
+	if who == "" {
+		who = a.Flat
+	}
+	var aptNm string
+	s.st.View(func(d *store.Data) { aptNm = d.Apartments[a.ApartmentID].Name })
+	p.Detail, p.H1a, p.H1b, p.Lead = who, "", who, aptHouse(aptNm, a)+" · "+a.Code
+	if aptNm == "" && houseLabel(a.Unit) == "" {
+		p.Lead = a.Code
+	}
+	p.Acts = nil
 	p.Label, p.Href, p.Group = "Subscribers", "/admin/accounts", "Customers"
 	var evs []store.Event
 	s.st.View(func(d *store.Data) {
@@ -541,7 +557,7 @@ func (s *Server) adminAccountMove(w http.ResponseWriter, r *http.Request) {
 		s.back(w, r, s.accountURL(id), "Error: "+err.Error())
 		return
 	}
-	s.back(w, r, s.accountURL(id), "Moved. Its ONT MAC must now be on the new router's network. Payments already made stay with the old router in the ledger.")
+	s.back(w, r, s.accountURL(id), "Moved. Its ONU MAC must now be on the new router's network. Payments already made stay with the old router in the ledger.")
 }
 
 func (s *Server) adminAccountUpdate(w http.ResponseWriter, r *http.Request) {
@@ -567,7 +583,7 @@ func (s *Server) adminAccountUpdate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminAccountMAC(w http.ResponseWriter, r *http.Request) {
 	id := r.PostFormValue("id")
 	err := s.svc.ChangeMAC(r.Context(), id, r.PostFormValue("mac"))
-	s.back(w, r, s.accountURL(id), msgOr(err, "ONT MAC updated. The old session is being ended."))
+	s.back(w, r, s.accountURL(id), msgOr(err, "ONU MAC updated. The old session is being ended."))
 }
 
 func (s *Server) adminAccountSuspend(w http.ResponseWriter, r *http.Request) {

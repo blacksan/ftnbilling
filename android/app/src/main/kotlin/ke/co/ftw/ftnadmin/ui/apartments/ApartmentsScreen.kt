@@ -53,7 +53,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.Surface
+import ke.co.ftw.ftnadmin.R
+import ke.co.ftw.ftnadmin.ui.common.CheckRow
+import ke.co.ftw.ftnadmin.ui.common.LoadingSpinner
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -93,48 +110,62 @@ fun ApartmentsScreen(user: UserInfo, onBack: () -> Unit, onOpen: (String) -> Uni
     }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        topBar = { AppTopBar("Apartments", onBack = onBack) },
+        topBar = { AppTopBar(stringResource(R.string.apartments), onBack = onBack) },
         snackbarHost = { SnackbarHost(snack) },
         floatingActionButton = {
             if (user.canWrite) {
                 ExtendedFloatingActionButton(
                     onClick = onAdd,
                     icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                    text = { Text("New apartment", fontWeight = FontWeight.ExtraBold, maxLines = 1, softWrap = false) },
+                    text = { Text(stringResource(R.string.new_apartment), maxLines = 1, softWrap = false) },
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
             }
         },
     ) { inner ->
-        Column(Modifier.padding(inner).fillMaxSize()) {
-            OutlinedTextField(
-                value = ui.query,
-                onValueChange = vm::onQuery,
-                placeholder = { Text("Search apartment, address, caretaker or landlord") },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (ui.query.isNotEmpty()) {
-                        IconButton(onClick = { vm.onQuery("") }) { Icon(Icons.Default.Clear, contentDescription = "Clear search") }
-                    }
-                },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-            when (val items = ui.items) {
-                Loadable.Loading -> CenteredLoading()
-                is Loadable.Failed -> ErrorState(items.message, vm::retry)
-                is Loadable.Ready -> PullToRefreshBox(isRefreshing = ui.refreshing, onRefresh = vm::refresh, modifier = Modifier.fillMaxSize()) {
-                    if (items.value.isEmpty()) {
-                        EmptyState(if (ui.query.isBlank()) "No apartments yet. Add an apartment, link its routers, then add customers to it with their house numbers." else "No apartment matches.")
-                    } else {
-                        LazyColumn(
-                            Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            items(items.value, key = { it.id }) { a -> ApartmentRow(a) { onOpen(a.id) } }
+        // One scrolling list: the search field is its first row, so large fonts never squeeze the apartments out of view.
+        PullToRefreshBox(isRefreshing = ui.refreshing, onRefresh = vm::refresh, modifier = Modifier.padding(inner).fillMaxSize()) {
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                item {
+                    OutlinedTextField(
+                        value = ui.query,
+                        onValueChange = vm::onQuery,
+                        placeholder = { Text(stringResource(R.string.search_apartments), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        supportingText = { Text(stringResource(R.string.search_apartments_hint)) },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        trailingIcon = {
+                            if (ui.query.isNotEmpty()) {
+                                IconButton(onClick = { vm.onQuery("") }) { Icon(Icons.Default.Clear, contentDescription = stringResource(R.string.clear_search)) }
+                            }
+                        },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                when (val items = ui.items) {
+                    Loadable.Loading -> item { Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { LoadingSpinner() } }
+                    is Loadable.Failed -> item {
+                        Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text(items.message, style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
+                            Button(onClick = vm::retry) { Text(stringResource(R.string.action_try_again)) }
                         }
+                    }
+                    is Loadable.Ready -> if (items.value.isEmpty()) {
+                        item {
+                            Text(
+                                stringResource(if (ui.query.isBlank()) R.string.no_apartments_hint else R.string.no_apartment_matches),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                            )
+                        }
+                    } else {
+                        items(items.value, key = { it.id }) { a -> ApartmentRow(a) { onOpen(a.id) } }
                     }
                 }
             }
@@ -147,13 +178,14 @@ private fun ApartmentRow(a: Apartment, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(a.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold, maxLines = 1, modifier = Modifier.weight(1f).padding(end = 8.dp))
-                if (a.routers.isEmpty()) StatusChip("No router", Tone.Warn) else StatusChip("${a.onlineNow} online", if (a.onlineNow > 0) Tone.Good else Tone.Neutral)
+                Text(a.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(end = 8.dp))
+                if (a.routers.isEmpty()) StatusChip(stringResource(R.string.no_router), Tone.Warn, Modifier.weight(1f, fill = false)) else StatusChip(stringResource(R.string.n_online, a.onlineNow), if (a.onlineNow > 0) Tone.Good else Tone.Neutral, Modifier.weight(1f, fill = false))
             }
-            if (a.address.isNotBlank()) Text(a.address, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
+            // An address must stay readable: it wraps.
+            if (a.address.isNotBlank()) Text(a.address, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
             a.gps?.let { ViewOnMapChip(a.name, it) }
             Text(
-                listOf(a.routers.joinToString(", ") { it.label }.ifBlank { "no router linked" }, "${a.accountsActive} of ${a.accountsTotal} houses active").joinToString("  |  "),
+                listOf(a.routers.joinToString(", ") { it.label }.ifBlank { stringResource(R.string.no_router_linked) }, stringResource(R.string.houses_active_of, a.accountsActive, a.accountsTotal)).joinToString("  |  "),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -229,18 +261,27 @@ fun ApartmentDetailScreen(
                         )
                     }
                     apt.routers.forEach { r ->
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            TextButton(onClick = { onOpenRouter(r.key) }, modifier = Modifier.weight(1f)) {
-                                Text("${r.label}  (${r.accounts} houses)", maxLines = 1)
-                            }
-                            if (user.canWrite) TextButton(onClick = { vm.askUnlink(r.key) }, enabled = !ui.busy) { Text("Unlink") }
-                        }
+                        // A list row: the router name and house count start-aligned, Unlink at the end.
+                        ListItem(
+                            headlineContent = { Text(r.label) },
+                            supportingContent = { Text(pluralStringResource(R.plurals.houses_count, r.accounts, r.accounts)) },
+                            trailingContent = if (user.canWrite) {
+                                { TextButton(onClick = { vm.askUnlink(r.key) }, enabled = !ui.busy) { Text(stringResource(R.string.unlink)) } }
+                            } else null,
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            modifier = Modifier.clickable(role = Role.Button, onClick = { onOpenRouter(r.key) }),
+                        )
                     }
                     if (user.canWrite && ui.linkable.isNotEmpty()) {
-                        Text("Link a router", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(R.string.link_a_router), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             ui.linkable.forEach { s ->
-                                FilterChip(selected = false, onClick = { vm.link(s.key) }, enabled = !ui.busy, label = { ChipLabel(s.label) })
+                                AssistChip(
+                                    onClick = { vm.link(s.key) },
+                                    enabled = !ui.busy,
+                                    leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                                    label = { Text(s.label) },
+                                )
                             }
                         }
                     }
@@ -249,12 +290,18 @@ fun ApartmentDetailScreen(
                     ContactBlock("Caretaker", apt.caretaker)
                     ContactBlock("Landlord / agent", apt.landlord)
                 }
-                SectionCard("Houses (${apt.accounts.size})") {
-                    if (apt.accounts.isEmpty()) Text("No houses yet.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // The houses sit inside their card, not loose below an empty header.
+                SectionCard(stringResource(R.string.houses_n, apt.accounts.size)) {
+                    if (apt.accounts.isEmpty()) Text(stringResource(R.string.no_houses_yet), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    apt.accounts.forEach { acc -> AccountRow(acc) { onOpenAccount(acc.id) } }
                 }
-                apt.accounts.forEach { acc -> AccountRow(acc) { onOpenAccount(acc.id) } }
                 if (user.isOwner) {
-                    OutlinedButton(onClick = { vm.askDelete(true) }, enabled = !ui.busy, modifier = Modifier.fillMaxWidth()) { Text("Remove apartment") }
+                    OutlinedButton(
+                        onClick = { vm.askDelete(true) },
+                        enabled = !ui.busy,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(stringResource(R.string.remove_apartment)) }
                 }
             }
         }
@@ -266,7 +313,7 @@ fun ApartmentDetailScreen(
             onDismissRequest = { vm.askUnlink(null) },
             title = { Text("Unlink $name?") },
             text = { Text("The router stops serving this apartment. It is refused while houses of this apartment are still on it: move them first.") },
-            confirmButton = { TextButton(onClick = vm::unlink) { Text("Unlink") } },
+            confirmButton = { TextButton(onClick = vm::unlink, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text(stringResource(R.string.unlink)) } },
             dismissButton = { TextButton(onClick = { vm.askUnlink(null) }) { Text("Cancel") } },
         )
     }
@@ -275,7 +322,7 @@ fun ApartmentDetailScreen(
             onDismissRequest = { vm.askDelete(false) },
             title = { Text("Remove this apartment?") },
             text = { Text("Only possible when no customer, open or closed, belongs to it.") },
-            confirmButton = { TextButton(onClick = vm::delete) { Text("Remove") } },
+            confirmButton = { TextButton(onClick = vm::delete, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text(stringResource(R.string.remove)) } },
             dismissButton = { TextButton(onClick = { vm.askDelete(false) }) { Text("Cancel") } },
         )
     }
@@ -287,7 +334,7 @@ fun ViewOnMapChip(name: String, point: GpsPoint, modifier: Modifier = Modifier) 
     val context = LocalContext.current
     AssistChip(
         onClick = { openMap(context, name, point) },
-        label = { ChipLabel("View on map") },
+        label = { Text(stringResource(R.string.view_on_map)) },
         leadingIcon = { Icon(Icons.Default.Place, contentDescription = null) },
         modifier = modifier,
     )
@@ -354,24 +401,27 @@ fun ApartmentFormScreen(id: String?, onBack: () -> Unit, onSaved: (String) -> Un
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        topBar = { AppTopBar(if (ui.isNew) "New apartment" else "Edit apartment", onBack = onBack) },
+        topBar = { AppTopBar(stringResource(if (ui.isNew) R.string.new_apartment else R.string.edit_apartment), onBack = onBack) },
+        // Save sits above the navigation bar and the keyboard (edge to edge: nothing pads for them unless asked).
         bottomBar = {
-            Button(
-                onClick = vm::save,
-                enabled = ui.canSave,
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-            ) { Text(if (ui.saving) "Saving..." else "Save", fontWeight = FontWeight.ExtraBold) }
+            Surface(tonalElevation = 3.dp) {
+                Button(
+                    onClick = vm::save,
+                    enabled = ui.canSave,
+                    modifier = Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(16.dp),
+                ) { Text(stringResource(if (ui.saving) R.string.saving else R.string.action_save)) }
+            }
         },
     ) { inner ->
         if (ui.loading) {
             CenteredLoading(Modifier.padding(inner))
         } else {
             Column(
-                Modifier.padding(inner).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                Modifier.padding(inner).fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 OutlinedTextField(
-                    ui.form.name, vm::onName, label = { Text("Apartment name") }, singleLine = true,
+                    ui.form.name, vm::onName, label = { Text(stringResource(R.string.apartment_name)) }, singleLine = true,
                     isError = ui.fieldErrors.containsKey("name"), supportingText = { ui.fieldErrors["name"]?.let { Text(it) } },
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -393,10 +443,7 @@ fun ApartmentFormScreen(id: String?, onBack: () -> Unit, onSaved: (String) -> Un
                     SectionCard("Routers that serve it") {
                         if (ui.allRouters.isEmpty()) Text("No routers yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         ui.allRouters.forEach { r ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(checked = r.key in ui.routerIds, onCheckedChange = { vm.toggleRouter(r.key) })
-                                Text(r.label, style = MaterialTheme.typography.bodyLarge)
-                            }
+                            CheckRow(r.key in ui.routerIds, { vm.toggleRouter(r.key) }, r.label)
                         }
                     }
                 }

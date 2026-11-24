@@ -356,3 +356,14 @@ func TestACSRegisteredOnlyDefaultsOn(t *testing.T) {
 		}
 	}
 }
+
+func TestGoogleMapsAPIKeyFromEnv(t *testing.T) {
+	c, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "1"}))
+	if err != nil || c.GoogleMapsAPIKey != "" {
+		t.Fatalf("default: %q %v", c.GoogleMapsAPIKey, err)
+	}
+	c, err = Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "1", "GOOGLE_MAPS_API_KEY": "  AIzaSyExampleExampleExampleExample123 "}))
+	if err != nil || c.GoogleMapsAPIKey != "AIzaSyExampleExampleExampleExample123" {
+		t.Fatalf("set: %q %v", c.GoogleMapsAPIKey, err)
+	}
+}

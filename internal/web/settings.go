@@ -46,6 +46,9 @@ func (s *Server) settingsRoutes(get, post func(string, http.HandlerFunc)) {
 	get("/admin/settings/support", s.settingsSupport)
 	post("/admin/settings/support", s.settingsSaveSupport)
 
+	get("/admin/settings/maps", s.settingsMaps)
+	post("/admin/settings/maps", s.settingsSaveMaps)
+
 	get("/admin/settings/equipment", s.settingsEquipment)
 	get("/admin/settings/equipment/find", s.settingsEquipmentFind)
 
@@ -65,7 +68,7 @@ func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 		"Stray": s.mgr.Stray(), "Backup": s.backupStatus(), "DBKind": s.st.Kind(), "DBErr": errString(s.st.Healthy()),
 		"HasKey": len(s.cfg.DataKey) > 0,
 		"Listen": s.cfg.ListenAddr, "PublicURL": s.cfg.PublicBaseURL, "AdminUser": p.User,
-		"Problems": s.problems(), "Tabs": s.settingsTabs("general"),
+		"Problems": s.problems(), "Tabs": s.settingsTabs("general"), "ActiveTab": "general", "JoinMin": int(s.cfg.JoinTokenTTL.Minutes()),
 		"WAOn": live.WhatsAppConfigured(), "EmailOn": live.EmailConfigured(),
 	}
 	s.render(w, "admin_settings", p)
@@ -82,11 +85,12 @@ type settingsTab struct{ Key, Label, URL string }
 
 func (s *Server) settingsTabs(active string) []settingsTab {
 	return []settingsTab{
-		{"general", "General and password", "/admin/settings"},
+		{"general", "General", "/admin/settings"},
 		{"whatsapp", "WhatsApp", "/admin/settings/whatsapp"},
 		{"mpesa", "M-Pesa", "/admin/settings/mpesa"},
 		{"email", "Email", "/admin/settings/email"},
 		{"support", "Support contacts", "/admin/settings/support"},
+		{"maps", "Maps", "/admin/settings/maps"},
 		{"equipment", "Equipment", "/admin/settings/equipment"},
 		{"onu", "ONU management", "/admin/settings/onu"},
 		{"tools", "Tools", "/admin/tools"},
@@ -225,6 +229,14 @@ func (s *Server) settingsSupport(w http.ResponseWriter, r *http.Request) {
 	live := s.live()
 	p.Data["Phone"], p.Data["Email"], p.Data["WhatsApp"] = live.SupportPhone, live.SupportEmail, live.SupportWhatsApp
 	s.render(w, "admin_settings_support", p)
+}
+
+// ---- Maps (the Network page's Google Maps key) -----------------------------------------------
+
+func (s *Server) settingsMaps(w http.ResponseWriter, r *http.Request) {
+	p := s.sectionPage(r, "set-maps", settings.SecMaps)
+	p.Data["KeySet"] = s.live().GoogleMapsAPIKey != ""
+	s.render(w, "admin_settings_maps", p)
 }
 
 // ---- Email -----------------------------------------------------------------------------------

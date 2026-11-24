@@ -184,11 +184,15 @@ func TestWireClientsInterfacesAndOverviewTabs(t *testing.T) {
 	if none := view("clients", "zzzz"); !strings.Contains(none, "Nothing matches that search") {
 		t.Errorf("empty search state")
 	}
+	// The Interfaces tab is gone: its old address shows the Ports tab, the one place for every port.
 	ifs := view("interfaces", "")
-	for _, want := range []string{"ether1", "sfp-sfpplus1", "wg-ftn", "br-customers", ">wan<", ">olt<", ">tunnel<"} {
+	for _, want := range []string{"data-ports=", ">Ports</a>"} {
 		if !strings.Contains(ifs, want) {
-			t.Errorf("interfaces tab lacks %q", want)
+			t.Errorf("interfaces address does not show the Ports tab: lacks %q", want)
 		}
+	}
+	if strings.Contains(ifs, ">Interfaces</a>") {
+		t.Error("the Interfaces tab is still listed")
 	}
 	ov := view("overview", "")
 	for _, want := range []string{"RouterOS 7.25.1", "7%", "Houses online", `id="rt-live"`} {

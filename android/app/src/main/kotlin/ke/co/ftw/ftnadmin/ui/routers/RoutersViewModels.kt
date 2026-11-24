@@ -48,6 +48,14 @@ class RoutersViewModel(private val repo: SitesRepository) : ViewModel() {
 
 val QOE_PERIODS = listOf("24h", "7d", "30d")
 
+/** The words for a QoE period chip: "24h" -> "24 hours". */
+fun qoePeriodLabel(code: String): String = when (code) {
+    "24h" -> "24 hours"
+    "7d" -> "7 days"
+    "30d" -> "30 days"
+    else -> code
+}
+
 data class RouterDetailUiState(
     val site: Loadable<Site> = Loadable.Loading,
     val onts: Loadable<List<Ont>> = Loadable.Loading,
@@ -86,7 +94,7 @@ class RouterDetailViewModel(private val id: String, private val repo: SitesRepos
             _state.update {
                 it.copy(
                     onts = r.fold(
-                        { l -> Loadable.Ready(l.sortedWith(compareBy({ o -> o.flat.length }, { o -> o.flat }))) },
+                        { l -> Loadable.Ready(l.sortedWith(compareBy({ o -> o.unitLabel.length }, { o -> o.unitLabel }))) },
                         { e -> Loadable.Failed(e.userMessage()) },
                     ),
                 )

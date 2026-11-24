@@ -105,7 +105,7 @@ func TestEquipmentTabsRenderTheirLists(t *testing.T) {
 		}
 	}
 	tree := a.adminGet(t, "/admin/equipment?tab=tree")
-	if !strings.Contains(tree, "(logical)") || !strings.Contains(tree, "Block A OLT") {
+	if !strings.Contains(tree, "Apartments served") || !strings.Contains(tree, "Block A OLT") {
 		t.Error("tree view lost")
 	}
 }

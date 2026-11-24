@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -35,10 +34,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import ke.co.ftw.ftnadmin.R
 import ke.co.ftw.ftnadmin.domain.APARTMENT_SEARCH_FROM
 import ke.co.ftw.ftnadmin.domain.Apartment
 import ke.co.ftw.ftnadmin.domain.matching
@@ -54,20 +57,27 @@ fun ApartmentField(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
 ) {
+    val fieldDesc = stringResource(R.string.apartment_field_desc, selected?.name ?: stringResource(R.string.none))
+    val openLabel = stringResource(R.string.choose_an_apartment)
     Box(modifier.fillMaxWidth()) {
         OutlinedTextField(
             value = selected?.name.orEmpty(),
             onValueChange = {},
             readOnly = true,
             singleLine = true,
-            label = { Text("Apartment") },
-            placeholder = { Text("Choose an apartment") },
+            label = { Text(stringResource(R.string.apartment)) },
+            placeholder = { Text(stringResource(R.string.choose_an_apartment)) },
             supportingText = selected?.address?.takeIf { it.isNotBlank() }?.let { a -> { Text(a, maxLines = 1, overflow = TextOverflow.Ellipsis) } },
             trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
             enabled = enabled,
             modifier = Modifier.fillMaxWidth(),
         )
-        Box(Modifier.matchParentSize().clickable(enabled = enabled, role = Role.Button, onClick = onClick))
+        Box(
+            Modifier.matchParentSize()
+                .clip(MaterialTheme.shapes.extraSmall)
+                .semantics { contentDescription = fieldDesc }
+                .clickable(enabled = enabled, onClickLabel = openLabel, role = Role.DropdownList, onClick = onClick),
+        )
     }
 }
 
@@ -86,14 +96,15 @@ fun ApartmentPickerSheet(
     var query by remember { mutableStateOf("") }
     val shown = apartments.matching(query)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(Modifier.padding(horizontal = 16.dp).navigationBarsPadding(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Choose an apartment", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold)
+        // ModalBottomSheet already pads for the navigation bar and keyboard; no extra inset here.
+        Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(stringResource(R.string.choose_an_apartment), style = MaterialTheme.typography.titleLarge)
             if (apartments.size > APARTMENT_SEARCH_FROM) {
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
                     singleLine = true,
-                    placeholder = { Text("Search by name, address or router", maxLines = 1) },
+                    placeholder = { Text(stringResource(R.string.search_apartments), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { shown.singleOrNull()?.let(onSelect) }),
@@ -101,8 +112,8 @@ fun ApartmentPickerSheet(
                 )
             }
             when {
-                apartments.isEmpty() -> Text("No apartments yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                shown.isEmpty() -> Text("No apartment matches.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                apartments.isEmpty() -> Text(stringResource(R.string.no_apartments_yet), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                shown.isEmpty() -> Text(stringResource(R.string.no_apartment_matches), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 else -> LazyColumn(Modifier.heightIn(max = 520.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(shown, key = { it.id }) { a -> ApartmentRow(a, selected = a.id == selectedId, onClick = { onSelect(a) }) }
                 }
@@ -125,11 +136,11 @@ private fun ApartmentRow(a: Apartment, selected: Boolean, onClick: () -> Unit) {
     ) {
         Row(Modifier.padding(14.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(a.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(a.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 if (a.address.isNotBlank()) Text(a.address, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(a.pickerSummary, style = MaterialTheme.typography.bodySmall, color = if (selected) scheme.onPrimaryContainer else scheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            if (selected) Icon(Icons.Default.Check, contentDescription = "Selected")
+            if (selected) Icon(Icons.Default.Check, contentDescription = stringResource(R.string.selected))
         }
     }
 }

@@ -32,6 +32,12 @@ type Config struct {
 	SupportEmail    string
 	SupportWhatsApp string // international digits, like 254100133133
 
+	// GoogleMapsAPIKey (GOOGLE_MAPS_API_KEY) is the browser key for the Maps JavaScript API on the Network
+	// page. It is not a secret (every visitor of the page sees it), so it is a plain setting: restrict it by
+	// HTTP referrer to the admin domain and to "Maps JavaScript API" in Google Cloud Console. Empty = the
+	// Network page shows its list view with "View on Google Maps" links.
+	GoogleMapsAPIKey string
+
 	// WebFigDomain (WEBFIG_DOMAIN) turns on remote WebFig access: the host name
 	// served by a second listener (WebFigListen, loopback only) that the
 	// reverse proxy sends to the app. Empty = the feature is off.
@@ -195,6 +201,7 @@ func Load(getenv func(string) string) (Config, error) {
 		SupportEmail:       supportValue(get("SUPPORT_EMAIL", DefaultSupportEmail)),
 		SupportWhatsApp:    supportValue(get("SUPPORT_WHATSAPP", DefaultSupportWhatsApp)),
 		PublicIP:           get("PUBLIC_IP", ""),
+		GoogleMapsAPIKey:   strings.TrimSpace(get("GOOGLE_MAPS_API_KEY", "")),
 		MpesaEnv:           strings.ToLower(get("MPESA_ENV", "sandbox")),
 		MpesaKey:           get("MPESA_CONSUMER_KEY", ""),
 		MpesaSecret:        get("MPESA_CONSUMER_SECRET", ""),

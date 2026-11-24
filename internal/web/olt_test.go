@@ -95,7 +95,7 @@ func TestOLTFormTreeRouterTabAndApartmentPage(t *testing.T) {
 	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"A1"}, "tenant": {"Jane Wanjiru"}, "equipment_id": {eq}, "apartment_id": {a.aptID(t)}})
 
 	tree := a.adminGet(t, "/admin/equipment?tab=tree")
-	for _, want := range []string{"Block A", "Apartments", "(logical)", "(physical)", "Block A OLT", tOLTMAC, "on ether3", "PON 1", "serves: ", "ZTEG1", "Jane Wanjiru", "A1", "F601", "ONUs not under an OLT"} {
+	for _, want := range []string{"Block A", "Apartments served", "OLTs and ONUs", "Block A OLT", tOLTMAC, "on ether3", "PON 1", "serves: ", "ZTEG1", "Jane Wanjiru", "A1", "F601", "ONUs not under an OLT"} {
 		if !strings.Contains(tree, want) {
 			t.Errorf("tree page lacks %q", want)
 		}

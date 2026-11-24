@@ -211,7 +211,7 @@ func TestAdminApartmentPages(t *testing.T) {
 		t.Errorf("unlink with flats: %s", l)
 	}
 	// The router page lists the apartments it serves; search finds the apartment by caretaker name and phone.
-	if rp := m.adminGet(t, "/admin/routers/view?id="+A.ID+"&tab=profile"); !strings.Contains(rp, "Apartments served") || !strings.Contains(rp, "MG One Central") {
+	if rp := m.adminGet(t, "/admin/routers/view?id="+A.ID+"&tab=equipment"); !strings.Contains(rp, "Apartments served") || !strings.Contains(rp, "MG One Central") {
 		t.Error("router page lacks its apartments")
 	}
 	for _, q := range []string{"Otieno", "0722000111", "Kamau", "MG One"} {
@@ -235,7 +235,7 @@ func TestAdminDevicesBelongsToAndMove(t *testing.T) {
 	}
 	m.svc.NoteDevice(B.ID, acct.MAC, "10.5.50.40", "dhcp")
 	page := m.adminGet(t, "/admin/devices")
-	if !strings.Contains(page, "Belongs to Wanjiru (Alpha, house number A-1)") || !strings.Contains(page, "Move customer here") {
+	if !strings.Contains(page, "Belongs to Wanjiru (Alpha, House A-1)") || !strings.Contains(page, "Move customer here") {
 		t.Fatalf("devices page: %s", page)
 	}
 	if strings.Contains(page, `data-open="addcustomer" data-mac="`+acct.MAC) {

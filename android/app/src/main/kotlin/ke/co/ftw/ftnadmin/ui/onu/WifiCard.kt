@@ -26,6 +26,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import ke.co.ftw.ftnadmin.R
+import ke.co.ftw.ftnadmin.ui.common.CheckRow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -103,7 +112,7 @@ private fun OnuBody(onu: Onu, task: OnuTask?, error: String?, canWrite: Boolean,
         )
     }
     LabeledValue("ONU", onu.title)
-    LabeledValue("Serial", onu.serial)
+    LabeledValue(stringResource(R.string.serial), onu.serial, mono = true)
     onu.warnings.forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
     if (onu.wifi.isEmpty()) {
         Text("The ONU has not reported its Wi-Fi yet.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -118,7 +127,7 @@ private fun OnuBody(onu: Onu, task: OnuTask?, error: String?, canWrite: Boolean,
     }
     task?.let {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Last request", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(stringResource(R.string.last_request), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             StatusChip(it.statusText, if (it.isFailed) Tone.Bad else if (it.isExpired) Tone.Warn else if (it.isQueued || it.isAccepted) Tone.Neutral else Tone.Good)
         }
         if (it.isAccepted) {
@@ -153,7 +162,7 @@ private fun ChangeWifiSheet(form: WifiForm, busy: Boolean, error: String?, vm: W
     val hide = if (form.showPassword) VisualTransformation.None else PasswordVisualTransformation()
     ModalBottomSheet(onDismissRequest = vm::closeSheet, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
-            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+            Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text("Change Wi-Fi", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
@@ -169,13 +178,18 @@ private fun ChangeWifiSheet(form: WifiForm, busy: Boolean, error: String?, vm: W
             OutlinedTextField(
                 form.password, vm::onPassword, label = { Text(if (form.same) "Password" else "2.4 GHz password") }, singleLine = true,
                 visualTransformation = hide, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    IconButton(onClick = { vm.toggleShowPassword() }) {
+                        Icon(
+                            if (form.showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = stringResource(if (form.showPassword) R.string.hide_password else R.string.show_password),
+                        )
+                    }
+                },
                 isError = form.errors["password"] != null, supportingText = { form.errors["password"]?.let { Text(it) } ?: Text("8 to 63 characters") },
                 modifier = Modifier.fillMaxWidth(),
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(form.same, vm::onSame)
-                Text("Same name and password on 2.4 and 5 GHz", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-            }
+            CheckRow(form.same, vm::onSame, stringResource(R.string.same_wifi_both_bands))
             if (!form.same) {
                 OutlinedTextField(
                     form.ssid5, vm::onSsid5, label = { Text("5 GHz name") }, singleLine = true,
@@ -184,13 +198,17 @@ private fun ChangeWifiSheet(form: WifiForm, busy: Boolean, error: String?, vm: W
                 OutlinedTextField(
                     form.password5, vm::onPassword5, label = { Text("5 GHz password") }, singleLine = true,
                     visualTransformation = hide, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    isError = form.errors["password5"] != null, supportingText = { form.errors["password5"]?.let { Text(it) } },
+                    trailingIcon = {
+                    IconButton(onClick = { vm.toggleShowPassword() }) {
+                        Icon(
+                            if (form.showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = stringResource(if (form.showPassword) R.string.hide_password else R.string.show_password),
+                        )
+                    }
+                },
+                isError = form.errors["password5"] != null, supportingText = { form.errors["password5"]?.let { Text(it) } },
                     modifier = Modifier.fillMaxWidth(),
                 )
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(form.showPassword, { vm.toggleShowPassword() })
-                Text("Show the password while typing", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
             }
             error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error) }
             Button(onClick = vm::submit, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(if (busy) "Sending..." else "Save and apply") }

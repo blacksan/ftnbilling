@@ -75,6 +75,13 @@
   });
   var rs = $("#router-switch");
   if (rs) rs.addEventListener("change", function () { location.href = "/admin/site/select?site=" + enc(rs.value) + "&next=" + enc(rs.getAttribute("data-next") || "/admin"); });
+  /* tab strips: bring the current tab into view and fade the edge that has more */
+  $$(".tabs").forEach(function (t) {
+    function edges() { t.classList.toggle("more-l", t.scrollLeft > 4); t.classList.toggle("more-r", t.scrollLeft + t.clientWidth < t.scrollWidth - 4); }
+    var cur = t.querySelector("[aria-current],[aria-selected=true],.on");
+    if (cur && t.scrollWidth > t.clientWidth) t.scrollLeft = Math.max(0, cur.offsetLeft - (t.clientWidth - cur.offsetWidth) / 2);
+    edges(); t.addEventListener("scroll", edges, { passive: true }); window.addEventListener("resize", edges);
+  });
   $$("select[data-goto]").forEach(function (s) { s.addEventListener("change", function () { location.href = s.value; }); });
 
   if (location.search.indexOf("add=1") >= 0) { var ar = $("#addrouter"); if (ar) setTimeout(function () { openDlg(ar); }, 50); }
@@ -124,7 +131,7 @@
 
   /* A native confirm for the simple "are you sure" buttons and forms. */
   doc.addEventListener("submit", function (e) {
-    var m = e.target.getAttribute && e.target.getAttribute("data-confirm");
+    var m = (e.submitter && e.submitter.getAttribute && e.submitter.getAttribute("data-confirm")) || (e.target.getAttribute && e.target.getAttribute("data-confirm"));
     if (m && !window.confirm(m)) e.preventDefault();
   }, true);
 
@@ -398,6 +405,7 @@
             step(form, "status");
             $("[data-join-cmd]", form).value = j.command || ""; $("[data-join-cmd2]", form).value = j.command_nocheck || "";
             var vr = $("[data-view-router]", form); if (vr && j.url) vr.href = j.url;
+            if (j.warning) { var lw = el("div", "flash bad", j.warning); lw.setAttribute("role", "alert"); var jt = $("[data-join-text]", form); jt.parentNode.insertBefore(lw, jt); }
             if (!j.command) { $("[data-join-text]", form).textContent = j.note || "Router created. Open it to make the join command."; $("[data-join-spin]", form).hidden = true; }
             else pollJoin(form, j.id);
           }
@@ -487,7 +495,9 @@
     (function () {
       var rid = portsBox.getAttribute("data-ports"), rname = portsBox.getAttribute("data-name");
       var body = $("[data-ports-body]", portsBox), at = $("[data-ports-at]", portsBox), warn = $("[data-ports-warn]", portsBox), applyEl = $("[data-ports-apply]", portsBox);
-      var roles = {}, busy = false, timer = null;
+      var roles = {}, busy = false, timer = null, hasLink = true;
+      /* ether1, ether2, ether10, sfp-sfpplus1 ...: by name, numbers as numbers */
+      function byName(a, b) { return String(a.name).localeCompare(String(b.name), undefined, { numeric: true, sensitivity: "base" }); }
       function rate(v) { return v == null ? "-" : bps(v); }
       function pill(p) {
         if (p.disabled) return el("span", "pill paused", "disabled");
@@ -526,7 +536,7 @@
         var tr = el("tr");
         function td(label, content, cls) { var c = el("td", cls || ""); c.setAttribute("data-label", label); if (content instanceof Node) c.appendChild(content); else c.textContent = content; tr.appendChild(c); return c; }
         var nm = el("span"); nm.appendChild(el("b", "mono", p.name)); if (p.comment) { nm.appendChild(el("br")); nm.appendChild(el("span", "muted", p.comment)); }
-        td("Port", nm, "mono");
+        td("Port", nm, "mono wrap");
         var rl = el("span"); if (p.locked) { var lk = el("span", "", "🔒 "); lk.setAttribute("aria-hidden", "true"); rl.appendChild(lk); }
         rl.appendChild(document.createTextNode(p.role_label));
         if (p.locked) rl.appendChild(el("span", "sr-only", " (locked)"));
@@ -535,8 +545,8 @@
         if (p.note) rl.appendChild(el("div", "muted", p.note));
         if (p.warning) { var wn = el("div", "warn", p.warning); wn.style.marginTop = "4px"; rl.appendChild(wn); }
         if (p.disabled && !p.locked && p.role !== "lan") rl.appendChild(el("div", "muted", "Switched off until you enable it."));
-        td("Role", rl);
-        td("Link", p.link || "");
+        td("Role", rl, "pnote");
+        td("Link", p.link || "").hidden = !hasLink;
         td("State", pill(p));
         td("Receive", rate(p.rx_bps), "n"); td("Send", rate(p.tx_bps), "n"); td("MAC", p.mac || "", "mono");
         var act = el("td", "pact"); act.setAttribute("data-label", "Actions");
@@ -545,7 +555,7 @@
         else {
           /* the OLT uplink is not switched off here (it can be enabled): give the OLT role to another port first */
           if (p.can_disable !== false) { var b = el("button", "ghost sm", p.disabled ? "Enable" : "Disable"); b.type = "button"; b.onclick = function () { toggle(p); }; act.appendChild(b); }
-          else { act.appendChild(el("span", "muted", "OLT port: can\u2019t be switched off here. Give the OLT role to another port first.")); }
+          else if (p.role === "olt") { act.appendChild(el("span", "muted", "OLT port: can\u2019t be switched off here. Give the OLT role to another port first.")); }
           if (p.role_options && p.role_options.length) {
             var sel = el("select"); sel.setAttribute("aria-label", "Change the role of " + p.name);
             var o0 = el("option", "", "Change role…"); o0.value = ""; sel.appendChild(o0);
@@ -560,7 +570,10 @@
       function draw(j) {
         (j.roles || []).forEach(function (r) { roles[r.key] = r.label; });
         body.textContent = "";
-        (j.items || []).forEach(function (p) { body.appendChild(row(p)); });
+        var items = (j.items || []).slice().sort(byName);
+        hasLink = items.some(function (p) { return p.link; });
+        $$("[data-col=link]", portsBox).forEach(function (h) { h.hidden = !hasLink; });
+        items.forEach(function (p) { body.appendChild(row(p)); });
         if (!(j.items || []).length) { var tr = el("tr"), c = el("td", "muted", "The router could not be read. Ports show here once it answers."); c.colSpan = 8; tr.appendChild(c); body.appendChild(tr); }
         warn.hidden = j.reachable !== false || !(j.items || []).length;
         var cp = j.customer_port || {};
@@ -602,6 +615,7 @@
       if (!j.items) { list.appendChild(el("li", "ph", j.error ? "The router could not be read: " + j.error : "Could not load the checklist.")); sum.textContent = ""; return; }
       var s = j.summary || {};
       sum.textContent = (s.fail ? s.fail + " to fix, " : "") + (s.warn ? s.warn + " to look at, " : "") + (s.ok || 0) + " fine" + (j.router && j.router.reachable === false ? ". The router is not reachable right now." : "");
+      if (j.items.length && j.items.every(function (it) { return it.status === "unknown"; })) { sum.textContent = ""; list.appendChild(el("li", "ph", "The router has not answered yet, so its " + j.items.length + " checks are waiting. They appear here once the tunnel is up.")); return; }
       j.items.slice().sort(function (a, b) { return (ORDER[a.status] - ORDER[b.status]) || 0; }).forEach(function (it) {
         var li = el("li", "check s-" + it.status);
         li.appendChild(el("span", "st", MARK[it.status] || "?")); li.lastChild.setAttribute("aria-label", it.status);
@@ -647,6 +661,7 @@
     var rname = setup.getAttribute("data-name") || "";
     var view = $("[data-setup-view]", setup), stateEl = $("[data-setup-state]", setup);
     var MARKS = { ok: "\u2713", failed: "\u00d7" };
+    var STATE_LABEL = { not_started: "Not started", waiting_router: "Waiting for the router", stalled: "Stalled", online: "Online, checks pending", ready: "Ready" };
     var drawSetup = function (j) {
       if (!view || !j || !j.steps) return;
       view.textContent = "";
@@ -664,7 +679,7 @@
         var d = el("div"); d.appendChild(el("b", "", st.title || st.key || "")); if (st.detail) d.appendChild(el("span", "", st.detail)); li.appendChild(d); ol.appendChild(li);
       });
       view.appendChild(ol);
-      if (stateEl) { stateEl.textContent = j.state; stateEl.className = "pill " + (ready ? "live" : "waiting"); }
+      if (stateEl) { stateEl.textContent = STATE_LABEL[j.state] || String(j.state || "").replace(/_/g, " "); stateEl.className = "pill " + (ready ? "live" : "waiting"); }
       return ready;
     };
     var setupReady = null;

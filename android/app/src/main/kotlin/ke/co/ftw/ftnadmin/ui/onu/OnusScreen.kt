@@ -30,6 +30,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import ke.co.ftw.ftnadmin.R
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -69,18 +73,19 @@ fun OnusScreen(
     }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        topBar = { AppTopBar("ONUs", onBack = onBack) },
+        topBar = { AppTopBar(stringResource(R.string.onus), onBack = onBack) },
         snackbarHost = { SnackbarHost(snack) },
     ) { inner ->
         when (val list = ui.items) {
             Loadable.Loading -> CenteredLoading(Modifier.padding(inner))
             is Loadable.Failed -> ErrorState(list.message, vm::load, Modifier.padding(inner))
-            is Loadable.Ready -> LazyColumn(
-                Modifier.padding(inner).fillMaxSize(),
+            is Loadable.Ready -> PullToRefreshBox(ui.refreshing, vm::refresh, Modifier.padding(inner).fillMaxSize()) {
+              LazyColumn(
+                Modifier.fillMaxSize(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                item { OutlinedButton(onClick = onRegister, modifier = Modifier.fillMaxWidth()) { Text("ONU register (serial and MAC pairs)") } }
+              ) {
+                item { OutlinedButton(onClick = onRegister, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.onu_register_link)) } }
                 ui.error?.let { item { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) } }
                 if (list.value.isEmpty()) {
                     item {
@@ -94,16 +99,17 @@ fun OnusScreen(
                 items(list.value, key = { it.id }) { onu ->
                     OnuCard(onu, user.canWrite, user.isOwner, ui.busy, vm, onOpenAccount)
                 }
+              }
             }
         }
     }
     ui.linking?.let { onu ->
         ModalBottomSheet(onDismissRequest = vm::cancelLink, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
             Column(
-                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+                Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Text("Link ${onu.serial} to a house", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                Text(stringResource(R.string.link_onu_to_house, onu.serial), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
                 var picked by remember { mutableStateOf<ke.co.ftw.ftnadmin.domain.Account?>(null) }
                 AccountPicker(selectedId = picked?.id, onSelect = { picked = it }, search = vm::searchHouses)
                 Button(
@@ -122,7 +128,7 @@ private fun OnuCard(onu: Onu, canWrite: Boolean, isOwner: Boolean, busy: Boolean
     var confirmUnlink by remember { mutableStateOf(false) }
     SectionCard(onu.title) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            StatusChip(if (onu.online) "Online" else "Silent", if (onu.online) Tone.Good else Tone.Warn)
+            StatusChip(stringResource(if (onu.online) R.string.state_online else R.string.silent), if (onu.online) Tone.Good else Tone.Warn)
             if (!onu.inInventory) StatusChip("Not in the register", Tone.Neutral)
             if (onu.isQuarantined) StatusChip("Held back", Tone.Bad)
             if (onu.isWaitingForMac) StatusChip("Waiting for MAC", Tone.Bad)
@@ -160,10 +166,10 @@ private fun OnuCard(onu: Onu, canWrite: Boolean, isOwner: Boolean, busy: Boolean
         if (onu.blocked && !onu.isQuarantined && canWrite) {
             OutlinedButton(onClick = { vm.unblock(onu) }, enabled = !busy) { Text("Unblock") }
         }
-        LabeledValue("Serial", onu.serial)
-        LabeledValue("Address", onu.mgmtIp)
-        LabeledValue("MAC", onu.macs.joinToString(", "))
-        LabeledValue("House", if (onu.isLinked) "${onu.unit} (${onu.accountCode})" else "Not linked")
+        LabeledValue(stringResource(R.string.serial), onu.serial, mono = true)
+        LabeledValue(stringResource(R.string.management_ip), onu.mgmtIp, mono = true)
+        LabeledValue("MAC", onu.macs.joinToString(", "), mono = true)
+        LabeledValue(stringResource(R.string.house), if (onu.isLinked) "${onu.unit} (${onu.accountCode})" else stringResource(R.string.not_linked))
         onu.wifi.forEach { w -> LabeledValue("${w.band} GHz", w.ssid) }
         onu.warnings.forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

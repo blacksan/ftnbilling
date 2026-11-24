@@ -3,6 +3,7 @@ package web_test
 import (
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -118,7 +119,7 @@ func TestCustomersEquipmentSearchAndAccountCards(t *testing.T) {
 	// Search: phone (either spelling) and MAC land on the one match; a miss lists nothing.
 	// the phone belongs to the customer and (copied) to the flat: both are listed
 	for _, q := range []string{"0712345678", "%2B254712345678", "712345678"} {
-		if pg := a.adminGet(t, "/admin/search?q="+q); !strings.Contains(pg, "/admin/customers/view?id="+cid) || !strings.Contains(pg, "Flat 3B") {
+		if pg := a.adminGet(t, "/admin/search?q="+q); !strings.Contains(pg, "/admin/customers/view?id="+cid) || !strings.Contains(pg, "House 3B") {
 			t.Errorf("phone search %s: %.200s", q, pg)
 		}
 	}
@@ -156,11 +157,11 @@ func TestPaymentFiltersAndFilteredCSV(t *testing.T) {
 	a.adminPost(t, "/admin/payments/record", url.Values{"account": {acct.Code}, "trans": {"sgl7k2m9xa"}, "amount": {"3000"}, "phone": {"0712345678"}, "date": {"2026-11-16T18:30"}})
 	a.adminPost(t, "/admin/payments/record", url.Values{"account": {acct.Code}, "trans": {"sgl7k2m9xb"}, "amount": {"3000"}, "phone": {"0799999999"}, "date": {"2026-10-02T09:00"}})
 	all := a.adminGet(t, "/admin/payments")
-	if !strings.Contains(all, "SGL7K2M9XA") || !strings.Contains(all, "SGL7K2M9XB") || !strings.Contains(all, "KES 6000") {
+	if !strings.Contains(all, "SGL7K2M9XA") || !strings.Contains(all, "SGL7K2M9XB") || !strings.Contains(all, "KES 6,000") {
 		t.Error("unfiltered ledger or revenue total")
 	}
 	nov := a.adminGet(t, "/admin/payments?from=2026-11-01&to=2026-11-30")
-	if !strings.Contains(nov, "SGL7K2M9XA") || strings.Contains(nov, "SGL7K2M9XB") || !strings.Contains(nov, "KES 3000") {
+	if !strings.Contains(nov, "SGL7K2M9XA") || strings.Contains(nov, "SGL7K2M9XB") || !strings.Contains(nov, "KES 3,000") {
 		t.Error("date filter")
 	}
 	if q := a.adminGet(t, "/admin/payments?q=0799999999"); strings.Contains(q, "SGL7K2M9XA") || !strings.Contains(q, "SGL7K2M9XB") {
@@ -189,10 +190,19 @@ func TestBuildingProfileAndContacts(t *testing.T) {
 		t.Fatalf("contacts save: %d", r.StatusCode)
 	}
 	page := a.adminGet(t, "/admin/routers/view?id="+a.site+"&tab=profile") + a.adminGet(t, "/admin/routers/view?id="+a.site)
-	for _, want := range []string{"Hatheru Road, Lavington", "2026-09-01", "geo:-1.2864,36.7677", "Revenue by month"} {
+	for _, want := range []string{"2026-09-01", "Revenue by month"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("building page lacks %q", want)
 		}
+	}
+	// The address and point are kept (the profile form carries them), but the apartment owns the location: no second set of GPS fields on the router.
+	if strings.Contains(page, `type="text" name="lat"`) || strings.Contains(page, "Open in maps") || strings.Contains(page, "Latitude") {
+		t.Error("the router page still has its own GPS fields")
+	}
+	var st store.Site
+	a.st.View(func(d *store.Data) { st = d.Sites[a.site] })
+	if st.Address != "Hatheru Road, Lavington" || st.Lat != -1.2864 {
+		t.Errorf("the saved router address or point was lost: %+v", st)
 	}
 }
 
@@ -309,5 +319,59 @@ func TestAccountPageListsTheDevicesOnTheAccount(t *testing.T) {
 	}
 	if strings.Contains(page, "Equipment at this") {
 		t.Error("the old card title is still there")
+	}
+}
+
+// A house that already has a customer can be given a new record made from its Details: the Customer
+// record card posts the tenant, phone and WhatsApp whether or not a customer is linked.
+func TestReplaceLinkedCustomerWithRecordFromDetails(t *testing.T) {
+	a := newApp(t, false)
+	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"Flat 4C"}, "mac": {mac1}})
+	acct := a.account(t, "Flat 4C")
+	a.adminPost(t, "/admin/customers/save", url.Values{"name": {"Old Tenant"}, "phone": {"0712345678"}})
+	a.adminPost(t, "/admin/accounts/customer", url.Values{"id": {acct.ID}, "customer": {a.customerID(t, "Old Tenant")}, "move_in": {"2026-10-01"}})
+	a.adminPost(t, "/admin/accounts/update", url.Values{"id": {acct.ID}, "tenant": {"New Tenant"}, "phone": {"0722000111"}, "wa_same": {"1"}})
+	acct = a.account(t, "Flat 4C")
+	page := a.adminGet(t, "/admin/accounts/view?code="+acct.Code)
+	for _, want := range []string{`name="name" value="New Tenant"`, `name="phone" value="` + acct.Phone + `"`, `name="wa_same" value="1"`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("the customer card does not post %s while a customer is linked", want)
+		}
+	}
+	// the posted form: no customer chosen
+	if l := a.adminPost(t, "/admin/accounts/customer", url.Values{"id": {acct.ID}, "customer": {""}, "name": {"New Tenant"}, "phone": {acct.Phone}, "wa_same": {"1"}, "move_in": {"2026-11-01"}}); !strings.Contains(l, "Customer linked") {
+		t.Fatal(l)
+	}
+	if got := a.account(t, "Flat 4C"); got.CustomerID != a.customerID(t, "New Tenant") {
+		t.Fatalf("not linked to the new record: %+v", got)
+	}
+}
+
+// The account Notes field is editable on the web through the Details form.
+func TestAccountNotesEditableOnWeb(t *testing.T) {
+	a := newApp(t, false)
+	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"Flat 5D"}, "mac": {mac1}, "notes": {"legacy note"}})
+	acct := a.account(t, "Flat 5D")
+	if p := a.adminGet(t, "/admin/accounts/view?code="+acct.Code); !strings.Contains(p, `<textarea name="notes"`) || !strings.Contains(p, "legacy note") {
+		t.Fatal("the Details form does not offer the notes")
+	}
+	a.adminPost(t, "/admin/accounts/update", url.Values{"id": {acct.ID}, "tenant": {"T"}, "notes": {"fixed note"}})
+	if got := a.account(t, "Flat 5D"); got.Notes != "fixed note" {
+		t.Fatalf("notes %q", got.Notes)
+	}
+	a.adminPost(t, "/admin/accounts/update", url.Values{"id": {acct.ID}, "tenant": {"T"}, "notes": {""}})
+	if got := a.account(t, "Flat 5D"); got.Notes != "" {
+		t.Fatalf("notes not cleared: %q", got.Notes)
+	}
+}
+
+// The Ports tab says "OLT port" only for the OLT port; a vanished port that cannot be switched off says nothing.
+func TestPortsTabOLTMessageOnlyForOLT(t *testing.T) {
+	js, err := os.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(js), `else if (p.role === "olt") { act.appendChild(el("span", "muted", "OLT port:`) {
+		t.Error("the OLT message is not limited to the OLT port")
 	}
 }

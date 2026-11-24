@@ -98,6 +98,8 @@ data class Account(
     val whatsapp: String = "",
     /** The WhatsApp number is the phone number and follows it (the "same as the phone" box). */
     @SerialName("wa_same_phone") val waSamePhone: Boolean = false,
+    /** Free-text notes on the account (the web's Details form edits them too). */
+    val notes: String = "",
     val state: String = "new",
     val suspended: Boolean = false,
     @SerialName("package") val pkg: PackageRef? = null,
@@ -317,6 +319,8 @@ data class Ont(
     @SerialName("account_id") val accountId: String = "",
     val code: String = "",
     val flat: String = "",
+    /** v4 servers may send the house number as `unit`; [unitLabel] falls back to the legacy [flat]. */
+    val unit: String = "",
     val mac: String = "",
     val ip: String = "",
     @SerialName("lease_status") val leaseStatus: String = "none",
@@ -325,7 +329,9 @@ data class Ont(
     @SerialName("down_bps") val downBps: Long = 0,
     @SerialName("up_bps") val upBps: Long = 0,
     @SerialName("suspended_on_router") val suspendedOnRouter: Boolean = false,
-)
+) {
+    val unitLabel: String get() = unit.ifBlank { flat }
+}
 
 @Serializable
 data class Alert(
