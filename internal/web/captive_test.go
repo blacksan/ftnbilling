@@ -332,7 +332,7 @@ func TestCaptiveExpiredFlatPaysWithMpesaAndComesBack(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("find: %d %s", code, html)
 	}
-	for _, want := range []string{"Flat 4B", "Your plan ended at", "Choose a package", "Use the number on file", "07•• ••• 678", "Pay with M-Pesa", "Mbps", "Have a voucher?"} {
+	for _, want := range []string{"Flat 4B", "Plan ended", "Your internet is paused", "Choose a package", "Use the number on file", "07•• ••• 678", `Pay with <span class="nb">M-Pesa</span>`, "Mbps", "Have a voucher?"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("package step lacks %q", want)
 		}
@@ -349,7 +349,7 @@ func TestCaptiveExpiredFlatPaysWithMpesaAndComesBack(t *testing.T) {
 	}
 	// The flat label alone shows a package list but no state and no phone number: a neighbour could type it.
 	_, byFlat, _ := c.pay(t, "/pay/find", url.Values{"code": {"Flat 4B"}})
-	if !strings.Contains(byFlat, "Choose a package") || strings.Contains(byFlat, `07•• ••• 678`) || strings.Contains(byFlat, "Your plan ended") {
+	if !strings.Contains(byFlat, "Choose a package") || strings.Contains(byFlat, `07•• ••• 678`) || strings.Contains(byFlat, "Plan ended") {
 		t.Errorf("by flat label must show packages only:\n%s", byFlat)
 	}
 	// Pay a day with a different (editable) phone number, typed in local format.
@@ -443,7 +443,8 @@ func TestCaptiveVoucherUnwalls(t *testing.T) {
 func TestCaptiveWithoutMpesaSaysSo(t *testing.T) {
 	c := newCaptive(t, false)
 	_, html, _ := c.pay(t, "/pay/find", url.Values{"code": {c.acct.Code}})
-	if !strings.Contains(html, "Online payment is not available right now. Call 0722 000 111") || strings.Contains(html, "Pay with M-Pesa") || !strings.Contains(html, "Have a voucher?") {
+	if !strings.Contains(html, "Pay via voucher or contact us") || !strings.Contains(html, "Online payment is not available right now") || !strings.Contains(html, "0722 000 111") ||
+		strings.Contains(html, "Pay with") || strings.Contains(html, `type="radio"`) || strings.Contains(html, "checked") || !strings.Contains(html, "Have a voucher?") || !strings.Contains(html, "1 Day") {
 		t.Errorf("page without M-Pesa:\n%s", html)
 	}
 	st, html, _ := c.pay(t, "/pay/start", url.Values{"code": {c.acct.Code}, "package": {c.pkg("1 Day")}, "method": {"mpesa"}, "phone": {"0712345678"}})

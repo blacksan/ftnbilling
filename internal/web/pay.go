@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
+	"html/template"
 	"net"
 	"net/http"
 	"net/netip"
@@ -195,6 +196,7 @@ type payPage struct {
 	PhoneMask                      string // the number on file, masked; "" = none offered
 	UseFile                        bool
 	Mpesa, Test                    bool
+	CanPay                         bool // M-Pesa or the test method is on: packages can be bought online
 	// Choices: set when a typed flat number is used in more than one apartment of the router.
 	// The visitor picks theirs (ApartmentID) and continues.
 	Choices []payChoice
@@ -281,6 +283,7 @@ func (s *Server) payBase(r *http.Request) payPage {
 		p.SiteName = s.onlyApartmentName(st.ID)
 		siteID = st.ID
 	}
+	p.CanPay = p.Mpesa || p.Test
 	p.Contacts = s.contacts(siteID)
 	p.Support = p.Contacts.Words()
 	return p
@@ -465,7 +468,10 @@ func (s *Server) payChoose(w http.ResponseWriter, r *http.Request, p payPage, a 
 		}
 	}
 	p.Selected = selected
-	if p.Selected == "" || p.Blocked[p.Selected] {
+	if !p.CanPay { // nothing can be bought online: no package is chosen for the visitor, and none is offered as buyable
+		p.Selected = ""
+		p.Blocked = nil
+	} else if p.Selected == "" || p.Blocked[p.Selected] {
 		p.Selected = ""
 		for _, g := range p.Groups {
 			for _, pk := range g.Packages {
@@ -679,4 +685,23 @@ func (s *Server) onlyApartmentName(siteID string) (name string) {
 		}
 	})
 	return name
+}
+
+// commas writes n with thousands separators: 12500 -> "12,500".
+func commas(n int) string {
+	s := itoa(n)
+	neg := strings.HasPrefix(s, "-")
+	s = strings.TrimPrefix(s, "-")
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	if neg {
+		s = "-" + s
+	}
+	return s
+}
+
+// nbMpesa escapes a message and wraps "M-Pesa" so a line never breaks at its hyphen.
+func nbMpesa(v string) template.HTML {
+	return template.HTML(strings.ReplaceAll(template.HTMLEscapeString(v), "M-Pesa", `<span class="nb">M-Pesa</span>`))
 }

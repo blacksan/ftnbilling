@@ -99,6 +99,9 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 	s.searchRL = newLimiter(searchPerMinute, time.Minute)
 	funcs := template.FuncMap{
 		"kes":    func(n int) string { return "KES " + itoa(n) },
+		"kesc":   func(n int) string { return "KES " + commas(n) }, // customer pages: KES 12,500
+		"nb":     nbMpesa,                                          // escapes, and keeps "M-Pesa" in one piece
+		"eatd":   func(t time.Time) string { return nbsp(t.In(billing.EAT).Format("Mon 2 Jan 2006")) },
 		"dur":    billing.DescribeMinutes,
 		"eat":    func(t time.Time) string { return t.In(billing.EAT).Format("Mon 2 Jan 2006, 15:04") + " EAT" },
 		"eats":   func(t time.Time) string { return t.In(billing.EAT).Format("2 Jan 2006, 15:04") },

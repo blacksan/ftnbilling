@@ -67,3 +67,35 @@ func TestPayFindsHouseNumberLoosely(t *testing.T) {
 		}
 	}
 }
+
+// Prices on customer pages carry a thousands separator, and "M-Pesa" is kept in one piece.
+func TestPayPriceAndMpesaWording(t *testing.T) {
+	c := newCaptive(t, true)
+	c.st.Update(func(d *store.Data) error {
+		for id, p := range d.Packages {
+			if p.Name == "Monthly 80 Mbps" {
+				p.PriceKES = 12500
+				d.Packages[id] = p
+			}
+		}
+		return nil
+	})
+	_, html, _ := c.pay(t, "/pay/find", url.Values{"code": {c.acct.Code}})
+	if !strings.Contains(html, "KES 12,500") || strings.Contains(html, "KES 12500") {
+		t.Errorf("price without a thousands separator:\n%s", html)
+	}
+	if !strings.Contains(html, `<span class="nb">M-Pesa</span>`) {
+		t.Error("M-Pesa may break at its hyphen")
+	}
+	// The active account's page says "Top up", the expired one "paused".
+	if !strings.Contains(html, "Your internet is paused") || strings.Contains(html, "Top up or change package") {
+		t.Error("an expired account is paused")
+	}
+	if err := c.svc.ExtendAccount(t.Context(), c.acct.ID, c.pkg("1 Day"), "", false); err != nil {
+		t.Fatal(err)
+	}
+	_, html, _ = c.pay(t, "/pay/find", url.Values{"code": {c.acct.Code}})
+	if !strings.Contains(html, "Top up or change package") || strings.Contains(html, "Your internet is paused") {
+		t.Errorf("an active account is not paused:\n%s", html)
+	}
+}
