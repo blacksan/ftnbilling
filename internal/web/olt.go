@@ -112,12 +112,15 @@ func (s *Server) oltForm(w http.ResponseWriter, r *http.Request, e store.Equipme
 			hist[j], hist[j-1] = hist[j-1], hist[j]
 		}
 	}
-	title := "Add OLT"
+	title := "Add an OLT"
 	if existing {
 		title = store.OLTLabel(e)
 	}
 	p.Detail = title
 	p.H1a, p.H1b = "OLT", title
+	if !existing {
+		p.H1a, p.H1b = "Add an", "OLT"
+	}
 	p.Data["E"], p.Data["Existing"], p.Data["PONRows"], p.Data["Hist"] = e, existing, rows, hist
 	p.Data["HasPass"], p.Data["Statuses"], p.Data["Sites"] = billing.HasOLTPassword(e), billing.OLTStatuses, sc.Sites
 	p.Data["RouterName"] = p.Data["SiteNames"].(map[string]string)[e.SiteID]

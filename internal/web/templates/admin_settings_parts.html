@@ -1,6 +1,6 @@
 {{define "set_tabs"}}<div class="row" style="margin:0 0 14px">{{$t := .Data.ActiveTab}}{{range .Data.Tabs}}<a href="{{.URL}}" class="tab{{if eq .Key $t}} on{{end}}">{{.Label}}</a>{{end}}</div>
 {{if .Data.Problems}}<div class="flash bad"><b>A saved setting could not be read.</b> {{range .Data.Problems}}<div>{{.}}</div>{{end}}</div>{{end}}
-{{if .Data.NoManager}}<div class="flash">Settings editing is off in this build: values come from the environment file only.</div>{{end}}{{end}}
+{{if and .Data.NoManager (ne $t "equipment") (ne $t "tools") (ne $t "general")}}<div class="flag nodata" role="status">Settings editing is off in this build: values come from the environment file only.</div>{{end}}{{end}}
 
 {{define "set_field"}}{{$f := .F}}<label class="fld"><span>{{$f.Label}} <span class="src {{$f.Source}}">{{if eq $f.Source "database"}}saved here{{else if eq $f.Source "env"}}from the environment file{{else}}default{{end}}</span></span>
 {{if eq $f.Kind "bool"}}<input type="checkbox" name="{{$f.Key}}" value="1"{{if eq $f.Value "true"}} checked{{end}}>
@@ -15,4 +15,4 @@
 {{define "set_form"}}<form method="post" action="{{.Action}}" class="card setf"><input type="hidden" name="_csrf" value="{{.P.CSRF}}"><input type="hidden" name="next" value="{{.P.Data.Next}}">
 <div class="fgrid">{{range .Fields}}{{template "set_field" (dict "F" .)}}{{end}}</div>
 {{if .P.Data.Production}}<div class="mt-3 row"><label><input type="checkbox" name="confirm_reregister" value="1"> Production: I understand that replacing or going back on the callback token changes the URLs Safaricom must call, and they must be registered again (the old token works for 7 days)</label></div>{{end}}
-<div class="mt-3 row"><label>Current admin password <small class="muted">(needed only when you set or replace a secret)</small><input type="password" name="current_password" autocomplete="current-password"></label><button>Save</button></div></form>{{end}}
+{{if not .P.Data.NoManager}}<div class="mt-3 row"><label>Current admin password <small class="muted">(needed only when you set or replace a secret)</small><input type="password" name="current_password" autocomplete="current-password"></label><button>Save</button></div>{{end}}</form>{{end}}

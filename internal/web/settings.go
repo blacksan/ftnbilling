@@ -65,7 +65,7 @@ func (s *Server) adminSettings(w http.ResponseWriter, r *http.Request) {
 		"Stray": s.mgr.Stray(), "Backup": s.backupStatus(), "DBKind": s.st.Kind(), "DBErr": errString(s.st.Healthy()),
 		"HasKey": len(s.cfg.DataKey) > 0,
 		"Listen": s.cfg.ListenAddr, "PublicURL": s.cfg.PublicBaseURL, "AdminUser": p.User,
-		"Problems": s.problems(), "Tabs": s.settingsTabs("general"),
+		"Problems": s.problems(), "Tabs": s.settingsTabs("general"), "ActiveTab": "general", "JoinMin": int(s.cfg.JoinTokenTTL.Minutes()),
 		"WAOn": live.WhatsAppConfigured(), "EmailOn": live.EmailConfigured(),
 	}
 	s.render(w, "admin_settings", p)
@@ -82,7 +82,7 @@ type settingsTab struct{ Key, Label, URL string }
 
 func (s *Server) settingsTabs(active string) []settingsTab {
 	return []settingsTab{
-		{"general", "General and password", "/admin/settings"},
+		{"general", "General", "/admin/settings"},
 		{"whatsapp", "WhatsApp", "/admin/settings/whatsapp"},
 		{"mpesa", "M-Pesa", "/admin/settings/mpesa"},
 		{"email", "Email", "/admin/settings/email"},
