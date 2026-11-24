@@ -37,17 +37,18 @@ type netRouter struct {
 }
 
 type netONU struct {
-	ID       string `json:"id"`
-	Serial   string `json:"serial"`
-	Model    string `json:"model,omitempty"`
-	House    string `json:"house,omitempty"`
-	Customer string `json:"customer,omitempty"`
-	Online   bool   `json:"online"`
-	Status   string `json:"status"` // online | offline
-	OLT      string `json:"olt,omitempty"`
-	PON      int    `json:"pon,omitempty"`
-	URL      string `json:"url"`
-	Account  string `json:"account_url,omitempty"`
+	ID        string `json:"id"`
+	Serial    string `json:"serial"`
+	Model     string `json:"model,omitempty"`
+	House     string `json:"house,omitempty"`
+	Customer  string `json:"customer,omitempty"`
+	Online    bool   `json:"online"`
+	Status    string `json:"status"` // online | offline
+	OLT       string `json:"olt,omitempty"`
+	PON       int    `json:"pon,omitempty"`
+	URL       string `json:"url"`
+	AccountID string `json:"account_id,omitempty"`
+	Account   string `json:"account_url,omitempty"`
 }
 
 type netOLT struct {
@@ -194,6 +195,9 @@ func (s *Server) networkData(ctx context.Context, sc scope) netMapData {
 		}
 		if olt.ID != "" {
 			o.OLT = store.OLTLabel(olt)
+		}
+		if n.AccountID != "" {
+			o.AccountID = n.AccountID
 		}
 		if n.Code != "" {
 			o.Account = "/admin/accounts/view?code=" + url.QueryEscape(n.Code)

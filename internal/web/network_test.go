@@ -132,7 +132,7 @@ func TestNetworkMapJSONContent(t *testing.T) {
 	if without["lat"] != nil || without["lng"] != nil || without["maps_url"] != nil {
 		t.Errorf("no-GPS apartment has a point: %v", without)
 	}
-	for _, want := range []string{`"houses":{"active":`, `"routers":[{`, `"olts":[{`, `"Block A OLT"`, `"pons":[1]`, `"onus":[{`, `"serial":"ZTENET01"`, `"customer":"Jane Wanjiru"`, `"house":"A1"`,
+	for _, want := range []string{`"houses":{"active":`, `"routers":[{`, `"olts":[{`, `"Block A OLT"`, `"pons":[1]`, `"onus":[{`, `"serial":"ZTENET01"`, `"customer":"Jane Wanjiru"`, `"account_id":"`, `"house":"A1"`,
 		`"other":[{`, `"CRS326`, `"open_alerts":0`, `/admin/olts/view?id=`, `/admin/routers/view?id=`, `/admin/equipment/view?id=`} {
 		if !strings.Contains(raw, want) {
 			t.Errorf("map.json lacks %q:\n%s", want, raw)
