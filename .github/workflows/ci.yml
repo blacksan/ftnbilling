@@ -1,6 +1,23 @@
 name: ci
 on: [push, pull_request]
 jobs:
+  # Supply chain: re-download every module through the Go proxy (checked against sum.golang.org by go.sum),
+  # then require go.mod/go.sum to be tidy and vendor/ to be exactly what `go mod vendor` produces.
+  # On a mismatch the fix is uploaded as a patch artifact (modules.patch).
+  modules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: GOFLAGS=-mod=mod go mod download -x all 2>&1 | tail -n 5
+      - run: GOFLAGS=-mod=mod go mod verify
+      - run: GOFLAGS=-mod=mod go mod tidy && go mod vendor
+      - run: git add -A go.mod go.sum vendor && git diff --cached > modules.patch; git diff --cached --stat | tail -n 20
+      - if: ${{ hashFiles('modules.patch') != '' }}
+        uses: actions/upload-artifact@v4
+        with: { name: modules-patch, path: modules.patch }
+      - run: test ! -s modules.patch
   test:
     runs-on: ubuntu-latest
     strategy:
