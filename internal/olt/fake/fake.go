@@ -42,6 +42,8 @@ type OLT struct {
 	NoOptical bool
 	// FailOn: a command containing this text answers with a "% Invalid input" line.
 	FailOn string
+	// DropOn: a command containing this text closes the session that sent it, without an answer (a session the OLT drops).
+	DropOn string
 	// MaxPON bounds interface gpon 0/N.
 	Secret string // appears in the running config as "password <Secret>"
 
@@ -65,6 +67,8 @@ type OLT struct {
 	ACLMatch string
 	// ACLShow selects the layout of `show login-access-list`: "" = a status line and a table, "lines" = config lines.
 	ACLShow string
+	// ACLNoState leaves `login-access-list enable|disable` out of the running configuration (a firmware that does not print it).
+	ACLNoState bool
 
 	SSHAddr, TelnetAddr string
 	HostKeyFP           string
@@ -260,9 +264,11 @@ func (o *OLT) running() string {
 	for _, r := range o.acl {
 		b.WriteString("login-access-list " + r.String() + "\n")
 	}
-	if o.aclOff {
+	switch {
+	case o.ACLNoState:
+	case o.aclOff:
 		b.WriteString("login-access-list disable\n")
-	} else {
+	default:
 		b.WriteString("login-access-list enable\n")
 	}
 	return b.String()
@@ -479,6 +485,8 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 		unknown := "% Unknown command.\n"
 		switch {
 		case line == "":
+		case o.DropOn != "" && strings.Contains(line, o.DropOn):
+			return
 		case o.FailOn != "" && strings.Contains(line, o.FailOn):
 			out = "% Invalid input detected at '^' marker.\n"
 		case strings.Contains(line, "badcmd"):

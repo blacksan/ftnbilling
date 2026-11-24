@@ -189,6 +189,9 @@ func VSOL() *Dialect {
 	}
 	d.RestoreShapes = []*regexp.Regexp{
 		regexp.MustCompile(`^user (login|enable)-password [A-Za-z][A-Za-z0-9_-]{0,31} [A-Za-z0-9@#%^&*_+=.,:;~-]{1,64}$`),
+		// Only to switch the login access list off again when Secure switched it on and the new session then failed (it puts
+		// the list back as it was). Never a SecureShape, never allowed by Apply.
+		regexp.MustCompile(`^login-access-list disable$`),
 	}
 	return d
 }
@@ -482,6 +485,7 @@ type ACLPlan struct {
 	Source               string
 	Permit, Deny4, Deny6 string
 	Enable               string
+	Disable              string // only to undo Enable, through the restore path
 }
 
 // SecureACLPlan builds the lines that allow SSH from the one address src (a host: mask 255.255.255.255) and deny it from
@@ -495,7 +499,7 @@ func (d *Dialect) SecureACLPlan(src string) (ACLPlan, error) {
 		Permit: "login-access-list permit ssh " + a.String() + " 255.255.255.255",
 		Deny4:  "login-access-list deny ssh 0.0.0.0 0.0.0.0",
 		Deny6:  "login-access-list ipv6 deny ssh ::/0",
-		Enable: "login-access-list enable"}, nil
+		Enable: "login-access-list enable", Disable: "login-access-list disable"}, nil
 }
 
 // ShowSNMPCmd lists the SNMP communities.
