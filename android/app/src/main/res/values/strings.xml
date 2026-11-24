@@ -334,6 +334,13 @@
         <item quantity="other">%d PON ports</item>
     </plurals>
     <string name="olt_status_title">OLT status</string>
+    <string name="olt_adopt_title">Adoption through the router</string>
+    <string name="olt_adopt_progress">%1$d of %2$d steps done</string>
+    <string name="olt_adopt_manual">manual</string>
+    <string name="olt_adopt_ok">Done</string>
+    <string name="olt_adopt_fail">Needs attention</string>
+    <string name="olt_adopt_todo">Waiting</string>
+    <string name="olt_adopt_web_only">Securing the OLT and its login are done by an owner on the web.</string>
     <string name="olt_status_not_set">The server has no login for this OLT yet. Set it up on the web.</string>
     <string name="olt_status_link">Server link</string>
     <string name="olt_status_reachable">Reachable</string>

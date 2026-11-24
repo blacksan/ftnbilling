@@ -56,6 +56,12 @@ type Dialect struct {
 	// AllowLines are the exact shapes of the few lines that start with a denied word (the management address).
 	DenyVerbs, DenyAnywhere, DenyAfterNo, WriteArgsOK, SubVerbsOK []string
 	AllowLines                                                    []*regexp.Regexp
+	// SecureShapes are the exact shapes of the few lines that Session.RunSecure may send although the denylist refuses
+	// them everywhere else: the "Secure this OLT" action (user manager passwords, the default SNMP communities).
+	SecureShapes []*regexp.Regexp
+	// RestoreShapes are the extra shapes of the lines that put an OLD login or enable password back after a failed change
+	// (the old one may be short or typed by the owner; never '?', '!' or a space).
+	RestoreShapes []*regexp.Regexp
 
 	// Fixed commands.
 	EnableCmd, ConfigCmd, EndCmd, ExitCmd, SaveCmd string
@@ -93,7 +99,8 @@ func VSOL() *Dialect {
 		CheckedModel:    "V1600GS-R",
 		CheckedSoftware: "V1.0.5",
 		// gpon-olt#  gpon-olt(config)#  gpon-olt(config-pon-0/1)#  (host name letters, digits, - _ .)
-		PromptRE:   regexp.MustCompile(`^[A-Za-z0-9_.\-]+(\((?:config|cfg)[^)\n]*\))?[>#]\s?$`),
+		// Any parenthesised mode name counts: the user manager sub-mode ("user manager") has a prompt the bench did not show.
+		PromptRE:   regexp.MustCompile(`^[A-Za-z0-9_.\-]+(\([A-Za-z0-9_.\-/ ]+\))?[>#]\s?$`),
 		MoreRE:     regexp.MustCompile(`(?i)-+\s*more\s*-+|\(more\)|press any key|<--- more --->`),
 		UserRE:     regexp.MustCompile(`(?i)(user ?name|login)\s*:\s*$`),
 		PasswordRE: regexp.MustCompile(`(?i)password\s*:\s*$`),
@@ -162,6 +169,18 @@ func VSOL() *Dialect {
 	d.AllowLines = []*regexp.Regexp{
 		regexp.MustCompile(`^ip address \d{1,3}(\.\d{1,3}){3}/\d{1,2}$`),
 		regexp.MustCompile(`^ip route 0\.0\.0\.0/0 \d{1,3}(\.\d{1,3}){3}$`),
+	}
+	d.SecureShapes = []*regexp.Regexp{
+		regexp.MustCompile(`^user manager$`),
+		// A new login or enable password is made by the server: letters and digits only (the CLI reads '?' as help and '!' as a
+		// comment), 24 characters or more. A restored password may be an older one the owner typed (no '?', '!' or space).
+		regexp.MustCompile(`^user (login|enable)-password [A-Za-z][A-Za-z0-9_-]{0,31} [A-Za-z0-9]{24,64}$`),
+		// Only the two default SNMP communities, by name.
+		regexp.MustCompile(`^no snmp-server community (public|private)$`),
+		regexp.MustCompile(`^exit$`),
+	}
+	d.RestoreShapes = []*regexp.Regexp{
+		regexp.MustCompile(`^user (login|enable)-password [A-Za-z][A-Za-z0-9_-]{0,31} [A-Za-z0-9@#%^&*_+=.,:;~-]{1,64}$`),
 	}
 	return d
 }
@@ -422,3 +441,45 @@ func (d *Dialect) AdoptSnippet(vlan int, ip, mask, gateway, uplink string) []str
 
 // Norm is a command line in the form lines are compared in: lower case, single spaces.
 func Norm(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
+
+// ---- Secure this OLT -------------------------------------------------------------------------------------------------
+
+// SecureUserLines change the login and enable password of one user (inside `user manager`). Both are one word, with no
+// space, '?' or '!'.
+func (d *Dialect) SecureUserLines(user, login, enable string) []string {
+	l := []string{"user manager"}
+	if login != "" {
+		l = append(l, "user login-password "+user+" "+login)
+	}
+	if enable != "" {
+		l = append(l, "user enable-password "+user+" "+enable)
+	}
+	return append(l, "exit")
+}
+
+// SecureSNMPLines remove the default SNMP communities that exist (words are "public" and "private" only).
+func (d *Dialect) SecureSNMPLines(words []string) []string {
+	var l []string
+	for _, w := range words {
+		l = append(l, "no snmp-server community "+w)
+	}
+	return l
+}
+
+// ShowSNMPCmd lists the SNMP communities.
+const ShowSNMPCmd = "show snmp-server community"
+
+// SecureLineOK reports whether a line has one of the exact shapes of the secure action (restore: also the shapes that put
+// an old password back).
+func (d *Dialect) SecureLineOK(line string, restore bool) bool {
+	shapes := d.SecureShapes
+	if restore {
+		shapes = append(append([]*regexp.Regexp(nil), shapes...), d.RestoreShapes...)
+	}
+	for _, re := range shapes {
+		if re.MatchString(line) {
+			return true
+		}
+	}
+	return false
+}

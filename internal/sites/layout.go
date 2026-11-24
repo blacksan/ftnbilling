@@ -217,6 +217,14 @@ func ValidateNetMgmt(s store.Site, wgNet, mgmt netip.Prefix) error {
 			return fieldErr("customer_ports", "customer port %q: use letters, digits, dot, dash and underscore only", p)
 		}
 	}
+	if s.OLTMgmtPort != "" {
+		if !ValidIface(s.OLTMgmtPort) {
+			return fieldErr("olt_mgmt_port", "OLT management port %q: use letters, digits, dot, dash and underscore only", s.OLTMgmtPort)
+		}
+		if s.OLTMgmtPort == s.WANInterface || s.OLTMgmtPort == s.OLTInterface || containsStr(SplitPorts(s.LANPorts), s.OLTMgmtPort) || containsStr(SplitPorts(s.CustomerPorts), s.OLTMgmtPort) {
+			return fieldErr("olt_mgmt_port", "%s is already the internet uplink, the OLT uplink, an admin LAN port or a customer port", s.OLTMgmtPort)
+		}
+	}
 	if s.VLANID < 0 || s.VLANID > 4094 {
 		return errors.New("VLAN ID must be 0 (none) to 4094")
 	}

@@ -750,6 +750,84 @@ func (s *Session) Save(ctx context.Context) error {
 }
 
 // Redact hides what looks like a secret in text that is shown or stored.
-func Redact(s string) string { return redactRE.ReplaceAllString(s, "${1}<redacted>") }
+func Redact(s string) string {
+	s = userPassRE.ReplaceAllString(s, "${1}<redacted>")
+	return redactRE.ReplaceAllString(s, "${1}<redacted>")
+}
+
+// userPassRE: "user login-password NAME PASSWORD" and "user enable-password NAME PASSWORD" (the name is not the secret, the
+// word after it is). Applied before redactRE, which would otherwise take the user name for the password.
+var userPassRE = regexp.MustCompile(`(?i)\b((?:login|enable)-password\s+\S+\s+)\S+`)
 
 var redactRE = regexp.MustCompile(`(?im)\b((?:enable\s+)?(?:username|password|passwd|pwd|secret|community|auth-key|priv-key|key-string|key|md5|sha|encrypted|cipher|psk)\b\s*(?:\d\s+)?(?:=\s*|:\s*)?)\S+`)
+
+// ---- the secure action ---------------------------------------------------------------------------------------------
+
+// ErrSecureShape: RunSecure was given a line that is not one of the exact shapes of the secure action.
+var ErrSecureShape = errors.New("olt: not a line of the secure action")
+
+// RunSecure sends the lines of the "Secure this OLT" action: the user manager passwords and the removal of the default
+// SNMP communities. They are the only user, password or SNMP lines the driver ever sends, and every one must have one of
+// the exact shapes in Dialect.SecureShapes (checked for the whole batch before the first is sent). The lines go through
+// the normal command path otherwise (control characters, redacted transcript, error detection), and the session is back
+// out of configuration mode afterwards. The first line the OLT refuses ends the batch (*CmdError, redacted).
+func (s *Session) RunSecure(ctx context.Context, lines []string) error {
+	return s.runSecure(ctx, lines, false)
+}
+
+// RunRestore is RunSecure for the lines that put an old login or enable password back after a failed change: the shapes
+// of RunSecure plus the old-password shapes (Dialect.RestoreShapes).
+func (s *Session) RunRestore(ctx context.Context, lines []string) error {
+	return s.runSecure(ctx, lines, true)
+}
+
+func (s *Session) runSecure(ctx context.Context, lines []string, restore bool) error {
+	for _, l := range lines {
+		if !s.d.SecureLineOK(l, restore) {
+			return ErrSecureShape
+		}
+	}
+	for _, l := range lines {
+		for _, c := range l {
+			if c < 0x20 || c == 0x7f {
+				return ErrSecureShape
+			}
+		}
+	}
+	if err := s.raise(ctx, ModeConfig); err != nil {
+		return err
+	}
+	var rerr error
+	for _, l := range lines {
+		out, err := s.exec(ctx, l, true)
+		if err != nil {
+			rerr = err
+			break
+		}
+		if failed(s.d.ErrorRE, out) {
+			s.Transcript[len(s.Transcript)-1].Err = "refused"
+			rerr = &CmdError{Cmd: l, Output: out}
+			break
+		}
+	}
+	if rerr != nil {
+		// Leave whatever sub-mode the batch was in (a refused line inside `user manager`).
+		for i := 0; i < 2 && s.mode == ModeConfig && promptInSubMode(s.prompt); i++ {
+			if _, err := s.exec(ctx, s.d.ExitCmd, true); err != nil {
+				break
+			}
+		}
+	}
+	s.lower(ctx)
+	return rerr
+}
+
+// VerifyEnable exercises the enable password: a session that starts at the user prompt must get to the privileged one with
+// it. checked is false when the session started privileged (the bench OLT's SSH does): then the enable password cannot be
+// tested from this login and nothing is claimed about it.
+func (s *Session) VerifyEnable(ctx context.Context) (checked bool, err error) {
+	if s.mode != ModeUser {
+		return false, nil
+	}
+	return true, s.enableMode(ctx)
+}

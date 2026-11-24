@@ -27,7 +27,7 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 			Join:         store.JoinToken{Hash: "h", ExpiresAt: at, CreatedAt: at, UsedAt: at, UsedFrom: "1.2.3.4"},
 			JoinedAt:     at,
 			WANInterface: "ether1", WANList: "WAN", OLTInterface: "sfp1", VLANID: 20, CustomerSubnet: "10.20.0.0/24",
-			WANCapMbps: 100.5, OLTCapMbps: 1000, FUPTB: 2.5, CustomerPorts: "ether5,ether4", DisabledPorts: "ether6", PortsPolicy: "off", EnabledPorts: "ether5,ether4", ONUMgmtN: 3, ONUMgmtVLAN: 98,
+			WANCapMbps: 100.5, OLTCapMbps: 1000, FUPTB: 2.5, CustomerPorts: "ether5,ether4", DisabledPorts: "ether6", PortsPolicy: "off", EnabledPorts: "ether5,ether4", ONUMgmtN: 3, ONUMgmtVLAN: 98, OLTMgmtPort: "ether6", OLTMgmtNet: "192.168.8.1/24",
 			PkgOverrides: map[string]store.PkgOverride{"p1": {Hidden: true, PriceKES: 70}},
 			Address:      "Kilimani Rd", Lat: -1.2921, Lng: 36.8219, GoLive: at, AccessMode: store.AccessIPoE, CreatedAt: at}
 		d.Sites["s222222"] = store.Site{ID: "s222222", Name: "Env", Mode: store.SiteModeEnv, CreatedAt: at}

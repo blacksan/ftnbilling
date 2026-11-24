@@ -368,5 +368,5 @@ func apiDeviceClass(c billing.DeviceClass) map[string]any {
 		ids = []string{}
 	}
 	return map[string]any{"kind": c.Class, "label": c.Label, "equipment_id": c.EquipmentID, "creatable": c.Creatable,
-		"attachable": c.Class != billing.ClassOLT, "never_asked": c.NeverAsked, "apartment_ids": ids}
+		"attachable": c.Class != billing.ClassOLT && c.Class != billing.ClassPossibleOLT, "never_asked": c.NeverAsked, "apartment_ids": ids}
 }

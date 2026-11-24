@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"sort"
@@ -28,6 +29,11 @@ func (s *Server) oltRoutesAPI(h func(string, string, apiFunc)) {
 	h("PUT /api/v1/olts/{id}/provisioning", owner, s.apiOLTProvisioning)
 	h("POST /api/v1/olts/{id}/plan", owner, s.apiOLTPlan)
 	h("POST /api/v1/olts/{id}/apply", owner, s.apiOLTApply)
+	h("GET /api/v1/olts/{id}/adoption", viewer, s.apiOLTAdoption)
+	h("POST /api/v1/olts/{id}/adoption/check", operator, s.apiOLTAdoptCheck)
+	h("POST /api/v1/olts/{id}/secure", owner, s.apiOLTSecure)
+	h("PUT /api/v1/olts/{id}/credentials", owner, s.apiOLTCredentials)
+	h("POST /api/v1/olts/{id}/credentials/reveal", owner, s.apiOLTReveal)
 }
 
 func (s *Server) apiOLT(w http.ResponseWriter, r *http.Request) (store.Equipment, store.OLTState, bool) {
@@ -96,6 +102,7 @@ func (s *Server) apiOLTStatus(w http.ResponseWriter, r *http.Request, c *apiCtx)
 		"online": online, "total": len(onus), "onus": onus, "auto_found": found, "not_in_inventory": unknown,
 		"provisioning": map[string]any{"enabled": st.Settings.Provisioning, "dialect_checked": st.Settings.DialectChecked},
 		"host_key":     st.Settings.HostKey, "unparsed": st.Status.Raw,
+		"adoption": s.adoptionJSON(e.ID),
 	})
 }
 
@@ -283,4 +290,120 @@ func (s *Server) apiOLTApply(w http.ResponseWriter, r *http.Request, c *apiCtx) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"backup_id": res.Backup, "sent": len(res.Sent), "verified": res.Verified, "remaining": nz(res.Remaining)})
+}
+
+// adoptionJSON is the adoption state of an OLT: the next action, the checklist, and what the server may do. It holds no
+// password; the login is only ever said to be there.
+func (s *Server) adoptionJSON(id string) map[string]any {
+	v, ok := s.olt.AdoptView(id)
+	if !ok {
+		return nil
+	}
+	steps := []map[string]any{}
+	for _, st := range v.Steps {
+		steps = append(steps, map[string]any{"label": st.Label, "state": st.State, "detail": st.Detail})
+	}
+	_, st, _ := s.olt.Load(id)
+	a := st.Settings.Adopt
+	return map[string]any{"stage": v.Stage, "next": v.Note, "error": v.Error, "manual": v.Manual, "port": v.Port, "steps": steps, "checked_at": tp(v.CheckedAt),
+		"mac_seen": a.MACSeen, "ssh_reached": a.SSHOK, "serial_ok": a.SerialOK, "credentials": map[string]any{"stored": v.HasLogin, "source": a.CredSource, "need_login": v.NeedLogin},
+		"secured": v.Secured, "secured_at": tp(a.SecuredAt), "can_secure": v.CanSecure, "snmp_off": a.SNMPOff, "snmp_note": v.SNMPNote, "access_list_note": v.ACLNote}
+}
+
+func (s *Server) apiOLTAdoption(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	if _, _, ok := s.apiOLT(w, r); !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, s.adoptionJSON(r.PathValue("id")))
+}
+
+func (s *Server) apiOLTAdoptCheck(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	if _, _, ok := s.apiOLT(w, r); !ok {
+		return
+	}
+	ctx, cancel := s.oltCtx(r)
+	defer cancel()
+	if err := s.olt.AdoptCheck(ctx, r.PathValue("id"), c.user.Username); err != nil {
+		if errors.Is(err, olt.ErrNoPort) || errors.Is(err, olt.ErrNoRouter) {
+			apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
+			return
+		}
+		s.apiOLTErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.adoptionJSON(r.PathValue("id")))
+}
+
+func (s *Server) apiOLTSecure(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	var req struct {
+		Password string `json:"password"`
+	}
+	if !decode(w, r, &req, false) {
+		return
+	}
+	if _, _, ok := s.apiOLT(w, r); !ok {
+		return
+	}
+	if !s.apiStepUp(w, c, req.Password) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	res, err := s.olt.Secure(ctx, r.PathValue("id"), c.user.Username)
+	if err != nil {
+		if errors.Is(err, olt.ErrNotIdentified) {
+			apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
+			return
+		}
+		s.apiOLTErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"secured": true, "enable_checked": res.EnableChecked, "snmp_removed": nz(res.SNMPRemoved), "snmp_note": res.SNMPNote, "access_list_note": res.ACLNote})
+}
+
+func (s *Server) apiOLTCredentials(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	var req struct {
+		User     string `json:"user"`
+		Pass     string `json:"pass"`
+		Enable   string `json:"enable"`
+		Password string `json:"password"`
+	}
+	if !decode(w, r, &req, false) {
+		return
+	}
+	if _, _, ok := s.apiOLT(w, r); !ok {
+		return
+	}
+	if !s.apiStepUp(w, c, req.Password) {
+		return
+	}
+	if err := s.olt.SetCredentials(r.PathValue("id"), req.User, req.Pass, req.Enable, c.user.Username); err != nil {
+		validationErr(w, map[string]string{"pass": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.adoptionJSON(r.PathValue("id")))
+}
+
+// apiOLTReveal returns the stored login and enable password to an owner who sent their password again: audited, never cached.
+func (s *Server) apiOLTReveal(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	var req struct {
+		Password string `json:"password"`
+	}
+	if !decode(w, r, &req, false) {
+		return
+	}
+	if _, _, ok := s.apiOLT(w, r); !ok {
+		return
+	}
+	if !s.apiStepUp(w, c, req.Password) {
+		return
+	}
+	user, login, enable, err := s.olt.Reveal(r.PathValue("id"), c.user.Username)
+	if err != nil {
+		s.apiOLTErr(w, err)
+		return
+	}
+	c.audit(s, "OLT login revealed")
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"user": user, "password": login, "enable_password": enable})
 }

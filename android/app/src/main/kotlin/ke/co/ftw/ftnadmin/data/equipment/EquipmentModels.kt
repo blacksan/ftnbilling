@@ -159,7 +159,32 @@ data class OltStatus(
     val total: Int = 0,
     val onus: List<OltStatusOnu> = emptyList(),
     @SerialName("not_in_inventory") val notInInventory: List<OltFoundOnu> = emptyList(),
+    /** Null from an older server. */
+    val adoption: OltAdoption? = null,
 )
+
+/**
+ * How far the OLT is adopted through the router's OLT management port (`adoption` of `GET /olts/{id}/status`). Read-only:
+ * the phone shows it and never acts on it. It carries no password, only whether a login is stored.
+ */
+@Serializable
+data class OltAdoption(
+    val stage: String = "",
+    val next: String = "",
+    val error: String = "",
+    val manual: Boolean = false,
+    val port: String = "",
+    val steps: List<OltAdoptStep> = emptyList(),
+    val secured: Boolean = false,
+    @SerialName("snmp_off") val snmpOff: Boolean = false,
+) {
+    /** Steps done, over all steps. */
+    val doneCount: Int get() = steps.count { it.state == "ok" }
+    val failed: Boolean get() = steps.any { it.state == "fail" }
+}
+
+@Serializable
+data class OltAdoptStep(val label: String = "", val state: String = "", val detail: String = "")
 
 @Serializable
 data class OltStatusOnu(

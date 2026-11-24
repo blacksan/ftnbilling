@@ -28,6 +28,7 @@ type Mock struct {
 	lastQ      map[string]map[string]string
 	failReads  map[string]error
 	writes     int // successful AddRow/SetRow/RemoveRow calls since the last ResetWrites
+	wpaths     []string
 }
 
 func NewMock() *Mock {
@@ -200,6 +201,7 @@ func (m *Mock) AddRow(_ context.Context, path string, body map[string]string) (s
 	}
 	m.nextID++
 	m.writes++
+	m.wpaths = append(m.wpaths, "add "+p)
 	r := copyRow(body)
 	r[RowID] = fmt.Sprintf("*%X", m.nextID)
 	// place-before is an instruction, not a property: like the router, insert
@@ -216,6 +218,7 @@ func (m *Mock) AddRow(_ context.Context, path string, body map[string]string) (s
 		}
 		m.nextID--
 		m.writes--
+		m.wpaths = m.wpaths[:len(m.wpaths)-1]
 		return "", &APIError{Status: 400, Message: "Bad Request", Detail: "place-before: no such item"}
 	}
 	m.tables[p] = append(m.tables[p], r)
@@ -232,6 +235,7 @@ func (m *Mock) SetRow(_ context.Context, path, id string, diff map[string]string
 	for _, r := range m.tables[cleanPath(path)] {
 		if r[RowID] == id {
 			m.writes++
+			m.wpaths = append(m.wpaths, "set "+cleanPath(path))
 			for k, v := range diff {
 				if k != RowID {
 					r[k] = v
@@ -255,6 +259,7 @@ func (m *Mock) RemoveRow(_ context.Context, path, id string) error {
 	for i, r := range rows {
 		if r[RowID] == id {
 			m.writes++
+			m.wpaths = append(m.wpaths, "remove "+p)
 			m.tables[p] = append(rows[:i:i], rows[i+1:]...)
 			return nil
 		}
@@ -268,7 +273,15 @@ func (m *Mock) RemoveRow(_ context.Context, path, id string) error {
 func (m *Mock) Writes() int { m.mu.Lock(); defer m.mu.Unlock(); return m.writes }
 
 // ResetWrites zeroes the write counter.
-func (m *Mock) ResetWrites() { m.mu.Lock(); m.writes = 0; m.mu.Unlock() }
+func (m *Mock) ResetWrites() { m.mu.Lock(); m.writes = 0; m.wpaths = nil; m.mu.Unlock() }
+
+// WrittenPaths lists the row writes since the last ResetWrites as "add /path", "set /path" or "remove /path" (tests:
+// which tables did the server write to).
+func (m *Mock) WrittenPaths() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.wpaths...)
+}
 
 // Table returns copies of every row of path in order (tests and the UI).
 func (m *Mock) Table(path string) []Row {

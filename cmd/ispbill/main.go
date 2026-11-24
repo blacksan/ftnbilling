@@ -193,19 +193,31 @@ func run(log *slog.Logger) error {
 		if box, err := secretbox.New(cfg.DataKey); err != nil {
 			log.Error("OLT management is off", "err", err)
 		} else {
-			oltSvc := olt.New(olt.Options{Store: st, Box: box, Reach: mgr.OLTReach, Alert: webSrv.OLTAlert, Log: log, ACS: func() *olt.ACS {
-				// The ACS address and the shared first-contact login the ONUs are given (a Pri profile on the OLT). Nil when the
-				// ACS is off or has no login yet.
-				if acsSvc == nil {
-					return nil
-				}
-				user, pass, err := acsSvc.Credentials()
-				if err != nil {
-					return nil
-				}
-				_, url := mgr.ACSAddress()
-				return &olt.ACS{URL: url, User: user, Pass: pass, InformSeconds: cfg.ACSInformInterval}
-			}})
+			oltSvc := olt.New(olt.Options{Store: st, Box: box, Reach: mgr.OLTReach, Alert: webSrv.OLTAlert, Log: log,
+				// The router's OLT management port: what is on it, and the rules that let only the server reach the OLT.
+				PortSeen: func(ctx context.Context, siteID string) (olt.PortSeen, error) {
+					v, err := mgr.OLTMgmtSeen(ctx, siteID)
+					out := olt.PortSeen{Port: v.Port}
+					for _, r := range v.Rows {
+						out.Rows = append(out.Rows, olt.SeenMAC{MAC: r.MAC, IP: r.IP, Status: r.Status})
+					}
+					return out, err
+				},
+				EnsurePort: mgr.EnsureOLTMgmt,
+				Vendor:     billing.Vendor,
+				ACS: func() *olt.ACS {
+					// The ACS address and the shared first-contact login the ONUs are given (a Pri profile on the OLT). Nil when the
+					// ACS is off or has no login yet.
+					if acsSvc == nil {
+						return nil
+					}
+					user, pass, err := acsSvc.Credentials()
+					if err != nil {
+						return nil
+					}
+					_, url := mgr.ACSAddress()
+					return &olt.ACS{URL: url, User: user, Pass: pass, InformSeconds: cfg.ACSInformInterval}
+				}})
 			webSrv.SetOLT(oltSvc)
 			wg.Add(1)
 			go func() { defer wg.Done(); oltSvc.Run(ctx) }()

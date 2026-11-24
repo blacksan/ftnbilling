@@ -52,6 +52,63 @@ type OLTSettings struct {
 	DialectChecked bool      `json:"dialect_checked,omitempty"`
 	CheckedBy      string    `json:"checked_by,omitempty"`
 	CheckedAt      time.Time `json:"checked_at,omitempty"`
+
+	// Adopt is how far the OLT has come with being taken over through the router's OLT management port.
+	Adopt OLTAdopt `json:"adopt,omitempty"`
+}
+
+// OLT adoption states (OLTAdopt.Stage): the next thing that has to happen.
+const (
+	AdoptNoRouter   = "no_router"   // the OLT is not on a router
+	AdoptNoPort     = "no_port"     // the router has no OLT management port
+	AdoptNoSSH      = "no_ssh"      // the OLT's SSH does not answer (a factory OLT has it off)
+	AdoptNoCable    = "no_cable"    // nothing is seen on the OLT management port
+	AdoptUnknownMAC = "unknown_mac" // another device than this OLT is on the port: listed as a possible OLT
+	AdoptNeedLogin  = "need_login"  // the OLT was reached but no login worked: the owner types one
+	AdoptMismatch   = "mismatch"    // the device on the port is not this OLT (serial or model): nothing is configured
+	AdoptNeedSecure = "need_secure" // the login works with a login that must be replaced (owner presses Secure)
+	AdoptSecured    = "secured"     // adopted and secured
+	AdoptAdopted    = "adopted"     // adopted with the owner's own login (not changed by the server)
+	AdoptManual     = "manual"      // the owner chose the console snippet instead
+	AdoptFailed     = "failed"      // the last step failed (see Error)
+)
+
+// OLTAdopt is the adoption progress of one OLT. Nothing in it is a secret: the passwords are sealed on the equipment item
+// (login) and in OLTSettings.EnablePass (enable); Pending* hold a new pair sealed while a change is in flight.
+type OLTAdopt struct {
+	Stage     string    `json:"stage,omitempty"`
+	Note      string    `json:"note,omitempty"` // the next action in words
+	Error     string    `json:"error,omitempty"`
+	CheckedAt time.Time `json:"checked_at,omitempty"`
+	// Manual: the owner uses the console snippet (the old adopt page) and the server does not use the management port.
+	Manual bool `json:"manual,omitempty"`
+
+	Port      string    `json:"port,omitempty"` // the router's OLT management port
+	MACSeen   bool      `json:"mac_seen"`       // this OLT's MAC is on that port
+	MACSeenAt time.Time `json:"mac_seen_at,omitempty"`
+	OtherMACs []string  `json:"other_macs,omitempty"` // other devices seen on the port
+
+	SSHOK       bool      `json:"ssh_ok"`
+	SSHAt       time.Time `json:"ssh_at,omitempty"`
+	SerialOK    string    `json:"serial_ok,omitempty"` // "" not checked, "ok", "mismatch"
+	SerialSeen  string    `json:"serial_seen,omitempty"`
+	ModelSeen   string    `json:"model_seen,omitempty"`
+	CredSource  string    `json:"cred_source,omitempty"` // stored, factory, owner, secured
+	FactoryAt   time.Time `json:"factory_at,omitempty"`  // the vendor default login was tried (once; never again by the server)
+	FactoryOK   bool      `json:"factory_ok,omitempty"`
+	Adopted     bool      `json:"adopted,omitempty"`
+	Secured     bool      `json:"secured,omitempty"`
+	SecuredAt   time.Time `json:"secured_at,omitempty"`
+	SecuredBy   string    `json:"secured_by,omitempty"`
+	SNMPOff     bool      `json:"snmp_off,omitempty"`
+	SNMPNote    string    `json:"snmp_note,omitempty"`
+	ACLNote     string    `json:"acl_note,omitempty"`
+	ACLDone     bool      `json:"acl_done,omitempty"`
+	AlertedAt   time.Time `json:"alerted_at,omitempty"` // the last "possible OLT" alert
+	RevealedAt  time.Time `json:"revealed_at,omitempty"`
+	RevealedBy  string    `json:"revealed_by,omitempty"`
+	PendingPass string    `json:"pending_pass,omitempty"` // sealed: a new login password being set (crash recovery)
+	PendingEn   string    `json:"pending_en,omitempty"`   // sealed: its enable password
 }
 
 // OLTONU is one ONU as the OLT reports it. Strings keep what the OLT printed when it could not be parsed.
@@ -128,6 +185,11 @@ const MaxOLTBackups = 20
 
 func (x OLTState) norm() OLTState {
 	x.Settings.HostKeyAt, x.Settings.ProvisioningAt, x.Settings.CheckedAt = nt(x.Settings.HostKeyAt), nt(x.Settings.ProvisioningAt), nt(x.Settings.CheckedAt)
+	a := &x.Settings.Adopt
+	a.CheckedAt, a.MACSeenAt, a.SSHAt, a.FactoryAt, a.SecuredAt, a.AlertedAt, a.RevealedAt = nt(a.CheckedAt), nt(a.MACSeenAt), nt(a.SSHAt), nt(a.FactoryAt), nt(a.SecuredAt), nt(a.AlertedAt), nt(a.RevealedAt)
+	if len(a.OtherMACs) == 0 {
+		a.OtherMACs = nil
+	}
 	x.Status.At = nt(x.Status.At)
 	x.Updated = nt(x.Updated)
 	for i := range x.Found {
@@ -156,6 +218,7 @@ func (x OLTState) Norm() OLTState { return x.norm() }
 func (x OLTState) Clone() OLTState { return cloneOLTState(x) }
 
 func cloneOLTState(x OLTState) OLTState {
+	x.Settings.Adopt.OtherMACs = append([]string(nil), x.Settings.Adopt.OtherMACs...)
 	x.Found = append([]OLTFound(nil), x.Found...)
 	x.Backups = append([]OLTBackup(nil), x.Backups...)
 	x.Status.ONUs = append([]OLTONU(nil), x.Status.ONUs...)
@@ -204,3 +267,7 @@ func (d *Data) OLTStateOf(id string) OLTState {
 	}
 	return OLTState{ID: id}
 }
+
+// DeviceSourceOLTMgmt is Device.Source of a device seen on a router's OLT management port that is not (or not yet proven to
+// be) an OLT of the inventory: it is listed under New devices as a "Possible OLT" and is never configured.
+const DeviceSourceOLTMgmt = "oltmgmt"

@@ -135,6 +135,11 @@ type Site struct {
 	// router, allocated like the tunnel address) on VLAN ONUMgmtVLAN (0 = 99) of the OLT port.
 	ONUMgmtN    int `json:"onu_mgmt_n,omitempty"`
 	ONUMgmtVLAN int `json:"onu_mgmt_vlan,omitempty"`
+	// OLTMgmtPort is the router port with the role "OLT management" ("" = none): a spare port, not in any bridge, cabled
+	// to an OLT's factory management port. The server gives it OLTMgmtNet (the router's own address, "" = 192.168.8.1/24)
+	// and a narrow set of firewall and NAT rules (internal/sites/oltadopt.go).
+	OLTMgmtPort string `json:"olt_mgmt_port,omitempty"`
+	OLTMgmtNet  string `json:"olt_mgmt_net,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 }

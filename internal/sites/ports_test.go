@@ -90,7 +90,7 @@ func TestPortsListsEveryPhysicalPortWithItsRole(t *testing.T) {
 	if p := portByName(t, ov, "ether2"); !p.CanChange || len(p.RoleOptions) != 0 {
 		t.Fatalf("the only admin LAN port cannot leave: %+v", p) // never the last one
 	}
-	if p := portByName(t, ov, "ether4"); strings.Join(p.RoleOptions, ",") != "lan,olt,customer" {
+	if p := portByName(t, ov, "ether4"); strings.Join(p.RoleOptions, ",") != "lan,olt,oltmgmt,customer" {
 		t.Fatalf("owner options on an unused port: %+v", p)
 	}
 	if p := portByName(t, ov, "sfp-sfpplus1"); len(p.RoleOptions) != 0 || p.RoleWarning != WarnOLT || p.ConfirmDisable || p.CanDisable {

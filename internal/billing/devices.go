@@ -244,7 +244,7 @@ func (s *Service) noteDevices(siteID string, obs []devObs, complete bool) {
 			changed = true
 		}
 		for key, dev := range d.Devices {
-			if complete && dev.SiteID == siteID && !seen[key] && dev.Online {
+			if complete && dev.SiteID == siteID && !seen[key] && dev.Online && dev.Source != store.DeviceSourceOLTMgmt {
 				dev.Online = false
 				d.Devices[key] = dev
 				changed = true
@@ -487,7 +487,7 @@ func (s *Service) UnregisteredOnline(has func(siteID string) bool) int {
 	s.st.View(func(d *store.Data) {
 		for _, dv := range d.Devices {
 			if dv.Source != SourceDismissed && dv.Online && now.Sub(dv.LastSeen) <= OnlineWindow && (has == nil || has(dv.SiteID)) {
-				if _, isOLT := d.OLTByMAC(dv.MAC); isOLT {
+				if _, isOLT := d.OLTByMAC(dv.MAC); isOLT && dv.Source != store.DeviceSourceOLTMgmt {
 					continue // an OLT needs nothing from the operator: it is not a new device to deal with
 				}
 				n++
@@ -546,7 +546,7 @@ func (s *Service) suggest(list []UnregDevice) {
 	now := s.now()
 	perSite := map[string][]int{} // site -> indexes of online devices
 	for i, u := range list {
-		if u.Online && u.BelongsTo == nil && u.Class.Class != ClassOLT {
+		if u.Online && u.BelongsTo == nil && u.Class.Class != ClassOLT && u.Class.Class != ClassPossibleOLT {
 			perSite[u.SiteID] = append(perSite[u.SiteID], i)
 		}
 	}
@@ -789,6 +789,8 @@ const (
 	ClassOLT     = "olt"     // the MAC of an OLT of the register
 	ClassONU     = "onu"     // the WAN MAC of an ONU of the register
 	ClassUnknown = "unknown" // nothing known
+	// ClassPossibleOLT: a device on a router's OLT management port that is not (or not yet proven to be) an OLT of the register.
+	ClassPossibleOLT = "possible_olt"
 )
 
 // DeviceClass says what a device row is.
@@ -809,6 +811,13 @@ type DeviceClass struct {
 func classifyLocked(d *store.Data, dv store.Device, router bool) DeviceClass {
 	if router {
 		return DeviceClass{Class: ClassRouter}
+	}
+	if dv.Source == store.DeviceSourceOLTMgmt {
+		label := "Possible OLT"
+		if dv.Vendor != "" {
+			label += " (" + dv.Vendor + ")"
+		}
+		return DeviceClass{Class: ClassPossibleOLT, Label: label}
 	}
 	if o, ok := d.OLTByMAC(dv.MAC); ok {
 		return DeviceClass{Class: ClassOLT, Label: strings.Join(strings.Fields("OLT "+o.Model+" "+o.Name), " "), EquipmentID: o.ID}

@@ -530,7 +530,8 @@
         var needName = p.role === "lan" || role === "olt";
         var warnText = p.role === "lan" ? p.role_warning : role === "olt" ? "All customers on the OLT go offline while the OLT uplink moves to " + p.name + "." : "";
         if (needName) return withName(p, warnText + " Type the router name to make " + p.name + ": " + label + ".", "Make " + p.name + " " + label + "?", "Change role", data);
-        return ask("Make " + p.name + " " + label + "?", "The server sets it up on the router by itself.", "Change role").then(function (y) { if (y) call(p, data); });
+        var msg = role === "oltmgmt" ? "Cable this port to the OLT's management port. The server gives it an address and firewall rules so only the server can reach the OLT over SSH. Nothing else is allowed on it." : "The server sets it up on the router by itself.";
+        return ask("Make " + p.name + " " + label + "?", msg, "Change role").then(function (y) { if (y) call(p, data); });
       }
       function row(p) {
         var tr = el("tr");

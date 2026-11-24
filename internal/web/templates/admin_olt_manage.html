@@ -1,5 +1,37 @@
 {{define "admin_olt_manage"}}{{template "ahead" .}}{{$E := .Data.E}}{{$S := .Data.Set}}{{$st := .Data.S}}
-<p><a href="/admin/olts/view?id={{$E.ID}}">&larr; OLT details</a> &middot; <a href="/admin/olts/adopt?id={{$E.ID}}">Adopt this OLT</a> &middot; <a href="/admin/equipment?tab=olt">all OLTs</a></p>
+<p><a href="/admin/olts/view?id={{$E.ID}}">&larr; OLT details</a> &middot; <a href="/admin/olts/adopt?id={{$E.ID}}">Manual setup (console snippet)</a> &middot; <a href="/admin/equipment?tab=olt">all OLTs</a></p>
+
+{{with .Data.Adopt}}<section class="panel mt-3"><div class="panel-h"><h2>Adoption</h2>
+<span class="muted">{{if not .CheckedAt.IsZero}}checked {{eats .CheckedAt}}{{else}}not checked yet{{end}}</span></div>
+<p><b>Next:</b> {{.Note}}</p>
+{{if .Error}}<p><span class="eqwarn" role="note">{{.Error}}</span></p>{{end}}
+{{if .Steps}}<div class="tw"><table class="rs"><thead><tr><th>Step</th><th>State</th><th>Detail</th></tr></thead><tbody>
+{{range .Steps}}<tr><td data-label="Step">{{.Label}}</td><td data-label="State"><span class="pill {{if eq .State "ok"}}live{{else if eq .State "fail"}}suspended{{else}}unknown{{end}}">{{if eq .State "ok"}}done{{else if eq .State "fail"}}problem{{else if eq .State "off"}}skipped{{else}}to do{{end}}</span></td><td data-label="Detail">{{.Detail}}</td></tr>{{end}}</tbody></table></div>{{end}}
+{{if $.CanWrite}}<div class="row mt-2"><form method="post" action="/admin/olts/manage/adopt-check"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><button class="btn sm">Check now</button></form></div>{{end}}
+</section>{{end}}
+
+{{if .IsOwner}}<section class="panel mt-3"><h2>OLT management port and login</h2>
+<p class="muted">Give a spare router port the role <b>OLT management</b> and cable the OLT's management port (GE0/2, factory address 192.168.8.200) to it. The server gives that port an address and firewall rules so that only this server can reach the OLT's SSH; the OLT gets no other access and no internet. It adopts the OLT only when its MAC is on that port and its serial number is the one in the inventory.</p>
+<form method="post" action="/admin/olts/manage/mgmt-port" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="action" value="set">
+<label class="field">Router port<select name="port">{{range .Data.FreePorts}}<option value="{{.}}">{{.}}</option>{{else}}<option value="">no spare port found</option>{{end}}</select></label>
+<label class="field">Router address on it<input name="net" value="{{.Data.MgmtNet}}" class="mono"></label><button class="btn sm">Use this port</button></form>
+{{if .Data.MgmtPort}}<p class="mt-2">Now: <b class="mono">{{.Data.MgmtPort}}</b>, router address <span class="mono">{{.Data.MgmtNet}}</span>.</p>
+<form method="post" action="/admin/olts/manage/mgmt-port" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="action" value="clear"><button class="btn ghost sm">Remove the role and the router rules</button></form>{{end}}
+{{with .Data.Adopt}}{{if .CanSecure}}<h3 class="mt-3">Secure this OLT</h3>
+<p class="muted">Replaces the OLT's login and enable password with long generated ones, tests them in a new SSH session while the old one stays open, and only then saves. If the test fails the old password is put back. It also removes the default SNMP communities (public, private), so SNMP is off.</p>
+<form method="post" action="/admin/olts/manage/secure" class="row"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
+<label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="btn sm">Secure this OLT</button></form>{{end}}
+<h3 class="mt-3">The OLT's login{{if .NeedLogin}} <span class="pill suspended">needed</span>{{end}}</h3>
+<p class="muted">{{if .NeedLogin}}The server could not log in. Type the login the OLT has now. {{end}}The password is stored encrypted and never shown, except to an owner who types their password again below.</p>
+<form method="post" action="/admin/olts/manage/credentials"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
+<div class="two3"><label class="field">Login name<input name="user" value="admin" autocomplete="off" class="mono" required></label>
+<label class="field">Password<input name="pass" type="password" autocomplete="new-password" required></label>
+<label class="field">Enable password<input name="enable" type="password" autocomplete="new-password" placeholder="none"></label></div>
+<div class="row mt-2"><label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="btn ghost sm">Save and check</button></div></form>
+{{if .HasLogin}}<form method="post" action="/admin/olts/manage/reveal" class="row mt-2"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
+<label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="btn ghost sm">Reveal the OLT's password</button></form>{{end}}{{end}}
+<form method="post" action="/admin/olts/manage/manual" class="row mt-2"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="on" value="{{if .Data.Adopt.Manual}}0{{else}}1{{end}}"><button class="btn ghost sm">{{if .Data.Adopt.Manual}}Use the OLT management port again{{else}}Set up by hand instead (console snippet){{end}}</button></form>
+</section>{{end}}
 
 <section class="panel mt-3"><div class="panel-h"><h2>Status</h2>
 <span class="muted">read {{.Data.PolledAt}}</span></div>
@@ -88,4 +120,13 @@
 <p class="muted">Then open <a href="/admin/olts/manage?id={{$E.ID}}">OLT management</a> and press Test connection.</p></section>
 <section class="panel mt-3"><h2>Why this is not automatic</h2><p class="muted">A factory OLT answers only on 192.168.8.200 on its untagged port. Reaching it from the server would need the router to put an address of that network on the customer-facing OLT port, which would also expose the OLT to every customer on it. The paste above avoids that.</p></section>
 {{end}}
+{{template "afoot" .}}{{end}}
+
+{{define "admin_olt_reveal"}}{{template "ahead" .}}{{$E := .Data.E}}
+<p><a href="/admin/olts/manage?id={{$E.ID}}">&larr; back to {{oltLabel $E}}</a></p>
+<section class="panel mt-3"><h2>The OLT's login</h2>
+<p class="muted">Shown once to you. This page is not stored by your browser. The reveal is in the audit log.</p>
+<p>Login name: <span class="mono">{{.Data.User}}</span></p>
+<p>Password: <span class="mono">{{.Data.Login}}</span></p>
+<p>Enable password: {{if .Data.Enable}}<span class="mono">{{.Data.Enable}}</span>{{else}}<span class="muted">none</span>{{end}}</p></section>
 {{template "afoot" .}}{{end}}
