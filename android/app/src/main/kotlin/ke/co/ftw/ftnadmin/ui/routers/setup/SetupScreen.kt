@@ -362,7 +362,7 @@ private fun BenchCard(ui: BenchUiState, vm: BenchViewModel) {
             Text(if (ui.busy) "Working..." else "Create test house")
         }
         ui.testAccount?.let { a ->
-            LabeledValue("Test house", a.flat.ifBlank { a.code })
+            LabeledValue("Test house", a.unitLabel.ifBlank { a.code })
             OutlinedButton(onClick = vm::runSuspendTest, enabled = !ui.busy, modifier = Modifier.fillMaxWidth()) { Text("Run suspend test") }
         }
         if (ui.suspendSteps.isNotEmpty()) StepList(ui.suspendSteps)
