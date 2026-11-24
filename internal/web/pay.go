@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
+	"html/template"
 	"net"
 	"net/http"
 	"net/netip"
@@ -171,6 +172,38 @@ func (s *Server) payRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /pay/find", s.payFind)
 	mux.HandleFunc("POST /pay/start", s.payStart)
 	mux.HandleFunc("POST /pay/voucher", s.payVoucher)
+	mux.HandleFunc("GET /pay/again", s.payAgain)
+	// A reload or a shared link opens these forms' addresses with GET: take the visitor to the page, not to a bare 405.
+	for _, p := range []string{"/pay/find", "/pay/start", "/pay/voucher"} {
+		mux.HandleFunc("GET "+p, toPay)
+	}
+}
+
+// payAgain is "Try again" after a payment that failed or timed out: the package step of the same account with the
+// same package chosen and the same paying number (the order id is the visitor's own receipt of that attempt).
+func (s *Server) payAgain(w http.ResponseWriter, r *http.Request) {
+	p := s.payBase(r)
+	o, ok := s.svc.GetOrder(r.FormValue("order"))
+	if !ok || !payFindLimiter(p).allow(limitKey(realIP(r))) {
+		toPay(w, r)
+		return
+	}
+	a, ok := s.svc.GetAccount(o.AccountID)
+	if open, found := s.svc.AccountByCode(a.Code); !ok || !found || open.ID != a.ID {
+		toPay(w, r)
+		return
+	}
+	r.Form.Set("phone_src", "")
+	r.Form.Del("phone")
+	if n := normOrEmpty(a.Phone); o.Phone != "" && o.Phone != n {
+		r.Form.Set("phone_src", "other")
+		r.Form.Set("phone", localPhone(o.Phone))
+	} else if n != "" {
+		r.Form.Set("phone_src", "file")
+	} else if o.Phone != "" {
+		r.Form.Set("phone", localPhone(o.Phone))
+	}
+	s.payChoose(w, r, p, a, true, http.StatusOK, "", o.PackageID)
 }
 
 // payPage is everything the public payment page shows. It never carries a
@@ -190,11 +223,12 @@ type payPage struct {
 	ExpiresAt                      time.Time
 	Groups                         []packageGroup
 	Blocked                        map[string]bool
-	BlockedUntil                   string
+	BlockedUntil, BlockedShort     string // the day the current plan ends, long ("Wed 23 Dec 2026") and short ("23 Dec")
 	Selected, Phone                string
 	PhoneMask                      string // the number on file, masked; "" = none offered
 	UseFile                        bool
 	Mpesa, Test                    bool
+	CanPay                         bool // M-Pesa or the test method is on: packages can be bought online
 	// Choices: set when a typed flat number is used in more than one apartment of the router.
 	// The visitor picks theirs (ApartmentID) and continues.
 	Choices []payChoice
@@ -277,9 +311,11 @@ func (s *Server) payBase(r *http.Request) payPage {
 		Test:  s.providers["test"] != nil && s.providers["test"].Enabled()}
 	siteID := ""
 	if st, ok := s.siteByAddr(realIP(r)); ok {
-		p.Site, p.SiteName, p.Detected = st.ID, st.Name, true
+		p.Site, p.Detected = st.ID, true
+		p.SiteName = s.onlyApartmentName(st.ID)
 		siteID = st.ID
 	}
+	p.CanPay = p.Mpesa || p.Test
 	p.Contacts = s.contacts(siteID)
 	p.Support = p.Contacts.Words()
 	return p
@@ -305,7 +341,75 @@ func (s *Server) payAccount(site, text, apartmentID string) (a store.Account, by
 		return store.Account{}, false, false, nil
 	}
 	a, ok, ambiguous = s.resolveFlat(site, text, apartmentID)
+	if !ok && len(ambiguous) == 0 {
+		a, ok, ambiguous = s.resolveFlatLoose(site, text, apartmentID)
+	}
 	return a, false, ok, ambiguous
+}
+
+// unitWords are the words a house number is often written with ("Flat 2A", "Hse 2A", "No. 2A"): the visitor may
+// leave them out, or add them where the owner did not.
+var unitWords = []string{"flat", "house", "hse", "unit", "apt", "apartment", "door", "room", "no", "number", "nr"}
+
+// looseUnitKey reduces a house number to its core for a forgiving match: "Flat 2A", "House 2a", "hse2a", "No. 2 A"
+// and "2A" all become "2a". Case, spaces, dots, dashes and a leading word are ignored.
+func looseUnitKey(s string) string {
+	s = strings.ToLower(strings.NewReplacer(".", " ", ",", " ", "#", " ", ":", " ", "/", " ", "-", " ", "_", " ").Replace(s))
+	f := strings.Fields(s)
+	for len(f) > 1 && isUnitWord(f[0]) {
+		f = f[1:]
+	}
+	k := strings.Join(f, "")
+	for _, w := range unitWords { // "flat2a" written without a space
+		if r, ok := strings.CutPrefix(k, w); ok && r != "" && r[0] >= '0' && r[0] <= '9' {
+			return r
+		}
+	}
+	return k
+}
+
+func isUnitWord(w string) bool {
+	for _, u := range unitWords {
+		if w == u {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveFlatLoose is the second try of a house-number lookup, after the exact one found nothing: it compares
+// looseUnitKey of what was typed with that of each open account of the router. A match in two apartments comes back
+// as ambiguous (the visitor is asked which apartment); two matches inside one apartment are never guessed.
+func (s *Server) resolveFlatLoose(siteID, text, apartmentID string) (a store.Account, ok bool, ambiguous []store.Account) {
+	key := looseUnitKey(text)
+	if key == "" {
+		return store.Account{}, false, nil
+	}
+	var hits []store.Account
+	s.st.View(func(d *store.Data) {
+		for _, x := range d.AccountList() {
+			if x.SiteID != siteID || (apartmentID != "" && x.ApartmentID != apartmentID) {
+				continue
+			}
+			if looseUnitKey(x.Unit) == key || looseUnitKey(x.Flat) == key {
+				hits = append(hits, x)
+			}
+		}
+	})
+	seen := map[string]bool{}
+	for _, h := range hits {
+		if seen[h.ApartmentID] {
+			return store.Account{}, false, nil // two houses of one apartment read the same: do not guess
+		}
+		seen[h.ApartmentID] = true
+	}
+	switch len(hits) {
+	case 0:
+		return store.Account{}, false, nil
+	case 1:
+		return hits[0], true, nil
+	}
+	return store.Account{}, false, hits
 }
 
 func (s *Server) payFail(w http.ResponseWriter, r *http.Request, code int, p payPage, msg string) {
@@ -327,18 +431,25 @@ func (s *Server) payFind(w http.ResponseWriter, r *http.Request) {
 		s.payFail(w, r, http.StatusTooManyRequests, p, "Too many attempts. Wait a minute and try again.")
 		return
 	}
+	p.Typed = strings.TrimSpace(r.FormValue("code"))
+	if len(p.Typed) > 40 {
+		p.Typed = p.Typed[:40]
+	}
 	a, byCode, ok, amb := s.payAccount(p.Site, r.FormValue("code"), r.FormValue("apartment_id"))
 	if len(amb) > 0 {
-		// The same label is used in more than one apartment of this router: ask which one, never guess.
-		p.Typed = strings.TrimSpace(r.FormValue("code"))
+		// The same house number is used in more than one apartment of this router: ask which one, never guess.
 		for _, x := range amb {
 			p.Choices = append(p.Choices, payChoice{ID: x.ApartmentID, Name: s.apartmentName(x.ApartmentID)})
 		}
-		s.payFail(w, r, http.StatusConflict, p, "More than one house on this network has that number. Choose your apartment, or enter your account number.")
+		s.payFail(w, r, http.StatusConflict, p, "")
 		return
 	}
 	if !ok {
-		s.payFail(w, r, http.StatusNotFound, p, "We could not find that account. Check the account number, or call "+p.Support+".")
+		msg := "We could not find that account. Check the number, or call " + p.Support + "."
+		if p.Detected {
+			msg = "We could not find that account. Check the account number or house number, or call " + p.Support + "."
+		}
+		s.payFail(w, r, http.StatusNotFound, p, msg)
 		return
 	}
 	s.payChoose(w, r, p, a, byCode, http.StatusOK, "", "")
@@ -364,9 +475,8 @@ func (s *Server) payChoose(w http.ResponseWriter, r *http.Request, p payPage, a 
 	if byCode {
 		p.Code, p.ExpiresAt, p.State = a.Code, a.ExpiresAt, billing.AccountState(a, s.svc.Now())
 	}
+	p.SiteName = s.apartmentName(a.ApartmentID)
 	s.st.View(func(d *store.Data) {
-		st := d.Sites[a.SiteID]
-		p.SiteName = st.Name
 		p.Groups = packageGroups(d.EffectivePackages(a.SiteID))
 	})
 	if a.Suspended {
@@ -384,12 +494,16 @@ func (s *Server) payChoose(w http.ResponseWriter, r *http.Request, p payPage, a 
 		for _, pk := range g.Packages {
 			if until, bl := s.svc.LowerPlanBlocked(a, pk); bl {
 				p.Blocked[pk.ID] = true
-				p.BlockedUntil = until.In(billing.EAT).Format("Mon 2 Jan 2006")
+				p.BlockedUntil = nbsp(until.In(billing.EAT).Format("Mon 2 Jan 2006"))
+				p.BlockedShort = nbsp(until.In(billing.EAT).Format("2 Jan"))
 			}
 		}
 	}
 	p.Selected = selected
-	if p.Selected == "" || p.Blocked[p.Selected] {
+	if !p.CanPay { // nothing can be bought online: no package is chosen for the visitor, and none is offered as buyable
+		p.Selected = ""
+		p.Blocked = nil
+	} else if p.Selected == "" || p.Blocked[p.Selected] {
 		p.Selected = ""
 		for _, g := range p.Groups {
 			for _, pk := range g.Packages {
@@ -404,7 +518,8 @@ func (s *Server) payChoose(w http.ResponseWriter, r *http.Request, p payPage, a 
 		// The number on file is offered, masked, only to a visitor who typed the account code (a flat label is easy to
 		// guess). The page never carries the full number: /pay/start fills it in from the account.
 		p.PhoneMask = maskPhone(a.Phone)
-		p.UseFile = r.FormValue("phone_src") != "other"
+		src := r.FormValue("phone_src")
+		p.UseFile = src != "other" && !(src == "" && strings.TrimSpace(p.Phone) != "")
 	}
 	s.render(w, "pay", p)
 }
@@ -465,8 +580,29 @@ func (s *Server) payStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rawPhone := strings.TrimSpace(r.FormValue("phone"))
-	if byCode && a.Phone != "" && r.FormValue("phone_src") != "other" {
-		rawPhone = a.Phone // "use the number on file": the page never held it
+	if byCode && a.Phone != "" {
+		// Two ways to name the paying number: the one on file (the page never held it) or one typed by the visitor.
+		// A typed number is never dropped silently: it is either used (the visitor chose "another number", or a form
+		// without the choice sent one) or the visitor is asked which number pays. The prompt never goes to a number
+		// the visitor did not choose.
+		src := r.FormValue("phone_src")
+		switch {
+		case src == "other" || (src == "" && rawPhone != ""):
+			if rawPhone == "" {
+				r.Form.Set("phone_src", "other")
+				again(http.StatusBadRequest, "Type the number that should pay, or choose \"Use the number on file\".")
+				return
+			}
+		default:
+			if rawPhone != "" {
+				if typed, err := billing.NormalizePhone(rawPhone); err != nil || typed != normOrEmpty(a.Phone) {
+					r.Form.Set("phone_src", "other") // show the number they typed
+					again(http.StatusBadRequest, "You typed another number, but \"Use the number on file\" is selected. Choose which number pays.")
+					return
+				}
+			}
+			rawPhone = a.Phone
+		}
 	}
 	phone, err := billing.NormalizePhone(rawPhone)
 	if err != nil {
@@ -558,4 +694,46 @@ func localPhone(p string) string {
 		return "0" + p[3:]
 	}
 	return p
+}
+
+// normOrEmpty is the normalised form of a stored phone number, "" when it does not parse.
+func normOrEmpty(p string) string {
+	n, err := billing.NormalizePhone(p)
+	if err != nil {
+		return ""
+	}
+	return n
+}
+
+// nbsp keeps a date or a name in one piece when a line wraps.
+func nbsp(s string) string { return strings.ReplaceAll(s, " ", "\u00a0") }
+
+// onlyApartmentName is what a visitor sees under the logo before the account is known: the apartment (building)
+// name when the router serves exactly one, otherwise nothing. The router's own name is internal and never shown.
+func (s *Server) onlyApartmentName(siteID string) (name string) {
+	s.st.View(func(d *store.Data) {
+		if ids := d.SiteApartmentIDs(siteID); len(ids) == 1 {
+			name = d.Apartments[ids[0]].Name
+		}
+	})
+	return name
+}
+
+// commas writes n with thousands separators: 12500 -> "12,500".
+func commas(n int) string {
+	s := itoa(n)
+	neg := strings.HasPrefix(s, "-")
+	s = strings.TrimPrefix(s, "-")
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	if neg {
+		s = "-" + s
+	}
+	return s
+}
+
+// nbMpesa escapes a message and wraps "M-Pesa" so a line never breaks at its hyphen.
+func nbMpesa(v string) template.HTML {
+	return template.HTML(strings.ReplaceAll(template.HTMLEscapeString(v), "M-Pesa", `<span class="nb">M-Pesa</span>`))
 }

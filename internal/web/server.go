@@ -133,6 +133,9 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 		"inc":      func(i int) int { return i + 1 },
 		"day":      day,
 		"stat":     func(v string) string { return strings.ReplaceAll(v, "_", " ") },
+		"kesc":     func(n int) string { return "KES " + commas(n) }, // customer pages: KES 12,500
+		"nb":       nbMpesa,                                          // escapes, and keeps "M-Pesa" in one piece
+		"eatd":     func(t time.Time) string { return nbsp(t.In(billing.EAT).Format("Mon 2 Jan 2006")) },
 		"eqStat": func(v string) string {
 			if v == store.EqInstalled {
 				return "deployed"
