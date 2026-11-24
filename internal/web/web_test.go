@@ -410,17 +410,39 @@ func TestNoTaxWordingAnywhere(t *testing.T) {
 	a.svc.GenerateVouchers(a.pkgID("1 Day"), "", 2)
 	a.adminPost(t, "/admin/metrics/demo", url.Values{})
 	banned := regexp.MustCompile(`(?i)\bvat\b|etims|excise|tax|tariff levy|inclusive of|exclusive of`)
+	// Account codes, voucher codes and batch ids are random (RandomCode), so one can spell "TAX" by
+	// chance; CSRF tokens are random too. Blank out those generated values (and nothing else) before
+	// scanning, so only the wording the app itself renders is checked.
+	var generated []string
+	a.st.View(func(d *store.Data) {
+		for _, x := range d.Accounts {
+			generated = append(generated, x.Code)
+		}
+		for _, v := range d.Vouchers {
+			generated = append(generated, v.Code, v.Batch)
+		}
+	})
+	csrfVal := regexp.MustCompile(`(name="_p?csrf" value=")[^"]*`)
+	scrub := func(h string) string {
+		h = csrfVal.ReplaceAllString(h, "$1")
+		for _, g := range generated {
+			if g != "" {
+				h = strings.ReplaceAll(h, g, "·")
+			}
+		}
+		return h
+	}
 	pages := []string{"/admin", "/admin/accounts", "/admin/accounts/view?code=" + acct.Code, "/admin/devices", "/admin/payments", "/admin/payments.csv",
 		"/admin/payments/record", "/admin/unmatched", "/admin/orders", "/admin/packages", "/admin/vouchers", "/admin/settings",
 		"/admin/metrics", "/admin/metrics/flat?code=" + acct.Code, "/admin/metrics.csv"}
 	for _, p := range pages {
-		if m := banned.FindString(a.adminGet(t, p)); m != "" {
+		if m := banned.FindString(scrub(a.adminGet(t, p))); m != "" {
 			t.Errorf("%s contains %q", p, m)
 		}
 	}
 	for _, p := range []string{"/pay", "/portal/wait?order=x"} {
-		if _, h := a.portal(t, p); banned.MatchString(h) {
-			t.Errorf("%s: %q", p, banned.FindString(h))
+		if _, h := a.portal(t, p); banned.MatchString(scrub(h)) {
+			t.Errorf("%s: %q", p, banned.FindString(scrub(h)))
 		}
 	}
 	var vc store.Voucher
@@ -429,7 +451,7 @@ func TestNoTaxWordingAnywhere(t *testing.T) {
 			vc = v
 		}
 	})
-	if h := a.adminGet(t, "/admin/vouchers/print?batch="+vc.Batch); banned.MatchString(h) {
+	if h := a.adminGet(t, "/admin/vouchers/print?batch="+vc.Batch); banned.MatchString(scrub(h)) {
 		t.Error("voucher print page")
 	}
 	// Package prices are plain KES amounts.

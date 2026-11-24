@@ -63,6 +63,9 @@ func newFixture(t *testing.T, mut func(*config.Config)) *fixture {
 			}
 			return f.mocks[s.ID]
 		}})
+	// Registered after t.TempDir and the store, so it runs before they are cleaned up: a change-port
+	// or sweep goroutine the test left behind must finish (it still writes the store/data dir) first.
+	t.Cleanup(func() { f.m.cport.wg.Wait(); f.m.Wait() })
 	return f
 }
 

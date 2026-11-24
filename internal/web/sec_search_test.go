@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -122,6 +123,8 @@ func (r *apiRig) webGet(t *testing.T, b *browser, path string) (int, string) {
 	return resp.StatusCode, string(bs)
 }
 
+var csrfValue = regexp.MustCompile(`(name="_p?csrf" value=")[^"]*`)
+
 // The last four digits are shown to owners only; everyone else sees "on file".
 func TestLastFourOfNationalIDHiddenFromViewersAndOperators(t *testing.T) {
 	r, cid, secret := natIDRig(t)
@@ -139,7 +142,10 @@ func TestLastFourOfNationalIDHiddenFromViewersAndOperators(t *testing.T) {
 				}
 				continue
 			}
-			if strings.Contains(page, last4) || strings.Contains(page, "ending") {
+			// The page also carries random hex (customer id, CSRF token) that can contain the four
+			// digits by chance; blank those out so only a real leak of the stored ID can match.
+			seen := csrfValue.ReplaceAllString(strings.ReplaceAll(page, cid, "·"), "$1")
+			if strings.Contains(seen, last4) || strings.Contains(page, "ending") {
 				t.Errorf("%s sees part of the ID on %s", name, p)
 			}
 			if !strings.Contains(page, "on file") && !strings.Contains(strings.ToLower(page), "on file") {
