@@ -258,7 +258,7 @@
       zoom: 13,
       maxZoom: MAX_ZOOM,
       // The style's own attribution (OpenFreeMap, OpenMapTiles, OpenStreetMap) stays open, not folded into an "i" button.
-      attributionControl: { compact: false },
+      attributionControl: { compact: false, customAttribution: "<a href=\"https://openfreemap.org\" target=\"_blank\" rel=\"noopener\">OpenFreeMap</a> <a href=\"https://www.openmaptiles.org/\" target=\"_blank\" rel=\"noopener\">\u00a9 OpenMapTiles</a> Data from <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap</a>" },
       dragRotate: false,
       pitchWithRotate: false,
       touchPitch: false
