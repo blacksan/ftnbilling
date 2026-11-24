@@ -354,6 +354,24 @@ class OnuViewModelsTest {
         assertEquals(1, requests("POST /api/v1/onus/o5/unblock").size)
     }
 
+    private val waitingJson = """{"id":"o7","serial":"SNW7","manufacturer":"V-SOL","site_id":"s1",
+        "mac_wait":{"text":"Waiting: management MAC doesn't match the registered ONU yet","lease_mac":"AA:BB:CC:00:00:90","registered_mac":"AA:BB:CC:00:00:10","can_trust":true}}"""
+
+    @Test fun onuWaitingForItsMacIsShownAndTrusted() = runTest(main.dispatcher) {
+        routes["GET /api/v1/sites/s1/onus"] = ok("""{"items":[$waitingJson]}""")
+        routes["POST /api/v1/onus/o7/trust"] = ok("""{"id":"o7","serial":"SNW7"}""")
+        val vm = main.track(OnusViewModel("s1", repo, AccountsRepository(api)))
+        await(vm.state) { it.items is Loadable.Ready }
+        val onu = (vm.state.value.items as Loadable.Ready).value.single()
+        assertTrue(onu.isWaitingForMac)
+        assertEquals("AA:BB:CC:00:00:90", onu.macWait!!.leaseMac)
+        assertEquals("AA:BB:CC:00:00:10", onu.macWait!!.registeredMac)
+        assertTrue(onu.macWait!!.canTrust)
+        vm.trust(onu)
+        await(vm.state) { !it.busy && it.info != null }
+        assertEquals(1, requests("POST /api/v1/onus/o7/trust").size)
+    }
+
     @Test fun approveWithNothingToApproveShowsTheReason() = runTest(main.dispatcher) {
         routes["GET /api/v1/sites/s1/onus"] = ok("""{"items":[{"id":"o6","serial":"SN6"}]}""")
         routes["POST /api/v1/onus/o6/approve"] = err(409, "bad_state", msg = "that ONU is not waiting for an approval")

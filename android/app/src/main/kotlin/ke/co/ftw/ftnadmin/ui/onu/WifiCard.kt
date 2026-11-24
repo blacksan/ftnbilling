@@ -84,12 +84,20 @@ private fun OnuBody(onu: Onu, task: OnuTask?, error: String?, canWrite: Boolean,
         StatusChip(if (onu.online) "ONU online" else "ONU silent", if (onu.online) Tone.Good else Tone.Warn)
         if (onu.desired.changedOnDevice) StatusChip("Changed on the device", Tone.Warn)
         if (onu.isQuarantined) StatusChip("Held back: unexpected place", Tone.Bad)
+        if (onu.isWaitingForMac) StatusChip("Waiting for MAC", Tone.Bad)
         if (onu.sharedLoginOnly) StatusChip("Shared login only", Tone.Neutral)
         if (onu.returned) StatusChip("Returned: reset on next check-in", Tone.Neutral)
     }
     if (onu.isQuarantined) {
         Text(
             "This ONU checked in from an unexpected place and gets nothing until the owner approves or blocks it in the router's ONUs.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+    onu.macWait?.let { w ->
+        Text(
+            "${w.text}. Nothing is sent to it yet. An owner can trust it in the router's ONUs.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
         )

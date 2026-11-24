@@ -54,6 +54,32 @@ data class OnuQuarantine(
     @SerialName("site_name") val siteName: String = "",
 )
 
+/**
+ * A registered ONU whose management MAC is not near the registered WAN MAC yet: nothing is sent to it. An owner can
+ * trust it ([canTrust]: the router has said which MAC holds its address).
+ */
+@Serializable
+data class OnuMacWait(
+    val text: String = "",
+    @SerialName("lease_mac") val leaseMac: String = "",
+    @SerialName("registered_mac") val registeredMac: String = "",
+    val reason: String = "",
+    @SerialName("can_trust") val canTrust: Boolean = false,
+)
+
+/** A serial that tried to check in and is not in the ONU inventory (GET /onus/unknown). */
+@Serializable
+data class UnknownOnu(
+    val serial: String = "",
+    val manufacturer: String = "",
+    val model: String = "",
+    @SerialName("site_id") val siteId: String = "",
+    @SerialName("site_name") val siteName: String = "",
+    val ip: String = "",
+    @SerialName("last_seen") val lastSeen: String? = null,
+    val count: Int = 0,
+)
+
 @Serializable
 data class Onu(
     val id: String = "",
@@ -85,8 +111,11 @@ data class Onu(
     /** The box left a house: a factory reset is queued and it never gets a house's Wi-Fi. */
     val returned: Boolean = false,
     val blocked: Boolean = false,
+    /** Set while the ONU waits for its management MAC to match the registered ONU. */
+    @SerialName("mac_wait") val macWait: OnuMacWait? = null,
 ) {
     val isQuarantined: Boolean get() = quarantine != null
+    val isWaitingForMac: Boolean get() = macWait != null
     val title: String get() = listOf(manufacturer, model).filter { it.isNotBlank() }.joinToString(" ").ifBlank { "ONU" }
     val isLinked: Boolean get() = accountId.isNotBlank()
 }

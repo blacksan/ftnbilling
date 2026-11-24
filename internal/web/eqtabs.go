@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"ispbill/internal/acs"
 	"ispbill/internal/billing"
 	"ispbill/internal/store"
 )
@@ -296,6 +297,18 @@ func (s *Server) eqONUs(w http.ResponseWriter, r *http.Request) {
 	p.Data["Rows"], p.Data["Counts"], p.Data["Status"], p.Data["Router"], p.Data["OLT"], p.Data["Q"] = rows, counts, status, rtr, olt, q
 	p.Data["Statuses"], p.Data["Routers"], p.Data["OLTs"] = billing.EquipmentStatuses, sc.Sites, s.oltChoices(sc)
 	p.Data["Flash2"] = qv.Get("skipped")
+	if s.acs != nil {
+		var unk []acs.UnknownONU
+		for _, u := range s.acs.UnknownONUs("") {
+			if (u.SiteID == "" || sc.Has(u.SiteID)) && (rtr == "" || u.SiteID == rtr) {
+				unk = append(unk, u)
+			}
+		}
+		p.Data["Unknown"] = unk
+	}
+	p.Data["AddBack"] = "/admin/equipment?tab=onu"
+	// "Add to inventory" from an unknown ONU opens this page with the form prefilled.
+	p.Data["AddSerial"], p.Data["AddModel"] = prefillText(qv.Get("add_serial")), prefillText(qv.Get("add_model"))
 	s.render(w, "admin_equipment_onus", p)
 }
 
@@ -350,4 +363,18 @@ func (s *Server) eqOther(w http.ResponseWriter, r *http.Request) {
 	p.Data["Kinds"], p.Data["Statuses"] = kinds, billing.EquipmentStatuses
 	p.Data["Flash2"] = qv.Get("skipped")
 	s.render(w, "admin_equipment_other", p)
+}
+
+// prefillText keeps a value taken from the address bar short and printable before it goes into a form field.
+func prefillText(v string) string {
+	v = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(v))
+	if len(v) > 64 {
+		v = v[:64]
+	}
+	return v
 }

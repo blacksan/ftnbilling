@@ -165,6 +165,10 @@ func (s *Service) handleInform(w http.ResponseWriter, r *http.Request, site stor
 		switch v.state {
 		case stBlocked, stBadAuth, stCapped:
 			return store.ErrNoChange
+		case stUnregistered:
+			if v.noWrite {
+				return store.ErrNoChange
+			}
 		}
 		o = cur
 		return nil
@@ -198,7 +202,7 @@ func (s *Service) handleInform(w http.ResponseWriter, r *http.Request, site stor
 		return
 	}
 	for _, old := range s.sessions { // one session per device: a new Inform ends the old one
-		if old.onuID == o.ID {
+		if o.ID != "" && old.onuID == o.ID {
 			old.cancel()
 			delete(s.sessions, old.id)
 		}

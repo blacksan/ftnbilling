@@ -69,6 +69,8 @@ func TaskTTL(kind string) time.Duration {
 
 // Per-device ACS login states (ONUSec.ACSCred).
 const (
+	MACWaiting  = "waiting" // ONUSec.MACCheck: the management MAC does not match the registered ONU yet
+	MACOK       = "ok"
 	CredNone    = ""        // not yet written
 	CredPending = "pending" // written; the ONU has not logged in with it yet
 	CredDevice  = "device"  // the ONU logs in with its own login
@@ -168,8 +170,16 @@ type ONUSec struct {
 	FlapCount   int           `json:"flap_count,omitempty"`
 	FlapSince   time.Time     `json:"flap_since,omitempty"`
 	// AdminPassEnc is the random password set on the ONU's own web admin (sealed); AdminPass the state (Admin*).
-	AdminPassEnc string `json:"admin_pass_enc,omitempty"`
-	AdminPass    string `json:"admin_pass,omitempty"`
+	// MACCheck is the state of the management-MAC check against the registered ONU (MACWaiting, MACOK or "" = never
+	// needed). MACWaitLease is the lease MAC last seen while it waited; MACTrusted the lease MAC the owner overrode
+	// ("Trust this ONU"): the box is let through whenever its address is leased to that MAC. MACAlerted limits the alert.
+	MACCheck     string    `json:"mac_check,omitempty"`
+	MACWaitLease string    `json:"mac_wait_lease,omitempty"`
+	MACWaitNote  string    `json:"mac_wait_note,omitempty"`
+	MACTrusted   string    `json:"mac_trusted,omitempty"`
+	MACAlerted   time.Time `json:"mac_alerted,omitempty"`
+	AdminPassEnc string    `json:"admin_pass_enc,omitempty"`
+	AdminPass    string    `json:"admin_pass,omitempty"`
 }
 
 // ONUState is what the ACS remembers about the box between sessions.
@@ -234,7 +244,7 @@ func (x ONU) norm() ONU {
 	x.FirstSeen, x.LastInform = nt(x.FirstSeen), nt(x.LastInform)
 	q := &x.Sec.Quarantine
 	q.Since, q.LastAt, q.Alerted = nt(q.Since), nt(q.LastAt), nt(q.Alerted)
-	x.Sec.FlapSince = nt(x.Sec.FlapSince)
+	x.Sec.FlapSince, x.Sec.MACAlerted = nt(x.Sec.FlapSince), nt(x.Sec.MACAlerted)
 	x.State.AppliedAt, x.State.ReturnedAt = nt(x.State.AppliedAt), nt(x.State.ReturnedAt)
 	if x.LegacyDesired != nil {
 		c := *x.LegacyDesired

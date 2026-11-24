@@ -99,6 +99,9 @@ type Config struct {
 	// ACSResetCreds makes a new ACS login when the stored one cannot be opened (DATA_KEY lost). Off: ONU management
 	// refuses to start instead of silently cutting every ONU off.
 	ACSResetCreds bool
+	// ACSRegisteredOnly (ACS_REGISTERED_ONLY, default on): the ACS takes a first check-in only from a serial that is in the
+	// ONU inventory, and holds the first house secrets until the management MAC is near the registered WAN MAC.
+	ACSRegisteredOnly bool
 	// ACSAllowPrivate lets ACS_LISTEN be a private address that is neither the server's WireGuard address nor
 	// loopback (ACS_LISTEN_ALLOW_PRIVATE=true). Off by default: a private NIC that is 1:1 NATed to a public address
 	// would expose the ACS.
@@ -532,6 +535,10 @@ func (c *Config) loadACS(get func(k, def string) string, errs *[]error) {
 	c.ACSCompatAuth = parseBool(get("ACS_COMPAT_AUTH", ""))
 	c.ACSAllowPrivate = parseBool(get("ACS_LISTEN_ALLOW_PRIVATE", ""))
 	c.ACSResetCreds = parseBool(get("ACS_RESET_CREDENTIALS", ""))
+	c.ACSRegisteredOnly = true
+	if v := get("ACS_REGISTERED_ONLY", ""); v != "" {
+		c.ACSRegisteredOnly = parseBool(v)
+	}
 	c.ACSCRPorts = []int{7547, 30005}
 	if v := get("ACS_CR_PORTS", ""); v != "" {
 		var ports []int

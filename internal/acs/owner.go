@@ -246,6 +246,9 @@ func (s *Service) Upkeep() {
 	now := s.now()
 	_ = s.st.Update(func(d *store.Data) error {
 		changed := expireTasks(d, now) > 0
+		if pruneUnknown(d, now) {
+			changed = true
+		}
 		for id, o := range d.ONUs {
 			if o.AccountID != "" {
 				continue

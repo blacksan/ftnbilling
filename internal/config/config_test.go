@@ -343,3 +343,16 @@ func TestMACVendorLookupSettings(t *testing.T) {
 		}
 	}
 }
+
+func TestACSRegisteredOnlyDefaultsOn(t *testing.T) {
+	c, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true"}))
+	if err != nil || !c.ACSRegisteredOnly {
+		t.Fatalf("default: %v %v", c.ACSRegisteredOnly, err)
+	}
+	for v, want := range map[string]bool{"true": true, "false": false, "0": false, "yes": true} {
+		c, err = Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true", "ACS_REGISTERED_ONLY": v}))
+		if err != nil || c.ACSRegisteredOnly != want {
+			t.Errorf("ACS_REGISTERED_ONLY=%q: %v %v", v, c.ACSRegisteredOnly, err)
+		}
+	}
+}

@@ -43,6 +43,7 @@ func (s *Server) onuRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/accounts/onu/reject", s.adminAccountONUReject)
 	post("/admin/onus/approve", s.adminONUApprove)
 	post("/admin/onus/block", s.adminONUBlock)
+	post("/admin/onus/trust", s.adminONUTrust)
 	post("/admin/onus/unblock", s.adminONUUnblock)
 	post("/admin/onus/task/cancel", s.adminONUTaskCancel)
 	post("/admin/onus/adminpw", s.adminONUAdminPW)
@@ -114,6 +115,8 @@ func (s *Server) onuTabData(data map[string]any, st store.Site) {
 		return
 	}
 	data["ONUs"] = s.acs.ONUs(st.ID)
+	data["Unknown"] = s.acs.UnknownONUs(st.ID)
+	data["AddBack"] = "/admin/equipment?tab=onu"
 	data["ONUVLAN"] = st.MgmtVLANOrDefault()
 	data["ONUDefault"] = store.DefaultONUMgmtVLAN
 	if st.ONUMgmtN > 0 {
@@ -159,6 +162,7 @@ func (s *Server) adminONUs(w http.ResponseWriter, r *http.Request) {
 	p.Detail = "TR-069 check-ins"
 	list := s.acs.ONUs(p.Site)
 	p.Data["ONUs"] = list
+	p.Data["Unknown"] = s.acs.UnknownONUs(p.Site)
 	var free []store.Account
 	s.st.View(func(d *store.Data) {
 		linked := map[string]bool{}
@@ -217,6 +221,27 @@ func (s *Server) adminONUApprove(w http.ResponseWriter, r *http.Request) {
 	}
 	err := s.acs.ApproveONU(s.actorOf(r), realIP(r), r.PostFormValue("onu"))
 	s.back(w, r, s.onuBack(r, "/admin/onus"), msgOr(err, "Approved. The ONU is bound to where it checked in from."))
+}
+
+// adminONUTrust is the owner's override for an ONU that waits for its management MAC to match the registered ONU: the
+// MAC it checked in from is trusted for that serial. Owner only, behind the owner's own password, audited.
+func (s *Server) adminONUTrust(w http.ResponseWriter, r *http.Request) {
+	if s.acsOff(w, r) {
+		return
+	}
+	to := s.onuBack(r, "/admin/onus")
+	if u, _ := userOf(r); u.Role != store.RoleOwner {
+		s.back(w, r, to, "Error: only an owner can trust an ONU whose management MAC does not match")
+		return
+	}
+	if !s.reauth(w, r, to) {
+		return
+	}
+	err := s.acs.TrustONU(s.actorOf(r), realIP(r), r.PostFormValue("onu"))
+	if err == nil {
+		s.audit(r, "ONU management MAC trusted for "+r.PostFormValue("onu"))
+	}
+	s.back(w, r, to, msgOr(err, "Trusted. The ONU gets its settings at its next check-in."))
 }
 
 func (s *Server) adminONUBlock(w http.ResponseWriter, r *http.Request) {
