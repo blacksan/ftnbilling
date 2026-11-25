@@ -2,8 +2,10 @@ package olt
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"ispbill/internal/store"
 )
@@ -515,4 +517,50 @@ func TestApplyPriProfileRefusedStillGivesExistingONUsTR069(t *testing.T) {
 	if eq.OLTID == oltID {
 		t.Fatal("a skipped ONU was placed on the OLT")
 	}
+}
+
+// The bench: after `profile pri name ftn_pri` the driver did not recognise the OLT's prompt and timed out. Any prompt of the
+// OLT's host name (learned at the login) is a prompt, whatever its mode text, also when redrawn after an erase.
+func TestUnusualProfilePromptsAreRecognised(t *testing.T) {
+	for _, pp := range []string{"config-{kind}-profile:{name}", "profile-{kind}[1]", "{kind}-profile-1", "config-profile-{kind}-{name} id 1"} {
+		t.Run(pp, func(t *testing.T) {
+			e := newEnv(t)
+			e.withACS()
+			e.f.SetRunning(withoutPri(t, ""))
+			e.f.ProfilePrompt, e.f.PromptRedraw = pp, true
+			e.enable(t)
+			_, h, err := e.svc.Plan(context.Background(), oltID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.svc.Apply(context.Background(), oltID, h, "owner"); err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			if !strings.Contains(strings.Join(e.f.Lines(), "\n"), "profile pri name ftn_pri") {
+				t.Fatal("the profile was not sent")
+			}
+		})
+	}
+}
+
+// A prompt that is not recognised ends in a timeout that shows what the OLT printed last (redacted).
+func TestCommandTimeoutShowsTheLastOutput(t *testing.T) {
+	e := newEnv(t)
+	e.withACS()
+	e.f.SetRunning(withoutPri(t, ""))
+	e.f.ProfilePrompt = "x)\n(odd-prompt" // the last line is "(odd-prompt)# ": no host name in front
+	e.svc.o.Timeout = time.Second
+	e.enable(t)
+	_, h, err := e.svc.Plan(context.Background(), oltID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.svc.Apply(context.Background(), oltID, h, "owner")
+	if err == nil || !errors.Is(err, ErrTimeout) || !strings.Contains(err.Error(), `the OLT showed last: "`) || !strings.Contains(err.Error(), "(odd-prompt)#") {
+		t.Fatalf("%v", err)
+	}
+	if !strings.Contains(e.auditText(), "(odd-prompt)#") {
+		t.Fatalf("audit: %s", e.auditText())
+	}
+	e.noSecretsAnywhere(t, err.Error())
 }

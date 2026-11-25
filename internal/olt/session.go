@@ -73,8 +73,13 @@ type Session struct {
 	SaveTimeout time.Duration
 	mode        Mode
 	prompt      string
-	enable      string
-	Timeout     time.Duration // per command (default 20 s)
+	// host is the OLT's host name, learned from the first prompt after the login ("gpon-olt"); hostRE then accepts any
+	// prompt of it in any mode: host, an optional "(<any mode text>)", then # or >. The mode text is never assumed (the
+	// Pri profile's prompt was not recognised on the bench).
+	host    string
+	hostRE  *regexp.Regexp
+	enable  string
+	Timeout time.Duration // per command (default 20 s)
 	// Protect is the management VLAN: nothing may be removed under it.
 	Protect int
 	cs      cstate // where the lines sent so far have left the CLI (inside the management interface, inside a sub-mode)
@@ -160,8 +165,8 @@ func (s *Session) readUntil(ctx context.Context, timeout time.Duration, st stopA
 					return "", "", err
 				}
 				goto wait
-			case s.d.PromptRE.MatchString(tl):
-				return s.tidy(text[:lastNL+1]), tl, nil
+			case s.isPrompt(tl):
+				return s.tidy(text[:lastNL+1]), strings.TrimSpace(tl), nil
 			case st == stopLogin && (s.d.UserRE.MatchString(tl) || s.d.PasswordRE.MatchString(tl)):
 				return s.tidy(text[:lastNL+1]), tl, nil
 			case st == stopQuestion && s.d.QuestionRE != nil && s.d.QuestionRE.MatchString(tl) && len(s.raw) > s.asked:
@@ -215,6 +220,30 @@ func (s *Session) tidy(t string) string {
 	return t
 }
 
+// learnHost takes the host name from the first prompt ("gpon-olt#", "gpon-olt>", "gpon-olt(config)#").
+func (s *Session) learnHost(p string) {
+	p = strings.TrimSpace(p)
+	end := strings.IndexAny(p, "(#>")
+	if end <= 0 || s.host != "" {
+		return
+	}
+	s.host = p[:end]
+	s.hostRE = regexp.MustCompile(`^` + regexp.QuoteMeta(s.host) + `(\([^\r\n]*\))?[>#]$`)
+}
+
+// isPrompt reports whether a rendered last line is a prompt: the dialect's shape, or the learned host name with any mode
+// text. Leading blanks (a prompt redrawn after an erase) and one trailing blank are allowed.
+func (s *Session) isPrompt(line string) bool {
+	t := strings.TrimSpace(line)
+	if t == "" {
+		return false
+	}
+	if s.d.PromptRE.MatchString(t) {
+		return true
+	}
+	return s.hostRE != nil && s.hostRE.MatchString(t)
+}
+
 func (s *Session) setPrompt(p string) {
 	s.prompt = p
 	switch {
@@ -247,6 +276,7 @@ func (s *Session) login(ctx context.Context, user, pass, enable string) error {
 		_, last, err := s.readUntil(ctx, sub, stopLogin)
 		switch {
 		case err == nil && s.d.PromptRE.MatchString(last):
+			s.learnHost(last)
 			s.setPrompt(last)
 			s.settle(ctx)
 			return nil
@@ -299,8 +329,8 @@ func (s *Session) settle(ctx context.Context) {
 			text := clean(s.raw)
 			if i := strings.LastIndexByte(strings.TrimRight(text, " "), '\n'); i >= 0 || text != "" {
 				l := strings.TrimRight(text[strings.LastIndexByte(text, '\n')+1:], " \t")
-				if s.d.PromptRE.MatchString(l) {
-					s.setPrompt(l)
+				if s.isPrompt(l) {
+					s.setPrompt(strings.TrimSpace(l))
 				}
 			}
 			s.raw, s.answered = nil, 0
@@ -584,6 +614,10 @@ func (s *Session) exec(ctx context.Context, line string, trusted bool) (string, 
 	}
 	out, last, err := s.readUntil(ctx, s.Timeout, stopPrompt)
 	if err != nil {
+		if errors.Is(err, ErrTimeout) {
+			// What the OLT showed last: an unrecognised prompt (or a question) is visible on the page next time.
+			err = &timeoutErr{tail: outputTail(out, 200)}
+		}
 		s.Transcript = append(s.Transcript, Entry{Cmd: Redact(line), Err: err.Error()})
 		return out, err
 	}
@@ -801,7 +835,7 @@ func (s *Session) Save(ctx context.Context) error {
 			}
 			return err
 		}
-		if s.d.PromptRE.MatchString(last) {
+		if s.isPrompt(last) {
 			break
 		}
 		// A yes/no question: only the save's own confirmation is answered, once.
@@ -850,7 +884,7 @@ var resyncQuiet = 200 * time.Millisecond
 func (s *Session) saveSettle(ctx context.Context) (more, last string, ok bool) {
 	s.raw, s.answered = nil, 0
 	out, l, err := s.readUntil(ctx, settleQuiet, stopQuestion)
-	if err != nil || l == "" || !s.d.PromptRE.MatchString(l) {
+	if err != nil || l == "" || !s.isPrompt(l) {
 		return "", "", false
 	}
 	return out, l, true
@@ -879,6 +913,14 @@ func (s *Session) resync(ctx context.Context) {
 	}
 	s.raw, s.answered = nil, 0
 }
+
+// timeoutErr is ErrTimeout with the last output the OLT showed.
+type timeoutErr struct{ tail string }
+
+func (e *timeoutErr) Error() string {
+	return ErrTimeout.Error() + "; the OLT showed last: " + strconv.Quote(e.tail)
+}
+func (e *timeoutErr) Unwrap() error { return ErrTimeout }
 
 // outputTail is the last n characters of rendered output, on one line and redacted, for an error message.
 func outputTail(out string, n int) string {

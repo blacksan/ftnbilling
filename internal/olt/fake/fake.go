@@ -70,6 +70,12 @@ type OLT struct {
 	// WriteRedraw makes `write` end the way some terminals draw it: "\r ESC[K [OK]" with the prompt drawn on the same line
 	// right after it (no line break).
 	WriteRedraw bool
+	// ProfilePrompt replaces the mode text of a profile's prompt: "{kind}" and "{name}" are filled in, e.g.
+	// "config-{kind}-profile:{name}" gives "gpon-olt(config-pri-profile:ftn_pri)# " (the bench's Pri profile prompt was not
+	// recognised; its text is not known).
+	ProfilePrompt string
+	// PromptRedraw draws every prompt after "\r ESC[K" (erase the line) with a blank in front.
+	PromptRedraw bool
 	// WriteAsk makes `write` ask this question first; it saves only when the answer is "y".
 	WriteAsk string
 	// Communities are the SNMP communities (default public and private).
@@ -461,6 +467,12 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 			switch {
 			case ponOf() > 0:
 				name = "pon-" + f[2]
+			case f[0] == "profile" && o.ProfilePrompt != "":
+				pn := ""
+				if len(f) > 0 {
+					pn = f[len(f)-1]
+				}
+				return o.Host + "(" + strings.NewReplacer("{kind}", f[1], "{name}", pn).Replace(o.ProfilePrompt) + ")# "
 			case f[0] == "profile":
 				name = f[1] + "-profile"
 			case len(f) > 1:
@@ -475,6 +487,13 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 		return o.Host + "> "
 	}
 	w := func(s string) { _, _ = io.WriteString(rw, strings.ReplaceAll(s, "\n", "\r\n")) }
+	basePrompt := prompt
+	prompt = func() string {
+		if o.PromptRedraw {
+			return "\r\x1b[K " + basePrompt()
+		}
+		return basePrompt()
+	}
 	w(prompt())
 	skipLF := false
 	for {
