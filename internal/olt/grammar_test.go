@@ -310,7 +310,7 @@ func TestGrammarSecureACLAndSNMP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := []string{plan.Permit, plan.Deny4, plan.Deny6, plan.Enable, "no " + plan.Deny4, "no " + plan.Deny6, "no " + plan.Permit,
+	lines := []string{plan.Permit, plan.Enable, "no " + plan.Permit,
 		"no snmp-server community public", ShowACLCmd, ShowSNMPCmd}
 	for _, l := range lines {
 		if g.match("config", l) == "" {

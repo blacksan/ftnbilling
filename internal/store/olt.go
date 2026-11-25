@@ -55,6 +55,40 @@ type OLTSettings struct {
 
 	// Adopt is how far the OLT has come with being taken over through the router's OLT management port.
 	Adopt OLTAdopt `json:"adopt,omitempty"`
+
+	// Job marks a background job that changes the OLT's configuration (a plan apply) from its start to its end. A mark that
+	// is still here with no job running means the server stopped in the middle of it.
+	Job OLTJobMark `json:"job,omitempty"`
+	// Last is the outcome of the latest background job (job.go).
+	Last OLTLastJob `json:"last_job,omitempty"`
+}
+
+// OLTLastJob is the outcome of the latest background job (Secure, Apply, Check) of an OLT, kept until the next one ends:
+// the page and the API show it after a restart or when the request that started it is long gone. Redacted, no secret.
+type OLTLastJob struct {
+	Kind       string    `json:"kind,omitempty"` // secure, apply, check
+	By         string    `json:"by,omitempty"`
+	Started    time.Time `json:"started,omitempty"`
+	Finished   time.Time `json:"finished,omitempty"`
+	OK         bool      `json:"ok,omitempty"`
+	Error      string    `json:"error,omitempty"`
+	Sent       int       `json:"sent,omitempty"` // configuration lines sent (apply)
+	Verified   bool      `json:"verified,omitempty"`
+	Remaining  int       `json:"remaining,omitempty"`   // lines still missing at the read back
+	Refused    string    `json:"refused,omitempty"`     // the first line the OLT refused (or did not answer)
+	RefusedOut string    `json:"refused_out,omitempty"` // and what the OLT said to it
+	Failed     []string  `json:"failed,omitempty"`      // steps that failed
+	Skipped    []string  `json:"skipped,omitempty"`     // steps not tried
+	Backup     string    `json:"backup,omitempty"`
+}
+
+// OLTJobMark is the durable trace of a running background apply: no secret, only what the page needs to say that it was
+// interrupted. Kind "" = none.
+type OLTJobMark struct {
+	Kind string    `json:"kind,omitempty"`
+	By   string    `json:"by,omitempty"`
+	At   time.Time `json:"at,omitempty"`
+	Plan string    `json:"plan,omitempty"` // the hash of the plan that was being applied
 }
 
 // OLT adoption states (OLTAdopt.Stage): the next thing that has to happen.
@@ -227,6 +261,8 @@ func cloneOLTState(x OLTState) OLTState {
 	x.Found = append([]OLTFound(nil), x.Found...)
 	x.Backups = append([]OLTBackup(nil), x.Backups...)
 	x.Status.ONUs = append([]OLTONU(nil), x.Status.ONUs...)
+	x.Settings.Last.Failed = append([]string(nil), x.Settings.Last.Failed...)
+	x.Settings.Last.Skipped = append([]string(nil), x.Settings.Last.Skipped...)
 	return x
 }
 

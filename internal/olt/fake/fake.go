@@ -61,6 +61,21 @@ type OLT struct {
 	WriteDelay time.Duration
 	// WriteBuilding makes `write` print "Building configuration..." at once and "[OK]" after WriteDelay.
 	WriteBuilding bool
+	// WriteHangAfter > 0 makes every `write` after that many saves print "Building configuration..." and never answer:
+	// the bench's second save in one Secure run (cause not known yet).
+	WriteHangAfter int
+	// WriteLate makes `write` print "Building configuration..." and the prompt at once, and "[OK]" with the prompt again
+	// only when the flash write ends (WriteDelay later; the CLI reads nothing meanwhile).
+	WriteLate bool
+	// WriteRedraw makes `write` end the way some terminals draw it: "\r ESC[K [OK]" with the prompt drawn on the same line
+	// right after it (no line break).
+	WriteRedraw bool
+	// ProfilePrompt replaces the mode text of a profile's prompt: "{kind}" and "{name}" are filled in, e.g.
+	// "config-{kind}-profile:{name}" gives "gpon-olt(config-pri-profile:ftn_pri)# " (the bench's Pri profile prompt was not
+	// recognised; its text is not known).
+	ProfilePrompt string
+	// PromptRedraw draws every prompt after "\r ESC[K" (erase the line) with a blank in front.
+	PromptRedraw bool
 	// WriteAsk makes `write` ask this question first; it saves only when the answer is "y".
 	WriteAsk string
 	// Communities are the SNMP communities (default public and private).
@@ -75,6 +90,11 @@ type OLT struct {
 	ACLMatch string
 	// ACLShow selects the layout of `show login-access-list`: "" = a status line and a table, "lines" = config lines.
 	ACLShow string
+	// ACLExclusive is the V1600GS-R's rule (bench, after PR #39): the rules of one protocol are either all permit (an
+	// allowlist: only the listed sources may log in) or all deny; adding the other kind is refused with the OLT's own text
+	// "add failed, protocol has permit rule,please detele it first!" (or "... has deny rule ..."). IPv4 and IPv6 rules of a
+	// protocol count together.
+	ACLExclusive bool
 	// ACLNoState leaves `login-access-list enable|disable` out of the running configuration (a firmware that does not print it).
 	ACLNoState bool
 
@@ -447,6 +467,12 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 			switch {
 			case ponOf() > 0:
 				name = "pon-" + f[2]
+			case f[0] == "profile" && o.ProfilePrompt != "":
+				pn := ""
+				if len(f) > 0 {
+					pn = f[len(f)-1]
+				}
+				return o.Host + "(" + strings.NewReplacer("{kind}", f[1], "{name}", pn).Replace(o.ProfilePrompt) + ")# "
 			case f[0] == "profile":
 				name = f[1] + "-profile"
 			case len(f) > 1:
@@ -461,6 +487,13 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 		return o.Host + "> "
 	}
 	w := func(s string) { _, _ = io.WriteString(rw, strings.ReplaceAll(s, "\n", "\r\n")) }
+	basePrompt := prompt
+	prompt = func() string {
+		if o.PromptRedraw {
+			return "\r\x1b[K " + basePrompt()
+		}
+		return basePrompt()
+	}
 	w(prompt())
 	skipLF := false
 	for {
@@ -650,6 +683,26 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 				out = "% Write failed.\n"
 				break
 			}
+			o.mu.Lock()
+			hang := o.WriteHangAfter > 0 && o.writes >= o.WriteHangAfter
+			o.mu.Unlock()
+			if hang {
+				w("Building configuration...\n")
+				continue // no answer, no prompt
+			}
+			if o.WriteLate {
+				w("Building configuration...\n")
+				w(prompt())
+				time.Sleep(o.WriteDelay)
+				o.mu.Lock()
+				o.writes++
+				o.mu.Unlock()
+				out = "[OK]\n"
+				if o.WriteRedraw {
+					out = "\r\x1b[K[OK]"
+				}
+				break
+			}
 			if o.WriteAsk != "" {
 				w(o.WriteAsk)
 				ans := ""
@@ -686,6 +739,9 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 				o.writes++
 				o.mu.Unlock()
 				out = "[OK]\n"
+				if o.WriteRedraw {
+					out = "\r\x1b[K[OK]"
+				}
 				break
 			}
 			o.mu.Lock()
@@ -973,6 +1029,21 @@ func (o *OLT) aclAllows(proto string) bool {
 		}
 		return true
 	}
+	if o.ACLExclusive {
+		// An allowlist when the protocol has permit rules: only a listed source logs in.
+		permits := false
+		for _, r := range o.acl {
+			if !r.v6 && r.proto == proto && r.action == "permit" {
+				permits = true
+				if match(r) {
+					return true
+				}
+			}
+		}
+		if permits {
+			return false
+		}
+	}
 	allowed, decided := true, false
 	for _, r := range o.acl {
 		if !match(r) {
@@ -1070,6 +1141,13 @@ func (o *OLT) aclLine(f []string) string {
 			return "% Invalid input detected at '^' marker.\n"
 		}
 	}
+	if !no && o.ACLExclusive {
+		for _, x := range o.acl {
+			if x.proto == r.proto && x.action != r.action {
+				return "add failed, protocol has " + x.action + " rule,please detele it first!\n"
+			}
+		}
+	}
 	for i, x := range o.acl {
 		if x == r {
 			if no {
@@ -1085,6 +1163,9 @@ func (o *OLT) aclLine(f []string) string {
 	o.acl = append(o.acl, r)
 	return ""
 }
+
+// ACLLine runs one `[no] login-access-list ...` line as the CLI would and returns what it prints.
+func (o *OLT) ACLLine(line string) string { return o.aclLine(strings.Fields(line)) }
 
 // ACLRules are the login-access-list rules now configured, as the running configuration prints them (after the leading
 // "login-access-list ").

@@ -1,6 +1,23 @@
 {{define "admin_olt_manage"}}{{template "ahead" .}}{{$E := .Data.E}}{{$S := .Data.Set}}{{$st := .Data.S}}
 <p><a href="/admin/olts/view?id={{$E.ID}}">&larr; OLT details</a> &middot; <a href="/admin/olts/adopt?id={{$E.ID}}">Manual setup (console snippet)</a> &middot; <a href="/admin/equipment?tab=olt">all OLTs</a></p>
 
+{{with .Data.Job}}{{if or .Running .UnfinishedSecure .UnfinishedApply}}<section class="panel mt-3" role="status"{{if .Running}} {{if $.IsOwner}}data-job-poll="/admin/olts/manage/job-status?id={{$E.ID}}" data-running="1"{{else}}data-reload="5"{{end}}{{end}}>
+{{if .Running}}<p><b>{{.Label}}&hellip;</b> started {{.Started}}. <span data-job-stage>{{.Stage}}</span></p><p class="muted">This takes a few minutes. The page updates by itself. Nothing else can be started on this OLT until it ends.</p>{{end}}
+{{if .UnfinishedSecure}}<p><span class="pill suspended">unfinished</span> A Secure did not finish (the server stopped, or it failed half way). The new login it set is kept encrypted; the server tries it at its next check of the OLT.</p>{{end}}
+{{if .UnfinishedApply}}<p><span class="pill suspended">unfinished</span> {{.ApplyNote}}</p>{{end}}</section>{{end}}{{end}}
+
+{{with .Data.Last}}<section class="panel mt-3" data-last-change><div class="panel-h"><h2>Last change</h2><span class="muted">{{.Label}} by {{.By}}, {{.Started}} &ndash; {{.Finished}}</span></div>
+<p>{{if .OK}}<span class="pill active">done</span>{{else}}<span class="pill suspended">failed</span>{{end}} {{.Message}}</p>
+{{if .Error}}<p><span class="eqwarn" role="note">{{.Error}}</span></p>{{end}}
+{{if eq .Kind "apply"}}<p class="muted">{{.Sent}} line{{if ne .Sent 1}}s{{end}} sent{{if .OK}}; read back: {{if .Verified}}all there{{else}}{{.Remaining}} still missing{{end}}{{end}}.{{if .Backup}} The configuration was saved first (backup {{.Backup}}).{{end}}</p>{{end}}
+{{if .Refused}}<p>The OLT refused (or did not answer) <span class="mono">{{.Refused}}</span>:</p><pre class="mono">{{.RefusedOut}}</pre>{{end}}
+{{if .Failed}}<p>Failed steps:</p><ul>{{range .Failed}}<li>{{.}}</li>{{end}}</ul>{{end}}
+{{if .Skipped}}<p>Skipped steps:</p><ul>{{range .Skipped}}<li>{{.}}</li>{{end}}</ul>{{end}}
+<p class="muted">Shown until the next Apply, Secure or Check now ends.</p></section>{{end}}
+
+{{if .Data.Audit}}<section class="panel mt-3"><h2>Recent audit entries for this OLT</h2><div class="tw"><table class="rs"><thead><tr><th>When</th><th>Who</th><th>What</th></tr></thead><tbody>
+{{range .Data.Audit}}<tr><td data-label="When">{{.At}}</td><td data-label="Who">{{.By}}</td><td data-label="What" class="wrap">{{.Msg}}</td></tr>{{end}}</tbody></table></div><p class="muted">The last 10, owners only; secrets are hidden.</p></section>{{end}}
+
 {{with .Data.Adopt}}<section class="panel mt-3"><div class="panel-h"><h2>Adoption</h2>
 <span class="muted">{{if not .CheckedAt.IsZero}}checked {{eats .CheckedAt}}{{else}}not checked yet{{end}}</span></div>
 <p><b>Next:</b> {{.Note}}</p>
@@ -8,6 +25,7 @@
 {{if .Steps}}<div class="tw"><table class="rs"><thead><tr><th>Step</th><th>State</th><th>Detail</th></tr></thead><tbody>
 {{range .Steps}}<tr><td data-label="Step">{{.Label}}</td><td data-label="State"><span class="pill {{if eq .State "ok"}}live{{else if eq .State "fail"}}suspended{{else}}unknown{{end}}">{{if eq .State "ok"}}done{{else if eq .State "fail"}}problem{{else if eq .State "off"}}skipped{{else}}to do{{end}}</span></td><td data-label="Detail">{{.Detail}}</td></tr>{{end}}</tbody></table></div>{{end}}
 {{if .ACLRules}}<h3 class="mt-2">Login access list on the OLT</h3><ul class="mono">{{range .ACLRules}}<li>{{.}}</li>{{end}}</ul>{{end}}
+{{if .ACLDone}}<p class="muted">SSH limited to the router (the OLT allows SSH only from listed addresses). The server can only test from the router's address: check from another PC that SSH is refused.</p>{{end}}
 {{if .ACLFinding}}<p><span class="eqwarn" role="note">{{.ACLFinding}}</span></p>{{end}}
 {{if $.CanWrite}}<div class="row mt-2"><form method="post" action="/admin/olts/manage/adopt-check"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><button class="btn sm">Check now</button></form></div>{{end}}
 </section>{{end}}
@@ -20,12 +38,7 @@
 {{if .Data.MgmtPort}}<p class="mt-2">Now: <b class="mono">{{.Data.MgmtPort}}</b>, router address <span class="mono">{{.Data.MgmtNet}}</span>.</p>
 <form method="post" action="/admin/olts/manage/mgmt-port" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="action" value="clear"><button class="btn ghost sm">Remove the role and the router rules</button></form>{{end}}
 {{with .Data.Adopt}}{{if .CanSecure}}<h3 class="mt-3">Secure this OLT</h3>
-{{with $.Data.Secure}}<div class="panel" data-secure-poll="/admin/olts/manage/secure-status?id={{$E.ID}}"{{if .Running}} data-running="1"{{end}}>
-{{if .Running}}<p><b>Securing&hellip;</b> started {{.Started}}. <span data-secure-stage>{{.Stage}}</span></p><p class="muted">This takes a few minutes. The page updates by itself.</p>
-{{else if .Done}}<p><span class="pill active">done</span> {{.Message}}</p>
-{{else if .Failed}}<p><span class="pill suspended">failed</span> {{.Error}}</p>
-{{else if .Interrupted}}<p><span class="pill suspended">unfinished</span> A Secure did not finish (the server stopped, or it failed half way). The new login it set is kept encrypted; the server tries it at its next check of the OLT.</p>{{end}}</div>{{end}}
-<p class="muted">Replaces the OLT's login and enable password with long generated ones, tests them in a new SSH session while the old one stays open, and only then saves. If the test fails the old password is put back. It also removes the default SNMP communities (public, private), so SNMP is off.</p>
+<p class="muted">Replaces the OLT's login and enable password with long generated ones, tests them in a new SSH session while the old one stays open, and only then saves. If the test fails the old password is put back. It also removes the default SNMP communities (public, private), so SNMP is off, and limits SSH to the router (the OLT allows SSH only from listed addresses).</p>
 <form method="post" action="/admin/olts/manage/secure" class="row"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
 <label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="btn sm">Secure this OLT</button></form>{{end}}
 <h3 class="mt-3">The OLT's login{{if .NeedLogin}} <span class="pill suspended">needed</span>{{end}}</h3>
@@ -85,7 +98,7 @@
 <label class="field">Enable password<input name="enable_pass" type="password" autocomplete="new-password" placeholder="{{if .Data.HasEnable}}stored, leave empty to keep{{else}}none{{end}}"></label></div>
 <div class="two3 mt-2"><label class="field">OLT management VLAN<input name="mgmt_vlan" type="number" min="2" max="4094" value="{{.Data.MgmtVLAN}}"></label>
 <label class="field">Uplink port (to the router)<input name="uplink" value="{{.Data.Uplink}}" placeholder="0/1" class="mono"></label>
-<label class="field">Internet VLAN on the OLT<input name="internet_vlan" type="number" min="0" max="4094" value="{{$S.InternetVLAN}}" placeholder="from the router"></label></div>
+<label class="field">Internet VLAN on the OLT<input name="internet_vlan" type="number" min="0" max="4094" value="{{$S.InternetVLAN}}" placeholder="from the router">{{with .Data.InetVLANNote}}<span class="muted">{{.}}</span>{{end}}</label></div>
 <p class="muted">Login name and password are on the <a href="/admin/olts/view?id={{$E.ID}}">OLT details</a> page. The password and the enable password are stored encrypted and never shown. {{if $S.HostKey}}SSH host key pinned: <span class="mono">{{$S.HostKey}}</span> <label class="ck muted"><input type="checkbox" name="clear_hostkey" value="1"> forget it (after replacing the OLT)</label>{{else}}The SSH host key is pinned the first time the server connects, and shown here.{{end}}
 {{if .Data.HasEnable}} <label class="ck muted"><input type="checkbox" name="clear_enable" value="1"> remove the enable password</label>{{end}}</p>
 <div class="row mt-2"><label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button>Save</button></div></form></section>
@@ -103,8 +116,8 @@
 {{define "admin_olt_plan"}}{{template "ahead" .}}{{$E := .Data.E}}{{$P := .Data.Plan}}
 <p><a href="/admin/olts/manage?id={{$E.ID}}">&larr; back to {{oltLabel $E}}</a></p>
 <section class="panel mt-3"><h2>{{if .Data.Remove}}Removal plan{{else}}Plan{{end}} <span class="muted">{{.Data.Cmds}} line{{if ne .Data.Cmds 1}}s{{end}}, id {{.Data.Hash}}</span></h2>
-<p class="muted">This is exactly what would be sent. Nothing has been changed. The OLT's configuration is saved first, and the lines are read back afterwards to check them.</p>
-{{range $P.Steps}}<h3>{{.Title}}</h3><pre class="mono">{{range .Lines}}{{.}}
+<p class="muted">This is exactly what would be sent. Nothing has been changed. The OLT's configuration is saved first, and the lines are read back afterwards to check them. Each step is sent on its own: a refused line stops its step and the later steps, except those marked as sent anyway.</p>
+{{range $P.Steps}}<h3>{{.Title}}</h3>{{if .Unverified}}<p><span class="pill unknown">unverified</span> <span class="muted">{{.Unverified}}</span></p>{{end}}{{if .Independent}}<p class="muted">Sent even if an earlier step is refused.</p>{{end}}<pre class="mono">{{range .Lines}}{{.}}
 {{end}}</pre>{{else}}<p>Nothing to change: the OLT already matches.</p>{{end}}
 {{range $P.Warnings}}<p><span class="eqwarn" role="note">{{.}}</span></p>{{end}}
 {{range $P.Notes}}<p class="muted">{{.}}</p>{{end}}

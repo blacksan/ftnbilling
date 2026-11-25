@@ -2,6 +2,7 @@ package olt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -17,6 +18,11 @@ type Result struct {
 	Verified  bool
 	Remaining []string // lines the re-read configuration still lacks
 	Entries   []Entry
+	// Failed are the steps the OLT refused a line of ("title: why"); Skipped the steps not tried because an earlier step
+	// failed; Done the steps that went through (only set when a step failed).
+	Failed, Skipped, Done []string
+	// SavedPartly: a step failed, but steps that do not depend on it went through and the configuration was saved.
+	SavedPartly bool
 }
 
 func (s *Service) mayConfigure(st store.OLTState) error {
@@ -86,12 +92,24 @@ func (s *Service) Plan(ctx context.Context, id string) (Plan, string, error) {
 		p, _, err = s.computePlan(ctx, o)
 		return err
 	})
+	if err == nil {
+		// Reading the plan again is the answer to "unfinished": the plan is built from what the OLT has now.
+		s.clearStaleMark(id)
+	}
 	return p, p.Hash(), err
 }
+
+// clearStaleMark forgets the mark of an interrupted apply when no job runs.
+func (s *Service) clearStaleMark(id string) { s.clearJobMark(id, true) }
 
 // Apply runs the plan the owner reviewed (its hash). It saves the running configuration first, sends the lines, saves,
 // re-reads and compares, and writes an audit entry with the (redacted) transcript. The first refused line stops it.
 func (s *Service) Apply(ctx context.Context, id, wantHash, by string) (Result, error) {
+	return s.apply(ctx, id, wantHash, by, nil)
+}
+
+// apply is Apply with a stage report (nil = none): the background job tells the page what it is doing.
+func (s *Service) apply(ctx context.Context, id, wantHash, by string, stage func(string)) (Result, error) {
 	var res Result
 	err := s.withSession(ctx, id, true, func(o *opened) error {
 		if err := s.mayConfigure(o.st); err != nil {
@@ -104,7 +122,7 @@ func (s *Service) Apply(ctx context.Context, id, wantHash, by string) (Result, e
 		if wantHash == "" || p.Hash() != wantHash {
 			return ErrPlanChanged
 		}
-		res, err = s.applyPlan(ctx, o, p, "before a configuration change", by, s.verifyPlan(id, false))
+		res, err = s.applyPlan(ctx, o, p, "before a configuration change", by, s.verifyPlan(id, false), stage)
 		return err
 	})
 	return res, err
@@ -112,12 +130,16 @@ func (s *Service) Apply(ctx context.Context, id, wantHash, by string) (Result, e
 
 // applyPlan is the one place the server writes to an OLT: backup, send, save, verify, audit. The caller has checked
 // permission.
-func (s *Service) applyPlan(ctx context.Context, o *opened, p Plan, why, by string, verify verifier) (Result, error) {
+func (s *Service) applyPlan(ctx context.Context, o *opened, p Plan, why, by string, verify verifier, stage func(string)) (Result, error) {
 	var res Result
 	cmds := p.Commands()
 	if len(cmds) == 0 {
 		return res, nil
 	}
+	if stage == nil {
+		stage = func(string) {}
+	}
+	stage("Saving a copy of the configuration")
 	b, _, err := s.backupIn(ctx, o, why, by)
 	if err != nil {
 		return res, fmt.Errorf("the configuration could not be saved first, nothing was changed: %w", err)
@@ -126,25 +148,76 @@ func (s *Service) applyPlan(ctx context.Context, o *opened, p Plan, why, by stri
 	// From the first configuration line on, the batch runs to its end (or its first refused line) even when the web
 	// request that started it is cancelled or times out: stopping half way would leave a half-made ONU or VLAN in the
 	// running configuration, unsaved. The OLT's own per-command timeouts still apply.
-	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), applyWriteBudget)
 	defer cancel()
 	before := len(o.sess.Transcript)
-	n, cerr := o.sess.ConfigN(wctx, cmds)
-	res.Sent = redactAll(cmds[:n])
-	if cerr == nil {
-		cerr = o.sess.Save(wctx)
+	// Every line of every step passes the denylist before the first one is sent.
+	if err := o.sess.CheckAll(cmds); err != nil {
+		return res, err
+	}
+	stage(fmt.Sprintf("Sending %d lines", len(cmds)))
+	// Each step is its own batch. A refused line stops its step and every later step, except the Independent ones (the
+	// per-ONU lines of ONUs already on the OLT): ONU 1 gets its TR-069 lines even when a new Pri profile is refused.
+	var cerr error
+	okAfterFail := false
+	donePON := map[int]bool{}
+	for i, st := range p.Steps {
+		if cerr != nil && !st.Independent {
+			res.Skipped = append(res.Skipped, st.Title)
+			continue
+		}
+		n, err := o.sess.ConfigN(wctx, st.Lines)
+		res.Sent = append(res.Sent, redactAll(st.Lines[:n])...)
+		if err != nil {
+			res.Failed = append(res.Failed, st.Title+": "+errText(err))
+			if cerr == nil {
+				cerr = err
+			}
+			if ctx.Err() != nil || wctx.Err() != nil || !isRefusal(err) {
+				// The session itself failed (not a refused line): nothing more is tried.
+				for _, rest := range p.Steps[i+1:] {
+					res.Skipped = append(res.Skipped, rest.Title)
+				}
+				break
+			}
+			continue
+		}
+		res.Done = append(res.Done, st.Title)
+		if cerr != nil {
+			okAfterFail = true
+		}
+		if st.NewONUs > 0 {
+			donePON[st.NewONUs] = true
+		}
+	}
+	if cerr == nil || okAfterFail {
+		stage("Saving on the OLT")
+		if serr := o.sess.Save(wctx); serr != nil {
+			if cerr == nil {
+				cerr = serr
+			} else {
+				res.Failed = append(res.Failed, "save: "+errText(serr))
+			}
+		} else if cerr != nil {
+			res.SavedPartly = true
+		}
 	}
 	res.Entries = append([]Entry(nil), o.sess.Transcript[before:]...)
 	if cerr != nil {
-		s.auditApply(o.e, by, p, res, "FAILED: "+errText(cerr))
+		err := stepError(cerr, res)
+		s.auditApply(o.e, by, p, res, "FAILED: "+errText(err))
 		if s.o.Alert != nil {
-			s.o.Alert("OLT "+store.OLTLabel(o.e)+": configuration stopped", clip(errText(cerr), 400)+" The earlier lines may have been applied; the configuration was saved first.")
+			s.o.Alert("OLT "+store.OLTLabel(o.e)+": configuration stopped", clip(errText(err), 400)+" The earlier lines may have been applied; the configuration was saved first.")
 		}
-		return res, cerr
+		// The ONUs a step that went through authorised are still recorded.
+		s.afterApply(o, addsOf(p, donePON))
+		return res, err
 	}
+	res.Failed, res.Skipped, res.Done = nil, nil, nil
 	// The ONUs it authorised are placed on this OLT before the check, so that the check looks at their services too.
 	s.afterApply(o, p)
 	// Verify: read it back; nothing the plan wanted may be missing.
+	stage("Reading back")
 	text, err := s.readRunning(wctx, o.sess)
 	if err == nil {
 		run := ParseRunning(text)
@@ -153,6 +226,54 @@ func (s *Service) applyPlan(ctx context.Context, o *opened, p Plan, why, by stri
 	}
 	s.auditApply(o.e, by, p, res, "ok")
 	return res, nil
+}
+
+// isRefusal: the OLT answered the line with an error (the session is fine), as opposed to a broken or timed-out session.
+func isRefusal(err error) bool {
+	var ce *CmdError
+	return errors.As(err, &ce)
+}
+
+// stepError is the error of an apply where a step failed: which step, what was still done (and saved), what was skipped.
+func stepError(first error, res Result) error {
+	if len(res.Failed) == 0 {
+		return first
+	}
+	msg := "the OLT refused a line in step " + res.Failed[0]
+	if len(res.Failed) > 1 {
+		msg += "; also failed: " + strings.Join(res.Failed[1:], "; ")
+	}
+	if len(res.Done) > 0 {
+		msg += "; went through: " + strings.Join(res.Done, ", ")
+		if res.SavedPartly {
+			msg += " (saved)"
+		} else {
+			msg += " (not saved)"
+		}
+	}
+	if len(res.Skipped) > 0 {
+		msg += "; skipped: " + strings.Join(res.Skipped, ", ")
+	}
+	return &stepErr{msg: msg, err: first}
+}
+
+type stepErr struct {
+	msg string
+	err error
+}
+
+func (e *stepErr) Error() string { return e.msg }
+func (e *stepErr) Unwrap() error { return e.err }
+
+// addsOf is the plan's adds whose step went through (by PON).
+func addsOf(p Plan, done map[int]bool) Plan {
+	var q Plan
+	for _, a := range p.Adds {
+		if done[a.PON] {
+			q.Adds = append(q.Adds, a)
+		}
+	}
+	return q
 }
 
 // verifier lists what is still missing after an apply, from the re-read configuration.
@@ -248,7 +369,7 @@ func (s *Service) autoProvision(ctx context.Context, o *opened) {
 	if len(p.Adds) == 0 {
 		return
 	}
-	res, err := s.applyPlan(ctx, o, p, "before automatic ONU add", "system", s.verifyPlan(o.e.ID, true))
+	res, err := s.applyPlan(ctx, o, p, "before automatic ONU add", "system", s.verifyPlan(o.e.ID, true), nil)
 	if err != nil {
 		s.markFound(o.e.ID, ready, store.OLTFoundFailed, errText(err))
 		return
@@ -310,6 +431,11 @@ func (s *Service) removePlan(ctx context.Context, o *opened, serial string) (Pla
 
 // ApplyRemove runs a reviewed removal plan.
 func (s *Service) ApplyRemove(ctx context.Context, id, serial, wantHash, by string) (Result, error) {
+	return s.applyRemove(ctx, id, serial, wantHash, by, nil)
+}
+
+// applyRemove is ApplyRemove with a stage report (nil = none).
+func (s *Service) applyRemove(ctx context.Context, id, serial, wantHash, by string, stage func(string)) (Result, error) {
 	var res Result
 	err := s.withSession(ctx, id, true, func(o *opened) error {
 		if err := s.mayConfigure(o.st); err != nil {
@@ -322,7 +448,7 @@ func (s *Service) ApplyRemove(ctx context.Context, id, serial, wantHash, by stri
 		if wantHash == "" || p.Hash() != wantHash {
 			return ErrPlanChanged
 		}
-		res, err = s.applyPlan(ctx, o, p, "before removing an ONU", by, verifyRemoved(serial))
+		res, err = s.applyPlan(ctx, o, p, "before removing an ONU", by, verifyRemoved(serial), stage)
 		return err
 	})
 	return res, err

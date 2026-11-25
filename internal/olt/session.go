@@ -73,8 +73,13 @@ type Session struct {
 	SaveTimeout time.Duration
 	mode        Mode
 	prompt      string
-	enable      string
-	Timeout     time.Duration // per command (default 20 s)
+	// host is the OLT's host name, learned from the first prompt after the login ("gpon-olt"); hostRE then accepts any
+	// prompt of it in any mode: host, an optional "(<any mode text>)", then # or >. The mode text is never assumed (the
+	// Pri profile's prompt was not recognised on the bench).
+	host    string
+	hostRE  *regexp.Regexp
+	enable  string
+	Timeout time.Duration // per command (default 20 s)
 	// Protect is the management VLAN: nothing may be removed under it.
 	Protect int
 	cs      cstate // where the lines sent so far have left the CLI (inside the management interface, inside a sub-mode)
@@ -160,13 +165,17 @@ func (s *Session) readUntil(ctx context.Context, timeout time.Duration, st stopA
 					return "", "", err
 				}
 				goto wait
-			case s.d.PromptRE.MatchString(tl):
-				return s.tidy(text[:lastNL+1]), tl, nil
+			case s.isPrompt(tl):
+				return s.tidy(text[:lastNL+1]), strings.TrimSpace(tl), nil
 			case st == stopLogin && (s.d.UserRE.MatchString(tl) || s.d.PasswordRE.MatchString(tl)):
 				return s.tidy(text[:lastNL+1]), tl, nil
 			case st == stopQuestion && s.d.QuestionRE != nil && s.d.QuestionRE.MatchString(tl) && len(s.raw) > s.asked:
 				s.asked = len(s.raw)
 				return s.tidy(text[:lastNL+1]), tl, nil
+			case st == stopQuestion && s.prompt != "" && len(tl) > len(strings.TrimRight(s.prompt, " \t")) && strings.HasSuffix(tl, strings.TrimRight(s.prompt, " \t")):
+				// The save's own prompt drawn on the same line as its last output ("[OK]gpon-olt(config)#").
+				p := strings.TrimRight(s.prompt, " \t")
+				return s.tidy(text[:lastNL+1] + tl[:len(tl)-len(p)] + "\n"), p, nil
 			}
 		}
 	wait:
@@ -211,6 +220,30 @@ func (s *Session) tidy(t string) string {
 	return t
 }
 
+// learnHost takes the host name from the first prompt ("gpon-olt#", "gpon-olt>", "gpon-olt(config)#").
+func (s *Session) learnHost(p string) {
+	p = strings.TrimSpace(p)
+	end := strings.IndexAny(p, "(#>")
+	if end <= 0 || s.host != "" {
+		return
+	}
+	s.host = p[:end]
+	s.hostRE = regexp.MustCompile(`^` + regexp.QuoteMeta(s.host) + `(\([^\r\n]*\))?[>#]$`)
+}
+
+// isPrompt reports whether a rendered last line is a prompt: the dialect's shape, or the learned host name with any mode
+// text. Leading blanks (a prompt redrawn after an erase) and one trailing blank are allowed.
+func (s *Session) isPrompt(line string) bool {
+	t := strings.TrimSpace(line)
+	if t == "" {
+		return false
+	}
+	if s.d.PromptRE.MatchString(t) {
+		return true
+	}
+	return s.hostRE != nil && s.hostRE.MatchString(t)
+}
+
 func (s *Session) setPrompt(p string) {
 	s.prompt = p
 	switch {
@@ -243,6 +276,7 @@ func (s *Session) login(ctx context.Context, user, pass, enable string) error {
 		_, last, err := s.readUntil(ctx, sub, stopLogin)
 		switch {
 		case err == nil && s.d.PromptRE.MatchString(last):
+			s.learnHost(last)
 			s.setPrompt(last)
 			s.settle(ctx)
 			return nil
@@ -295,8 +329,8 @@ func (s *Session) settle(ctx context.Context) {
 			text := clean(s.raw)
 			if i := strings.LastIndexByte(strings.TrimRight(text, " "), '\n'); i >= 0 || text != "" {
 				l := strings.TrimRight(text[strings.LastIndexByte(text, '\n')+1:], " \t")
-				if s.d.PromptRE.MatchString(l) {
-					s.setPrompt(l)
+				if s.isPrompt(l) {
+					s.setPrompt(strings.TrimSpace(l))
 				}
 			}
 			s.raw, s.answered = nil, 0
@@ -580,6 +614,10 @@ func (s *Session) exec(ctx context.Context, line string, trusted bool) (string, 
 	}
 	out, last, err := s.readUntil(ctx, s.Timeout, stopPrompt)
 	if err != nil {
+		if errors.Is(err, ErrTimeout) {
+			// What the OLT showed last: an unrecognised prompt (or a question) is visible on the page next time.
+			err = &timeoutErr{tail: outputTail(out, 200)}
+		}
 		s.Transcript = append(s.Transcript, Entry{Cmd: Redact(line), Err: err.Error()})
 		return out, err
 	}
@@ -716,6 +754,20 @@ func (s *Session) Config(ctx context.Context, lines []string) error {
 }
 
 // ConfigN is Config that also says how many of the lines were sent to the OLT (the refused one included).
+// CheckAll applies the denylist to a batch of lines (as ConfigN would before sending), without sending anything.
+func (s *Session) CheckAll(lines []string) error {
+	in := s.cs
+	in.config = true
+	for _, l := range lines {
+		in.config = true
+		if err := s.checkIn(l, in); err != nil {
+			return err
+		}
+		in = s.trackIn(l, in)
+	}
+	return nil
+}
+
 func (s *Session) ConfigN(ctx context.Context, lines []string) (int, error) {
 	// Check every line before any is sent: a denied line must stop the batch before it changes anything.
 	in := s.cs
@@ -751,6 +803,9 @@ func (s *Session) Save(ctx context.Context) error {
 	if err := s.raise(ctx, ModePriv); err != nil {
 		return err
 	}
+	// Start from a quiet line: output still arriving from an earlier command (the first save's late "[OK]" and its prompt)
+	// would otherwise be read as this save's answer, or leave the reading one prompt behind.
+	s.resync(ctx)
 	cmd := s.d.SaveCmd
 	if err := s.check(cmd); err != nil {
 		return err
@@ -775,11 +830,12 @@ func (s *Session) Save(ctx context.Context) error {
 		if err != nil {
 			s.Transcript = append(s.Transcript, Entry{Cmd: Redact(cmd), Err: err.Error()})
 			if errors.Is(err, ErrTimeout) {
-				return fmt.Errorf("the save did not finish within %s: %w", to, err)
+				// What the OLT showed last, so that the next failure can be read from the page.
+				return fmt.Errorf("the save did not finish within %s: %w; the OLT showed last: %q", to, err, outputTail(out, 200))
 			}
 			return err
 		}
-		if s.d.PromptRE.MatchString(last) {
+		if s.isPrompt(last) {
 			break
 		}
 		// A yes/no question: only the save's own confirmation is answered, once.
@@ -799,6 +855,11 @@ func (s *Session) Save(ctx context.Context) error {
 		s.Transcript = append(s.Transcript, Entry{Cmd: Redact(cmd), Out: q, Err: "unexpected question, answered n"})
 		return &CmdError{Cmd: cmd, Output: "the OLT asked \"" + q + "\", which is not the save confirmation; it was answered n"}
 	}
+	// Some OLTs print the prompt before the flash write ends and then "[OK]" and the prompt again: wait for a short quiet
+	// moment and take the last prompt.
+	if more, plast, ok := s.saveSettle(ctx); ok {
+		out, last = out+last+"\n"+more, plast
+	}
 	s.setPrompt(last)
 	s.track(cmd)
 	if i := strings.IndexByte(out, '\n'); i >= 0 && (Norm(out[:i]) == Norm(cmd) || strings.HasSuffix(Norm(out[:i]), Norm(cmd))) {
@@ -810,6 +871,64 @@ func (s *Session) Save(ctx context.Context) error {
 		return &CmdError{Cmd: cmd, Output: out}
 	}
 	return nil
+}
+
+// settleQuiet is how long the session waits after a save's prompt for more output (a late "[OK]" and a second prompt).
+var settleQuiet = 700 * time.Millisecond
+
+// resyncQuiet is how long resync waits for output still in flight.
+var resyncQuiet = 200 * time.Millisecond
+
+// saveSettle reads what arrives within settleQuiet after a prompt. ok: more output came and it ends at a prompt again (more is
+// the text before that prompt).
+func (s *Session) saveSettle(ctx context.Context) (more, last string, ok bool) {
+	s.raw, s.answered = nil, 0
+	out, l, err := s.readUntil(ctx, settleQuiet, stopQuestion)
+	if err != nil || l == "" || !s.isPrompt(l) {
+		return "", "", false
+	}
+	return out, l, true
+}
+
+// resync drains what is still arriving and makes sure the OLT is at a prompt: an empty line, read to the prompt (a short
+// wait; a failure is left to the command that follows).
+func (s *Session) resync(ctx context.Context) {
+	s.raw, s.answered = nil, 0
+	_, _, _ = s.readUntil(ctx, resyncQuiet, stopPrompt) // whatever is in flight
+	s.raw, s.answered = nil, 0
+	if s.write("") != nil {
+		return
+	}
+	if _, last, err := s.readUntil(ctx, 5*time.Second, stopPrompt); err == nil && last != "" {
+		// Late output may hold more than one prompt: read until it is quiet.
+		for {
+			s.raw, s.answered = nil, 0
+			_, l, err := s.readUntil(ctx, resyncQuiet, stopPrompt)
+			if err != nil || l == "" {
+				break
+			}
+			last = l
+		}
+		s.setPrompt(last)
+	}
+	s.raw, s.answered = nil, 0
+}
+
+// timeoutErr is ErrTimeout with the last output the OLT showed.
+type timeoutErr struct{ tail string }
+
+func (e *timeoutErr) Error() string {
+	return ErrTimeout.Error() + "; the OLT showed last: " + strconv.Quote(e.tail)
+}
+func (e *timeoutErr) Unwrap() error { return ErrTimeout }
+
+// outputTail is the last n characters of rendered output, on one line and redacted, for an error message.
+func outputTail(out string, n int) string {
+	t := strings.Join(strings.Fields(out), " ")
+	if r := []rune(t); len(r) > n {
+		t = "..." + string(r[len(r)-n:])
+	}
+	return Redact(t)
 }
 
 // Redact hides what looks like a secret in text that is shown or stored.

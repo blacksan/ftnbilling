@@ -773,10 +773,11 @@
       $$("tbody tr", tb).forEach(function (tr) { tr.hidden = q && tr.textContent.toLowerCase().indexOf(q) < 0; });
     });
   });
-  // Secure this OLT runs in the background: poll its status and reload the page when it has finished.
-  var sp = $("[data-secure-poll]");
+  // Secure, Apply and Check now run in the background (one job per OLT): poll its status and reload the page when it has
+  // finished. The poll stops on any 4xx (signed out, not allowed) and when the job is over.
+  var sp = $("[data-job-poll]");
   if (sp && sp.getAttribute("data-running")) {
-    var st = $("[data-secure-stage]", sp), spUrl = sp.getAttribute("data-secure-poll");
+    var st = $("[data-job-stage]", sp), spUrl = sp.getAttribute("data-job-poll");
     var spTimer = setInterval(function () {
       if (doc.hidden) return;
       getJSON(spUrl).then(function (j) {

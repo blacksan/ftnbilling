@@ -101,8 +101,15 @@ func (s *Service) AdoptAll(ctx context.Context) {
 }
 
 // AdoptSite runs one pass for a router: heals the router's rules, looks at the port and adopts the inventory OLT that is
-// on it. by is the actor ("system" for the timer).
+// on it. by is the actor ("system" for the timer). An OLT whose job slot is taken (a Secure, Apply or Check job runs) is
+// left alone by the pass: it neither logs in to it nor changes its adoption state.
 func (s *Service) AdoptSite(ctx context.Context, siteID, by string) error {
+	return s.adoptSite(ctx, siteID, by, "")
+}
+
+// adoptSite is AdoptSite run by the Check job of the OLT self, which holds that OLT's slot already ("" = none: the pass
+// takes the slot of each OLT it works on, and skips the OLTs whose slot is taken).
+func (s *Service) adoptSite(ctx context.Context, siteID, by, self string) error {
 	if s.o.PortSeen == nil {
 		return ErrAdoptOff
 	}
@@ -126,6 +133,19 @@ func (s *Service) AdoptSite(ctx context.Context, siteID, by string) error {
 	if port == "" {
 		return ErrNoPort
 	}
+	// The slot of each OLT the pass works on, for the whole pass: the pass may log in to it and secure a factory one, which
+	// must never run beside a job of that OLT (two login changes from stale logins), and it must not write a running job's
+	// adoption state. An OLT whose slot is taken is skipped this time; the next pass looks at it again.
+	mine := olts[:0:0]
+	for _, o := range olts {
+		if o.ID == self || s.hold(o.ID) {
+			mine = append(mine, o)
+			if o.ID != self {
+				defer s.release(o.ID)
+			}
+		}
+	}
+	olts = mine
 	// Heal the router's side first (the rules and the address); a failure is the finding.
 	if s.o.EnsurePort != nil {
 		if err := s.o.EnsurePort(ctx, siteID, by); err != nil {
@@ -338,21 +358,34 @@ func (s *Service) alertOnce(key, subject, msg string) {
 
 // AdoptCheck is the "Check now" of the OLT page: one adoption pass for the router of this OLT.
 func (s *Service) AdoptCheck(ctx context.Context, id, by string) error {
+	if err := s.busy(id); err != nil {
+		return err
+	}
+	siteID, err := s.checkSite(id)
+	if err != nil {
+		return err
+	}
+	return s.AdoptSite(ctx, siteID, by)
+}
+
+// checkSite is what "Check now" can answer at once: the router the OLT is on and its OLT management port (it records the
+// finding when either is missing).
+func (s *Service) checkSite(id string) (string, error) {
 	e, _, ok := s.Load(id)
 	if !ok {
-		return ErrNotFound
+		return "", ErrNotFound
 	}
 	if e.SiteID == "" {
 		s.markAdopt(id, store.AdoptNoRouter, "Put the OLT on a router first (edit the OLT).", "")
-		return ErrNoRouter
+		return "", ErrNoRouter
 	}
 	var port string
 	s.o.Store.View(func(d *store.Data) { port = d.Sites[e.SiteID].OLTMgmtPort })
 	if port == "" {
 		s.markAdopt(id, store.AdoptNoPort, "Give a spare router port the role OLT management, then cable the OLT's management port to it.", "")
-		return ErrNoPort
+		return "", ErrNoPort
 	}
-	return s.AdoptSite(ctx, e.SiteID, by)
+	return e.SiteID, nil
 }
 
 // credCandidates are the logins to try, in order. The vendor's factory login only when the OLT has no stored login and the
@@ -385,7 +418,13 @@ func (s *Service) credCandidates(id string, forSecure bool) []cred {
 	}
 	noStored := len(cc) == 0 || (len(cc) == 1 && cc[0].Source == "pending")
 	if noStored && (((a.FactoryAt.IsZero() || a.FactoryOK) && !forSecure) || (forSecure && a.FactoryOK)) {
-		cc = append(cc, cred{User: factoryUser, Pass: factoryPass, Source: "factory"})
+		c := cred{User: factoryUser, Pass: factoryPass, Source: "factory"}
+		// A failed Secure of a factory OLT that had no enable password leaves the generated one on the OLT and stored
+		// (secureIn's restore): the factory login goes with it, or the next Secure is refused at `enable`.
+		if st.Settings.EnablePass != "" && s.o.Box != nil {
+			c.Enable, _ = s.o.Box.OpenAAD(st.Settings.EnablePass, enableAAD)
+		}
+		cc = append(cc, c)
 	}
 	for i := range cc {
 		cc[i].NoPin = true // the host key is pinned only after the serial check (identify)
@@ -584,6 +623,7 @@ type AdoptView struct {
 	SNMPNote, ACLNote  string
 	ACLRules           []string // login-access-list rules read back from the OLT
 	ACLFinding         string
+	ACLDone            bool // SSH is limited to the router (verified from the router's address only)
 	HasLogin           bool
 }
 
@@ -610,7 +650,7 @@ func (s *Service) AdoptView(id string) (AdoptView, bool) {
 	a := st.Settings.Adopt
 	v.Stage, v.Note, v.Error, v.Manual, v.CheckedAt, v.Secured = a.Stage, a.Note, a.Error, a.Manual, a.CheckedAt, a.Secured
 	v.Port, v.SNMPNote, v.ACLNote = site.OLTMgmtPort, a.SNMPNote, a.ACLNote
-	v.ACLRules, v.ACLFinding = a.ACLRules, a.ACLFinding
+	v.ACLRules, v.ACLFinding, v.ACLDone = a.ACLRules, a.ACLFinding, a.ACLDone
 	v.HasLogin = e.MgmtUser != "" && e.MgmtPass != ""
 	step := func(label, state, detail string) { v.Steps = append(v.Steps, AdoptStep{label, state, detail}) }
 	yn := func(b bool) string {
@@ -671,7 +711,7 @@ func (s *Service) AdoptView(id string) (AdoptView, bool) {
 		} else if strings.HasPrefix(a.ACLNote, "Couldn't restrict SSH") {
 			acl = "fail"
 		}
-		step("SSH access list", acl, firstNonEmpty(a.ACLNote, "Not done yet."))
+		step("SSH limited to the router", acl, firstNonEmpty(a.ACLNote, "Not done yet."))
 	}
 	v.CanSecure = a.SerialOK == "ok" && !a.Secured && (v.HasLogin || a.FactoryOK)
 	v.NeedLogin = a.Stage == store.AdoptNeedLogin

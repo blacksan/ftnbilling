@@ -4,9 +4,13 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"ispbill/internal/store"
 )
+
+// The tests' saves wait less for late output after the prompt (no fake OLT sends any, except where a test says so).
+func init() { settleQuiet, resyncQuiet = 100*time.Millisecond, 30*time.Millisecond }
 
 // The `show snmp-server community` table of the bench OLT (V1600GS-R, V1.0.5), exactly as captured.
 const benchSNMPTable = `community               access
@@ -137,20 +141,18 @@ func securedEnv(t *testing.T, mut func(*aenv)) *aenv {
 	return a
 }
 
-func TestSecureACLOrderPermitDeniesVerifyThenWrite(t *testing.T) {
+func TestSecureACLPermitOnlyVerifyThenWrite(t *testing.T) {
 	a := securedEnv(t, nil)
 	ev := a.f.Events()
 	iPermit := indexEv(ev, "cmd login-access-list permit ssh "+routerAddr+" 255.255.255.255", 0)
-	iD4 := indexEv(ev, "cmd login-access-list deny ssh 0.0.0.0 0.0.0.0", 0)
-	iD6 := indexEv(ev, "cmd login-access-list ipv6 deny ssh ::/0", 0)
-	iVerify := indexEv(ev, "login admin true", iD6+1)
+	iVerify := indexEv(ev, "login admin true", iPermit+1)
 	iWrite := indexEv(ev, "cmd write", iVerify+1)
-	if iPermit < 0 || iD4 < iPermit || iD6 < iD4 || iVerify < iD6 || iWrite < iVerify {
-		t.Fatalf("wrong order (permit, denies, new session, write):\n%s", strings.Join(ev, "\n"))
+	if iPermit < 0 || iVerify < iPermit || iWrite < iVerify {
+		t.Fatalf("wrong order (permit, new session, write):\n%s", strings.Join(ev, "\n"))
 	}
-	// The list was already enabled: no enable line was sent. Nothing but the three ssh lines was sent for telnet/snmp/web.
+	// Only the permit: no deny line (the OLT refuses one beside a permit), no enable (the list was on), no telnet/snmp/web.
 	for _, l := range a.f.Lines() {
-		if l == "login-access-list enable" || strings.Contains(l, "telnet") || strings.Contains(l, " web ") || (strings.Contains(l, "snmp") && !strings.HasPrefix(l, "no snmp-server community ") && l != ShowSNMPCmd) {
+		if strings.Contains(l, "deny") || l == "login-access-list enable" || strings.Contains(l, "telnet") || strings.Contains(l, " web ") || (strings.Contains(l, "snmp") && !strings.HasPrefix(l, "no snmp-server community ") && l != ShowSNMPCmd) {
 			t.Fatalf("unexpected line %q", l)
 		}
 	}
@@ -158,22 +160,85 @@ func TestSecureACLOrderPermitDeniesVerifyThenWrite(t *testing.T) {
 	if !ad.ACLDone || strings.Join(ad.ACLRules, "|") != strings.Join(a.f.ACLRules(), "|") {
 		t.Fatalf("stored rules %v, OLT %v", ad.ACLRules, a.f.ACLRules())
 	}
-	if !strings.Contains(ad.ACLFinding, "web") || !strings.Contains(ad.ACLFinding, "HTTPS") {
-		t.Fatalf("no web finding: %q", ad.ACLFinding)
+	checkACLRules(t, a.f.ACLRules(), routerAddr)
+	if !strings.HasPrefix(ad.ACLNote, "SSH limited to the router (the OLT allows SSH only from listed addresses): "+routerAddr) {
+		t.Fatalf("note %q", ad.ACLNote)
 	}
-	// The poll keeps working (the stored login, from the permitted address).
+	if !strings.Contains(ad.ACLFinding, "web") || !strings.Contains(ad.ACLFinding, "HTTPS") || strings.Contains(ad.ACLFinding, "IPv6") {
+		t.Fatalf("finding: %q", ad.ACLFinding)
+	}
+	// The allowlist is in force: another address is refused, the router's is not.
+	a.f.ClientAddr = "10.77.0.9"
+	if err := a.svc.Poll(context.Background(), oltID, true); err == nil {
+		t.Fatal("a session from another address logged in")
+	}
+	a.f.ClientAddr = ""
 	if err := a.svc.Poll(context.Background(), oltID, true); err != nil {
 		t.Fatalf("poll: %v", err)
 	}
-	// The page shows the rules and the finding.
+	// Two writes in the whole Secure: the passwords' own, and the access list's (which also saves the SNMP removal).
+	if w := a.f.Writes(); w != 2 {
+		t.Fatalf("%d writes", w)
+	}
 	v, _ := a.svc.AdoptView(oltID)
-	if len(v.ACLRules) != 7 || v.ACLFinding == "" {
+	if len(v.ACLRules) != 5 || v.ACLFinding == "" {
 		t.Fatalf("view: %+v", v)
 	}
 }
 
-// failedRestrict checks the restore path: SSH left open, nothing saved after the failed step, the rules back to the factory
-// ones, and the new passwords still the ones in use.
+// The V1600GS-R refuses a deny beside a permit (and the reverse) for one protocol, with this text: a refusal for the driver.
+func TestMixedACLRefusalIsAKnownOLTError(t *testing.T) {
+	const msg = "add failed, protocol has permit rule,please detele it first!"
+	if !VSOL().ErrorRE.MatchString(msg) || !mixedRE.MatchString(msg) || !mixedRE.MatchString("Add failed, protocol has DENY rule") {
+		t.Fatal("not recognised")
+	}
+	a := newAdoptEnv(t)
+	a.f.SetRunningACL("permit ssh 10.1.1.1 255.255.255.255")
+	a.f.SetCreds("admin", "plainpassword1", "")
+	f := a.f
+	f.Reset()
+	if out := f.ACLLine("login-access-list deny ssh 0.0.0.0 0.0.0.0"); out != msg+"\n" {
+		t.Fatalf("fake: %q", out)
+	}
+	if out := f.ACLLine("login-access-list ipv6 deny ssh ::/0"); !strings.Contains(out, "has permit rule") {
+		t.Fatalf("fake v6: %q", out)
+	}
+}
+
+// An OLT whose list already denies SSH by rule (deny-list mode) is left alone: a permit cannot go beside a deny.
+func TestSecureACLLeavesADenyListAlone(t *testing.T) {
+	a := securedEnv(t, func(a *aenv) { a.f.SetRunningACL("deny ssh 10.5.5.0 255.255.255.0") })
+	ad := a.adoptState()
+	if ad.ACLDone || !strings.HasPrefix(ad.ACLNote, "Couldn't restrict SSH; left open.") || !strings.Contains(ad.ACLNote, "already denies SSH by rule (deny ssh 10.5.5.0 255.255.255.0)") {
+		t.Fatalf("note %q", ad.ACLNote)
+	}
+	for _, l := range a.f.Lines() {
+		if strings.Contains(l, "login-access-list") && !strings.HasPrefix(l, "show ") {
+			t.Fatalf("sent %q", l)
+		}
+	}
+	// The SNMP removal is still saved, by the one save at the end.
+	if w := a.f.Writes(); w != 2 || !strings.Contains(ad.SNMPNote, "SNMP is off") {
+		t.Fatalf("%d writes, %q", w, ad.SNMPNote)
+	}
+}
+
+// IPv6: nothing is sent; a finding only when the OLT has an IPv6 address.
+func TestSecureACLIPv6FindingOnlyWithAnIPv6Address(t *testing.T) {
+	a := securedEnv(t, func(a *aenv) { a.f.SetRunning("interface vlan 98\n ipv6 address 2001:db8::2/64\n") })
+	ad := a.adoptState()
+	if !ad.ACLDone || !strings.Contains(ad.ACLFinding, "IPv6 SSH is not restricted") {
+		t.Fatalf("%q / %q", ad.ACLNote, ad.ACLFinding)
+	}
+	for _, l := range a.f.Lines() {
+		if strings.Contains(l, "ipv6") && strings.Contains(l, "login-access-list") {
+			t.Fatalf("sent %q", l)
+		}
+	}
+}
+
+// failedRestrict checks the restore path: SSH left open, the access list not saved, the rules back to the factory ones,
+// and the new passwords still the ones in use.
 func failedRestrict(t *testing.T, a *aenv, wantWhy string) {
 	t.Helper()
 	ad := a.adoptState()
@@ -183,25 +248,23 @@ func failedRestrict(t *testing.T, a *aenv, wantWhy string) {
 	if got := strings.Join(a.f.ACLRules(), "|"); got != "deny telnet 0.0.0.0 0.0.0.0|ipv6 deny telnet ::/0|deny snmp 0.0.0.0 0.0.0.0|ipv6 deny snmp ::/0" {
 		t.Fatalf("rules left on the OLT: %s", got)
 	}
-	// Writes: one for the passwords and one for the SNMP removal; none for the access list.
+	// Writes: one for the passwords and one at the end for the SNMP removal, after the rules were undone.
 	if w := a.f.Writes(); w != 2 {
 		t.Fatalf("%d writes (want 2: passwords and SNMP)", w)
 	}
 	ev := a.f.Events()
-	iD4 := indexEv(ev, "cmd login-access-list deny ssh 0.0.0.0 0.0.0.0", 0)
-	iUn4 := indexEv(ev, "cmd no login-access-list deny ssh 0.0.0.0 0.0.0.0", 0)
-	iUn6 := indexEv(ev, "cmd no login-access-list ipv6 deny ssh ::/0", 0)
+	iP := indexEv(ev, "cmd login-access-list permit ssh ", 0)
 	iUnP := indexEv(ev, "cmd no login-access-list permit ssh ", 0)
-	if iD4 < 0 || iUn4 < iD4 || iUn6 < iD4 || iUnP < iUn4 || iUnP < iUn6 {
-		t.Fatalf("the denies must be removed before the permit:\n%s", strings.Join(ev, "\n"))
+	iW := indexEv(ev, "cmd write", iUnP+1)
+	if iP < 0 || iUnP < iP || iW < iUnP {
+		t.Fatalf("the permit must be removed before the last write:\n%s", strings.Join(ev, "\n"))
 	}
-	if ad.ACLRules != nil || strings.Contains(a.auditText(), "SSH restricted to") {
+	if ad.ACLRules != nil || strings.Contains(a.auditText(), "SSH limited to") {
 		t.Fatalf("a failed restriction was recorded as done: %v", ad.ACLRules)
 	}
 	if !strings.Contains(a.auditText(), "left open") {
 		t.Fatalf("no audit:\n%s", a.auditText())
 	}
-	// The passwords stay secured, and the server can still log in.
 	if !ad.Secured {
 		t.Fatal("the secured state was lost")
 	}
@@ -211,22 +274,9 @@ func failedRestrict(t *testing.T, a *aenv, wantWhy string) {
 }
 
 func TestSecureACLRestoresWhenNewSessionIsBlocked(t *testing.T) {
-	// The OLT sees the server as another address than the one that was permitted: the deny blocks the new session.
+	// The OLT sees the server as another address than the one that was permitted: the allowlist blocks the new session.
 	a := securedEnv(t, func(a *aenv) { a.f.ClientAddr = "10.77.0.9" })
 	failedRestrict(t, a, "could not log in")
-}
-
-func TestSecureACLRestoresWhenRuleOrderIsLastMatch(t *testing.T) {
-	// An OLT that lets the LAST matching rule decide: permit then deny blocks the server itself.
-	a := securedEnv(t, func(a *aenv) { a.f.ACLMatch = "last" })
-	failedRestrict(t, a, "could not log in")
-}
-
-func TestSecureACLWorksWhenFirstMatchDecides(t *testing.T) {
-	a := securedEnv(t, func(a *aenv) { a.f.ACLMatch = "first" })
-	if !a.adoptState().ACLDone {
-		t.Fatalf("note %q", a.adoptState().ACLNote)
-	}
 }
 
 func TestSecureACLWrongRouterAddressInStoreIsRefusedBeforeSending(t *testing.T) {
@@ -254,8 +304,8 @@ func TestSecureACLWrongRouterAddressInStoreIsRefusedBeforeSending(t *testing.T) 
 }
 
 func TestSecureACLRefusedLineRestores(t *testing.T) {
-	// The OLT refuses the second line: the permit that went in is removed again.
-	a := securedEnv(t, func(a *aenv) { a.f.FailOn = "login-access-list ipv6 deny ssh" })
+	// The list is off; the OLT refuses the enable line: the permit that went in is removed again.
+	a := securedEnv(t, func(a *aenv) { a.f.SetACLEnabled(false); a.f.FailOn = "login-access-list enable" })
 	ad := a.adoptState()
 	if ad.ACLDone || !strings.Contains(ad.ACLNote, "refused") || !strings.HasPrefix(ad.ACLNote, "Couldn't restrict SSH; left open.") {
 		t.Fatalf("%q", ad.ACLNote)
@@ -266,12 +316,9 @@ func TestSecureACLRefusedLineRestores(t *testing.T) {
 }
 
 func TestSecureACLWriteFailureRestores(t *testing.T) {
-	// `write` fails only for the access list: the SNMP step's write is made to work by flipping FailWrite from the hook of the
-	// first list line.
 	a := newAdoptEnv(t)
-	a.f.FailWrite = false
 	a.adopt(t)
-	// Second run on the secured OLT with the rules removed again by hand, and write now failing.
+	// Second run on the secured OLT with the rule removed again by hand, and write now failing.
 	a.f.Reset()
 	removeSSHRules(t, a)
 	a.f.FailWrite = true
@@ -288,7 +335,7 @@ func removeSSHRules(t *testing.T, a *aenv) {
 	t.Helper()
 	// Done through the fake's own CLI via a session, as an owner would on the console.
 	err := a.svc.withSession(context.Background(), oltID, true, func(o *opened) error {
-		return o.sess.RunSecure(context.Background(), []string{"no login-access-list deny ssh 0.0.0.0 0.0.0.0", "no login-access-list ipv6 deny ssh ::/0", "no login-access-list permit ssh " + routerAddr + " 255.255.255.255"})
+		return o.sess.RunSecure(context.Background(), []string{"no login-access-list permit ssh " + routerAddr + " 255.255.255.255"})
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -301,7 +348,7 @@ func TestSecureACLIdempotentAndPartial(t *testing.T) {
 	a.f.Reset()
 	writes := a.f.Writes()
 	res := a.aclRun(t)
-	if !res.ACLDone || !strings.Contains(res.ACLNote, "already restricted") {
+	if !res.ACLDone || !strings.Contains(res.ACLNote, "already the listed address") {
 		t.Fatalf("%+v", res)
 	}
 	for _, l := range a.f.Lines() {
@@ -312,13 +359,8 @@ func TestSecureACLIdempotentAndPartial(t *testing.T) {
 	if a.f.Writes() != writes {
 		t.Fatal("a second run wrote")
 	}
-	// Only the IPv6 deny is missing: only it is sent.
-	err := a.svc.withSession(context.Background(), oltID, true, func(o *opened) error {
-		return o.sess.RunSecure(context.Background(), []string{"no login-access-list ipv6 deny ssh ::/0"})
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The permit is gone: only it is sent, and saved once.
+	removeSSHRules(t, a)
 	a.f.Reset()
 	res = a.aclRun(t)
 	if !res.ACLDone {
@@ -330,11 +372,17 @@ func TestSecureACLIdempotentAndPartial(t *testing.T) {
 			sent = append(sent, l)
 		}
 	}
-	if len(sent) != 1 || sent[0] != "login-access-list ipv6 deny ssh ::/0" {
+	if len(sent) != 1 || sent[0] != "login-access-list permit ssh "+routerAddr+" 255.255.255.255" {
 		t.Fatalf("sent %v", sent)
 	}
 	if a.f.Writes() != writes+1 {
 		t.Fatalf("writes %d, want one more than %d", a.f.Writes(), writes)
+	}
+	// Another permit the owner added stays, and the note says so.
+	a.f.SetRunningACL("permit ssh 10.20.0.5 255.255.255.255")
+	res = a.aclRun(t)
+	if !res.ACLDone || !strings.Contains(res.ACLNote, "also allowed from rules the server did not add: permit ssh 10.20.0.5 255.255.255.255") {
+		t.Fatalf("%+v", res)
 	}
 }
 
@@ -347,11 +395,10 @@ func TestSecureACLSwitchesTheListOnLast(t *testing.T) {
 	}
 	ev := a.f.Events()
 	iEn := indexEv(ev, "cmd login-access-list enable", 0)
-	iD6 := indexEv(ev, "cmd login-access-list ipv6 deny ssh ::/0", 0)
-	if iEn < 0 || iEn < iD6 {
-		t.Fatalf("enable must come after the rules:\n%s", strings.Join(ev, "\n"))
+	iP := indexEv(ev, "cmd login-access-list permit ssh ", 0)
+	if iEn < 0 || iEn < iP {
+		t.Fatalf("enable must come after the rule:\n%s", strings.Join(ev, "\n"))
 	}
-	// Nothing in `show` says "disabled" now, and the rules were read back.
 	if strings.Join(a.adoptState().ACLRules, "|") != strings.Join(a.f.ACLRules(), "|") {
 		t.Fatal("read back differs")
 	}
@@ -385,9 +432,9 @@ func TestSecureACLWebRuleSilencesNothingAndIsNeverTouched(t *testing.T) {
 // ---- review additions: lockout safety ----
 
 func TestSecureACLOldSessionDroppedDuringRestoreAlertsPowerCycle(t *testing.T) {
-	// The new session is blocked (last match decides), and the OLT drops the old session at the first undo line: the rules
-	// stay in the running configuration, nothing is saved, and the owners are told to power-cycle the OLT.
-	a := securedEnv(t, func(a *aenv) { a.f.ACLMatch = "last"; a.f.DropOn = "no login-access-list" })
+	// The new session is blocked (the OLT sees another address), and the OLT drops the old session at the first undo line:
+	// the rule stays in the running configuration, nothing more is saved, and the owners are told to power-cycle the OLT.
+	a := securedEnv(t, func(a *aenv) { a.f.ClientAddr = "10.77.0.9"; a.f.DropOn = "no login-access-list" })
 	ad := a.adoptState()
 	if ad.ACLDone || !strings.HasPrefix(ad.ACLNote, "Couldn't restrict SSH; left open.") || !strings.Contains(ad.ACLNote, "power-cycle the OLT") {
 		t.Fatalf("note %q", ad.ACLNote)
@@ -395,23 +442,36 @@ func TestSecureACLOldSessionDroppedDuringRestoreAlertsPowerCycle(t *testing.T) {
 	if !strings.Contains(a.alertText(), "power-cycle the OLT") || !strings.Contains(a.alertText(), "Nothing was saved") {
 		t.Fatalf("no power-cycle alert: %q", a.alertText())
 	}
-	if w := a.f.Writes(); w != 2 {
-		t.Fatalf("%d writes (want 2: passwords and SNMP; never one with the access list)", w)
+	if w := a.f.Writes(); w != 1 {
+		t.Fatalf("%d writes (want 1: the passwords; never one with the access list)", w)
 	}
-	if !strings.Contains(strings.Join(a.f.ACLRules(), "|"), "deny ssh 0.0.0.0 0.0.0.0") {
-		t.Fatal("the fake should still hold the unsaved rules")
+	if !strings.Contains(ad.SNMPNote, "not saved") {
+		t.Fatalf("SNMP note %q", ad.SNMPNote)
+	}
+	if !strings.Contains(strings.Join(a.f.ACLRules(), "|"), "permit ssh "+routerAddr) {
+		t.Fatal("the fake should still hold the unsaved rule")
+	}
+}
+
+// The undo is refused but the session lives: the final save must not run either (it would keep the unverified rule).
+func TestSecureACLStuckUndoBlocksTheFinalSave(t *testing.T) {
+	a := securedEnv(t, func(a *aenv) { a.f.ClientAddr = "10.77.0.9"; a.f.FailOn = "no login-access-list" })
+	ad := a.adoptState()
+	if !strings.Contains(ad.ACLNote, "power-cycle the OLT") || !strings.Contains(ad.SNMPNote, "not saved") {
+		t.Fatalf("%q / %q", ad.ACLNote, ad.SNMPNote)
+	}
+	if w := a.f.Writes(); w != 1 {
+		t.Fatalf("%d writes", w)
 	}
 }
 
 func TestSecureACLSwitchedOnListIsSwitchedOffAgainOnFailure(t *testing.T) {
-	// The list was off and already held the owner's ssh deny; only `enable` is sent. The new session is then blocked: the undo
-	// switches the list off again (there are no added rules to remove), nothing is saved.
+	// The list was off and already held the router's permit; only `enable` is sent. The new session is then blocked (the
+	// OLT sees another address): the undo switches the list off again (no added rule to remove), the list is not saved.
 	a := newAdoptEnv(t)
 	a.f.SetACLEnabled(false)
 	a.f.SetRunningACL("permit ssh " + routerAddr + " 255.255.255.255")
-	a.f.SetRunningACL("deny ssh 0.0.0.0 0.0.0.0")
-	a.f.SetRunningACL("ipv6 deny ssh ::/0")
-	a.f.ACLMatch = "last"
+	a.f.ClientAddr = "10.77.0.9"
 	a.adopt(t)
 	ad := a.adoptState()
 	if ad.ACLDone || !strings.Contains(ad.ACLNote, "switched off again") {
@@ -438,7 +498,6 @@ func TestSecureACLRefusesWhenStateUnknownOrWebRulesWouldTurnOn(t *testing.T) {
 		}
 		return out
 	}
-	// The running configuration does not say whether the list is on.
 	a := securedEnv(t, func(a *aenv) { a.f.ACLNoState = true })
 	if ad := a.adoptState(); ad.ACLDone || !strings.Contains(ad.ACLNote, "does not show whether the access list is on") {
 		t.Fatalf("%q", ad.ACLNote)
@@ -446,7 +505,6 @@ func TestSecureACLRefusesWhenStateUnknownOrWebRulesWouldTurnOn(t *testing.T) {
 	if s := sentACL(a); len(s) != 0 {
 		t.Fatalf("sent %v", s)
 	}
-	// The list is off and holds a web rule: switching it on could lock the web interface out.
 	b := newAdoptEnv(t)
 	b.f.SetACLEnabled(false)
 	b.f.SetRunningACL("permit web 10.0.0.5 255.255.255.255")
@@ -463,16 +521,17 @@ func TestSecureACLRestoreOutlivesTheCallersDeadline(t *testing.T) {
 	// The web request's context is already cancelled when the step runs: the step and its undo still complete.
 	a := securedEnv(t, nil)
 	removeSSHRules(t, a)
-	a.f.ACLMatch = "last"
 	user, login, enable := a.opened(t)
 	var res SecureResult
 	err := a.svc.withSession(context.Background(), oltID, true, func(o *opened) error {
 		vi := ParseVersion(mustShow(t, o))
+		a.f.ClientAddr = "10.77.0.9" // the new session will come from an address the permit does not list
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		a.svc.secureACL(ctx, o, user, login, enable, vi.Serial, "olga", &res)
 		return nil
 	})
+	a.f.ClientAddr = ""
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +551,7 @@ func TestACLDisableOnlyInTheRestorePath(t *testing.T) {
 	if !d.SecureLineOK("login-access-list disable", true) {
 		t.Fatal("the restore path cannot switch the list off again")
 	}
-	for _, l := range []string{"login-access-list deny telnet 0.0.0.0 0.0.0.0", "no login-access-list deny telnet 0.0.0.0 0.0.0.0", "login-access-list permit web 1.2.3.4 255.255.255.255",
+	for _, l := range []string{"login-access-list deny ssh 0.0.0.0 0.0.0.0", "login-access-list ipv6 deny ssh ::/0", "login-access-list deny telnet 0.0.0.0 0.0.0.0", "no login-access-list deny telnet 0.0.0.0 0.0.0.0", "login-access-list permit web 1.2.3.4 255.255.255.255",
 		"no login-access-list ipv6 deny snmp ::/0", "login-access-list permit ssh 1.2.3.0 255.255.255.0", "login-access-list deny ssh 10.0.0.0 255.0.0.0"} {
 		if d.SecureLineOK(l, true) || d.SecureLineOK(l, false) {
 			t.Errorf("allowed: %q", l)
@@ -501,5 +560,83 @@ func TestACLDisableOnlyInTheRestorePath(t *testing.T) {
 	// A show output that says "enabled" somewhere does not make the state known; "disabled" does (it only adds an enable).
 	if st := ParseACL("", "Login access list: enabled\n"); st.Enabled != nil {
 		t.Fatal("enabled taken from the show output")
+	}
+}
+
+// Two writes in one session with the output real OLTs give: "Building configuration...", the prompt before the flash write
+// ends, then "[OK]" redrawn with ESC[K and the prompt on the same line. Both saves finish, nothing in between is read one
+// prompt behind (the SNMP and access-list steps parse their own output), and there are two writes in the whole Secure.
+func TestSecureTwoWritesWithLateOKAndRedraw(t *testing.T) {
+	defer func(q time.Duration) { settleQuiet = q }(settleQuiet)
+	defer func(q time.Duration) { resyncQuiet = q }(resyncQuiet)
+	settleQuiet, resyncQuiet = 700*time.Millisecond, 200*time.Millisecond // the production waits: longer than the fake's flash write below
+	a := newAdoptEnv(t)
+	a.f.WriteLate, a.f.WriteRedraw, a.f.WriteDelay = true, true, 400*time.Millisecond
+	a.adopt(t)
+	ad := a.adoptState()
+	if !ad.Secured || !ad.ACLDone || !strings.Contains(ad.SNMPNote, "SNMP is off") {
+		t.Fatalf("%+v", ad)
+	}
+	if w := a.f.Writes(); w != 2 {
+		t.Fatalf("%d writes", w)
+	}
+	// And a later save in the same kind of session, at the # prompt after reads, also finishes.
+	err := a.svc.withSession(context.Background(), oltID, true, func(o *opened) error {
+		_ = mustShow(t, o)
+		if err := o.sess.Save(context.Background()); err != nil {
+			return err
+		}
+		_ = mustShow(t, o)
+		return o.sess.Save(context.Background())
+	})
+	if err != nil {
+		t.Fatalf("saves: %v", err)
+	}
+	if v := ParseVersion(a.mustVersion(t)); v.Serial == "" {
+		t.Fatal("the session is out of step after the saves")
+	}
+}
+
+func (a *aenv) mustVersion(t *testing.T) string {
+	t.Helper()
+	var out string
+	err := a.svc.withSession(context.Background(), oltID, true, func(o *opened) error { out = mustShow(t, o); return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// A save that does not finish says what the OLT showed last (redacted), so the page tells what happened; the SNMP removal
+// is then reported unsaved, the access list undone.
+func TestSaveTimeoutShowsTheLastOutput(t *testing.T) {
+	a := newAdoptEnv(t)
+	a.rebuild(func(o *Options) {
+		d := VSOL()
+		d.SaveTimeout = time.Second
+		o.Dialect, o.Timeout = d, time.Second
+	})
+	a.f.WriteBuilding, a.f.WriteHangAfter = true, 1
+	a.adopt(t)
+	ad := a.adoptState()
+	if !ad.Secured {
+		t.Fatalf("the first save should work: %+v", ad)
+	}
+	if !strings.Contains(ad.ACLNote, "would not save") || !strings.Contains(ad.ACLNote, `the OLT showed last: "write Building configuration..."`) {
+		t.Fatalf("ACL note %q", ad.ACLNote)
+	}
+	if !strings.Contains(ad.SNMPNote, "the save did not finish within 1s") || !strings.Contains(ad.SNMPNote, "Building configuration") {
+		t.Fatalf("SNMP note %q", ad.SNMPNote)
+	}
+	if strings.Contains(strings.Join(a.f.ACLRules(), "|"), "ssh") {
+		t.Fatal("the unsaved rule was not undone")
+	}
+}
+
+func TestOutputTailIsShortOneLineAndRedacted(t *testing.T) {
+	long := strings.Repeat("x", 300) + "\r\nuser login-password admin Secret123456789012345678\r\n gpon-olt"
+	got := outputTail(long, 200)
+	if len([]rune(got)) > 203 || strings.Contains(got, "\n") || strings.Contains(got, "Secret1234") || !strings.HasPrefix(got, "...") {
+		t.Fatalf("%q", got)
 	}
 }

@@ -46,10 +46,17 @@ type DesiredONU struct {
 	Add         bool
 }
 
-// Step is one titled group of commands in a plan.
+// Step is one titled group of commands in a plan. Each step is sent as its own batch (see Service.applyPlan): a refused
+// line stops its step and every later step that is not Independent.
 type Step struct {
 	Title string
 	Lines []string
+	// Independent: tried even when an earlier step failed (the per-ONU lines of ONUs already on the OLT need no profile).
+	Independent bool
+	// NewONUs is the PON of a step that authorises ONUs (0 = none): its adds count only when the step went through.
+	NewONUs int
+	// Unverified says which lines of the step the bench grammar does not show (shown with the plan).
+	Unverified string
 }
 
 // PlanAdd says which ONU a plan authorises, with the id it picked.
@@ -93,7 +100,8 @@ func (p Plan) Display() Plan {
 	q := p
 	q.Steps = make([]Step, len(p.Steps))
 	for i, s := range p.Steps {
-		q.Steps[i] = Step{Title: s.Title, Lines: redactAll(s.Lines)}
+		q.Steps[i] = s
+		q.Steps[i].Lines = redactAll(s.Lines)
 	}
 	return q
 }
@@ -129,11 +137,14 @@ func (d *Dialect) BuildPlan(want Desired, run *Running) Plan {
 	var p Plan
 	add := func(title string, lines []string) {
 		if len(lines) > 0 {
-			p.Steps = append(p.Steps, Step{title, lines})
+			p.Steps = append(p.Steps, Step{Title: title, Lines: lines})
 		}
 	}
 	if want.OnlyONUs {
-		return d.buildONUs(want, run, p)
+		// The automatic add binds new ONUs to the Pri profile only when the OLT has it complete.
+		bind := want.PriProfile != "" && run.HasBlock("profile pri name "+want.PriProfile) &&
+			missingProfileLines(run, d.PriProfileLines(want.PriProfile, want.InternetVLAN, want.TR069VLAN, want.ACS)) == 0
+		return d.buildONUs(want, run, p, bind)
 	}
 	// VLANs.
 	var vl []string
@@ -154,14 +165,6 @@ func (d *Dialect) BuildPlan(want Desired, run *Running) Plan {
 	}
 	if want.SrvProfile != "" && !run.HasBlock("profile srv name "+want.SrvProfile) {
 		add("Service profile "+want.SrvProfile+" (HGU, VEIP)", d.SrvProfileLines(want.SrvProfile))
-	}
-	if want.PriProfile != "" && !run.HasBlock("profile pri name "+want.PriProfile) {
-		add("Pri profile "+want.PriProfile+" (WAN, TR-069)", d.PriProfileLines(want.PriProfile, want.InternetVLAN, want.TR069VLAN, want.ACS))
-	} else if want.PriProfile != "" {
-		// A profile is never edited, so one that a stopped batch left half made would stay so: say what it lacks.
-		if miss := missingProfileLines(run, d.PriProfileLines(want.PriProfile, want.InternetVLAN, want.TR069VLAN, want.ACS)); miss > 0 {
-			p.Warnings = append(p.Warnings, fmt.Sprintf("The Pri profile %s on the OLT does not show %d of the lines the server makes it with (a change that stopped half way, or made by hand). New ONUs bound to it get what it has. Check it with \"show profile pri name %s\"; to have the server make it again, remove it on the OLT console first.", want.PriProfile, miss, want.PriProfile))
-		}
 	}
 	// Uplink tagging and PVID.
 	if want.Uplink != "" {
@@ -231,7 +234,24 @@ func (d *Dialect) BuildPlan(want Desired, run *Running) Plan {
 			p.Warnings = append(p.Warnings, fmt.Sprintf("Auto-learn is on: the OLT accepts any ONU by itself (PON %d). With provisioning on, the plan turns it off.", pon))
 		}
 	}
-	p = d.buildONUs(want, run, p)
+	// The Pri profile last of the base steps (its lines are not in the bench grammar): when the OLT refuses one, only
+	// the steps after it that are not Independent (the new ONUs) are skipped.
+	// bindPri: new ONUs are bound to the Pri profile (it is made by this plan, or the OLT has it complete).
+	bindPri := false
+	if want.PriProfile != "" && !run.HasBlock("profile pri name "+want.PriProfile) {
+		bindPri = true
+		add("Pri profile "+want.PriProfile+" (WAN, TR-069)", d.PriProfileLines(want.PriProfile, want.InternetVLAN, want.TR069VLAN, want.ACS))
+		p.Steps[len(p.Steps)-1].Unverified = "Not verified on this OLT: the bench grammar has no capture of the Pri profile mode, so its wan_adv and tr069_mng lines and the closing commit are unchecked. If the OLT refuses a line here, the steps that need the profile (new ONUs) are skipped; the ONUs already on the OLT still get TR-069 per ONU."
+	} else if want.PriProfile != "" {
+		// A profile is never edited, so one that a stopped batch left half made (the bench: the header and exit, with no
+		// body) would stay so: say what it lacks, and do not bind ONUs to it.
+		if miss := missingProfileLines(run, d.PriProfileLines(want.PriProfile, want.InternetVLAN, want.TR069VLAN, want.ACS)); miss > 0 {
+			p.Warnings = append(p.Warnings, fmt.Sprintf("The Pri profile %s on the OLT is incomplete: it does not show %d of the lines the server makes it with (a change that stopped half way, or made by hand). The plan does not bind ONUs to it: new ONUs get the TR-069 WAN per ONU instead, and their internet WAN is not set by the plan. Check it with \"show profile pri name %s\"; to have the server make it again, remove it on the OLT console first.", want.PriProfile, miss, want.PriProfile))
+		} else {
+			bindPri = true
+		}
+	}
+	p = d.buildONUs(want, run, p, bindPri)
 	switch {
 	case want.TR069VLAN > 0 && want.ACS != nil:
 		p.Notes = append(p.Notes, fmt.Sprintf("TR-069: new ONUs get the Pri profile %s (a TR-069 WAN on VLAN %d and the ACS address and login; the login is hidden here). ONUs already on the OLT get the same as per-ONU lines.", want.PriProfile, want.TR069VLAN))
@@ -306,13 +326,10 @@ func missingBlock(run *Running, block []string) []string {
 	return append(append([]string{hdr}, miss...), "exit")
 }
 
-// buildONUs adds the ONU steps (authorisations and services) to the plan.
-func (d *Dialect) buildONUs(want Desired, run *Running, p Plan) Plan {
-	add := func(title string, lines []string) {
-		if len(lines) > 0 {
-			p.Steps = append(p.Steps, Step{title, lines})
-		}
-	}
+// buildONUs adds the ONU steps to the plan, two per PON port: the ONUs already on the OLT (what they lack, TR-069 per ONU;
+// Independent: they need no profile, so they are tried even when a profile step failed) and the new ONUs (authorised and
+// bound to the profiles). bindPri: new ONUs are bound to the Pri profile; otherwise they get the TR-069 WAN per ONU.
+func (d *Dialect) buildONUs(want Desired, run *Running, p Plan, bindPri bool) Plan {
 	// ONUs, grouped per PON port.
 	used := map[int][]int{}
 	for pon, l := range run.ONUs {
@@ -331,7 +348,7 @@ func (d *Dialect) buildONUs(want Desired, run *Running, p Plan) Plan {
 	sort.Ints(pons)
 	for _, pon := range pons {
 		hdr := d.PONEnter(pon)[0]
-		var lines []string
+		var lines, have []string // new ONUs, ONUs already on the OLT
 		for _, o := range byPON[pon] {
 			id := o.ID
 			if _, ro, ok := run.ONUBySerial(o.Serial); ok && !o.Add {
@@ -360,8 +377,11 @@ func (d *Dialect) buildONUs(want Desired, run *Running, p Plan) Plan {
 				if want.SrvProfile != "" {
 					lines = append(lines, d.ONUBindLine(id, "srv", want.SrvProfile))
 				}
-				if want.PriProfile != "" {
+				if want.PriProfile != "" && bindPri {
 					lines = append(lines, d.ONUBindLine(id, "pri", want.PriProfile))
+				} else if want.PriProfile != "" && want.ACS != nil && want.TR069VLAN > 0 {
+					// The Pri profile is incomplete: the TR-069 WAN per ONU, as for an ONU already on the OLT.
+					lines = append(lines, d.ONUWANLines(id, 1, want.TR069VLAN, *want.ACS)...)
 				}
 				if descWord(o.Label) != "" {
 					lines = append(lines, d.ONUDescLine(id, o.Label))
@@ -374,20 +394,25 @@ func (d *Dialect) buildONUs(want Desired, run *Running, p Plan) Plan {
 			// Pri profile (its own WAN lines would be doubled): the TR-069 WAN is added to it line by line.
 			if want.LineProfile != "" {
 				if l := d.ONUBindLine(id, "line", want.LineProfile); !run.Has(hdr, l) {
-					lines = append(lines, l)
+					have = append(have, l)
 				}
 			}
 			if want.SrvProfile != "" {
 				if l := d.ONUBindLine(id, "srv", want.SrvProfile); !run.Has(hdr, l) {
-					lines = append(lines, l)
+					have = append(have, l)
 				}
 			}
 			if want.ACS != nil && want.TR069VLAN > 0 {
-				lines = append(lines, d.existingONUTR069(id, run, pon, want)...)
+				have = append(have, d.existingONUTR069(id, run, pon, want)...)
 			}
 		}
+		if len(have) > 0 {
+			p.Steps = append(p.Steps, Step{Title: fmt.Sprintf("PON %d: ONUs already on the OLT", pon),
+				Lines: append(append(d.PONEnter(pon), have...), d.PONExit()...), Independent: true})
+		}
 		if len(lines) > 0 {
-			add(fmt.Sprintf("PON %d: ONUs", pon), append(append(d.PONEnter(pon), lines...), d.PONExit()...))
+			p.Steps = append(p.Steps, Step{Title: fmt.Sprintf("PON %d: new ONUs", pon),
+				Lines: append(append(d.PONEnter(pon), lines...), d.PONExit()...), NewONUs: pon})
 		}
 	}
 	return p

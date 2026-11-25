@@ -2,8 +2,10 @@ package olt
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"ispbill/internal/store"
 )
@@ -176,8 +178,11 @@ func TestPlanExistingONUGetsTR069WAN(t *testing.T) {
 	p, _, _ = e.svc.Plan(context.Background(), oltID)
 	var c []string
 	for _, st := range p.Steps {
-		if st.Title == "PON 1: ONUs" {
+		if st.Title == "PON 1: ONUs already on the OLT" {
 			c = st.Lines
+			if !st.Independent {
+				t.Error("the step of ONUs already on the OLT is not independent")
+			}
 		}
 	}
 	if len(c) != 3 || !strings.HasPrefix(c[1], "onu 1 pri tr069_mng enable") {
@@ -352,7 +357,7 @@ func TestPlanWarnsAboutAHalfMadePriProfile(t *testing.T) {
 	}
 	half := "profile pri name ftn_pri\nwan_adv add route\nwan_adv index 1 route mode internet mtu 1500\nexit\n"
 	p := d.BuildPlan(want, ParseRunning(half))
-	if !strings.Contains(strings.Join(p.Warnings, " "), "Pri profile ftn_pri on the OLT does not show") || strings.Contains(strings.Join(p.Commands(), "\n"), "profile pri") {
+	if !strings.Contains(strings.Join(p.Warnings, " "), "Pri profile ftn_pri on the OLT is incomplete") || strings.Contains(strings.Join(p.Commands(), "\n"), "profile pri") {
 		t.Errorf("%v\n%s", p.Warnings, Redact(strings.Join(p.Commands(), "\n")))
 	}
 }
@@ -387,4 +392,175 @@ func TestPlanSkipsVLAN98WhenManagedThroughTheOLTMgmtPort(t *testing.T) {
 			t.Errorf("manual path: the plan lost VLAN 98 lines:\n%s", txt)
 		}
 	}
+}
+
+// withoutPri is base with its Pri profile block left out (rest unchanged).
+func withoutPri(t *testing.T, extra string) string {
+	t.Helper()
+	i := strings.Index(base, "profile pri id 1 name ftn_pri\n")
+	j := strings.Index(base[i:], "  commit\n")
+	if i < 0 || j < 0 {
+		t.Fatal("base changed")
+	}
+	return base[:i] + base[i+j+len("  commit\n"):] + extra
+}
+
+const onu1 = `interface gpon 0/1
+  onu add 1 profile default sn VSOL00000001
+  onu 1 profile line name line_hgu
+  onu 1 profile srv name srv_hgu
+`
+
+// The bench: a backup right before an Apply showed `profile pri id 1 name ftn_pri` / `exit` with no body. The plan warns,
+// does not make the profile again (it is never edited), binds no ONU to it, and gives new ONUs TR-069 per ONU. The ONUs
+// already on the OLT are their own, independent step.
+func TestPlanEmptyPriProfileIsNotBoundToONUs(t *testing.T) {
+	d := VSOL()
+	acs := &ACS{URL: "http://10.99.0.1:7547/", User: testACSUser, Pass: testACSPass, InformSeconds: 300}
+	want := Desired{InternetVLAN: 100, TR069VLAN: 99, LineProfile: d.DefaultLine, SrvProfile: d.DefaultSrv, PriProfile: d.DefaultPri, ONUProfile: "default", ACS: acs,
+		ONUs: []DesiredONU{{PON: 1, Serial: "VSOL00000001"}, {PON: 1, Serial: "VSOL00000009", Add: true, Label: "B2"}}}
+	run := ParseRunning(withoutPri(t, "profile pri id 1 name ftn_pri\nexit\n"+onu1))
+	p := d.BuildPlan(want, run)
+	if !strings.Contains(strings.Join(p.Warnings, " "), "Pri profile ftn_pri on the OLT is incomplete") {
+		t.Fatalf("no warning: %v", p.Warnings)
+	}
+	var have, added *Step
+	for i := range p.Steps {
+		st := &p.Steps[i]
+		switch st.Title {
+		case "PON 1: ONUs already on the OLT":
+			have = st
+		case "PON 1: new ONUs":
+			added = st
+		}
+		if strings.HasPrefix(st.Title, "Pri profile") {
+			t.Fatalf("the incomplete profile is made again: %v", st.Lines)
+		}
+	}
+	if have == nil || !have.Independent || !strings.Contains(strings.Join(have.Lines, "\n"), "onu 1 pri tr069_mng enable") {
+		t.Fatalf("existing ONU step: %+v", have)
+	}
+	if added == nil || added.Independent || added.NewONUs != 1 {
+		t.Fatalf("new ONU step: %+v", added)
+	}
+	nl := strings.Join(added.Lines, "\n")
+	if strings.Contains(nl, "profile pri") || !strings.Contains(nl, "onu 2 pri wan_adv index 1 route mode tr069") || !strings.Contains(nl, "onu 2 pri tr069_mng enable") {
+		t.Fatalf("new ONU lines:\n%s", Redact(nl))
+	}
+	// With no profile at all, the plan makes it (marked unverified) last of the base steps, and binds new ONUs to it.
+	p = d.BuildPlan(want, ParseRunning(withoutPri(t, onu1)))
+	pri := -1
+	for i, st := range p.Steps {
+		if strings.HasPrefix(st.Title, "Pri profile") {
+			pri = i
+			if !strings.Contains(st.Unverified, "commit") {
+				t.Errorf("the Pri profile step is not marked unverified: %q", st.Unverified)
+			}
+		}
+	}
+	if pri < 0 || !strings.HasPrefix(p.Steps[pri+1].Title, "PON ") {
+		t.Fatalf("the Pri profile is not the last base step: %v", p.Steps)
+	}
+	if !strings.Contains(strings.Join(p.Commands(), "\n"), "onu 2 profile pri") {
+		t.Fatal("new ONUs not bound to the profile the plan makes")
+	}
+}
+
+// The OLT refuses a line of the new Pri profile: the new ONUs (which need it) are skipped, ONU 1 already on the OLT still
+// gets its TR-069 lines, and that is saved. The error says which step failed, what was done and what was skipped.
+func TestApplyPriProfileRefusedStillGivesExistingONUsTR069(t *testing.T) {
+	e := newEnv(t)
+	e.withACS()
+	_ = e.st.Update(func(d *store.Data) error {
+		x := d.Equipment["ont1"]
+		x.OLTID, x.PONPort = oltID, 1
+		d.Equipment["ont1"] = x
+		return nil
+	})
+	e.f.SetRunning(withoutPri(t, onu1))
+	e.f.AutoFind = [][2]string{{"2", "VSOL00000002"}} // a new ONU, ready, on PON 2
+	if err := e.svc.Poll(context.Background(), oltID, true); err != nil {
+		t.Fatal(err)
+	}
+	e.enable(t)
+	p, h, err := e.svc.Plan(context.Background(), oltID)
+	if err != nil || len(p.Adds) != 1 {
+		t.Fatalf("plan: %v %v", p.Adds, err)
+	}
+	e.f.FailOn = "wan_adv index 1 bind ssid ssid1" // a line only the Pri profile has
+	e.f.Reset()
+	writes := e.f.Writes()
+	res, err := e.svc.Apply(context.Background(), oltID, h, "owner")
+	if err == nil {
+		t.Fatal("no error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"the OLT refused a line in step Pri profile ftn_pri", "PON 1: ONUs already on the OLT (saved)", "skipped: PON 2: new ONUs"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error lacks %q: %s", want, msg)
+		}
+	}
+	sent := strings.Join(e.f.Lines(), "\n")
+	if !strings.Contains(sent, "onu 1 pri tr069_mng enable") || strings.Contains(sent, "onu add") {
+		t.Fatalf("sent:\n%s", Redact(sent))
+	}
+	if e.f.Writes() != writes+1 || !res.SavedPartly {
+		t.Fatalf("not saved: %d writes, %+v", e.f.Writes()-writes, res.Failed)
+	}
+	if !strings.Contains(e.auditText(), "FAILED") || !strings.Contains(e.alertText(), "configuration stopped") {
+		t.Fatal("no audit or alert")
+	}
+	e.noSecretsAnywhere(t, msg)
+	// The ONU that was skipped is not recorded as authorised.
+	var eq store.Equipment
+	e.st.View(func(d *store.Data) { eq = d.Equipment["ont2"] })
+	if eq.OLTID == oltID {
+		t.Fatal("a skipped ONU was placed on the OLT")
+	}
+}
+
+// The bench: after `profile pri name ftn_pri` the driver did not recognise the OLT's prompt and timed out. Any prompt of the
+// OLT's host name (learned at the login) is a prompt, whatever its mode text, also when redrawn after an erase.
+func TestUnusualProfilePromptsAreRecognised(t *testing.T) {
+	for _, pp := range []string{"config-{kind}-profile:{name}", "profile-{kind}[1]", "{kind}-profile-1", "config-profile-{kind}-{name} id 1"} {
+		t.Run(pp, func(t *testing.T) {
+			e := newEnv(t)
+			e.withACS()
+			e.f.SetRunning(withoutPri(t, ""))
+			e.f.ProfilePrompt, e.f.PromptRedraw = pp, true
+			e.enable(t)
+			_, h, err := e.svc.Plan(context.Background(), oltID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.svc.Apply(context.Background(), oltID, h, "owner"); err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			if !strings.Contains(strings.Join(e.f.Lines(), "\n"), "profile pri name ftn_pri") {
+				t.Fatal("the profile was not sent")
+			}
+		})
+	}
+}
+
+// A prompt that is not recognised ends in a timeout that shows what the OLT printed last (redacted).
+func TestCommandTimeoutShowsTheLastOutput(t *testing.T) {
+	e := newEnv(t)
+	e.withACS()
+	e.f.SetRunning(withoutPri(t, ""))
+	e.f.ProfilePrompt = "x)\n(odd-prompt" // the last line is "(odd-prompt)# ": no host name in front
+	e.svc.o.Timeout = time.Second
+	e.enable(t)
+	_, h, err := e.svc.Plan(context.Background(), oltID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.svc.Apply(context.Background(), oltID, h, "owner")
+	if err == nil || !errors.Is(err, ErrTimeout) || !strings.Contains(err.Error(), `the OLT showed last: "`) || !strings.Contains(err.Error(), "(odd-prompt)#") {
+		t.Fatalf("%v", err)
+	}
+	if !strings.Contains(e.auditText(), "(odd-prompt)#") {
+		t.Fatalf("audit: %s", e.auditText())
+	}
+	e.noSecretsAnywhere(t, err.Error())
 }

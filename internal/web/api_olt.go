@@ -31,7 +31,8 @@ func (s *Server) oltRoutesAPI(h func(string, string, apiFunc)) {
 	h("GET /api/v1/olts/{id}/adoption", viewer, s.apiOLTAdoption)
 	h("POST /api/v1/olts/{id}/adoption/check", operator, s.apiOLTAdoptCheck)
 	h("POST /api/v1/olts/{id}/secure", owner, s.apiOLTSecure)
-	h("GET /api/v1/olts/{id}/secure", owner, s.apiOLTSecureStatus)
+	h("GET /api/v1/olts/{id}/job", owner, s.apiOLTJobStatus)
+	h("GET /api/v1/olts/{id}/secure", owner, s.apiOLTJobStatus) // the first name of the same endpoint
 	h("PUT /api/v1/olts/{id}/credentials", owner, s.apiOLTCredentials)
 	h("POST /api/v1/olts/{id}/credentials/reveal", owner, s.apiOLTReveal)
 }
@@ -110,7 +111,7 @@ func (s *Server) apiOLTErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, olt.ErrNotFound):
 		apiErr(w, http.StatusNotFound, codeNotFound, "Not found.", nil)
-	case errors.Is(err, olt.ErrBusy), errors.Is(err, olt.ErrPlanChanged):
+	case errors.Is(err, olt.ErrBusy), errors.Is(err, olt.ErrPlanChanged), errors.Is(err, olt.ErrJobRunning):
 		apiErr(w, http.StatusConflict, codeBadState, oltErrText(err), nil)
 	case errors.Is(err, olt.ErrProvisioningOff):
 		apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
@@ -234,7 +235,7 @@ func planJSON(p olt.Plan, hash string) map[string]any {
 	p = p.Display() // the login in a TR-069 line is hidden
 	steps := []map[string]any{}
 	for _, st := range p.Steps {
-		steps = append(steps, map[string]any{"title": st.Title, "lines": st.Lines})
+		steps = append(steps, map[string]any{"title": st.Title, "lines": st.Lines, "independent": st.Independent, "unverified": st.Unverified})
 	}
 	adds := []map[string]any{}
 	for _, a := range p.Adds {
@@ -282,14 +283,22 @@ func (s *Server) apiOLTApply(w http.ResponseWriter, r *http.Request, c *apiCtx) 
 	if !s.apiStepUp(w, c, req.Password) {
 		return
 	}
+	// Password and plan hash are checked here; the apply runs in the background: 202 with the URL to poll.
 	ctx, cancel := s.oltCtx(r)
 	defer cancel()
-	res, err := s.olt.Apply(ctx, r.PathValue("id"), req.Hash, c.user.Username)
-	if err != nil {
+	id := r.PathValue("id")
+	if err := s.olt.StartApply(ctx, id, req.Hash, c.user.Username); err != nil {
 		s.apiOLTErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"backup_id": res.Backup, "sent": len(res.Sent), "verified": res.Verified, "remaining": nz(res.Remaining)})
+	s.accepted(w, id)
+}
+
+// accepted answers a started background job: 202, the URL to poll in Location and in the body.
+func (s *Server) accepted(w http.ResponseWriter, id string) {
+	url := "/api/v1/olts/" + id + "/job"
+	w.Header().Set("Location", url)
+	writeJSON(w, http.StatusAccepted, map[string]any{"started": true, "status_url": url})
 }
 
 // adoptionJSON is the adoption state of an OLT: the next action, the checklist, and what the server may do. It holds no
@@ -317,21 +326,21 @@ func (s *Server) apiOLTAdoption(w http.ResponseWriter, r *http.Request, c *apiCt
 	writeJSON(w, http.StatusOK, s.adoptionJSON(r.PathValue("id")))
 }
 
+// apiOLTAdoptCheck starts "Check now" in the background (it may secure a factory OLT): 202 with the URL to poll.
 func (s *Server) apiOLTAdoptCheck(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 	if _, _, ok := s.apiOLT(w, r); !ok {
 		return
 	}
-	ctx, cancel := s.oltCtx(r)
-	defer cancel()
-	if err := s.olt.AdoptCheck(ctx, r.PathValue("id"), c.user.Username); err != nil {
-		if errors.Is(err, olt.ErrNoPort) || errors.Is(err, olt.ErrNoRouter) {
+	id := r.PathValue("id")
+	if err := s.olt.StartCheck(id, c.user.Username); err != nil {
+		if errors.Is(err, olt.ErrNoPort) || errors.Is(err, olt.ErrNoRouter) || errors.Is(err, olt.ErrAdoptOff) {
 			apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
 			return
 		}
 		s.apiOLTErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.adoptionJSON(r.PathValue("id")))
+	s.accepted(w, id)
 }
 
 // apiOLTSecure starts Secure this OLT in the background: 202 with the URL to poll.
@@ -351,25 +360,23 @@ func (s *Server) apiOLTSecure(w http.ResponseWriter, r *http.Request, c *apiCtx)
 	id := r.PathValue("id")
 	if err := s.olt.StartSecure(id, c.user.Username); err != nil {
 		switch {
-		case errors.Is(err, olt.ErrNotIdentified), errors.Is(err, olt.ErrSecureRunning):
+		case errors.Is(err, olt.ErrNotIdentified), errors.Is(err, olt.ErrJobRunning):
 			apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
 		default:
 			s.apiOLTErr(w, err)
 		}
 		return
 	}
-	url := "/api/v1/olts/" + id + "/secure"
-	w.Header().Set("Location", url)
-	writeJSON(w, http.StatusAccepted, map[string]any{"started": true, "status_url": url})
+	s.accepted(w, id)
 }
 
-// apiOLTSecureStatus is the progress or outcome of the background Secure.
-func (s *Server) apiOLTSecureStatus(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+// apiOLTJobStatus is the progress or outcome of the latest background job (Secure, Apply or Check).
+func (s *Server) apiOLTJobStatus(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 	if _, _, ok := s.apiOLT(w, r); !ok {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, s.secureJSON(r.PathValue("id")))
+	writeJSON(w, http.StatusOK, s.jobJSON(r.PathValue("id")))
 }
 
 func (s *Server) apiOLTCredentials(w http.ResponseWriter, r *http.Request, c *apiCtx) {
@@ -389,6 +396,10 @@ func (s *Server) apiOLTCredentials(w http.ResponseWriter, r *http.Request, c *ap
 		return
 	}
 	if err := s.olt.SetCredentials(r.PathValue("id"), req.User, req.Pass, req.Enable, c.user.Username); err != nil {
+		if errors.Is(err, olt.ErrJobRunning) {
+			s.apiOLTErr(w, err)
+			return
+		}
 		validationErr(w, map[string]string{"pass": err.Error()})
 		return
 	}

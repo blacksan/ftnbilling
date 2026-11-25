@@ -179,9 +179,20 @@ func TestOLTAPIRolesStepUpAndSecrets(t *testing.T) {
 		t.Fatalf("apply without password: %d", g.Status)
 	}
 	ap := o.call(o.owner.Access, "POST", p+"/apply", map[string]any{"hash": hash, "password": o.ownerW.Pass}, nil)
-	if ap.Status != 200 || ap.JSON(t)["verified"] != true {
-		t.Fatalf("apply: %d %s", ap.Status, ap.Raw)
+	// The apply runs in the background: 202, where to look, and then the outcome there.
+	if ap.Status != 202 || ap.Header.Get("Location") != "/api/v1/olts/"+o.id+"/job" || ap.JSON(t)["started"] != true {
+		t.Fatalf("apply: %d %v %s", ap.Status, ap.Header, ap.Raw)
 	}
+	var done reply
+	for end := time.Now().Add(60 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		if done = o.call(o.owner.Access, "GET", p+"/job", nil, nil); done.Status == 200 && done.JSON(t)["done"] == true {
+			break
+		}
+	}
+	if j := done.JSON(t); j["ok"] != true || j["kind"] != "apply" || j["verified"] != true || j["sent"].(float64) < 1 {
+		t.Fatalf("apply outcome: %s", done.Raw)
+	}
+	ap = done
 	// no secret in any response above or in the audit trail
 	if raw := string(ap.Raw); strings.Contains(raw, oltACSPass) || strings.Contains(raw, oltACSUser) {
 		t.Fatalf("apply response: %s", raw)

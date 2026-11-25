@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"ispbill/internal/billing"
 	"ispbill/internal/olt"
 	"ispbill/internal/sites"
 	"ispbill/internal/store"
@@ -128,9 +129,36 @@ func (s *Server) adminOLTManage(w http.ResponseWriter, r *http.Request) {
 	p.Data["HasEnable"], p.Data["Configured"] = st.Settings.EnablePass != "", pw
 	p.Data["PolledAt"] = s.ageText(st.Status.At)
 	p.Data["Note"] = s.olt.Dialect().VersionNote(st.Status.Model, st.Status.SWVersion)
+	p.Data["Last"] = lastViewOf(st.Settings.Last)
+	// The internet VLAN: 0 means the router's customer VLAN (untagged 100 when the router has none), as the plan uses it.
+	var site store.Site
+	var audit []oltAuditRow
+	s.st.View(func(d *store.Data) {
+		site = d.Sites[e.SiteID]
+		if !p.IsOwner {
+			return
+		}
+		for i := len(d.Events) - 1; i >= 0 && len(audit) < 10; i-- {
+			if ev := d.Events[i]; ev.Kind == "audit" && ev.EquipmentID == e.ID {
+				audit = append(audit, oltAuditRow{At: ev.Time.In(billing.EAT).Format("2 Jan 15:04"), By: ev.Actor, Msg: olt.Redact(ev.Msg)})
+			}
+		}
+	})
+	p.Data["Audit"] = audit
+	switch {
+	case st.Settings.InternetVLAN > 0:
+		p.Data["InetVLANNote"] = ""
+	case site.VLANID > 0:
+		p.Data["InetVLANNote"] = fmt.Sprintf("0 = the router's customer VLAN (%d)", site.VLANID)
+	default:
+		p.Data["InetVLANNote"] = "0 = the router's customer VLAN; the router has none, so 100, untagged on the uplink"
+	}
 	s.adoptData(r, e, &p, p.IsOwner)
 	s.render(w, "admin_olt_manage", p)
 }
+
+// oltAuditRow is one audit entry of the OLT for its page (owners; the text was redacted when stored, and again here).
+type oltAuditRow struct{ At, By, Msg string }
 
 func (s *Server) adminOLTSettings(w http.ResponseWriter, r *http.Request) {
 	id := r.PostFormValue("id")
@@ -337,10 +365,18 @@ func (s *Server) adminOLTApply(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// The password was checked above and the plan is compared with the one the owner reviewed here, in the request; the
+	// apply itself (minutes: a save alone may take two) runs in the background and the page shows its progress.
 	ctx, cancel := s.oltCtx(r)
 	defer cancel()
-	res, err := s.olt.Apply(ctx, id, r.PostFormValue("hash"), u.Username)
-	s.back(w, r, to, applyMsg(res, err))
+	switch err := s.olt.StartApply(ctx, id, r.PostFormValue("hash"), u.Username); {
+	case err == nil:
+		s.back(w, r, to, "Applying started. This takes a few minutes; this page shows the progress.")
+	case errors.Is(err, olt.ErrJobRunning):
+		s.back(w, r, to, runningMsg(err))
+	default:
+		s.back(w, r, to, "Error: "+oltErrText(err))
+	}
 }
 
 func applyMsg(res olt.Result, err error) string {
@@ -386,10 +422,18 @@ func (s *Server) adminOLTRemoveApply(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// As Apply: the password and the reviewed removal plan are checked here, the removal (backup, the line, a save of up to
+	// two minutes, a read back) runs in the background on the OLT's one job slot.
 	ctx, cancel := s.oltCtx(r)
 	defer cancel()
-	res, err := s.olt.ApplyRemove(ctx, id, r.PostFormValue("serial"), r.PostFormValue("hash"), u.Username)
-	s.back(w, r, to, applyMsg(res, err))
+	switch err := s.olt.StartRemove(ctx, id, r.PostFormValue("serial"), r.PostFormValue("hash"), u.Username); {
+	case err == nil:
+		s.back(w, r, to, "Removing started. This takes a few minutes; this page shows the progress.")
+	case errors.Is(err, olt.ErrJobRunning):
+		s.back(w, r, to, runningMsg(err))
+	default:
+		s.back(w, r, to, "Error: "+oltErrText(err))
+	}
 }
 
 // adminOLTAdopt shows how to make a factory OLT reachable: the short snippet for the OLT console and the script for

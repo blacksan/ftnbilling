@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"regexp"
 	"strings"
+	"time"
 
 	"ispbill/internal/store"
 )
@@ -202,12 +203,33 @@ func (s *Service) secureIn(ctx context.Context, o *opened, cur cred, by string) 
 	if err != nil {
 		return res, fmt.Errorf("the OLT now uses the new passwords but the server could not store them (they are kept sealed as pending): %w", err)
 	}
-	// SNMP: remove the default communities.
+	// SNMP: remove the default communities (not saved on their own: one save at the end covers them, see below).
 	s.stage(e.ID, "Removing the default SNMP communities")
-	s.secureSNMP(ctx, o, by, &res)
+	snmpUnsaved := s.secureSNMP(ctx, o, by, &res)
 	// SSH access list: restrict SSH to the router's OLT-management address (verified with a new session before it is saved).
 	s.stage(e.ID, "Restricting SSH to the router")
-	s.secureACL(ctx, o, user, login, enable, vi.Serial, by, &res)
+	aclSaved, aclStuck := s.secureACL(ctx, o, user, login, enable, vi.Serial, by, &res)
+	// One save for what is left: the SNMP removal, when the access-list step did not save (the passwords had their own,
+	// verified save above). Fewer writes of flash in one session: on the bench a second write in the same session did
+	// not answer.
+	if snmpUnsaved && aclStuck {
+		// The running configuration holds access-list rules that could not be undone: saving now would keep them.
+		res.SNMPNote = "The default SNMP communities were removed but not saved: the SSH access-list step could not undo its rules, so nothing more was saved. After the power cycle, press Secure this OLT again."
+		snmpUnsaved = false
+	}
+	if snmpUnsaved && !aclSaved {
+		s.stage(e.ID, "Saving the OLT's configuration")
+		wctx, wcancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Minute)
+		err := o.sess.Save(wctx)
+		wcancel()
+		if err != nil {
+			res.SNMPNote = "The default SNMP communities were removed but the OLT would not save: " + errText(err)
+			snmpUnsaved = false
+		}
+	}
+	if snmpUnsaved {
+		s.auditNote(e.ID, by, "OLT "+label+": default SNMP communities removed")
+	}
 	_ = s.setAdopt(e.ID, func(a *store.OLTAdopt, e *store.Equipment, d *store.Data) {
 		a.SNMPNote, a.SNMPOff = res.SNMPNote, len(res.SNMPRemoved) > 0 || strings.Contains(res.SNMPNote, "SNMP is off")
 		a.ACLNote, a.ACLDone, a.ACLRules, a.ACLFinding = res.ACLNote, res.ACLDone, res.ACLRules, res.ACLFinding
@@ -255,7 +277,9 @@ func (s *Service) verifyNew(ctx context.Context, o *opened, user, login, enable,
 
 // secureSNMP removes the default SNMP communities (public, private) and notes that SNMP is now off. The server itself
 // never uses SNMP. A failure is noted; it never undoes the password change.
-func (s *Service) secureSNMP(ctx context.Context, o *opened, by string, res *SecureResult) {
+// secureSNMP removes the default communities. It does not save: unsaved reports that it changed the running configuration
+// and the caller's save is still to come (the note says removed; the caller replaces it when that save fails).
+func (s *Service) secureSNMP(ctx context.Context, o *opened, by string, res *SecureResult) (unsaved bool) {
 	dl := s.o.Dialect
 	out, err := o.sess.ShowAt(ctx, ModeConfig, ShowSNMPCmd)
 	var present, other []string
@@ -283,24 +307,20 @@ func (s *Service) secureSNMP(ctx context.Context, o *opened, by string, res *Sec
 		other = other2
 	} else {
 		res.SNMPNote = "The removal of the default SNMP communities was sent but the list could not be read again to confirm it: check `show snmp-server community` on the OLT."
-		return
+		return len(present) > 0
 	}
 	if len(left) > 0 {
 		res.SNMPNote = "The default SNMP communities " + strings.Join(left, ", ") + " could not be removed. Remove them on the OLT (no snmp-server community WORD)."
 		s.auditNote(o.e.ID, by, "OLT "+store.OLTLabel(o.e)+": default SNMP communities could not be removed")
-		return
+		return len(present) > 0
 	}
 	res.SNMPRemoved = present
-	if err := o.sess.Save(ctx); err != nil {
-		res.SNMPNote = "The default SNMP communities were removed but the OLT would not save: " + errText(err)
-		return
-	}
 	if len(other) > 0 {
 		res.SNMPNote = fmt.Sprintf("The default SNMP communities public and private were removed. %d other community(ies) are still configured; the server did not touch them. The server does not use SNMP.", len(other))
 	} else {
 		res.SNMPNote = "SNMP is off: the default communities public and private were removed and no community is left. The server does not use SNMP."
 	}
-	s.auditNote(o.e.ID, by, "OLT "+store.OLTLabel(o.e)+": default SNMP communities removed")
+	return len(present) > 0
 }
 
 // SNMPCommunity is one row of `show snmp-server community`.
@@ -413,7 +433,16 @@ func (s *Service) SetCredentials(id, user, pass, enable, by string) error {
 			return errors.New("could not store the enable password")
 		}
 	}
-	return s.upd(id, func(d *store.Data, e store.Equipment, st *store.OLTState) {
+	if err := s.busy(id); err != nil {
+		return err
+	}
+	var busy error
+	err = s.upd(id, func(d *store.Data, e store.Equipment, st *store.OLTState) {
+		// Decided inside the update: a job (Secure, Check) or the adoption pass that started meanwhile may be changing or
+		// storing the login right now; a typed login must not cross it.
+		if busy = s.busy(id); busy != nil {
+			return
+		}
 		e.MgmtUser, e.MgmtPass = user, sp
 		d.Equipment[id] = e
 		st.Settings.EnablePass = se
@@ -425,6 +454,10 @@ func (s *Service) SetCredentials(id, user, pass, enable, by string) error {
 		}
 		s.audit(d, e, by, "OLT "+store.OLTLabel(e)+": the login the server uses was typed by "+by)
 	})
+	if err != nil {
+		return err
+	}
+	return busy
 }
 
 // Reveal returns the stored login name and the login and enable passwords. The caller has checked the owner's password;
