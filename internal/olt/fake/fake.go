@@ -61,6 +61,15 @@ type OLT struct {
 	WriteDelay time.Duration
 	// WriteBuilding makes `write` print "Building configuration..." at once and "[OK]" after WriteDelay.
 	WriteBuilding bool
+	// WriteHangAfter > 0 makes every `write` after that many saves print "Building configuration..." and never answer:
+	// the bench's second save in one Secure run (cause not known yet).
+	WriteHangAfter int
+	// WriteLate makes `write` print "Building configuration..." and the prompt at once, and "[OK]" with the prompt again
+	// only when the flash write ends (WriteDelay later; the CLI reads nothing meanwhile).
+	WriteLate bool
+	// WriteRedraw makes `write` end the way some terminals draw it: "\r ESC[K [OK]" with the prompt drawn on the same line
+	// right after it (no line break).
+	WriteRedraw bool
 	// WriteAsk makes `write` ask this question first; it saves only when the answer is "y".
 	WriteAsk string
 	// Communities are the SNMP communities (default public and private).
@@ -655,6 +664,26 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 				out = "% Write failed.\n"
 				break
 			}
+			o.mu.Lock()
+			hang := o.WriteHangAfter > 0 && o.writes >= o.WriteHangAfter
+			o.mu.Unlock()
+			if hang {
+				w("Building configuration...\n")
+				continue // no answer, no prompt
+			}
+			if o.WriteLate {
+				w("Building configuration...\n")
+				w(prompt())
+				time.Sleep(o.WriteDelay)
+				o.mu.Lock()
+				o.writes++
+				o.mu.Unlock()
+				out = "[OK]\n"
+				if o.WriteRedraw {
+					out = "\r\x1b[K[OK]"
+				}
+				break
+			}
 			if o.WriteAsk != "" {
 				w(o.WriteAsk)
 				ans := ""
@@ -691,6 +720,9 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 				o.writes++
 				o.mu.Unlock()
 				out = "[OK]\n"
+				if o.WriteRedraw {
+					out = "\r\x1b[K[OK]"
+				}
 				break
 			}
 			o.mu.Lock()

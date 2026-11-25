@@ -4,9 +4,13 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"ispbill/internal/store"
 )
+
+// The tests' saves wait less for late output after the prompt (no fake OLT sends any, except where a test says so).
+func init() { settleQuiet, resyncQuiet = 100*time.Millisecond, 30*time.Millisecond }
 
 // The `show snmp-server community` table of the bench OLT (V1600GS-R, V1.0.5), exactly as captured.
 const benchSNMPTable = `community               access
@@ -556,5 +560,83 @@ func TestACLDisableOnlyInTheRestorePath(t *testing.T) {
 	// A show output that says "enabled" somewhere does not make the state known; "disabled" does (it only adds an enable).
 	if st := ParseACL("", "Login access list: enabled\n"); st.Enabled != nil {
 		t.Fatal("enabled taken from the show output")
+	}
+}
+
+// Two writes in one session with the output real OLTs give: "Building configuration...", the prompt before the flash write
+// ends, then "[OK]" redrawn with ESC[K and the prompt on the same line. Both saves finish, nothing in between is read one
+// prompt behind (the SNMP and access-list steps parse their own output), and there are two writes in the whole Secure.
+func TestSecureTwoWritesWithLateOKAndRedraw(t *testing.T) {
+	defer func(q time.Duration) { settleQuiet = q }(settleQuiet)
+	defer func(q time.Duration) { resyncQuiet = q }(resyncQuiet)
+	settleQuiet, resyncQuiet = 700*time.Millisecond, 200*time.Millisecond // the production waits: longer than the fake's flash write below
+	a := newAdoptEnv(t)
+	a.f.WriteLate, a.f.WriteRedraw, a.f.WriteDelay = true, true, 400*time.Millisecond
+	a.adopt(t)
+	ad := a.adoptState()
+	if !ad.Secured || !ad.ACLDone || !strings.Contains(ad.SNMPNote, "SNMP is off") {
+		t.Fatalf("%+v", ad)
+	}
+	if w := a.f.Writes(); w != 2 {
+		t.Fatalf("%d writes", w)
+	}
+	// And a later save in the same kind of session, at the # prompt after reads, also finishes.
+	err := a.svc.withSession(context.Background(), oltID, true, func(o *opened) error {
+		_ = mustShow(t, o)
+		if err := o.sess.Save(context.Background()); err != nil {
+			return err
+		}
+		_ = mustShow(t, o)
+		return o.sess.Save(context.Background())
+	})
+	if err != nil {
+		t.Fatalf("saves: %v", err)
+	}
+	if v := ParseVersion(a.mustVersion(t)); v.Serial == "" {
+		t.Fatal("the session is out of step after the saves")
+	}
+}
+
+func (a *aenv) mustVersion(t *testing.T) string {
+	t.Helper()
+	var out string
+	err := a.svc.withSession(context.Background(), oltID, true, func(o *opened) error { out = mustShow(t, o); return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// A save that does not finish says what the OLT showed last (redacted), so the page tells what happened; the SNMP removal
+// is then reported unsaved, the access list undone.
+func TestSaveTimeoutShowsTheLastOutput(t *testing.T) {
+	a := newAdoptEnv(t)
+	a.rebuild(func(o *Options) {
+		d := VSOL()
+		d.SaveTimeout = time.Second
+		o.Dialect, o.Timeout = d, time.Second
+	})
+	a.f.WriteBuilding, a.f.WriteHangAfter = true, 1
+	a.adopt(t)
+	ad := a.adoptState()
+	if !ad.Secured {
+		t.Fatalf("the first save should work: %+v", ad)
+	}
+	if !strings.Contains(ad.ACLNote, "would not save") || !strings.Contains(ad.ACLNote, `the OLT showed last: "write Building configuration..."`) {
+		t.Fatalf("ACL note %q", ad.ACLNote)
+	}
+	if !strings.Contains(ad.SNMPNote, "the save did not finish within 1s") || !strings.Contains(ad.SNMPNote, "Building configuration") {
+		t.Fatalf("SNMP note %q", ad.SNMPNote)
+	}
+	if strings.Contains(strings.Join(a.f.ACLRules(), "|"), "ssh") {
+		t.Fatal("the unsaved rule was not undone")
+	}
+}
+
+func TestOutputTailIsShortOneLineAndRedacted(t *testing.T) {
+	long := strings.Repeat("x", 300) + "\r\nuser login-password admin Secret123456789012345678\r\n gpon-olt"
+	got := outputTail(long, 200)
+	if len([]rune(got)) > 203 || strings.Contains(got, "\n") || strings.Contains(got, "Secret1234") || !strings.HasPrefix(got, "...") {
+		t.Fatalf("%q", got)
 	}
 }

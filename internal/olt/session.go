@@ -167,6 +167,10 @@ func (s *Session) readUntil(ctx context.Context, timeout time.Duration, st stopA
 			case st == stopQuestion && s.d.QuestionRE != nil && s.d.QuestionRE.MatchString(tl) && len(s.raw) > s.asked:
 				s.asked = len(s.raw)
 				return s.tidy(text[:lastNL+1]), tl, nil
+			case st == stopQuestion && s.prompt != "" && len(tl) > len(strings.TrimRight(s.prompt, " \t")) && strings.HasSuffix(tl, strings.TrimRight(s.prompt, " \t")):
+				// The save's own prompt drawn on the same line as its last output ("[OK]gpon-olt(config)#").
+				p := strings.TrimRight(s.prompt, " \t")
+				return s.tidy(text[:lastNL+1] + tl[:len(tl)-len(p)] + "\n"), p, nil
 			}
 		}
 	wait:
@@ -751,6 +755,9 @@ func (s *Session) Save(ctx context.Context) error {
 	if err := s.raise(ctx, ModePriv); err != nil {
 		return err
 	}
+	// Start from a quiet line: output still arriving from an earlier command (the first save's late "[OK]" and its prompt)
+	// would otherwise be read as this save's answer, or leave the reading one prompt behind.
+	s.resync(ctx)
 	cmd := s.d.SaveCmd
 	if err := s.check(cmd); err != nil {
 		return err
@@ -775,7 +782,8 @@ func (s *Session) Save(ctx context.Context) error {
 		if err != nil {
 			s.Transcript = append(s.Transcript, Entry{Cmd: Redact(cmd), Err: err.Error()})
 			if errors.Is(err, ErrTimeout) {
-				return fmt.Errorf("the save did not finish within %s: %w", to, err)
+				// What the OLT showed last, so that the next failure can be read from the page.
+				return fmt.Errorf("the save did not finish within %s: %w; the OLT showed last: %q", to, err, outputTail(out, 200))
 			}
 			return err
 		}
@@ -799,6 +807,11 @@ func (s *Session) Save(ctx context.Context) error {
 		s.Transcript = append(s.Transcript, Entry{Cmd: Redact(cmd), Out: q, Err: "unexpected question, answered n"})
 		return &CmdError{Cmd: cmd, Output: "the OLT asked \"" + q + "\", which is not the save confirmation; it was answered n"}
 	}
+	// Some OLTs print the prompt before the flash write ends and then "[OK]" and the prompt again: wait for a short quiet
+	// moment and take the last prompt.
+	if more, plast, ok := s.saveSettle(ctx); ok {
+		out, last = out+last+"\n"+more, plast
+	}
 	s.setPrompt(last)
 	s.track(cmd)
 	if i := strings.IndexByte(out, '\n'); i >= 0 && (Norm(out[:i]) == Norm(cmd) || strings.HasSuffix(Norm(out[:i]), Norm(cmd))) {
@@ -810,6 +823,56 @@ func (s *Session) Save(ctx context.Context) error {
 		return &CmdError{Cmd: cmd, Output: out}
 	}
 	return nil
+}
+
+// settleQuiet is how long the session waits after a save's prompt for more output (a late "[OK]" and a second prompt).
+var settleQuiet = 700 * time.Millisecond
+
+// resyncQuiet is how long resync waits for output still in flight.
+var resyncQuiet = 200 * time.Millisecond
+
+// saveSettle reads what arrives within settleQuiet after a prompt. ok: more output came and it ends at a prompt again (more is
+// the text before that prompt).
+func (s *Session) saveSettle(ctx context.Context) (more, last string, ok bool) {
+	s.raw, s.answered = nil, 0
+	out, l, err := s.readUntil(ctx, settleQuiet, stopQuestion)
+	if err != nil || l == "" || !s.d.PromptRE.MatchString(l) {
+		return "", "", false
+	}
+	return out, l, true
+}
+
+// resync drains what is still arriving and makes sure the OLT is at a prompt: an empty line, read to the prompt (a short
+// wait; a failure is left to the command that follows).
+func (s *Session) resync(ctx context.Context) {
+	s.raw, s.answered = nil, 0
+	_, _, _ = s.readUntil(ctx, resyncQuiet, stopPrompt) // whatever is in flight
+	s.raw, s.answered = nil, 0
+	if s.write("") != nil {
+		return
+	}
+	if _, last, err := s.readUntil(ctx, 5*time.Second, stopPrompt); err == nil && last != "" {
+		// Late output may hold more than one prompt: read until it is quiet.
+		for {
+			s.raw, s.answered = nil, 0
+			_, l, err := s.readUntil(ctx, resyncQuiet, stopPrompt)
+			if err != nil || l == "" {
+				break
+			}
+			last = l
+		}
+		s.setPrompt(last)
+	}
+	s.raw, s.answered = nil, 0
+}
+
+// outputTail is the last n characters of rendered output, on one line and redacted, for an error message.
+func outputTail(out string, n int) string {
+	t := strings.Join(strings.Fields(out), " ")
+	if r := []rune(t); len(r) > n {
+		t = "..." + string(r[len(r)-n:])
+	}
+	return Redact(t)
 }
 
 // Redact hides what looks like a secret in text that is shown or stored.

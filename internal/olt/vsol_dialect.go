@@ -120,8 +120,10 @@ func VSOL() *Dialect {
 		EnableCmd: "enable", ConfigCmd: "configure terminal", EndCmd: "end", ExitCmd: "exit", SaveCmd: "write",
 		// TODO(bench): the V1600GS-R's write took longer than the 20 s command timeout on the bench; its exact output and
 		// whether it asks anything are not known. Common shapes: "Building configuration...", "[OK]", progress dots.
-		SaveTimeout:       120 * time.Second,
-		QuestionRE:        regexp.MustCompile(`(?i)[\[(]\s*(y/n|yes/no|y/n/c)\s*[\])]\s*[:?]?\s*$`),
+		SaveTimeout: 120 * time.Second,
+		// "[y/n]", "(yes/no)", "(y/n/c)", "[confirm]", "(yes|no)": a question the save may ask. One that is not the save's
+		// own is answered n and fails the save with its text, rather than waiting silently until the save times out.
+		QuestionRE:        regexp.MustCompile(`(?i)([\[(]\s*(y/n|yes/no|y/n/c|y\|n|yes\|no)\s*[\])]|\[confirm\])\s*[:?]?\s*$`),
 		SaveConfirmRE:     regexp.MustCompile(`(?i)^(are you sure (you want )?to (save|write)( the| current)?( running)? config(uration)?|(save|write)( the| current)?( running)? config(uration)?( to (flash|startup( config(uration)?)?))?|overwrite (the )?(startup|saved) config(uration)?)\s*\??\s*[\[(]\s*(y/n|yes/no)\s*[\])]\s*[:?]?\s*$`),
 		SaveConfirmAnswer: "y",
 		NoPaging:          "terminal length 0", // TODO(bench): status unknown; a failure is ignored
