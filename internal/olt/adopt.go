@@ -101,8 +101,15 @@ func (s *Service) AdoptAll(ctx context.Context) {
 }
 
 // AdoptSite runs one pass for a router: heals the router's rules, looks at the port and adopts the inventory OLT that is
-// on it. by is the actor ("system" for the timer).
+// on it. by is the actor ("system" for the timer). An OLT whose job slot is taken (a Secure, Apply or Check job runs) is
+// left alone by the pass: it neither logs in to it nor changes its adoption state.
 func (s *Service) AdoptSite(ctx context.Context, siteID, by string) error {
+	return s.adoptSite(ctx, siteID, by, "")
+}
+
+// adoptSite is AdoptSite run by the Check job of the OLT self, which holds that OLT's slot already ("" = none: the pass
+// takes the slot of each OLT it works on, and skips the OLTs whose slot is taken).
+func (s *Service) adoptSite(ctx context.Context, siteID, by, self string) error {
 	if s.o.PortSeen == nil {
 		return ErrAdoptOff
 	}
@@ -126,6 +133,19 @@ func (s *Service) AdoptSite(ctx context.Context, siteID, by string) error {
 	if port == "" {
 		return ErrNoPort
 	}
+	// The slot of each OLT the pass works on, for the whole pass: the pass may log in to it and secure a factory one, which
+	// must never run beside a job of that OLT (two login changes from stale logins), and it must not write a running job's
+	// adoption state. An OLT whose slot is taken is skipped this time; the next pass looks at it again.
+	mine := olts[:0:0]
+	for _, o := range olts {
+		if o.ID == self || s.hold(o.ID) {
+			mine = append(mine, o)
+			if o.ID != self {
+				defer s.release(o.ID)
+			}
+		}
+	}
+	olts = mine
 	// Heal the router's side first (the rules and the address); a failure is the finding.
 	if s.o.EnsurePort != nil {
 		if err := s.o.EnsurePort(ctx, siteID, by); err != nil {
@@ -338,6 +358,9 @@ func (s *Service) alertOnce(key, subject, msg string) {
 
 // AdoptCheck is the "Check now" of the OLT page: one adoption pass for the router of this OLT.
 func (s *Service) AdoptCheck(ctx context.Context, id, by string) error {
+	if err := s.busy(id); err != nil {
+		return err
+	}
 	siteID, err := s.checkSite(id)
 	if err != nil {
 		return err
@@ -395,7 +418,13 @@ func (s *Service) credCandidates(id string, forSecure bool) []cred {
 	}
 	noStored := len(cc) == 0 || (len(cc) == 1 && cc[0].Source == "pending")
 	if noStored && (((a.FactoryAt.IsZero() || a.FactoryOK) && !forSecure) || (forSecure && a.FactoryOK)) {
-		cc = append(cc, cred{User: factoryUser, Pass: factoryPass, Source: "factory"})
+		c := cred{User: factoryUser, Pass: factoryPass, Source: "factory"}
+		// A failed Secure of a factory OLT that had no enable password leaves the generated one on the OLT and stored
+		// (secureIn's restore): the factory login goes with it, or the next Secure is refused at `enable`.
+		if st.Settings.EnablePass != "" && s.o.Box != nil {
+			c.Enable, _ = s.o.Box.OpenAAD(st.Settings.EnablePass, enableAAD)
+		}
+		cc = append(cc, c)
 	}
 	for i := range cc {
 		cc[i].NoPin = true // the host key is pinned only after the serial check (identify)

@@ -94,11 +94,7 @@ func (s *Service) Plan(ctx context.Context, id string) (Plan, string, error) {
 }
 
 // clearStaleMark forgets the mark of an interrupted apply when no job runs.
-func (s *Service) clearStaleMark(id string) {
-	if s.busy(id) == nil {
-		s.clearJobMark(id)
-	}
-}
+func (s *Service) clearStaleMark(id string) { s.clearJobMark(id, true) }
 
 // Apply runs the plan the owner reviewed (its hash). It saves the running configuration first, sends the lines, saves,
 // re-reads and compares, and writes an audit entry with the (redacted) transcript. The first refused line stops it.
@@ -333,6 +329,11 @@ func (s *Service) removePlan(ctx context.Context, o *opened, serial string) (Pla
 
 // ApplyRemove runs a reviewed removal plan.
 func (s *Service) ApplyRemove(ctx context.Context, id, serial, wantHash, by string) (Result, error) {
+	return s.applyRemove(ctx, id, serial, wantHash, by, nil)
+}
+
+// applyRemove is ApplyRemove with a stage report (nil = none).
+func (s *Service) applyRemove(ctx context.Context, id, serial, wantHash, by string, stage func(string)) (Result, error) {
 	var res Result
 	err := s.withSession(ctx, id, true, func(o *opened) error {
 		if err := s.mayConfigure(o.st); err != nil {
@@ -345,7 +346,7 @@ func (s *Service) ApplyRemove(ctx context.Context, id, serial, wantHash, by stri
 		if wantHash == "" || p.Hash() != wantHash {
 			return ErrPlanChanged
 		}
-		res, err = s.applyPlan(ctx, o, p, "before removing an ONU", by, verifyRemoved(serial), nil)
+		res, err = s.applyPlan(ctx, o, p, "before removing an ONU", by, verifyRemoved(serial), stage)
 		return err
 	})
 	return res, err

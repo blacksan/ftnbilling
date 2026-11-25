@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"testing"
@@ -220,6 +221,15 @@ func TestStartApplyChecksBeforeStarting(t *testing.T) {
 // which job holds the slot; nothing else is started.
 func TestOneJobPerOLTAcrossKinds(t *testing.T) {
 	a := newAdoptEnv(t)
+	// The Check job below must still run when the other starts are tried: its pass waits at the router until released.
+	gate := make(chan struct{})
+	ensure := a.svc.o.EnsurePort
+	a.svc.o.EnsurePort = func(ctx context.Context, siteID, by string) error {
+		if by == "olga" {
+			<-gate
+		}
+		return ensure(ctx, siteID, by)
+	}
 	a.adopt(t)
 	a.f.SetRunning("")
 	a.enable(t)
@@ -257,6 +267,7 @@ func TestOneJobPerOLTAcrossKinds(t *testing.T) {
 	if err := a.svc.StartApply(context.Background(), oltID, h, "olga"); !errors.Is(err, ErrJobRunning) {
 		t.Fatalf("apply during check: %v", err)
 	}
+	close(gate)
 	if v := waitJob(t, a.svc); !v.OK || v.Kind != JobCheck {
 		t.Fatalf("%+v", v)
 	}
@@ -386,5 +397,144 @@ func TestApplyInterruptedByRestartIsReportedAndNothingIsAppliedTwice(t *testing.
 	}
 	if p3, _, _ := e.svc.Plan(context.Background(), oltID); !p3.Empty() {
 		t.Fatal("not empty after the second run")
+	}
+}
+
+// The 5-minute adoption pass and a Secure job never run on one OLT side by side. Here a factory OLT that is identified but
+// not yet secured (the automatic secure failed once) gets an owner's Secure job that is waiting for the session; the
+// timer's pass comes meanwhile. It must leave that OLT alone (before, it queued behind the job with the factory login it had
+// read, and afterwards wrote "the OLT refused the login" over the secured state), must not touch the job's stage text, and
+// while the pass itself holds an OLT, no job can start on it.
+func TestAdoptionPassAndJobsShareTheSlot(t *testing.T) {
+	a := newAdoptEnv(t)
+	a.f.BlockNewPass = true
+	a.adopt(t) // the automatic secure fails: factory login, identified, not adopted
+	a.f.BlockNewPass = false
+	if st := a.adoptState(); st.SerialOK != "ok" || st.Adopted || !st.FactoryOK || st.Stage != store.AdoptNeedSecure {
+		t.Fatalf("setup: %+v", st)
+	}
+	lk := a.svc.lockOf(oltID)
+	lk <- struct{}{} // another operation holds the session: the job will wait for it
+	if err := a.svc.StartSecure(oltID, "olga"); err != nil {
+		<-lk
+		t.Fatal(err)
+	}
+	a.svc.stage(oltID, "marker")
+	done := make(chan error, 1)
+	go func() { done <- a.svc.AdoptSite(context.Background(), siteID, "system") }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("pass: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		<-lk
+		t.Fatal("the pass waited for the OLT whose job runs")
+	}
+	if v := a.svc.JobStatus(oltID); v.Stage != "marker" || !v.Running {
+		t.Errorf("the pass touched the running job: %+v", v)
+	}
+	<-lk
+	if v := waitJob(t, a.svc); !v.OK || v.Kind != JobSecure {
+		t.Fatalf("%+v", v)
+	}
+	// The pass after the job: the stored login is the one the OLT has, and the state says secured.
+	a.adopt(t)
+	if st := a.adoptState(); !st.Secured || !st.Adopted || st.Stage != store.AdoptSecured {
+		t.Fatalf("after the job and a pass: %+v", st)
+	}
+	if _, err := a.svc.TestConnection(context.Background(), oltID, "olga"); err != nil {
+		t.Fatalf("the stored login does not work: %v", err)
+	}
+	// While the pass holds the OLT, nothing starts, and the refusal says it is the server's own check.
+	if !a.svc.hold(oltID) {
+		t.Fatal("hold")
+	}
+	for name, err := range map[string]error{
+		"secure": a.svc.StartSecure(oltID, "olga"),
+		"check":  a.svc.StartCheck(oltID, "olga"),
+		"creds":  a.svc.SetCredentials(oltID, "admin", "typed-pass", "", "olga"),
+	} {
+		if !errors.Is(err, ErrJobRunning) || !ByPass(err) {
+			t.Errorf("%s while the pass holds the OLT: %v", name, err)
+		}
+	}
+	if a.svc.hold(oltID) {
+		t.Fatal("the slot was taken twice")
+	}
+	a.svc.release(oltID)
+	if err := a.svc.busy(oltID); err != nil {
+		t.Fatalf("not released: %v", err)
+	}
+}
+
+// The job compares the plan again inside its own session: a plan that changed after the request checked it is never sent.
+func TestApplyJobRefusesAPlanThatChangedAfterTheStart(t *testing.T) {
+	e := newEnv(t)
+	e.f.SetRunning("")
+	e.enable(t)
+	_, h, err := e.svc.Plan(context.Background(), oltID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dial, n := e.svc.o.Dial, 0
+	e.svc.o.Dial = func(ctx context.Context, nw, ad string) (net.Conn, error) {
+		if n++; n == 2 { // the job's own session (the first is the request's plan): the OLT changed in between
+			e.f.SetRunning(base)
+		}
+		return dial(ctx, nw, ad)
+	}
+	e.f.Reset()
+	if err := e.svc.StartApply(context.Background(), oltID, h, "olga"); err != nil {
+		t.Fatal(err)
+	}
+	v := waitJob(t, e.svc)
+	if v.OK || !strings.Contains(v.Error, ErrPlanChanged.Error()) {
+		t.Fatalf("%+v", v)
+	}
+	for _, l := range e.f.Lines() {
+		if writeLine(l) {
+			t.Fatalf("a changed plan sent %q", l)
+		}
+	}
+	if e.state().Settings.Job.Kind != "" {
+		t.Fatal("mark left")
+	}
+}
+
+// Removing an ONU runs on the job slot too, in the background, with the same checks.
+func TestStartRemoveRunsAsAnApplyJob(t *testing.T) {
+	e := newEnv(t)
+	e.f.SetRunning(base + "interface gpon 0/1\n  onu add 3 profile default sn VSOL00000001\n")
+	e.enable(t)
+	if err := e.svc.StartRemove(context.Background(), oltID, "VSOL00000001", "wrong", "olga"); !errors.Is(err, ErrPlanChanged) {
+		t.Fatalf("stale hash: %v", err)
+	}
+	if e.svc.JobStatus(oltID).Known {
+		t.Fatal("a refused start made a job")
+	}
+	_, h, err := e.svc.PlanRemove(context.Background(), oltID, "VSOL00000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.slowSave(1500 * time.Millisecond)
+	if err := e.svc.StartRemove(context.Background(), oltID, "VSOL00000001", h, "olga"); err != nil {
+		t.Fatal(err)
+	}
+	if v := e.svc.JobStatus(oltID); !v.Running || v.Kind != JobApply {
+		t.Fatalf("%+v", v)
+	}
+	if m := e.state().Settings.Job; m.Kind != "apply" || m.Plan != h {
+		t.Fatalf("mark: %+v", m)
+	}
+	if err := e.svc.StartApply(context.Background(), oltID, h, "olga"); !errors.Is(err, ErrJobRunning) {
+		t.Fatalf("apply during remove: %v", err)
+	}
+	v := waitJob(t, e.svc)
+	if !v.OK || !v.Apply.Verified || len(v.Apply.Sent) == 0 {
+		t.Fatalf("%+v", v)
+	}
+	if e.state().Settings.Job.Kind != "" {
+		t.Fatal("mark left")
 	}
 }

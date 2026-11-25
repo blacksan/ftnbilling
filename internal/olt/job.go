@@ -58,10 +58,24 @@ var ErrJobRunning = errors.New("a job is already running for this OLT")
 // ErrSecureRunning is the old name of ErrJobRunning.
 var ErrSecureRunning = ErrJobRunning
 
-type runningErr struct{ kind JobKind }
+type runningErr struct {
+	kind JobKind
+	pass bool // the server's own adoption pass holds the slot (no job record, no progress on the page)
+}
 
-func (e runningErr) Error() string   { return e.kind.Label() + " is already running for this OLT" }
+func (e runningErr) Error() string {
+	if e.pass {
+		return "The server's own check of the OLT management port is working on this OLT; try again in a few minutes"
+	}
+	return e.kind.Label() + " is already running for this OLT"
+}
 func (e runningErr) Is(t error) bool { return t == ErrJobRunning }
+
+// ByPass: the refusal err comes from the server's own adoption pass, which the page shows no progress of.
+func ByPass(err error) bool {
+	var r runningErr
+	return errors.As(err, &r) && r.pass
+}
 
 // RunningKind says which job blocked a start (ok false when err is not a "running" refusal).
 func RunningKind(err error) (JobKind, bool) {
@@ -115,8 +129,8 @@ type JobStatus struct {
 func (s *Service) claim(id, by string, kind JobKind) (*job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if j := s.jobs[id]; j != nil && j.running {
-		return nil, runningErr{j.kind}
+	if err := s.busyLocked(id); err != nil {
+		return nil, err
 	}
 	j := &job{kind: kind, by: by, started: s.now(), stage: "Starting", trail: []string{"Starting"}, running: true}
 	if s.jobs == nil {
@@ -126,14 +140,44 @@ func (s *Service) claim(id, by string, kind JobKind) (*job, error) {
 	return j, nil
 }
 
-// busy: a job holds the OLT's slot now.
+// busy: a job (or the timer's adoption pass) holds the OLT's slot now.
 func (s *Service) busy(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.busyLocked(id)
+}
+
+func (s *Service) busyLocked(id string) error {
 	if j := s.jobs[id]; j != nil && j.running {
-		return runningErr{j.kind}
+		return runningErr{kind: j.kind}
+	}
+	if s.held[id] {
+		return runningErr{kind: JobCheck, pass: true}
 	}
 	return nil
+}
+
+// hold takes the OLT's slot for an adoption pass that is not itself a job (the 5-minute timer, or the pass of a Check job
+// for the OLTs of the same router other than its own): false when a job holds it, and the pass leaves that OLT alone.
+// The pass has no job record, so it never touches the page's stage text, and while it holds the slot no Secure, Apply or
+// Check can start: two logins changes can never interleave. release gives it back.
+func (s *Service) hold(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.busyLocked(id) != nil {
+		return false
+	}
+	if s.held == nil {
+		s.held = map[string]bool{}
+	}
+	s.held[id] = true
+	return true
+}
+
+func (s *Service) release(id string) {
+	s.mu.Lock()
+	delete(s.held, id)
+	s.mu.Unlock()
 }
 
 // launch runs work in the background under its own budget and records the outcome. The slot j was claimed by the caller.
@@ -152,7 +196,7 @@ func (s *Service) launch(id string, j *job, budget time.Duration, work func(ctx 
 			out, err = work(ctx)
 		}()
 		if j.kind == JobApply {
-			s.clearJobMark(id) // before the job is reported finished, so the page never shows both
+			s.clearJobMark(id, false) // before the job is reported finished, so the page never shows both
 		}
 		s.mu.Lock()
 		j.running, j.finished, j.sec, j.app = false, s.now(), out.sec, out.app
@@ -235,12 +279,56 @@ func (s *Service) StartApply(ctx context.Context, id, wantHash, by string) error
 	return nil
 }
 
-// clearJobMark forgets the durable mark of an apply (it ended, or the plan was read again).
-func (s *Service) clearJobMark(id string) {
+// StartRemove runs a reviewed ONU removal plan in the background, as an Apply (same slot, same durable mark, same checks:
+// provisioning on, no job running, the removal plan the OLT has now is the one the owner reviewed). The job builds the
+// removal plan again inside its own session and compares the hash again before it sends anything.
+func (s *Service) StartRemove(ctx context.Context, id, serial, wantHash, by string) error {
+	_, st, ok := s.Load(id)
+	if !ok {
+		return ErrNotFound
+	}
+	if err := s.mayConfigure(st); err != nil {
+		return err
+	}
+	if wantHash == "" {
+		return ErrPlanChanged
+	}
+	if err := s.busy(id); err != nil {
+		return err
+	}
+	_, hash, err := s.PlanRemove(ctx, id, serial)
+	if err != nil {
+		return err
+	}
+	if hash != wantHash {
+		return ErrPlanChanged
+	}
+	j, err := s.claim(id, by, JobApply)
+	if err != nil {
+		return err
+	}
+	_ = s.upd(id, func(d *store.Data, e store.Equipment, st *store.OLTState) {
+		st.Settings.Job = store.OLTJobMark{Kind: string(JobApply), By: by, At: s.now(), Plan: hash}
+	})
+	s.launch(id, j, applyJobTimeout, func(ctx context.Context) (jobOut, error) {
+		res, err := s.applyRemove(ctx, id, serial, wantHash, by, func(text string) { s.stage(id, text) })
+		return jobOut{app: res}, err
+	})
+	return nil
+}
+
+// clearJobMark forgets the durable mark of an apply (it ended, or the plan was read again). With idle, only when no job
+// holds the slot, decided inside the store update: a job claims the slot before it writes its mark, so a mark written by a
+// job that started meanwhile is never cleared here.
+func (s *Service) clearJobMark(id string, idle bool) {
 	if _, st, ok := s.Load(id); !ok || st.Settings.Job.Kind == "" {
 		return
 	}
-	_ = s.upd(id, func(d *store.Data, e store.Equipment, st *store.OLTState) { st.Settings.Job = store.OLTJobMark{} })
+	_ = s.upd(id, func(d *store.Data, e store.Equipment, st *store.OLTState) {
+		if !idle || s.busy(id) == nil {
+			st.Settings.Job = store.OLTJobMark{}
+		}
+	})
 }
 
 // ---- Check now -------------------------------------------------------------------------------------------------------------
@@ -263,7 +351,7 @@ func (s *Service) StartCheck(id, by string) error {
 		return err
 	}
 	s.launch(id, j, checkJobTimeout, func(ctx context.Context) (jobOut, error) {
-		return jobOut{}, s.AdoptSite(ctx, siteID, by)
+		return jobOut{}, s.adoptSite(ctx, siteID, by, id)
 	})
 	return nil
 }

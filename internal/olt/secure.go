@@ -413,7 +413,16 @@ func (s *Service) SetCredentials(id, user, pass, enable, by string) error {
 			return errors.New("could not store the enable password")
 		}
 	}
-	return s.upd(id, func(d *store.Data, e store.Equipment, st *store.OLTState) {
+	if err := s.busy(id); err != nil {
+		return err
+	}
+	var busy error
+	err = s.upd(id, func(d *store.Data, e store.Equipment, st *store.OLTState) {
+		// Decided inside the update: a job (Secure, Check) or the adoption pass that started meanwhile may be changing or
+		// storing the login right now; a typed login must not cross it.
+		if busy = s.busy(id); busy != nil {
+			return
+		}
 		e.MgmtUser, e.MgmtPass = user, sp
 		d.Equipment[id] = e
 		st.Settings.EnablePass = se
@@ -425,6 +434,10 @@ func (s *Service) SetCredentials(id, user, pass, enable, by string) error {
 		}
 		s.audit(d, e, by, "OLT "+store.OLTLabel(e)+": the login the server uses was typed by "+by)
 	})
+	if err != nil {
+		return err
+	}
+	return busy
 }
 
 // Reveal returns the stored login name and the login and enable passwords. The caller has checked the owner's password;

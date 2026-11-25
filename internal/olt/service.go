@@ -75,6 +75,8 @@ type Service struct {
 	alerted map[string]time.Time
 	// jobs are the latest background job of each OLT (job.go), guarded by mu.
 	jobs map[string]*job
+	// held are the OLTs an adoption pass that is not a job is working on (job.go hold), guarded by mu.
+	held map[string]bool
 }
 
 // New creates the service.
