@@ -817,3 +817,23 @@ func checkACLRules(t *testing.T, got []string, src string) {
 		t.Fatalf("access list rules:\n got %q\nwant %q", got, want)
 	}
 }
+
+// The bench: "checked 06:00" at 07:13 although passes ran: an adopted OLT is skipped by the pass, but its check time and
+// MAC sighting are kept current (the timer and Check now), without touching its stage.
+func TestAdoptPassRefreshesCheckedAtOfAnAdoptedOLT(t *testing.T) {
+	a := newAdoptEnv(t)
+	a.adopt(t)
+	before := a.adoptState()
+	if !before.Adopted {
+		t.Fatalf("%+v", before)
+	}
+	later := before.CheckedAt.Add(time.Hour)
+	a.svc.o.Now = func() time.Time { return later }
+	if err := a.svc.AdoptCheck(context.Background(), oltID, "olga"); err != nil {
+		t.Fatal(err)
+	}
+	after := a.adoptState()
+	if !after.CheckedAt.Equal(later) || after.Stage != before.Stage || !after.Adopted {
+		t.Fatalf("before %+v\nafter %+v", before, after)
+	}
+}

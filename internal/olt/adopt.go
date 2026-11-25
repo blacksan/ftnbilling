@@ -173,6 +173,19 @@ func (s *Service) AdoptSite(ctx context.Context, siteID, by string) error {
 	var firstErr error
 	for _, o := range olts {
 		if s.adoptedOrManual(o.ID) {
+			// Adopted: the poll takes over, but the pass did look at the port, so "checked" says when (and whether the
+			// OLT's MAC was there). The stage is not touched.
+			if _, there := macs[strings.ToUpper(o.MAC)]; o.MAC != "" {
+				now := s.now()
+				_ = s.setAdopt(o.ID, func(a *store.OLTAdopt, e *store.Equipment, d *store.Data) {
+					if a.Adopted {
+						a.CheckedAt = now
+						if there {
+							a.MACSeen, a.MACSeenAt = true, now
+						}
+					}
+				})
+			}
 			continue
 		}
 		r, there := macs[strings.ToUpper(o.MAC)]
