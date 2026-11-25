@@ -276,7 +276,7 @@ func (s *Server) eqONUs(w http.ResponseWriter, r *http.Request) {
 				row.House, row.Code, row.Customer, row.Apartment = n.House, n.Code, n.Customer, n.Apartment
 				row.TR069, row.CheckIn, row.Held, row.Online = n.TR069, n.TR069Inform, n.TR069Held, n.Online
 			}
-			if q != "" && !(store.ContainsFold(e.Serial, q) || store.ContainsFold(e.GPONSerial, q) || store.ContainsFold(e.MAC, q) ||
+			if q != "" && !(store.ContainsFold(e.Serial, q) || store.ContainsFold(e.GPONSerial, q) || store.ContainsFold(e.TR069Serial, q) || store.ContainsFold(e.MAC, q) ||
 				store.ContainsFold(strings.ReplaceAll(e.MAC, ":", ""), strings.ReplaceAll(q, ":", "")) || store.ContainsFold(e.Model, q) ||
 				store.ContainsFold(row.House, q) || store.ContainsFold(row.Code, q) || store.ContainsFold(row.Customer, q) || store.ContainsFold(row.OLTLabel, q)) {
 				continue

@@ -104,7 +104,7 @@ func (s *Service) Tree(siteOK func(siteID string) bool) EquipmentTree {
 				}
 			}
 			if !n.TR069 {
-				for _, o := range d.ONUsOfSerial(e.Serial, e.GPONSerial) {
+				for _, o := range d.ONUsOfSerial(e.Serial, e.GPONSerial, e.TR069Serial) {
 					n.TR069, n.TR069Inform, n.TR069Held = true, o.LastInform, o.Sec.Quarantine.Active
 					break
 				}

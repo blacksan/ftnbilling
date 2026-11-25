@@ -52,6 +52,10 @@ type UnknownONU struct {
 	LastSeen     time.Time `json:"last_seen"`
 	Count        int       `json:"count"`
 	Notified     time.Time `json:"notified,omitempty"`
+	// LeaseMAC is the MAC the router leased the check-in address to (the management MAC), when it said.
+	LeaseMAC string `json:"lease_mac,omitempty"`
+	// Suggestions are the inventory items this one may be (filled when listed, never stored).
+	Suggestions []Suggestion `json:"suggestions"`
 }
 
 func readUnknown(d *store.Data) []UnknownONU {
@@ -84,7 +88,7 @@ func liveUnknown(d *store.Data, l []UnknownONU, now time.Time) []UnknownONU {
 
 // noteUnknown records an unregistered serial's check-in. It returns the owner alert to send (empty = none) and whether
 // anything was written.
-func (s *Service) noteUnknown(d *store.Data, in Inform, site store.Site, ip string, now time.Time) (alert string, wrote bool) {
+func (s *Service) noteUnknown(d *store.Data, in Inform, site store.Site, ip string, lease leaseResult, now time.Time) (alert string, wrote bool) {
 	all := readUnknown(d)
 	l := liveUnknown(d, all, now)
 	changed := len(l) != len(all)
@@ -103,6 +107,8 @@ func (s *Service) noteUnknown(d *store.Data, in Inform, site store.Site, ip stri
 		if now.Sub(u.LastSeen) >= unknownTouch { // at most one write a minute per serial
 			u.LastSeen, u.Count, u.IP, u.SiteID, u.SiteName = now, u.Count+1, ip, site.ID, site.Name
 			u.Model, u.Manufacturer = nonEmpty(cleanText(in.ProductClass), u.Model), nonEmpty(cleanText(in.Manufacturer), u.Manufacturer)
+			u.OUI = nonEmpty(in.OUI, u.OUI)
+			u.LeaseMAC = lease.mac
 			changed = true
 		}
 		if now.Sub(u.Notified) >= unknownNotify {
@@ -111,13 +117,13 @@ func (s *Service) noteUnknown(d *store.Data, in Inform, site store.Site, ip stri
 		l[idx] = u
 	case len(l) < unknownMax:
 		l = append(l, UnknownONU{Serial: cleanText(in.Serial), OUI: in.OUI, Manufacturer: cleanText(in.Manufacturer), Model: cleanText(in.ProductClass),
-			SiteID: site.ID, SiteName: site.Name, IP: ip, FirstSeen: now, LastSeen: now, Count: 1})
+			SiteID: site.ID, SiteName: site.Name, IP: ip, LeaseMAC: lease.mac, FirstSeen: now, LastSeen: now, Count: 1})
 		idx, changed, notify = len(l)-1, true, true
 	}
 	if notify && idx >= 0 && s.unknownBudget(now) {
 		l[idx].Notified = now
 		changed = true
-		alert = fmt.Sprintf("An unknown ONU tried to check in: serial %s, model %s, router %s. It is not in the ONU inventory, so it was given nothing. If it is yours, add it to the inventory (Equipment > ONU).",
+		alert = fmt.Sprintf("An unknown ONU tried to check in: serial %s, model %s, router %s. It is not in the ONU inventory, so it was given nothing. If it is yours, add it to the inventory (Equipment > ONU), or, when it is a box already in the inventory that reports a different serial, link it to that item from the unknown ONU list.",
 			l[idx].Serial, nonEmpty(l[idx].Model, "?"), nonEmpty(site.Name, site.ID))
 	}
 	if changed {
@@ -152,6 +158,7 @@ func (s *Service) UnknownONUs(siteID string) []UnknownONU {
 	s.st.View(func(d *store.Data) {
 		for _, u := range liveUnknown(d, readUnknown(d), now) {
 			if siteID == "" || u.SiteID == siteID {
+				u.Suggestions = Suggest(d, u)
 				out = append(out, u)
 			}
 		}

@@ -205,3 +205,39 @@ func TestTrustedMACIsClearedWhenTheItemIsReturnedOrRetired(t *testing.T) {
 		}
 	}
 }
+
+// The TR-069 serial is a third serial of an ONT: it finds the item, is unique across all three fields (retired items
+// included), is kept by an edit that does not mention it, and is cleared by an explicit empty value.
+func TestTR069SerialUniquenessAndKeep(t *testing.T) {
+	e := newEnv(t)
+	p := func(s string) *string { return &s }
+	a, err := e.svc.SaveEquipment(EquipmentInput{Kind: "ont", Serial: "V26051300697", GPONSerial: "VSOL00127E0F", TR069Serial: p("1234568229f127e0f"), MAC: macA})
+	if err != nil || a.TR069Serial != "1234568229F127E0F" {
+		t.Fatalf("%v %+v", err, a)
+	}
+	// taken as a serial, as a GPON serial or as a TR-069 serial by another item
+	for _, in := range []EquipmentInput{
+		{Kind: "ont", Serial: "1234568229F127E0F", MAC: macB},
+		{Kind: "ont", Serial: "x1", GPONSerial: "1234568229F127E0F", MAC: macB},
+		{Kind: "ont", Serial: "x2", TR069Serial: p("1234568229F127E0F"), MAC: macB},
+		{Kind: "ont", Serial: "x3", TR069Serial: p("vsol00127e0f"), MAC: macB},
+		{Kind: "ont", Serial: "x4", TR069Serial: p("v26051300697"), MAC: macB},
+	} {
+		if _, err := e.svc.SaveEquipment(in); err == nil || !strings.Contains(err.Error(), "already in the register") {
+			t.Fatalf("%+v accepted: %v", in, err)
+		}
+	}
+	if _, err := e.svc.SaveEquipment(EquipmentInput{Kind: "router", Serial: "r1", TR069Serial: p("T9")}); err == nil {
+		t.Fatal("a router got a TR-069 serial")
+	}
+	// an edit that leaves the field out keeps it
+	a2, err := e.svc.SaveEquipment(EquipmentInput{ID: a.ID, Kind: "ont", Serial: a.Serial, GPONSerial: a.GPONSerial, MAC: macA, Model: "V2804N-Z"})
+	if err != nil || a2.TR069Serial != a.TR069Serial {
+		t.Fatalf("kept? %v %+v", err, a2)
+	}
+	// and an explicit empty value clears it
+	a3, err := e.svc.SaveEquipment(EquipmentInput{ID: a.ID, Kind: "ont", Serial: a.Serial, GPONSerial: a.GPONSerial, TR069Serial: p(""), MAC: macA})
+	if err != nil || a3.TR069Serial != "" {
+		t.Fatalf("cleared? %v %+v", err, a3)
+	}
+}

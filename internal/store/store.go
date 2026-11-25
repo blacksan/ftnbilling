@@ -493,7 +493,11 @@ type Equipment struct {
 	Serial string `json:"serial,omitempty"`
 	// GPONSerial is the OLT-side serial (e.g. HWTC1234ABCD), only when it differs from the serial the ONU reports
 	// over TR-069 (Serial). Either one finds the item.
-	GPONSerial  string    `json:"gpon_serial,omitempty"`
+	GPONSerial string `json:"gpon_serial,omitempty"`
+	// TR069Serial is the serial the box's firmware reports in its CWMP DeviceId when that is neither Serial nor
+	// GPONSerial (a V-SOL V2804N-Z reports "12345" + its label MAC). The owner links it from the unknown-ONU list.
+	// Any of the three finds the item.
+	TR069Serial string    `json:"tr069_serial,omitempty"`
 	MAC         string    `json:"mac,omitempty"`
 	Model       string    `json:"model,omitempty"`
 	Firmware    string    `json:"firmware,omitempty"`

@@ -236,6 +236,13 @@ func Validate(d *Data) []string {
 			}
 			serials[k] = e.ID
 		}
+		if e.TR069Serial != "" {
+			k := "tr069|" + NormSerial(e.TR069Serial)
+			if o, ok := serials[k]; ok {
+				add("Two ONT items have the TR-069 serial %s (%s and %s).", e.TR069Serial, o, e.ID)
+			}
+			serials[k] = e.ID
+		}
 	}
 	names := map[string]string{}
 	for _, a := range d.ApartmentList() {

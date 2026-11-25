@@ -67,6 +67,18 @@ data class OnuMacWait(
     @SerialName("can_trust") val canTrust: Boolean = false,
 )
 
+/** An inventory item an unknown check-in may be, with the reasons why (strength 3 = MAC in the serial, 2 = management MAC near, 1 = model). */
+@Serializable
+data class UnknownOnuSuggestion(
+    @SerialName("equipment_id") val equipmentId: String = "",
+    val label: String = "",
+    val serial: String = "",
+    @SerialName("gpon_serial") val gponSerial: String = "",
+    val mac: String = "",
+    val why: List<String> = emptyList(),
+    val strength: Int = 0,
+)
+
 /** A serial that tried to check in and is not in the ONU inventory (GET /onus/unknown). */
 @Serializable
 data class UnknownOnu(
@@ -78,6 +90,9 @@ data class UnknownOnu(
     val ip: String = "",
     @SerialName("last_seen") val lastSeen: String? = null,
     val count: Int = 0,
+    @SerialName("lease_mac") val leaseMac: String = "",
+    /** Never linked automatically: an owner chooses ([OnuRepository.linkUnknown]). */
+    val suggestions: List<UnknownOnuSuggestion> = emptyList(),
 )
 
 @Serializable
@@ -138,6 +153,7 @@ data class RegisterItem(
     val kind: String = "",
     val serial: String = "",
     @SerialName("gpon_serial") val gponSerial: String = "",
+    @SerialName("tr069_serial") val tr069Serial: String = "",
     val mac: String = "",
     val model: String = "",
     val status: String = "",

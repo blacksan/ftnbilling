@@ -35,7 +35,7 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 		d.Packages["p2"] = store.Package{ID: "p2", Name: "Old", Slug: "old", DurationMin: 60, SpeedMbps: 5, PriceKES: 10, Disabled: true, Deleted: true, Sort: 2}
 		d.Customers["c1"] = store.Customer{ID: "c1", Name: "Alice", Phone: "254711000001", Phone2: "254711000002", WhatsApp: "254711000003", WAOptOut: true, WASamePhone: true,
 			Email: "a@example.com", Notes: "vip", NationalIDEnc: "enc", NationalIDHMAC: "hmac", NationalIDLast4: "1234", AnonymizedAt: at, CreatedAt: at, UpdatedAt: at}
-		d.Equipment["e1"] = store.Equipment{ID: "e1", Kind: store.KindONT, Serial: "SN1", GPONSerial: "HWTC00000001", MAC: "AA:BB:CC:DD:EE:01", Model: "F601", Firmware: "1.0",
+		d.Equipment["e1"] = store.Equipment{ID: "e1", Kind: store.KindONT, Serial: "SN1", GPONSerial: "HWTC00000001", TR069Serial: "1234AABBCCDDEE01", MAC: "AA:BB:CC:DD:EE:01", Model: "F601", Firmware: "1.0",
 			Status: store.EqInstalled, SiteID: "s111111", AccountID: "a1", Notes: "n", InstalledAt: at, CreatedAt: at, UpdatedAt: at}
 		d.Equipment["e2"] = store.Equipment{ID: "e2", Kind: store.KindSplitter, Status: store.EqInStock, CreatedAt: at}
 		d.Equipment["e3"] = store.Equipment{ID: "e3", Kind: store.KindRouter, Serial: "sn1", Status: store.EqInstalled, SiteID: "s111111", CreatedAt: at}
