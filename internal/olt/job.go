@@ -198,6 +198,7 @@ func (s *Service) launch(id string, j *job, budget time.Duration, work func(ctx 
 		if j.kind == JobApply {
 			s.clearJobMark(id, false) // before the job is reported finished, so the page never shows both
 		}
+		s.recordLast(id, j, out, err)
 		s.mu.Lock()
 		j.running, j.finished, j.sec, j.app = false, s.now(), out.sec, out.app
 		if err != nil {
@@ -211,6 +212,27 @@ func (s *Service) launch(id string, j *job, budget time.Duration, work func(ctx 
 		}
 		s.mu.Unlock()
 	}()
+}
+
+// recordLast stores the outcome of a finished job on the OLT's state (redacted, no secret), so that it is shown until the
+// next job ends, whatever happened to the request that started it.
+func (s *Service) recordLast(id string, j *job, out jobOut, err error) {
+	l := store.OLTLastJob{Kind: string(j.kind), By: j.by, Started: j.started, Finished: s.now(), OK: err == nil,
+		Sent: len(out.app.Sent), Verified: out.app.Verified, Remaining: len(out.app.Remaining), Backup: out.app.Backup,
+		Failed: out.app.Failed, Skipped: out.app.Skipped}
+	if err != nil {
+		l.Error = errText(err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			l.Error = j.kind.Label() + " did not finish within its time; the OLT took too long to answer"
+		}
+	}
+	for _, en := range out.app.Entries {
+		if en.Err != "" {
+			l.Refused, l.RefusedOut = en.Cmd, clip(Redact(firstNonEmpty(en.Out, en.Err)), 400)
+			break
+		}
+	}
+	_ = s.upd(id, func(d *store.Data, e store.Equipment, st *store.OLTState) { st.Settings.Last = l })
 }
 
 // ---- Secure ----------------------------------------------------------------------------------------------------------------

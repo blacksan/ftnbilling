@@ -279,3 +279,59 @@ func TestOLTRemoveAndCredentialsUseTheJobSlot(t *testing.T) {
 		t.Errorf("credentials: %s", loc)
 	}
 }
+
+// The bench: two Applies ran and the page showed no result at all. The outcome of the latest job is stored on the OLT and
+// shown in a "Last change" card (with the refused line and the OLT's own answer) until the next job ends, and in the
+// job status; owners also see the OLT's last audit entries. The internet VLAN 0 is explained.
+func TestOLTLastChangeCardAndAudit(t *testing.T) {
+	o := newOLTRig(t)
+	o.f.SetRunning("")
+	p := "/olts/" + o.id
+	if g := o.call(o.owner.Access, "PUT", p+"/provisioning", map[string]any{"enabled": true, "dialect_checked": true, "password": o.ownerW.Pass}, nil); g.Status != 200 {
+		t.Fatalf("provisioning: %d %s", g.Status, g.Raw)
+	}
+	pl := o.call(o.owner.Access, "POST", p+"/plan", nil, nil)
+	hash, _ := pl.JSON(t)["hash"].(string)
+	o.f.FailOn = "vlan 99"
+	if g := o.call(o.owner.Access, "POST", p+"/apply", map[string]any{"hash": hash, "password": o.ownerW.Pass}, nil); g.Status != 202 {
+		t.Fatalf("apply: %d %s", g.Status, g.Raw)
+	}
+	for end := time.Now().Add(60 * time.Second); time.Now().Before(end) && o.svc2.JobStatus(o.id).Running; time.Sleep(25 * time.Millisecond) {
+	}
+	st := o.call(o.owner.Access, "GET", p+"/job", nil, nil)
+	last, _ := st.JSON(t)["last"].(map[string]any)
+	if last == nil || last["kind"] != "apply" || last["ok"] != false || last["refused_line"] != "vlan 99" || !strings.Contains(last["refused_output"].(string), "Invalid input") {
+		t.Fatalf("last: %s", st.Raw)
+	}
+	cl := &http.Client{CheckRedirect: noRedirect}
+	page := func(b *browser) string {
+		resp := b.Do(cl, o.ts.URL, "GET", "/admin/olts/manage?id="+url.QueryEscape(o.id), nil)
+		bs, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return string(bs)
+	}
+	ob := signIn(t, o.ts, o.srv, o.st, o.ownerW)
+	pb := signIn(t, o.ts, o.srv, o.st, o.operW)
+	// The outcome is stored on the OLT's state (it survives a restart; the card is built from it).
+	var stored store.OLTLastJob
+	o.st.View(func(d *store.Data) { stored = d.OLTStateOf(o.id).Settings.Last })
+	if stored.Kind != "apply" || stored.OK || stored.Refused != "vlan 99" {
+		t.Fatalf("stored: %+v", stored)
+	}
+	op := page(ob)
+	for _, want := range []string{"data-last-change", "<h2>Last change</h2>", "Applying failed.", "<span class=\"mono\">vlan 99</span>", "Invalid input", "Recent audit entries for this OLT", "FAILED"} {
+		if !strings.Contains(op, want) {
+			t.Errorf("owner page lacks %q", want)
+		}
+	}
+	if !strings.Contains(op, "0 = the router&#39;s customer VLAN") {
+		t.Error("the internet VLAN 0 is not explained")
+	}
+	pp := page(pb)
+	if !strings.Contains(pp, "<h2>Last change</h2>") || strings.Contains(pp, "Recent audit entries") {
+		t.Error("operator page: no card, or the owner-only audit list")
+	}
+	if hasInlineScript(op) || inlineHandler.MatchString(op) {
+		t.Error("inline script")
+	}
+}

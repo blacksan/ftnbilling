@@ -1,12 +1,22 @@
 {{define "admin_olt_manage"}}{{template "ahead" .}}{{$E := .Data.E}}{{$S := .Data.Set}}{{$st := .Data.S}}
 <p><a href="/admin/olts/view?id={{$E.ID}}">&larr; OLT details</a> &middot; <a href="/admin/olts/adopt?id={{$E.ID}}">Manual setup (console snippet)</a> &middot; <a href="/admin/equipment?tab=olt">all OLTs</a></p>
 
-{{with .Data.Job}}<section class="panel mt-3" role="status"{{if .Running}} {{if $.IsOwner}}data-job-poll="/admin/olts/manage/job-status?id={{$E.ID}}" data-running="1"{{else}}data-reload="5"{{end}}{{end}}>
-{{if .Running}}<p><b>{{.Label}}&hellip;</b> started {{.Started}}. <span data-job-stage>{{.Stage}}</span></p><p class="muted">This takes a few minutes. The page updates by itself. Nothing else can be started on this OLT until it ends.</p>
-{{else if .Done}}<p><span class="pill active">done</span> {{.Message}}</p>
-{{else if .Failed}}<p><span class="pill suspended">{{.Label}} failed</span> {{.Error}}</p>{{end}}
+{{with .Data.Job}}{{if or .Running .UnfinishedSecure .UnfinishedApply}}<section class="panel mt-3" role="status"{{if .Running}} {{if $.IsOwner}}data-job-poll="/admin/olts/manage/job-status?id={{$E.ID}}" data-running="1"{{else}}data-reload="5"{{end}}{{end}}>
+{{if .Running}}<p><b>{{.Label}}&hellip;</b> started {{.Started}}. <span data-job-stage>{{.Stage}}</span></p><p class="muted">This takes a few minutes. The page updates by itself. Nothing else can be started on this OLT until it ends.</p>{{end}}
 {{if .UnfinishedSecure}}<p><span class="pill suspended">unfinished</span> A Secure did not finish (the server stopped, or it failed half way). The new login it set is kept encrypted; the server tries it at its next check of the OLT.</p>{{end}}
-{{if .UnfinishedApply}}<p><span class="pill suspended">unfinished</span> {{.ApplyNote}}</p>{{end}}</section>{{end}}
+{{if .UnfinishedApply}}<p><span class="pill suspended">unfinished</span> {{.ApplyNote}}</p>{{end}}</section>{{end}}{{end}}
+
+{{with .Data.Last}}<section class="panel mt-3" data-last-change><div class="panel-h"><h2>Last change</h2><span class="muted">{{.Label}} by {{.By}}, {{.Started}} &ndash; {{.Finished}}</span></div>
+<p>{{if .OK}}<span class="pill active">done</span>{{else}}<span class="pill suspended">failed</span>{{end}} {{.Message}}</p>
+{{if .Error}}<p><span class="eqwarn" role="note">{{.Error}}</span></p>{{end}}
+{{if eq .Kind "apply"}}<p class="muted">{{.Sent}} line{{if ne .Sent 1}}s{{end}} sent{{if .OK}}; read back: {{if .Verified}}all there{{else}}{{.Remaining}} still missing{{end}}{{end}}.{{if .Backup}} The configuration was saved first (backup {{.Backup}}).{{end}}</p>{{end}}
+{{if .Refused}}<p>The OLT refused (or did not answer) <span class="mono">{{.Refused}}</span>:</p><pre class="mono">{{.RefusedOut}}</pre>{{end}}
+{{if .Failed}}<p>Failed steps:</p><ul>{{range .Failed}}<li>{{.}}</li>{{end}}</ul>{{end}}
+{{if .Skipped}}<p>Skipped steps:</p><ul>{{range .Skipped}}<li>{{.}}</li>{{end}}</ul>{{end}}
+<p class="muted">Shown until the next Apply, Secure or Check now ends.</p></section>{{end}}
+
+{{if .Data.Audit}}<section class="panel mt-3"><h2>Recent audit entries for this OLT</h2><div class="tw"><table class="rs"><thead><tr><th>When</th><th>Who</th><th>What</th></tr></thead><tbody>
+{{range .Data.Audit}}<tr><td data-label="When">{{.At}}</td><td data-label="Who">{{.By}}</td><td data-label="What" class="wrap">{{.Msg}}</td></tr>{{end}}</tbody></table></div><p class="muted">The last 10, owners only; secrets are hidden.</p></section>{{end}}
 
 {{with .Data.Adopt}}<section class="panel mt-3"><div class="panel-h"><h2>Adoption</h2>
 <span class="muted">{{if not .CheckedAt.IsZero}}checked {{eats .CheckedAt}}{{else}}not checked yet{{end}}</span></div>
@@ -88,7 +98,7 @@
 <label class="field">Enable password<input name="enable_pass" type="password" autocomplete="new-password" placeholder="{{if .Data.HasEnable}}stored, leave empty to keep{{else}}none{{end}}"></label></div>
 <div class="two3 mt-2"><label class="field">OLT management VLAN<input name="mgmt_vlan" type="number" min="2" max="4094" value="{{.Data.MgmtVLAN}}"></label>
 <label class="field">Uplink port (to the router)<input name="uplink" value="{{.Data.Uplink}}" placeholder="0/1" class="mono"></label>
-<label class="field">Internet VLAN on the OLT<input name="internet_vlan" type="number" min="0" max="4094" value="{{$S.InternetVLAN}}" placeholder="from the router"></label></div>
+<label class="field">Internet VLAN on the OLT<input name="internet_vlan" type="number" min="0" max="4094" value="{{$S.InternetVLAN}}" placeholder="from the router">{{with .Data.InetVLANNote}}<span class="muted">{{.}}</span>{{end}}</label></div>
 <p class="muted">Login name and password are on the <a href="/admin/olts/view?id={{$E.ID}}">OLT details</a> page. The password and the enable password are stored encrypted and never shown. {{if $S.HostKey}}SSH host key pinned: <span class="mono">{{$S.HostKey}}</span> <label class="ck muted"><input type="checkbox" name="clear_hostkey" value="1"> forget it (after replacing the OLT)</label>{{else}}The SSH host key is pinned the first time the server connects, and shown here.{{end}}
 {{if .Data.HasEnable}} <label class="ck muted"><input type="checkbox" name="clear_enable" value="1"> remove the enable password</label>{{end}}</p>
 <div class="row mt-2"><label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button>Save</button></div></form></section>

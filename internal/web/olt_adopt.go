@@ -144,6 +144,9 @@ func jobMessage(v olt.JobStatus) string {
 func (s *Server) jobJSON(id string) map[string]any {
 	v := s.olt.JobStatus(id)
 	m := map[string]any{"known": v.Known, "running": v.Running, "stage": v.Stage, "interrupted": v.Interrupted, "done": v.Known && !v.Running}
+	if _, st, ok := s.olt.Load(id); ok {
+		m["last"] = lastJSON(st.Settings.Last) // the stored outcome of the latest finished job (null: none yet)
+	}
 	if v.Interrupted {
 		m["interrupted_kind"] = string(v.InterruptedKind)
 		if v.InterruptedKind == olt.JobApply {
@@ -173,6 +176,53 @@ func (s *Server) jobJSON(id string) map[string]any {
 		}
 	}
 	return m
+}
+
+// lastView is the "Last change" card: the stored outcome of the latest background job (it survives a restart and a
+// request that died at a proxy). No secret: every text in it was redacted when it was stored.
+type lastView struct {
+	Kind, Label, By, Started, Finished, Message, Error string
+	OK                                                 bool
+	Sent, Remaining                                    int
+	Verified                                           bool
+	Refused, RefusedOut                                string
+	Failed, Skipped                                    []string
+	Backup                                             string
+}
+
+func lastViewOf(l store.OLTLastJob) *lastView {
+	if l.Kind == "" {
+		return nil
+	}
+	k := olt.JobKind(l.Kind)
+	v := &lastView{Kind: l.Kind, Label: k.Label(), By: l.By, OK: l.OK, Error: l.Error, Sent: l.Sent, Remaining: l.Remaining, Verified: l.Verified,
+		Refused: l.Refused, RefusedOut: l.RefusedOut, Failed: l.Failed, Skipped: l.Skipped, Backup: l.Backup,
+		Started: l.Started.In(billing.EAT).Format("2 Jan 15:04"), Finished: l.Finished.In(billing.EAT).Format("2 Jan 15:04")}
+	v.Message = lastMessage(l)
+	return v
+}
+
+// lastMessage is the one-line outcome of a stored job.
+func lastMessage(l store.OLTLastJob) string {
+	if !l.OK {
+		return olt.JobKind(l.Kind).Label() + " failed."
+	}
+	switch olt.JobKind(l.Kind) {
+	case olt.JobApply:
+		return applyMsg(olt.Result{Sent: make([]string, l.Sent), Verified: l.Verified, Remaining: make([]string, l.Remaining)}, nil)
+	case olt.JobSecure:
+		return "Secured: the login and enable password were replaced by generated ones, tested with a new session and saved (the adoption checklist has the SNMP and SSH notes)."
+	}
+	return "Checked the OLT management port"
+}
+
+func lastJSON(l store.OLTLastJob) map[string]any {
+	if l.Kind == "" {
+		return nil
+	}
+	return map[string]any{"kind": l.Kind, "by": l.By, "started_at": l.Started.UTC().Format(time.RFC3339), "finished_at": l.Finished.UTC().Format(time.RFC3339),
+		"ok": l.OK, "message": lastMessage(l), "error": l.Error, "sent": l.Sent, "verified": l.Verified, "remaining": l.Remaining,
+		"refused_line": l.Refused, "refused_output": l.RefusedOut, "failed_steps": nz(l.Failed), "skipped_steps": nz(l.Skipped), "backup_id": l.Backup}
 }
 
 // applyInterrupted is what the page says when the server stopped in the middle of an apply.
