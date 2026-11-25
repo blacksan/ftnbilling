@@ -6,6 +6,7 @@ import ke.co.ftw.ftnadmin.core.network.ApiError
 import ke.co.ftw.ftnadmin.core.network.ErrorCode
 import ke.co.ftw.ftnadmin.data.onu.AccountOnu
 import ke.co.ftw.ftnadmin.data.onu.OnuRepository
+import ke.co.ftw.ftnadmin.data.onu.WifiReveal
 import ke.co.ftw.ftnadmin.domain.WifiRules
 import ke.co.ftw.ftnadmin.ui.common.Loadable
 import ke.co.ftw.ftnadmin.ui.common.apiResult
@@ -23,8 +24,6 @@ data class WifiForm(
     val same: Boolean = true,
     val ssid5: String = "",
     val password5: String = "",
-    /** The password boxes show the text while typing when set. */
-    val showPassword: Boolean = false,
     /** Field key (ssid, password, ssid5, password5) to the reason. */
     val errors: Map<String, String> = emptyMap(),
 )
@@ -37,6 +36,8 @@ data class WifiUiState(
     val busy: Boolean = false,
     val error: String? = null,
     val info: String? = null,
+    /** The current Wi-Fi password, while the dialog that shows it is open. */
+    val reveal: WifiReveal? = null,
 )
 
 class WifiViewModel(
@@ -71,8 +72,28 @@ class WifiViewModel(
         val first = (cur.onu as? Loadable.Ready)?.value?.onu?.wifi.orEmpty()
         val name2 = first.firstOrNull { it.band == "2.4" }?.ssid.orEmpty()
         val name5 = first.firstOrNull { it.band == "5" }?.ssid.orEmpty()
-        cur.copy(sheet = true, error = null, form = WifiForm(ssid = name2, ssid5 = name5, same = name5.isBlank() || name5 == name2))
+        val dual = (cur.onu as? Loadable.Ready)?.value?.onu?.has5ghz ?: true
+        cur.copy(sheet = true, error = null, form = WifiForm(ssid = name2, ssid5 = name5, same = !dual || name5.isBlank() || name5 == name2))
     }
+
+    /** True unless the ONU reported that it has no 5 GHz radio. */
+    private fun has5(): Boolean = (_state.value.onu as? Loadable.Ready)?.value?.onu?.has5ghz ?: true
+
+    /** Shows the current Wi-Fi password of the house (read from the ONU when it answers, else the saved one). */
+    fun showPassword() {
+        _state.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            val r = apiResult { repo.showWifiPassword(accountId) }
+            _state.update { cur ->
+                r.fold(
+                    { v -> cur.copy(busy = false, reveal = v) },
+                    { e -> cur.copy(busy = false, error = e.userMessage()) },
+                )
+            }
+        }
+    }
+
+    fun closeReveal() = _state.update { it.copy(reveal = null) }
 
     /** Closing forgets the typed passwords. */
     fun closeSheet() = _state.update { it.copy(sheet = false, form = WifiForm(), error = null) }
@@ -87,15 +108,13 @@ class WifiViewModel(
 
     fun onPassword5(v: String) = editForm { copy(password5 = v, errors = errors - "password5") }
 
-    fun toggleShowPassword() = editForm { copy(showPassword = !showPassword) }
-
     private fun editForm(f: WifiForm.() -> WifiForm) = _state.update { it.copy(form = it.form.f(), error = null) }
 
     /** Field problems of [f], keyed by field; empty when the form can be sent. */
     fun validate(f: WifiForm): Map<String, String> = buildMap {
         WifiRules.ssidError(f.ssid)?.let { put("ssid", it) }
         WifiRules.passwordError(f.password)?.let { put("password", it) }
-        if (!f.same) {
+        if (!f.same && has5()) {
             WifiRules.ssidError(f.ssid5)?.let { put("ssid5", it) }
             WifiRules.passwordError(f.password5)?.let { put("password5", it) }
         }
@@ -110,7 +129,7 @@ class WifiViewModel(
         }
         _state.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
-            val r = apiResult { repo.setWifi(accountId, f.ssid, f.password, f.same, f.ssid5, f.password5) }
+            val r = apiResult { repo.setWifi(accountId, f.ssid, f.password, f.same || !has5(), f.ssid5, f.password5) }
             r.fold(
                 {
                     _state.update { it.copy(busy = false, sheet = false, form = WifiForm(), info = "Wi-Fi change queued. When it shows Accepted, check the Wi-Fi on a phone and press It works.") }

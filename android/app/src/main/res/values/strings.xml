@@ -298,8 +298,6 @@
     <string name="gpon_serial_short">GPON serial</string>
     <string name="last_request">Last request</string>
     <string name="same_wifi_both_bands">Same name and password on 2.4 and 5 GHz</string>
-    <string name="hide_password">Hide the password</string>
-    <string name="show_password">Show the password</string>
     <string name="check_for_updates">Check for updates</string>
     <plurals name="alerts_open_desc">
         <item quantity="one">Alerts, %d open</item>

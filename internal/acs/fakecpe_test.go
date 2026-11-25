@@ -71,7 +71,7 @@ func newFixture(t *testing.T) *fixture {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Config{ACSListen: "10.99.0.1:7547", ACSCRPorts: []int{7547, 30005}, ACSInformInterval: 300, ACSMaxPerRouter: 200}
+	cfg := config.Config{ACSListen: "10.99.0.1:7547", ACSCRPorts: config.DefaultACSCRPorts(), ACSInformInterval: 300, ACSMaxPerRouter: 200}
 	log := slog.New(slog.NewTextHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	svc, err := New(Options{Store: st, Cfg: cfg, Log: log, DataKey: testKey, Now: func() time.Time { f.mu.Lock(); defer f.mu.Unlock(); return f.now },
 		ClientIP: func(r *http.Request) (netip.Addr, bool) {

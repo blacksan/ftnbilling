@@ -263,3 +263,95 @@ func TestAPILinkUnknownONUIsOwnerOnlyAndAudited(t *testing.T) {
 		t.Fatalf("%d %s", c.Status, c.Raw)
 	}
 }
+
+// The account/ONU API tells the apps which bands the ONU has, and serves the metrics of an ONU to operators only.
+func TestAPIONUBandsMetricsAndWiFiPassword(t *testing.T) {
+	forceACS = true
+	t.Cleanup(func() { forceACS = false })
+	r := newAPIRig(t)
+	a := r.acct(t, r.A, "A1", "AA:BB:CC:00:00:01")
+	r.st.Update(func(d *store.Data) error {
+		s := d.Sites[r.A.ID]
+		s.ONUMgmtN = 4
+		d.Sites[r.A.ID] = s
+		d.ONUs["o1"] = store.ONU{ID: "o1", Serial: "VSOL1", Manufacturer: "V-SOL", ProductClass: "VSOL V414", Root: store.RootTR098, SiteID: r.A.ID, MgmtIP: "10.6.4.9",
+			AccountID: a.ID, Link: store.LinkManual, LastInform: time.Now().Add(-48 * time.Hour),
+			WiFi: []store.ONUWiFi{{Path: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.", Band: "2.4", SSID: "Old", Enabled: true}}}
+		f1, f2, bps := -21.5, 2.5, 1.25e6
+		d.ONUMetrics["o1"] = store.ONUMetrics{ID: "o1", Updated: time.Now(), Uptime: 3600, Reboots: 1,
+			Optical: &store.ONUOptical{Rx: &f1, Tx: &f2},
+			WAN:     &store.ONUWAN{Dn: &bps, Up: &bps, Link: "Up"},
+			Hosts:   []store.ONUHost{{Name: "phone", MAC: "AA:BB:CC:00:00:09", IP: "192.168.1.5", Iface: "Old", Active: true, Dn: &bps}},
+			Fine:    []store.MetricPoint{{T: time.Now().Unix() - 60, N: 1, Rx: &f1, Dn: &bps}},
+			Gaps:    []string{"bias: not found"}}
+		return nil
+	})
+	got := r.call(r.view.Access, "GET", "/accounts/"+a.ID+"/onu", nil, nil)
+	var out struct {
+		ONU struct {
+			Bands   []string `json:"bands"`
+			Has5GHz bool     `json:"has_5ghz"`
+		} `json:"onu"`
+	}
+	if got.Status != 200 || json.Unmarshal(got.Raw, &out) != nil || out.ONU.Has5GHz || len(out.ONU.Bands) != 1 || out.ONU.Bands[0] != "2.4" {
+		t.Fatalf("bands: %d %s", got.Status, got.Raw)
+	}
+	// metrics: operators only
+	if v := r.call(r.view.Access, "GET", "/onus/o1/metrics", nil, nil); v.Status != 403 {
+		t.Fatalf("a viewer read the metrics: %d", v.Status)
+	}
+	m := r.call(r.oper.Access, "GET", "/onus/o1/metrics?range=24h", nil, nil)
+	if m.Status != 200 {
+		t.Fatalf("%d %s", m.Status, m.Raw)
+	}
+	var mv map[string]any
+	if err := json.Unmarshal(m.Raw, &mv); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"onu_id", "range", "step_s", "optical", "throughput", "devices", "qos", "gaps"} {
+		if _, ok := mv[k]; !ok {
+			t.Fatalf("missing %q in %s", k, m.Raw)
+		}
+	}
+	opt := mv["optical"].(map[string]any)
+	if cur := opt["current"].(map[string]any); cur["rx_dbm"].(float64) != -21.5 || len(opt["history"].([]any)) != 1 {
+		t.Fatalf("optical: %v", opt)
+	}
+	if dv := mv["devices"].(map[string]any); dv["count"].(float64) != 1 || len(dv["list"].([]any)) != 1 {
+		t.Fatalf("devices: %v", dv)
+	}
+	if q := mv["qos"].(map[string]any); q["reboots"].(float64) != 1 || q["link_status"] != "Up" {
+		t.Fatalf("qos: %v", q)
+	}
+	if strings.Contains(string(m.Raw), "password") || strings.Contains(string(m.Raw), "Pass") {
+		t.Fatalf("a secret-looking field in the metrics: %s", m.Raw)
+	}
+	if bad := r.call(r.oper.Access, "GET", "/onus/o1/metrics?range=999d", nil, nil); bad.Status != 400 {
+		t.Fatalf("a bad range: %d", bad.Status)
+	}
+	if nf := r.call(r.oper.Access, "GET", "/onus/nope/metrics", nil, nil); nf.Status != 404 {
+		t.Fatalf("unknown ONU: %d", nf.Status)
+	}
+	// the Wi-Fi password: saved, shown to an operator, audited, never to a viewer
+	if ok := r.call(r.oper.Access, "PUT", "/accounts/"+a.ID+"/wifi", map[string]any{"ssid": "My Net", "password": "correct-horse-1"}, nil); ok.Status != 202 {
+		t.Fatalf("%d %s", ok.Status, ok.Raw)
+	}
+	if v := r.call(r.view.Access, "POST", "/accounts/"+a.ID+"/wifi/password", nil, nil); v.Status != 403 {
+		t.Fatalf("a viewer saw the Wi-Fi password: %d", v.Status)
+	}
+	pw := r.call(r.oper.Access, "POST", "/accounts/"+a.ID+"/wifi/password", nil, nil)
+	if pw.Status != 200 || !strings.Contains(string(pw.Raw), "correct-horse-1") || !strings.Contains(string(pw.Raw), `"source":"saved"`) {
+		t.Fatalf("%d %s", pw.Status, pw.Raw)
+	}
+	audited := false
+	r.st.View(func(d *store.Data) {
+		for _, e := range d.Events {
+			if e.Kind == "audit" && strings.Contains(e.Msg, "viewed the Wi-Fi password for house "+a.Code) {
+				audited = true
+			}
+		}
+	})
+	if !audited {
+		t.Fatal("no audit entry")
+	}
+}

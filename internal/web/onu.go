@@ -37,6 +37,7 @@ func (s *Server) onuRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/onus/inventory", s.adminONUInventory)
 	post("/admin/onus/usemac", s.adminONUUseMAC)
 	post("/admin/accounts/wifi", s.adminAccountWiFi)
+	post("/admin/accounts/wifi/show", s.adminAccountWiFiShow)
 	post("/admin/accounts/onu/reboot", s.adminAccountONUReboot)
 	post("/admin/accounts/onu/refresh", s.adminAccountONURefresh)
 	post("/admin/accounts/onu/confirm", s.adminAccountONUConfirm)
@@ -363,6 +364,9 @@ func (s *Server) onuCardData(data map[string]any, a store.Account) {
 	}
 	if v, ok := s.acs.OfAccount(a.ID); ok {
 		data["ONU"] = v
+		if b, ok := s.acs.Brief(v.ID); ok {
+			data["ONUBrief"] = b
+		}
 	}
 }
 
@@ -379,6 +383,47 @@ func (s *Server) adminAccountWiFi(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.back(w, r, to, "Wi-Fi change queued. The ONU is being asked to connect now; use Refresh to see the result.")
+}
+
+// adminAccountWiFiShow shows the house's current Wi-Fi password: the one the ONU returns when it can be asked, else
+// the saved one. It writes an audit entry (in the ACS) and the page is never cached. Only the customer's Wi-Fi key
+// is shown here; system logins keep their step-up.
+func (s *Server) adminAccountWiFiShow(w http.ResponseWriter, r *http.Request) {
+	id := r.PostFormValue("id")
+	to := s.accountURL(id)
+	if s.acsOff(w, r) {
+		return
+	}
+	res, err := s.acs.RevealWiFi(r.Context(), s.actorOf(r), realIP(r), id)
+	if err != nil {
+		s.back(w, r, to, "Error: "+err.Error())
+		return
+	}
+	var parts []string
+	for _, k := range res.Networks {
+		name := "Wi-Fi"
+		switch k.Band {
+		case "2.4":
+			name = "2.4 GHz"
+		case "5":
+			name = "5 GHz"
+		}
+		if k.Password == "" {
+			parts = append(parts, name+" \""+k.SSID+"\": no password known.")
+			continue
+		}
+		src := "saved here"
+		if k.Source == "onu" {
+			src = "read from the ONU"
+		}
+		parts = append(parts, name+" \""+k.SSID+"\": password "+k.Password+" ("+src+").")
+	}
+	msg := strings.Join(parts, " ")
+	if res.Note != "" {
+		msg += " " + res.Note
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	s.notice(w, r, http.StatusOK, "Wi-Fi password", msg, to, "Back")
 }
 
 func (s *Server) adminAccountONUReboot(w http.ResponseWriter, r *http.Request) {

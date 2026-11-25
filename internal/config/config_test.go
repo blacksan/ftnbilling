@@ -280,7 +280,7 @@ func TestACSDefaultsAndPublicRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ACSListen != "10.99.0.1:7547" || !c.ACSEnabled() || c.ACSInformInterval != 300 || c.ACSMaxPerRouter != 200 || len(c.ACSCRPorts) != 2 {
+	if c.ACSListen != "10.99.0.1:7547" || !c.ACSEnabled() || c.ACSInformInterval != 300 || c.ACSMaxPerRouter != 200 || len(c.ACSCRPorts) != 3 || c.ACSCRPorts[2] != 58000 {
 		t.Fatalf("defaults: %+v", c)
 	}
 	// The default follows WG_SUBNET.
@@ -319,9 +319,16 @@ func TestACSDefaultsAndPublicRefusal(t *testing.T) {
 	if _, err := Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true", "ACS_INFORM_INTERVAL": "5"})); err == nil {
 		t.Error("an inform interval under 60s must be refused")
 	}
+	// An override keeps the ports it lists, but 58000 (the V-SOL connection-request port) is always kept too, so a
+	// narrowed list can never silently break the V-SOL ONUs this network uses.
 	c, _ = Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true", "ACS_CR_PORTS": "7547, 4567"}))
-	if len(c.ACSCRPorts) != 2 || c.ACSCRPorts[1] != 4567 {
+	if len(c.ACSCRPorts) != 3 || c.ACSCRPorts[0] != 7547 || c.ACSCRPorts[1] != 4567 || c.ACSCRPorts[2] != 58000 {
 		t.Fatalf("cr ports %v", c.ACSCRPorts)
+	}
+	// An override that already names 58000 is not duplicated.
+	c, _ = Load(env(map[string]string{"ADMIN_PASS": "s3cret!", "ROUTER_MOCK": "true", "ACS_CR_PORTS": "58000, 7547"}))
+	if len(c.ACSCRPorts) != 2 || c.ACSCRPorts[0] != 58000 || c.ACSCRPorts[1] != 7547 {
+		t.Fatalf("cr ports (with 58000) %v", c.ACSCRPorts)
 	}
 }
 

@@ -53,7 +53,11 @@ func (s *Service) program(ctx context.Context, ss *session, in Inform, onuID str
 		}
 		s.queueHomeWiFi(onuID, reset)
 	}
-	s.runTasks(ctx, ss, onuID, v.trust, ai.kind == authShared)
+	restarting := s.runTasks(ctx, ss, onuID, v.trust, ai.kind == authShared)
+	if ctx.Err() == nil && !restarting && v.trust == trustFull && o.Root != "" {
+		s.serveLiveRead(ctx, ss, onuID)
+		s.collectMetrics(ctx, ss, onuID, boot || bootstrap, needDiscover)
+	}
 }
 
 func (s *Service) loadONU(id string) (o store.ONU, ok bool) {
@@ -477,12 +481,12 @@ func (s *Service) finishWiFi(id string, r wifiResult) {
 	})
 }
 
-func (s *Service) runTasks(ctx context.Context, ss *session, onuID string, trust trustLevel, shared bool) {
+func (s *Service) runTasks(ctx context.Context, ss *session, onuID string, trust trustLevel, shared bool) (restarting bool) {
 	skipped := map[string]bool{}
 	for ctx.Err() == nil {
 		t, ok := s.nextTask(onuID, skipped)
 		if !ok {
-			return
+			return false
 		}
 		if t.Kind == store.TaskWiFi && trust != trustFull {
 			// The password goes only to a box whose identity was verified in this session (its own login, or the
@@ -525,16 +529,17 @@ func (s *Service) runTasks(ctx context.Context, ss *session, onuID string, trust
 		}
 		if err != nil {
 			if ctx.Err() != nil {
-				return // the session died: the task is picked up again at the next Inform
+				return true // the session died: the task is picked up again at the next Inform
 			}
 			s.finish(t.ID, "the ONU did not answer properly ("+err.Error()+")")
 		} else if t.Kind != store.TaskWiFi {
 			s.finish(t.ID, fault)
 		}
 		if t.Kind == store.TaskReboot || t.Kind == store.TaskFactoryReset {
-			return // the ONU restarts: nothing more in this session
+			return true // the ONU restarts: nothing more in this session
 		}
 	}
+	return ctx.Err() != nil
 }
 
 // forgetKeys: after a factory reset the box has no key; what it reports next is not a surprise.

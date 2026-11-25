@@ -101,7 +101,8 @@ type fixWriter struct {
 	// adminRules: comments of the admin-port rules (adminfw.go) a fix may write; adminList: the admin allow list's entries too
 	adminRules map[string]bool
 	adminList  bool
-	serverIP   string // the server's tunnel address: the only traffic-flow target a fix may touch
+	onuRules   map[string]bool // comments of the ONU-management rules a fix may set the dst-port of (fixONUMgmt)
+	serverIP   string          // the server's tunnel address: the only traffic-flow target a fix may touch
 	applied    []string
 	// stop, when set, is asked before every write: the server's own passes stop at once when the owner pauses
 	// the automatic fixes while a pass is running (between and inside fixes).
@@ -172,7 +173,7 @@ func (w *fixWriter) allowedRow(path string, row routeros.Row) error {
 			return forbid("a DHCP server the server did not make")
 		}
 	case "/ip/firewall/filter", "/ip/firewall/nat":
-		if path == "/ip/firewall/filter" && w.adminRules[row["comment"]] {
+		if path == "/ip/firewall/filter" && (w.adminRules[row["comment"]] || w.onuRules[row["comment"]]) {
 			break
 		}
 		if !w.walled[row["comment"]] && !strings.HasPrefix(row["comment"], "ftn: ipoe") {
@@ -354,6 +355,12 @@ func (w *fixWriter) setRow(ctx context.Context, path string, row routeros.Row, d
 			}
 		}
 	case "/ip/firewall/filter", "/ip/firewall/nat":
+		if path == "/ip/firewall/filter" && w.onuRules[row["comment"]] {
+			if len(diff) != 1 || diff["dst-port"] == "" {
+				return forbid("an ONU management rule may only get its dst-port set")
+			}
+			break
+		}
 		for k := range diff {
 			if !ruleProp(k) && !(k == "disabled" && diff[k] == "no") {
 				return forbid("firewall rule property " + k)
@@ -422,6 +429,7 @@ var fixers = map[string]fixFunc{
 	CheckDHCP:        fixDHCP,
 	CheckBootFile:    fixBootFile,
 	CheckAdminNet:    fixAdminNet,
+	CheckONUMgmt:     fixONUMgmt,
 }
 
 // freshRead re-reads what a fix depends on and fails (router unreachable)

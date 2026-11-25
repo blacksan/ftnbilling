@@ -56,6 +56,17 @@ func queue(d *store.Data, o store.ONU, kind, by string, now time.Time) store.ONU
 // SetWiFi saves the desired Wi-Fi configuration of the ONU linked to a house (the passphrases sealed), queues the
 // change and asks the ONU to connect now. The password is never stored in the clear and never returned.
 func (s *Service) SetWiFi(by, ip, accountID string, in WiFiInput) (store.ONUTask, error) {
+	// A box with one (2.4 GHz) radio has one name and password. The house keeps them for every band, so a later
+	// dual-band box gets the same; a 5 GHz override saved earlier is kept as it was (not edited here).
+	single := false
+	s.st.View(func(d *store.Data) {
+		if o, ok := d.ONUOfAccount(accountID); ok && !Has5GHz(o) {
+			single = true
+		}
+	})
+	if single {
+		in.Same, in.SSID5, in.Pass5 = true, "", ""
+	}
 	if err := in.check(); err != nil {
 		return store.ONUTask{}, err
 	}
@@ -81,15 +92,27 @@ func (s *Service) SetWiFi(by, ip, accountID string, in WiFiInput) (store.ONUTask
 			return ErrNoAccount
 		}
 		now := s.now()
+		prev := a.HomeWiFi
 		a.HomeWiFi = store.WiFiDesired{Set: true, Same: in.Same, SSID: in.SSID, PassEnc: enc, UpdatedAt: now, UpdatedBy: by}
 		if !in.Same {
 			a.HomeWiFi.SSID5, a.HomeWiFi.Pass5Enc = in.SSID5, enc5
 		}
+		kept := false
+		if single && prev.Set && !prev.Same && prev.SSID5 != "" && prev.Pass5Enc != "" {
+			// a 5 GHz override saved earlier stays for a later dual-band swap
+			a.HomeWiFi.Same, a.HomeWiFi.SSID5, a.HomeWiFi.Pass5Enc = false, prev.SSID5, prev.Pass5Enc
+			kept = true
+		}
 		d.Accounts[a.ID] = a
 		t = queue(d, o, store.TaskWiFi, by, now)
 		msg := "Wi-Fi name and password changed (2.4 and 5 GHz: " + in.SSID + ")"
-		if !in.Same {
+		switch {
+		case !in.Same:
 			msg = "Wi-Fi name and password changed (2.4 GHz: " + in.SSID + ", 5 GHz: " + in.SSID5 + ")"
+		case single && kept:
+			msg = "Wi-Fi name and password changed (" + in.SSID + "; this ONU has one radio; the saved 5 GHz name and password are kept)"
+		case single:
+			msg = "Wi-Fi name and password changed (" + in.SSID + "; this ONU has one radio)"
 		}
 		s.audit(d, o, by, ip, msg+"; the password is not logged")
 		onuID = o.ID
