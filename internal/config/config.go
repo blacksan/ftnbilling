@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -557,6 +558,12 @@ func (c *Config) loadACS(get func(k, def string) string, errs *[]error) {
 		if len(ports) > 0 {
 			c.ACSCRPorts = ports
 		}
+	}
+	// 58000 is the connection-request port of the V-SOL ONUs this network uses; without it their live Wi-Fi
+	// pushes never reach the box. Keep it in the list even when ACS_CR_PORTS narrows the set, so an operator's
+	// override (or one carried over from before 58000 was added) can never silently break them.
+	if !slices.Contains(c.ACSCRPorts, 58000) {
+		c.ACSCRPorts = append(c.ACSCRPorts, 58000)
 	}
 	if c.ACSListen != "" && !strings.EqualFold(c.ACSListen, "off") {
 		if err := c.CheckACSListenAddr(); err != nil {
