@@ -773,6 +773,19 @@
       $$("tbody tr", tb).forEach(function (tr) { tr.hidden = q && tr.textContent.toLowerCase().indexOf(q) < 0; });
     });
   });
+  // Secure this OLT runs in the background: poll its status and reload the page when it has finished.
+  var sp = $("[data-secure-poll]");
+  if (sp && sp.getAttribute("data-running")) {
+    var st = $("[data-secure-stage]", sp), spUrl = sp.getAttribute("data-secure-poll");
+    var spTimer = setInterval(function () {
+      if (doc.hidden) return;
+      getJSON(spUrl).then(function (j) {
+        if (j.__status !== 200) return;
+        if (j.running) { if (st && j.stage) st.textContent = j.stage; return; }
+        clearInterval(spTimer); location.reload();
+      }).catch(function () {});
+    }, 3000);
+  }
   // Auto refresh a section: <div data-reload="30"> reloads the page every N seconds when visible.
   var rl = $("[data-reload]");
   if (rl) setInterval(function () { if (!doc.hidden && !doc.querySelector("dialog[open]")) location.reload(); }, Number(rl.getAttribute("data-reload")) * 1000);

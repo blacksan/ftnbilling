@@ -73,6 +73,8 @@ type Service struct {
 	locks map[string]chan struct{}
 	// alerted rate-limits the possible-OLT alerts (key -> last sent).
 	alerted map[string]time.Time
+	// jobs are the background "Secure this OLT" runs (secjob.go), guarded by mu.
+	jobs map[string]*secJob
 }
 
 // New creates the service.
@@ -95,7 +97,7 @@ func New(o Options) *Service {
 	if o.Timeout <= 0 {
 		o.Timeout = 20 * time.Second
 	}
-	return &Service{o: o, sem: make(chan struct{}, o.MaxSessions), locks: map[string]chan struct{}{}}
+	return &Service{o: o, sem: make(chan struct{}, o.MaxSessions), locks: map[string]chan struct{}{}, jobs: map[string]*secJob{}}
 }
 
 // Dialect is the command dialect in use.

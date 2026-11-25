@@ -129,3 +129,30 @@ func TestOLTAdoptPagesOwnerOnlyNoSecretsNoInlineJS(t *testing.T) {
 		t.Error("the revealed password is in the audit trail")
 	}
 }
+
+func TestOLTSecureStatusEndpoints(t *testing.T) {
+	o := newOLTRig(t)
+	p := "/olts/" + o.id
+	g := o.call(o.owner.Access, "GET", p+"/secure", nil, nil)
+	if g.Status != 200 || g.JSON(t)["running"] != false || g.JSON(t)["known"] != false {
+		t.Fatalf("status of no job: %d %s", g.Status, g.Raw)
+	}
+	if g := o.call(o.oper.Access, "GET", p+"/secure", nil, nil); g.Status != 403 {
+		t.Errorf("status by an operator: %d", g.Status)
+	}
+	cl := &http.Client{CheckRedirect: noRedirect}
+	ob := signIn(t, o.ts, o.srv, o.st, o.ownerW)
+	pb := signIn(t, o.ts, o.srv, o.st, o.operW)
+	path := "/admin/olts/manage/secure-status?id=" + url.QueryEscape(o.id)
+	resp := ob.Do(cl, o.ts.URL, "GET", path, nil)
+	bs, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || !strings.Contains(string(bs), `"running":false`) || !strings.Contains(resp.Header.Get("Cache-Control"), "no-store") {
+		t.Errorf("owner status: %d %s", resp.StatusCode, bs)
+	}
+	resp = pb.Do(cl, o.ts.URL, "GET", path, nil)
+	resp.Body.Close()
+	if resp.StatusCode == 200 {
+		t.Errorf("an operator reads the owner's status")
+	}
+}

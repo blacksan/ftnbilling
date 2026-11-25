@@ -1,7 +1,6 @@
 package web
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"sort"
@@ -32,6 +31,7 @@ func (s *Server) oltRoutesAPI(h func(string, string, apiFunc)) {
 	h("GET /api/v1/olts/{id}/adoption", viewer, s.apiOLTAdoption)
 	h("POST /api/v1/olts/{id}/adoption/check", operator, s.apiOLTAdoptCheck)
 	h("POST /api/v1/olts/{id}/secure", owner, s.apiOLTSecure)
+	h("GET /api/v1/olts/{id}/secure", owner, s.apiOLTSecureStatus)
 	h("PUT /api/v1/olts/{id}/credentials", owner, s.apiOLTCredentials)
 	h("POST /api/v1/olts/{id}/credentials/reveal", owner, s.apiOLTReveal)
 }
@@ -334,6 +334,7 @@ func (s *Server) apiOLTAdoptCheck(w http.ResponseWriter, r *http.Request, c *api
 	writeJSON(w, http.StatusOK, s.adoptionJSON(r.PathValue("id")))
 }
 
+// apiOLTSecure starts Secure this OLT in the background: 202 with the URL to poll.
 func (s *Server) apiOLTSecure(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 	var req struct {
 		Password string `json:"password"`
@@ -347,18 +348,28 @@ func (s *Server) apiOLTSecure(w http.ResponseWriter, r *http.Request, c *apiCtx)
 	if !s.apiStepUp(w, c, req.Password) {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
-	defer cancel()
-	res, err := s.olt.Secure(ctx, r.PathValue("id"), c.user.Username)
-	if err != nil {
-		if errors.Is(err, olt.ErrNotIdentified) {
+	id := r.PathValue("id")
+	if err := s.olt.StartSecure(id, c.user.Username); err != nil {
+		switch {
+		case errors.Is(err, olt.ErrNotIdentified), errors.Is(err, olt.ErrSecureRunning):
 			apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
-			return
+		default:
+			s.apiOLTErr(w, err)
 		}
-		s.apiOLTErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"secured": true, "enable_checked": res.EnableChecked, "snmp_removed": nz(res.SNMPRemoved), "snmp_note": res.SNMPNote, "access_list_note": res.ACLNote, "access_list_done": res.ACLDone, "access_list_rules": nz(res.ACLRules), "access_list_finding": res.ACLFinding})
+	url := "/api/v1/olts/" + id + "/secure"
+	w.Header().Set("Location", url)
+	writeJSON(w, http.StatusAccepted, map[string]any{"started": true, "status_url": url})
+}
+
+// apiOLTSecureStatus is the progress or outcome of the background Secure.
+func (s *Server) apiOLTSecureStatus(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	if _, _, ok := s.apiOLT(w, r); !ok {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, s.secureJSON(r.PathValue("id")))
 }
 
 func (s *Server) apiOLTCredentials(w http.ResponseWriter, r *http.Request, c *apiCtx) {

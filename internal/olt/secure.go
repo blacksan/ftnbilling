@@ -98,7 +98,7 @@ func (s *Service) secureIn(ctx context.Context, o *opened, cur cred, by string) 
 	if s.o.Box == nil {
 		return res, ErrNoKey
 	}
-	// Still the same device? (An OLT could have been swapped since the last check.)
+	s.stage(e.ID, "Checking that this is the same device")
 	out, err := o.sess.ShowAt(ctx, dl.VersionMode, dl.VersionCmd)
 	if err != nil {
 		return res, err
@@ -108,6 +108,7 @@ func (s *Service) secureIn(ctx context.Context, o *opened, cur cred, by string) 
 		s.markAdopt(e.ID, store.AdoptMismatch, "The device on the port is not this OLT ("+why+"). Nothing was changed.", "")
 		return res, ErrNotIdentified
 	}
+	s.stage(e.ID, "Saving a copy of the configuration")
 	// A saved copy of the configuration first (a failure to read it does not stop the change: the old passwords are known).
 	if _, _, err := s.backupIn(ctx, o, "before Secure this OLT", by); err != nil {
 		s.o.Log.Warn("backup before securing an OLT failed", "olt", e.ID, "err", errText(err))
@@ -160,6 +161,7 @@ func (s *Service) secureIn(ctx context.Context, o *opened, cur cred, by string) 
 		clearPending()
 		return fmt.Errorf("%s; the old password was restored and nothing was saved", why)
 	}
+	s.stage(e.ID, "Changing the login and enable password")
 	if err := o.sess.RunSecure(ctx, dl.SecureUserLines(user, login, enable)); err != nil {
 		var ce *CmdError
 		if errors.As(err, &ce) && ce.Cmd != dl.ExitCmd {
@@ -168,12 +170,14 @@ func (s *Service) secureIn(ctx context.Context, o *opened, cur cred, by string) 
 		return res, s.secureFailed(e, by, restore("the OLT refused the new password ("+errText(err)+")"))
 	}
 	// Verify with a NEW session: the login, the shown serial and, where the session starts at the user prompt, the enable password.
+	s.stage(e.ID, "Testing the new login in a new session")
 	checked, verr := s.verifyNew(ctx, o, user, login, enable, vi.Serial)
 	if verr != nil {
 		return res, s.secureFailed(e, by, restore("the new password did not work in a new session ("+errText(verr)+")"))
 	}
 	res.EnableChecked = checked
 	// Only now is the change saved on the OLT.
+	s.stage(e.ID, "Saving the OLT's configuration")
 	if err := o.sess.Save(ctx); err != nil {
 		return res, s.secureFailed(e, by, restore("the OLT would not save its configuration ("+errText(err)+")"))
 	}
@@ -199,8 +203,10 @@ func (s *Service) secureIn(ctx context.Context, o *opened, cur cred, by string) 
 		return res, fmt.Errorf("the OLT now uses the new passwords but the server could not store them (they are kept sealed as pending): %w", err)
 	}
 	// SNMP: remove the default communities.
+	s.stage(e.ID, "Removing the default SNMP communities")
 	s.secureSNMP(ctx, o, by, &res)
 	// SSH access list: restrict SSH to the router's OLT-management address (verified with a new session before it is saved).
+	s.stage(e.ID, "Restricting SSH to the router")
 	s.secureACL(ctx, o, user, login, enable, vi.Serial, by, &res)
 	_ = s.setAdopt(e.ID, func(a *store.OLTAdopt, e *store.Equipment, d *store.Data) {
 		a.SNMPNote, a.SNMPOff = res.SNMPNote, len(res.SNMPRemoved) > 0 || strings.Contains(res.SNMPNote, "SNMP is off")

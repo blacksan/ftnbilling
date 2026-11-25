@@ -20,6 +20,11 @@
 {{if .Data.MgmtPort}}<p class="mt-2">Now: <b class="mono">{{.Data.MgmtPort}}</b>, router address <span class="mono">{{.Data.MgmtNet}}</span>.</p>
 <form method="post" action="/admin/olts/manage/mgmt-port" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="action" value="clear"><button class="btn ghost sm">Remove the role and the router rules</button></form>{{end}}
 {{with .Data.Adopt}}{{if .CanSecure}}<h3 class="mt-3">Secure this OLT</h3>
+{{with $.Data.Secure}}<div class="panel" data-secure-poll="/admin/olts/manage/secure-status?id={{$E.ID}}"{{if .Running}} data-running="1"{{end}}>
+{{if .Running}}<p><b>Securing&hellip;</b> started {{.Started}}. <span data-secure-stage>{{.Stage}}</span></p><p class="muted">This takes a few minutes. The page updates by itself.</p>
+{{else if .Done}}<p><span class="pill active">done</span> {{.Message}}</p>
+{{else if .Failed}}<p><span class="pill suspended">failed</span> {{.Error}}</p>
+{{else if .Interrupted}}<p><span class="pill suspended">unfinished</span> A Secure did not finish (the server stopped, or it failed half way). The new login it set is kept encrypted; the server tries it at its next check of the OLT.</p>{{end}}</div>{{end}}
 <p class="muted">Replaces the OLT's login and enable password with long generated ones, tests them in a new SSH session while the old one stays open, and only then saves. If the test fails the old password is put back. It also removes the default SNMP communities (public, private), so SNMP is off.</p>
 <form method="post" action="/admin/olts/manage/secure" class="row"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
 <label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="btn sm">Secure this OLT</button></form>{{end}}
