@@ -243,6 +243,7 @@ func expireTasks(d *store.Data, now time.Time) int {
 // and have not been heard from for a week (unknown or fake records would otherwise pile up and fill a router's quota).
 // A box linked to a house is never forgotten.
 func (s *Service) Upkeep() {
+	s.MarkWalks() // boxes that were reporting before parameter-tree discovery existed are walked at their next check-in
 	now := s.now()
 	_ = s.st.Update(func(d *store.Data) error {
 		changed := expireTasks(d, now) > 0
@@ -272,6 +273,7 @@ func (s *Service) Upkeep() {
 				}
 				delete(d.ONUs, id)
 				delete(d.ONUMetrics, id)
+				delete(d.ONUTrees, id)
 				changed = true
 			}
 		}

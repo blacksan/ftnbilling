@@ -328,6 +328,8 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	do(err)
 	onum, err := queryAll(ctx, tx, onuMetricsC, "")
 	do(err)
+	onutr, err := queryAll(ctx, tx, onuTreesC, "")
+	do(err)
 	ouic, err := queryAll(ctx, tx, ouiCacheC, "")
 	do(err)
 	oltst, err := queryAll(ctx, tx, oltStatesC, "")
@@ -365,6 +367,7 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	d.Registrations = map[string]store.Registration{}
 	d.ONUs, d.ONUTasks = map[string]store.ONU{}, map[string]store.ONUTask{}
 	d.ONUMetrics = map[string]store.ONUMetrics{}
+	d.ONUTrees = map[string]store.ONUTree{}
 	d.OUICache = map[string]store.OUIEntry{}
 	d.OLTStates = map[string]store.OLTState{}
 	d.AdminUsers, d.AdminSessions, d.APIDevices = map[string]store.AdminUser{}, map[string]store.AdminSession{}, map[string]store.APIDevice{}
@@ -390,6 +393,7 @@ func (b *Backend) load(ctx context.Context, all bool) (*store.Data, error) {
 	fill(d.ONUs, onus, onusC)
 	fill(d.ONUTasks, onut, onuTasksC)
 	fill(d.ONUMetrics, onum, onuMetricsC)
+	fill(d.ONUTrees, onutr, onuTreesC)
 	fill(d.OUICache, ouic, ouiCacheC)
 	fill(d.OLTStates, oltst, oltStatesC)
 	fill(d.Tasks, tsk, tasksC)
@@ -438,6 +442,7 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	oltStatesC.queueDeletes(batch, cs.OLTStates.Delete)
 	onuTasksC.queueDeletes(batch, cs.ONUTasks.Delete)
 	onuMetricsC.queueDeletes(batch, cs.ONUMetrics.Delete)
+	onuTreesC.queueDeletes(batch, cs.ONUTrees.Delete)
 	onusC.queueDeletes(batch, cs.ONUs.Delete)
 	tasksC.queueDeletes(batch, cs.Tasks.Delete)
 	eqEventsC.queueDeletes(batch, cs.EquipmentEvents.Delete)
@@ -481,6 +486,8 @@ func (b *Backend) Commit(ctx context.Context, _ *store.Data, cs *store.ChangeSet
 	mark("onu_tasks")
 	onuMetricsC.queueUpserts(batch, cs.ONUMetrics)
 	mark("onu_metrics")
+	onuTreesC.queueUpserts(batch, cs.ONUTrees)
+	mark("onu_trees")
 	ouiCacheC.queueUpserts(batch, cs.OUICache)
 	mark("oui_cache")
 	oltStatesC.queueUpserts(batch, cs.OLTStates)

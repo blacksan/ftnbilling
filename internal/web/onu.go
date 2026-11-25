@@ -30,6 +30,7 @@ func (s *Server) onuRoutes(get, post func(string, http.HandlerFunc)) {
 		http.Redirect(w, r, "/admin/settings/onu", http.StatusSeeOther)
 	})
 	get("/admin/onus", s.adminONUs)
+	get("/admin/onus/paramtree", s.adminONUParamTree)
 	post("/admin/onus/link", s.adminONULink)
 	post("/admin/onus/unlink", s.adminONUUnlink)
 	post("/admin/sites/onu/enable", s.adminSiteONUEnable)
@@ -182,6 +183,36 @@ func (s *Server) adminONUs(w http.ResponseWriter, r *http.Request) {
 	sortAccountsByUnit(free)
 	p.Data["FreeAccounts"] = free
 	s.render(w, "admin_onus", p)
+}
+
+// adminONUParamTree downloads the parameter tree of an ONU (plain text, or JSON with format=json): operators and owners
+// only, secrets withheld, never cached, and every download is audited.
+func (s *Server) adminONUParamTree(w http.ResponseWriter, r *http.Request) {
+	if s.acsOff(w, r) {
+		return
+	}
+	u, _ := userOf(r)
+	if u.Role != store.RoleOwner && u.Role != store.RoleOperator {
+		s.notice(w, r, http.StatusForbidden, "Not allowed", "Only an operator or an owner can download an ONU's parameter tree.", "/admin/onus", "Back")
+		return
+	}
+	v, err := s.acs.ParamTree(r.URL.Query().Get("onu"))
+	if err != nil {
+		s.notice(w, r, http.StatusNotFound, "No parameter tree", err.Error()+".", "/admin/onus", "Back")
+		return
+	}
+	s.audit(r, "ONU "+v.Serial+" parameter tree downloaded by "+u.Username+" ("+strconv.Itoa(v.Count)+" parameters)")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if r.URL.Query().Get("format") == "json" {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="`+paramTreeFile(v, "json")+`"`)
+		writeJSON(w, http.StatusOK, v)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+paramTreeFile(v, "txt")+`"`)
+	_, _ = w.Write([]byte(acs.TreeText(v)))
 }
 
 func (s *Server) onuBack(r *http.Request, def string) string {
@@ -366,6 +397,9 @@ func (s *Server) onuCardData(data map[string]any, a store.Account) {
 		data["ONU"] = v
 		if b, ok := s.acs.Brief(v.ID); ok {
 			data["ONUBrief"] = b
+		}
+		if t, ok := s.acs.TreeInfo(v.ID); ok {
+			data["ONUTree"] = t
 		}
 	}
 }

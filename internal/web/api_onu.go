@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"ispbill/internal/acs"
@@ -25,6 +26,7 @@ func (s *Server) onuRoutesAPI(h func(string, string, apiFunc)) {
 	h("POST /api/v1/accounts/{id}/onu/refresh", operator, s.apiAccountONUAction("refresh"))
 	h("POST /api/v1/accounts/{id}/wifi/password", operator, s.apiAccountWiFiPassword)
 	h("GET /api/v1/onus/{id}/metrics", operator, s.apiONUMetrics)
+	h("GET /api/v1/onus/{id}/paramtree", operator, s.apiONUParamTree)
 	h("POST /api/v1/accounts/{id}/onu/swap", operator, s.apiAccountONUSwap)
 	h("POST /api/v1/accounts/{id}/onu/use-reported-mac", operator, s.apiAccountUseMAC)
 	h("POST /api/v1/accounts/{id}/onu/confirm", operator, s.apiAccountONUConfirm)
@@ -156,6 +158,54 @@ func (s *Server) apiONUMetrics(w http.ResponseWriter, r *http.Request, c *apiCtx
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+// apiONUParamTree is the TR-069 parameter tree walked from one ONU: every parameter path found (and, where it was
+// read, its value), the real paths resolved from it and what could not be resolved. The value of a passphrase,
+// password or key parameter is never in it ("<redacted>"). ?format=text (or download=1) gives a plain-text dump to save.
+// Operators only; every download is audited.
+func (s *Server) apiONUParamTree(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	if !s.apiACS(w) {
+		return
+	}
+	id := r.PathValue("id")
+	v, err := s.acs.ParamTree(id)
+	switch {
+	case errors.Is(err, acs.ErrONUGone):
+		apiErr(w, http.StatusNotFound, codeNotFound, "That ONU was not found.", nil)
+		return
+	case errors.Is(err, acs.ErrNoTree):
+		apiErr(w, http.StatusNotFound, codeNotFound, "The parameter tree of that ONU has not been walked yet. It is walked at the ONU's next check-in.", nil)
+		return
+	case err != nil:
+		s.acsErr(w, err)
+		return
+	}
+	format, download := r.URL.Query().Get("format"), r.URL.Query().Get("download") == "1"
+	if format != "" && format != "json" && format != "text" {
+		validationErr(w, map[string]string{"format": "format must be json or text"})
+		return
+	}
+	c.audit(s, "ONU "+v.Serial+" parameter tree viewed ("+strconv.Itoa(v.Count)+" parameters)")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if format == "text" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if download {
+			w.Header().Set("Content-Disposition", `attachment; filename="`+paramTreeFile(v, "txt")+`"`)
+		}
+		_, _ = w.Write([]byte(acs.TreeText(v)))
+		return
+	}
+	if download {
+		w.Header().Set("Content-Disposition", `attachment; filename="`+paramTreeFile(v, "json")+`"`)
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+// paramTreeFile is the file name of a tree download.
+func paramTreeFile(v acs.TreeView, ext string) string {
+	return "onu-" + sanitizeFile(v.Serial) + "-paramtree-" + v.WalkedAt.UTC().Format("20060102-150405") + "." + ext
 }
 
 func (s *Server) apiAccountONUAction(kind string) apiFunc {

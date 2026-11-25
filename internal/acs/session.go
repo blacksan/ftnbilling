@@ -34,7 +34,11 @@ type session struct {
 	auth   authInfo
 	n      int // requests made
 	seq    int
+	extra  int // requests allowed beyond maxRPCs (a parameter-tree walk asks for its own allowance)
 }
+
+// allow raises the request limit of the session by n (the parameter-tree walk, paramtree.go).
+func (ss *session) allow(n int) { ss.mu.Lock(); ss.extra += n; ss.mu.Unlock() }
 
 func (ss *session) touch(t time.Time) { ss.mu.Lock(); ss.lastAt = t; ss.mu.Unlock() }
 func (ss *session) last() time.Time   { ss.mu.Lock(); defer ss.mu.Unlock(); return ss.lastAt }
@@ -49,7 +53,7 @@ func (ss *session) call(ctx context.Context, build func(id string) []byte) (*mes
 	ss.n++
 	ss.seq++
 	id := fmt.Sprintf("ftn-%d", ss.seq)
-	over := ss.n > maxRPCs
+	over := ss.n > maxRPCs+ss.extra
 	ss.mu.Unlock()
 	if over {
 		return nil, errSessionLimit
