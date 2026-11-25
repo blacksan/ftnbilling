@@ -222,7 +222,10 @@ func TestClassificationOfNewDevices(t *testing.T) {
 	if _, ok := got[macRouterPort]; ok {
 		t.Fatal("router MAC listed")
 	}
-	if c := got[macOLT].Class; c.Class != ClassOLT || c.Label != "OLT V1600GS-R Block A OLT" || c.Creatable || c.EquipmentID != o.ID {
+	if _, ok := got[macOLT]; ok {
+		t.Fatal("a known OLT is listed as a new device")
+	}
+	if c := e.svc.ClassifyMAC(e.site, macOLT); c.Class != ClassOLT || c.Label != "OLT V1600GS-R Block A OLT" || c.Creatable || c.EquipmentID != o.ID {
 		t.Fatalf("olt: %+v", c)
 	}
 	if c := got[macONU].Class; c.Class != ClassONU || c.Label != "ONU F601 · ZTE001" || !c.Creatable || c.EquipmentID != onu.ID || len(c.ApartmentIDs) != 1 || c.ApartmentIDs[0] != apt.ID {

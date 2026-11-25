@@ -418,8 +418,12 @@ func (s *Service) Unregistered(siteID string, onlineOnly bool) []UnregDevice {
 				if own {
 					continue // the account is on this very router: not an unknown device
 				}
+				cls := classifyLocked(d, dv, false)
+				if knownDeviceLocked(d, dv, cls) {
+					continue // the server already knows it: an OLT of the register or a MAC of an ONU already in a house
+				}
 				devs = append(devs, dv)
-				classes[store.DeviceKey(dv.SiteID, dv.MAC)] = classifyLocked(d, dv, false)
+				classes[store.DeviceKey(dv.SiteID, dv.MAC)] = cls
 				names[dv.SiteID] = d.Sites[dv.SiteID].Name
 				if b != nil {
 					belongs[store.DeviceKey(dv.SiteID, dv.MAC)] = b
@@ -892,6 +896,48 @@ func classifyLocked(d *store.Data, dv store.Device, router bool) DeviceClass {
 		return c
 	}
 	return DeviceClass{Class: ClassUnknown, Creatable: true, NeverAsked: dv.IP == "" && dv.Source == "bridge"}
+}
+
+// knownDeviceLocked says the server already recognises a seen device, so it needs nothing from the operator and is
+// not a "new device": the MAC of an OLT of the register (adopted or known), or any MAC of an ONU that is already linked
+// to a house (WAN MAC, the TR-069 management MAC, an ACS-recorded MAC). Only a positive match counts: an unlinked ONU
+// (still to be attached), the management address of an ONU that is not linked yet, and unknown MACs stay listed.
+func knownDeviceLocked(d *store.Data, dv store.Device, cls DeviceClass) bool {
+	if cls.Class == ClassOLT {
+		return true
+	}
+	linkedEq := func(e store.Equipment) bool {
+		if e.Kind != store.KindONT || e.Status == store.EqRetired || e.AccountID == "" {
+			return false
+		}
+		_, ok := d.Accounts[e.AccountID]
+		return ok
+	}
+	if cls.Class == ClassONUMgmt && cls.EquipmentID != "" {
+		// classifyONUMgmt already resolved the ONU through the ACS binding or the unique MAC-near (within 8) match.
+		return linkedEq(d.Equipment[cls.EquipmentID])
+	}
+	if cls.Class == ClassONU && cls.EquipmentID != "" && linkedEq(d.Equipment[cls.EquipmentID]) {
+		return true
+	}
+	// The ACS record of an ONU linked to an account knows its WAN MACs and its management MAC.
+	for _, o := range d.ONUs {
+		if o.AccountID == "" {
+			continue
+		}
+		if _, ok := d.Accounts[o.AccountID]; !ok {
+			continue
+		}
+		if o.Sec.MgmtMAC != "" && strings.EqualFold(o.Sec.MgmtMAC, dv.MAC) {
+			return true
+		}
+		for _, m := range o.MACs {
+			if strings.EqualFold(m, dv.MAC) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // macNear24: same OUI and the last 24 bits within 8 (the V-SOL case: label ...0F, WAN ...10, TR-069 WAN ...11).
