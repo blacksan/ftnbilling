@@ -780,6 +780,7 @@
     var spTimer = setInterval(function () {
       if (doc.hidden) return;
       getJSON(spUrl).then(function (j) {
+        if (j.__status >= 400 && j.__status < 500) { clearInterval(spTimer); return; } // signed out or not allowed: stop
         if (j.__status !== 200) return;
         if (j.running) { if (st && j.stage) st.textContent = j.stage; return; }
         clearInterval(spTimer); location.reload();

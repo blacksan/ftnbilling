@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"ispbill/internal/store"
 )
 
 func TestOLTAdoptAPIRolesStepUpAndSecrets(t *testing.T) {
@@ -154,5 +156,36 @@ func TestOLTSecureStatusEndpoints(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode == 200 {
 		t.Errorf("an operator reads the owner's status")
+	}
+}
+
+func TestOLTRawDebugCopyOwnerOnly(t *testing.T) {
+	o := newOLTRig(t)
+	if err := o.st.Update(func(d *store.Data) error {
+		st := d.OLTStateOf(o.id)
+		st.Status.Raw, st.Status.RawDebug = "PON 1 state, not understood:\nweird  thing", `weird\x1b[2C<b>thing</b>`
+		d.OLTStates[o.id] = st
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cl := &http.Client{CheckRedirect: noRedirect}
+	path := "/admin/olts/manage?id=" + url.QueryEscape(o.id)
+	page := func(w *who) string {
+		t.Helper()
+		b := signIn(t, o.ts, o.srv, o.st, w)
+		resp := b.Do(cl, o.ts.URL, "GET", path, nil)
+		bs, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("%d", resp.StatusCode)
+		}
+		return string(bs)
+	}
+	if p := page(o.ownerW); !strings.Contains(p, `weird\x1b[2C&lt;b&gt;thing&lt;/b&gt;`) {
+		t.Errorf("the owner does not see the escaped debug copy")
+	}
+	if p := page(o.operW); strings.Contains(p, `weird\x1b[2C`) || !strings.Contains(p, "Not understood") {
+		t.Errorf("an operator sees the debug copy (or not the section)")
 	}
 }

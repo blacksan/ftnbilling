@@ -88,6 +88,9 @@ func (s *Service) runSecureJob(id, by string, j *secJob) {
 	j.running, j.finished, j.res = false, s.now(), res
 	if err != nil {
 		j.err = errText(err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			j.err = "Secure this OLT did not finish within " + secureJobTimeout.String() + " (" + j.stage + "); the OLT took too long to answer"
+		}
 		j.stage = "Failed"
 	} else {
 		j.stage = "Done"
