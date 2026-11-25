@@ -145,6 +145,9 @@ type OLTStatus struct {
 	ONUs     []OLTONU `json:"onus,omitempty"`
 	// Raw is the part of the OLT's answer that could not be parsed (capped), shown to the owner as it came.
 	Raw string `json:"raw,omitempty"`
+	// RawDebug is the same output with its control characters made visible (\x1b[12C), for diagnosing a layout. It is
+	// shown on the owner's OLT page only, never in the API.
+	RawDebug string `json:"raw_debug,omitempty"`
 }
 
 // Verdicts of an ONU found on a PON port.

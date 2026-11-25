@@ -44,8 +44,15 @@ func BuildDesired(d *store.Data, olt store.Equipment, st store.OLTState, run *Ru
 	}
 	w.MgmtVLAN = s.MgmtVLANOrDefault()
 	w.Uplink = s.UplinkOrDefault()
+	// An OLT managed through the router's OLT management port (the one-cable path) keeps its factory management
+	// address on that port: the management VLAN, its uplink tagging and its address are only for the manual VLAN path.
+	viaMgmtPort := strings.TrimSpace(site.OLTMgmtPort) != ""
+	if viaMgmtPort {
+		w.MgmtVLAN = 0
+		notes = append(notes, "The OLT is managed through the router's OLT management port, so the plan has no management VLAN or management address lines.")
+	}
 	// The OLT's management address: its register address when it is inside the router's OLT subnet.
-	if site.ONUMgmtN > 0 && olt.MgmtIP != "" {
+	if !viaMgmtPort && site.ONUMgmtN > 0 && olt.MgmtIP != "" {
 		sub := netip.MustParsePrefix(fmt.Sprintf("10.7.%d.0/29", site.ONUMgmtN))
 		if a, err := netip.ParseAddr(olt.MgmtIP); err == nil && sub.Contains(a) {
 			w.MgmtIP, w.MgmtMask, w.MgmtGateway = olt.MgmtIP, "255.255.255.248", fmt.Sprintf("10.7.%d.1", site.ONUMgmtN)

@@ -67,10 +67,14 @@ type Session struct {
 	raw  []byte
 	// answered is len(raw) when the last pagination marker was answered.
 	answered int
-	mode     Mode
-	prompt   string
-	enable   string
-	Timeout  time.Duration // per command (default 20 s)
+	// asked is len(raw) when readUntil last stopped at a question (the same question is not returned twice).
+	asked int
+	// SaveTimeout overrides Dialect.SaveTimeout (tests).
+	SaveTimeout time.Duration
+	mode        Mode
+	prompt      string
+	enable      string
+	Timeout     time.Duration // per command (default 20 s)
 	// Protect is the management VLAN: nothing may be removed under it.
 	Protect int
 	cs      cstate // where the lines sent so far have left the CLI (inside the management interface, inside a sub-mode)
@@ -79,27 +83,12 @@ type Session struct {
 	// NewHostKey is the fingerprint seen when none was pinned (the caller pins it).
 	NewHostKey string
 	closer     func()
+	// lastDbg is the last command's raw output with its control characters made visible (diagnostics only).
+	lastDbg string
 }
 
-var ansiRE = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][A-Za-z0-9]|\x1b[=>]`)
-
-// clean applies backspaces, drops CR, NUL and terminal escapes.
-func clean(b []byte) string {
-	b = ansiRE.ReplaceAll(b, nil)
-	out := make([]byte, 0, len(b))
-	for _, c := range b {
-		switch c {
-		case '\r', 0:
-		case 8, 127:
-			if n := len(out); n > 0 && out[n-1] != '\n' {
-				out = out[:n-1]
-			}
-		default:
-			out = append(out, c)
-		}
-	}
-	return string(out)
-}
+// clean replays terminal output (see render): cursor movement, carriage returns, backspaces and escapes.
+func clean(b []byte) string { return render(b) }
 
 func newSession(d *Dialect, rw io.ReadWriteCloser, eol string) *Session {
 	s := &Session{d: d, rw: rw, eol: eol, in: make(chan []byte, 64), Timeout: 20 * time.Second, mode: ModeUser}
@@ -147,8 +136,9 @@ func (s *Session) write(line string) error {
 type stopAt int
 
 const (
-	stopPrompt stopAt = iota
-	stopLogin         // also stop at a user or password prompt
+	stopPrompt   stopAt = iota
+	stopLogin           // also stop at a user or password prompt
+	stopQuestion        // also stop at a yes/no question (Dialect.QuestionRE)
 )
 
 // readUntil reads until the prompt (or, with stopLogin, a login prompt), answers pagination, and returns the cleaned
@@ -164,6 +154,7 @@ func (s *Session) readUntil(ctx context.Context, timeout time.Duration, st stopA
 		if tl != "" {
 			switch {
 			case s.d.MoreRE.MatchString(line) && len(s.raw) > s.answered:
+				blankMore(s.raw, s.d.MoreRE)
 				s.answered = len(s.raw)
 				if err := s.write(" "); err != nil { // a space turns the page; no end of line
 					return "", "", err
@@ -172,6 +163,9 @@ func (s *Session) readUntil(ctx context.Context, timeout time.Duration, st stopA
 			case s.d.PromptRE.MatchString(tl):
 				return s.tidy(text[:lastNL+1]), tl, nil
 			case st == stopLogin && (s.d.UserRE.MatchString(tl) || s.d.PasswordRE.MatchString(tl)):
+				return s.tidy(text[:lastNL+1]), tl, nil
+			case st == stopQuestion && s.d.QuestionRE != nil && s.d.QuestionRE.MatchString(tl) && len(s.raw) > s.asked:
+				s.asked = len(s.raw)
 				return s.tidy(text[:lastNL+1]), tl, nil
 			}
 		}
@@ -193,6 +187,21 @@ func (s *Session) readUntil(ctx context.Context, timeout time.Duration, st stopA
 		case <-ctx.Done():
 			return clean(s.raw), "", ctx.Err()
 		}
+	}
+}
+
+// blankMore overwrites the pagination marker on the last line of raw with blanks of the same length, so the marker
+// cannot survive in the rendered text when the OLT redraws the line with a carriage return and a shorter line (the
+// marker's tail would show through) and every column position stays as the OLT counted it.
+func blankMore(raw []byte, re *regexp.Regexp) {
+	from := bytes.LastIndexByte(raw, '\n') + 1
+	locs := re.FindAllIndex(raw[from:], -1)
+	if len(locs) == 0 {
+		return
+	}
+	l := locs[len(locs)-1]
+	for k := from + l[0]; k < from+l[1]; k++ {
+		raw[k] = ' '
 	}
 }
 
@@ -576,6 +585,7 @@ func (s *Session) exec(ctx context.Context, line string, trusted bool) (string, 
 	}
 	s.setPrompt(last)
 	s.track(line)
+	s.lastDbg = debugCopy(s.raw, 4000)
 	// The first line is the OLT echoing what was typed.
 	if i := strings.IndexByte(out, '\n'); i >= 0 {
 		if Norm(out[:i]) == Norm(line) || strings.HasSuffix(Norm(out[:i]), Norm(line)) {
@@ -644,7 +654,8 @@ func (s *Session) show(ctx context.Context, cmd string) (string, error) {
 type CmdOut struct {
 	Cmd string
 	Out string
-	Err error // a refusal by the OLT (*CmdError); other errors end the Query
+	Err error  // a refusal by the OLT (*CmdError); other errors end the Query
+	Dbg string // the raw output with control characters made visible, for diagnosing a layout
 }
 
 // QueryEach runs a Query (a read-only sequence that may sit in configuration mode) and returns each command's own
@@ -657,13 +668,14 @@ func (s *Session) QueryEach(ctx context.Context, q Query) ([]CmdOut, error) {
 	var res []CmdOut
 	var hard error
 	for _, c := range q.Cmds {
+		s.lastDbg = ""
 		out, err := s.show(ctx, c)
 		var ce *CmdError
 		if err != nil && !errors.As(err, &ce) {
 			hard = err
 			break
 		}
-		res = append(res, CmdOut{Cmd: c, Out: out, Err: err})
+		res = append(res, CmdOut{Cmd: c, Out: out, Err: err, Dbg: s.lastDbg})
 	}
 	s.lower(ctx)
 	return res, hard
@@ -739,20 +751,117 @@ func (s *Session) Save(ctx context.Context) error {
 	if err := s.raise(ctx, ModePriv); err != nil {
 		return err
 	}
-	out, err := s.exec(ctx, s.d.SaveCmd, false)
-	if err != nil {
+	cmd := s.d.SaveCmd
+	if err := s.check(cmd); err != nil {
 		return err
 	}
+	to := s.SaveTimeout
+	if to <= 0 {
+		to = s.d.SaveTimeout
+	}
+	if to < s.Timeout {
+		to = s.Timeout
+	}
+	s.raw, s.answered, s.asked = nil, 0, 0
+	if err := s.write(cmd); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(to)
+	confirmed := false
+	var out, last string
+	for {
+		var err error
+		out, last, err = s.readUntil(ctx, time.Until(deadline), stopQuestion)
+		if err != nil {
+			s.Transcript = append(s.Transcript, Entry{Cmd: Redact(cmd), Err: err.Error()})
+			if errors.Is(err, ErrTimeout) {
+				return fmt.Errorf("the save did not finish within %s: %w", to, err)
+			}
+			return err
+		}
+		if s.d.PromptRE.MatchString(last) {
+			break
+		}
+		// A yes/no question: only the save's own confirmation is answered, once.
+		if !confirmed && s.d.SaveConfirmRE != nil && s.d.SaveConfirmRE.MatchString(last) {
+			confirmed = true
+			if err := s.write(s.d.SaveConfirmAnswer); err != nil {
+				return err
+			}
+			continue
+		}
+		_ = s.write("n")
+		_, pl, _ := s.readUntil(ctx, s.Timeout, stopPrompt)
+		if pl != "" {
+			s.setPrompt(pl)
+		}
+		q := Redact(clip(last, 200))
+		s.Transcript = append(s.Transcript, Entry{Cmd: Redact(cmd), Out: q, Err: "unexpected question, answered n"})
+		return &CmdError{Cmd: cmd, Output: "the OLT asked \"" + q + "\", which is not the save confirmation; it was answered n"}
+	}
+	s.setPrompt(last)
+	s.track(cmd)
+	if i := strings.IndexByte(out, '\n'); i >= 0 && (Norm(out[:i]) == Norm(cmd) || strings.HasSuffix(Norm(out[:i]), Norm(cmd))) {
+		out = out[i+1:]
+	}
+	out = strings.TrimSpace(out)
+	s.Transcript = append(s.Transcript, Entry{Cmd: Redact(cmd), Out: Redact(clip(out, 600))})
 	if failed(s.d.ErrorRE, out) {
-		return &CmdError{Cmd: s.d.SaveCmd, Output: out}
+		return &CmdError{Cmd: cmd, Output: out}
 	}
 	return nil
 }
 
 // Redact hides what looks like a secret in text that is shown or stored.
+//
+// The server's own notes use the same words in prose ("the old password was restored", "the SSH host key of the OLT"),
+// so a value that is a plain English word of those notes, or only punctuation, is left as it is: no generated or typed
+// secret is one of them, and a note stays readable.
 func Redact(s string) string {
-	s = userPassRE.ReplaceAllString(s, "${1}<redacted>")
-	return redactRE.ReplaceAllString(s, "${1}<redacted>")
+	s = redactWith(userPassRE, s)
+	return redactWith(redactRE, s)
+}
+
+func redactWith(re *regexp.Regexp, s string) string {
+	locs := re.FindAllStringSubmatchIndex(s, -1)
+	if len(locs) == 0 {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for _, l := range locs {
+		val := s[l[3]:l[1]] // the value after the key word (group 1 is the key word and what follows it)
+		if proseWord(val) {
+			continue
+		}
+		b.WriteString(s[last:l[3]])
+		b.WriteString("<redacted>")
+		last = l[1]
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+// proseWords are the words that follow a key word in the server's own notes and errors. A secret is never one of them.
+var proseWords = map[string]bool{}
+
+func init() {
+	for _, w := range strings.Fields(`a an the and or but nor so then than as at by for from in into of on onto to with without
+		is are was were be been being has have had do does did done not no yes it its this that these those there here
+		now still again only also just yet already all any each every both either neither
+		works worked work working failed fails fail kept stored changed restored replaced reset set sent saved removed
+		added tried tested checked verified matched mismatch changes change pinned unknown missing wrong ok
+		could would should will can may might must cannot isn't wasn't doesn't didn't`) {
+		proseWords[w] = true
+	}
+}
+
+func proseWord(v string) bool {
+	w := strings.ToLower(strings.TrimRight(v, ".,;:!?)]\"'"))
+	if w == "" {
+		return true // only punctuation ("the password." / "password)")
+	}
+	return proseWords[w]
 }
 
 // userPassRE: "user login-password NAME PASSWORD" and "user enable-password NAME PASSWORD" (the name is not the secret, the

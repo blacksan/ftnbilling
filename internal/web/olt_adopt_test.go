@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"ispbill/internal/store"
 )
 
 func TestOLTAdoptAPIRolesStepUpAndSecrets(t *testing.T) {
@@ -127,5 +129,97 @@ func TestOLTAdoptPagesOwnerOnlyNoSecretsNoInlineJS(t *testing.T) {
 	}
 	if strings.Contains(o.auditText(), o.f.Pass) {
 		t.Error("the revealed password is in the audit trail")
+	}
+}
+
+func TestOLTSecureStatusEndpoints(t *testing.T) {
+	o := newOLTRig(t)
+	p := "/olts/" + o.id
+	g := o.call(o.owner.Access, "GET", p+"/secure", nil, nil)
+	if g.Status != 200 || g.JSON(t)["running"] != false || g.JSON(t)["known"] != false {
+		t.Fatalf("status of no job: %d %s", g.Status, g.Raw)
+	}
+	if g := o.call(o.oper.Access, "GET", p+"/secure", nil, nil); g.Status != 403 {
+		t.Errorf("status by an operator: %d", g.Status)
+	}
+	cl := &http.Client{CheckRedirect: noRedirect}
+	ob := signIn(t, o.ts, o.srv, o.st, o.ownerW)
+	pb := signIn(t, o.ts, o.srv, o.st, o.operW)
+	path := "/admin/olts/manage/secure-status?id=" + url.QueryEscape(o.id)
+	resp := ob.Do(cl, o.ts.URL, "GET", path, nil)
+	bs, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || !strings.Contains(string(bs), `"running":false`) || !strings.Contains(resp.Header.Get("Cache-Control"), "no-store") {
+		t.Errorf("owner status: %d %s", resp.StatusCode, bs)
+	}
+	resp = pb.Do(cl, o.ts.URL, "GET", path, nil)
+	resp.Body.Close()
+	if resp.StatusCode == 200 {
+		t.Errorf("an operator reads the owner's status")
+	}
+}
+
+func TestOLTRawDebugCopyOwnerOnly(t *testing.T) {
+	o := newOLTRig(t)
+	if err := o.st.Update(func(d *store.Data) error {
+		st := d.OLTStateOf(o.id)
+		st.Status.Raw, st.Status.RawDebug = "PON 1 state, not understood:\nweird  thing", `weird\x1b[2C<b>thing</b>`
+		d.OLTStates[o.id] = st
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cl := &http.Client{CheckRedirect: noRedirect}
+	path := "/admin/olts/manage?id=" + url.QueryEscape(o.id)
+	page := func(w *who) string {
+		t.Helper()
+		b := signIn(t, o.ts, o.srv, o.st, w)
+		resp := b.Do(cl, o.ts.URL, "GET", path, nil)
+		bs, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("%d", resp.StatusCode)
+		}
+		return string(bs)
+	}
+	if p := page(o.ownerW); !strings.Contains(p, `weird\x1b[2C&lt;b&gt;thing&lt;/b&gt;`) {
+		t.Errorf("the owner does not see the escaped debug copy")
+	}
+	if p := page(o.operW); strings.Contains(p, `weird\x1b[2C`) || !strings.Contains(p, "Not understood") {
+		t.Errorf("an operator sees the debug copy (or not the section)")
+	}
+}
+
+// The bench: the select showed ether4 although the OLT is on ether6; saving the card unchanged must leave it on ether6.
+func TestOLTMgmtPortFormKeepsTheConfiguredPort(t *testing.T) {
+	o := newOLTRig(t)
+	if err := o.st.Update(func(d *store.Data) error {
+		s := d.Sites[o.A.ID]
+		s.OLTMgmtPort = "ether6"
+		d.Sites[o.A.ID] = s
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cl := &http.Client{CheckRedirect: noRedirect}
+	ob := signIn(t, o.ts, o.srv, o.st, o.ownerW)
+	resp := ob.Do(cl, o.ts.URL, "GET", "/admin/olts/manage?id="+url.QueryEscape(o.id), nil)
+	bs, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	page := string(bs)
+	if !strings.Contains(page, `<option value="ether6" selected>`) || !strings.Contains(page, `name="net" value="192.168.8.1/24"`) {
+		i := strings.Index(page, `name="port"`)
+		t.Fatalf("the configured port or address is not preselected: %s", page[max(i, 0):min(len(page), max(i, 0)+400)])
+	}
+	resp = ob.Do(cl, o.ts.URL, "POST", "/admin/olts/manage/mgmt-port", url.Values{"id": {o.id}, "action": {"set"}, "port": {"ether6"}, "net": {"192.168.8.1/24"}})
+	resp.Body.Close()
+	loc, _ := url.QueryUnescape(resp.Header.Get("Location"))
+	if !strings.Contains(loc, "Nothing changed") {
+		t.Errorf("unchanged form: %q", loc)
+	}
+	var port string
+	o.st.View(func(d *store.Data) { port = d.Sites[o.A.ID].OLTMgmtPort })
+	if port != "ether6" {
+		t.Errorf("the role moved to %q", port)
 	}
 }

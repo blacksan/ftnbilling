@@ -15,11 +15,16 @@
 {{if .IsOwner}}<section class="panel mt-3"><h2>OLT management port and login</h2>
 <p class="muted">Give a spare router port the role <b>OLT management</b> and cable the OLT's management port (GE0/2, factory address 192.168.8.200) to it. The server gives that port an address and firewall rules so that only this server can reach the OLT's SSH; the OLT gets no other access and no internet. It adopts the OLT only when its MAC is on that port and its serial number is the one in the inventory.</p>
 <form method="post" action="/admin/olts/manage/mgmt-port" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="action" value="set">
-<label class="field">Router port<select name="port">{{range .Data.FreePorts}}<option value="{{.}}">{{.}}</option>{{else}}<option value="">no spare port found</option>{{end}}</select></label>
+<label class="field">Router port<select name="port">{{range .Data.FreePorts}}<option value="{{.}}"{{if eq . $.Data.MgmtPort}} selected{{end}}>{{.}}{{if eq . $.Data.MgmtPort}} (now){{end}}</option>{{else}}<option value="">no spare port found</option>{{end}}</select></label>
 <label class="field">Router address on it<input name="net" value="{{.Data.MgmtNet}}" class="mono"></label><button class="btn sm">Use this port</button></form>
 {{if .Data.MgmtPort}}<p class="mt-2">Now: <b class="mono">{{.Data.MgmtPort}}</b>, router address <span class="mono">{{.Data.MgmtNet}}</span>.</p>
 <form method="post" action="/admin/olts/manage/mgmt-port" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="action" value="clear"><button class="btn ghost sm">Remove the role and the router rules</button></form>{{end}}
 {{with .Data.Adopt}}{{if .CanSecure}}<h3 class="mt-3">Secure this OLT</h3>
+{{with $.Data.Secure}}<div class="panel" data-secure-poll="/admin/olts/manage/secure-status?id={{$E.ID}}"{{if .Running}} data-running="1"{{end}}>
+{{if .Running}}<p><b>Securing&hellip;</b> started {{.Started}}. <span data-secure-stage>{{.Stage}}</span></p><p class="muted">This takes a few minutes. The page updates by itself.</p>
+{{else if .Done}}<p><span class="pill active">done</span> {{.Message}}</p>
+{{else if .Failed}}<p><span class="pill suspended">failed</span> {{.Error}}</p>
+{{else if .Interrupted}}<p><span class="pill suspended">unfinished</span> A Secure did not finish (the server stopped, or it failed half way). The new login it set is kept encrypted; the server tries it at its next check of the OLT.</p>{{end}}</div>{{end}}
 <p class="muted">Replaces the OLT's login and enable password with long generated ones, tests them in a new SSH session while the old one stays open, and only then saves. If the test fails the old password is put back. It also removes the default SNMP communities (public, private), so SNMP is off.</p>
 <form method="post" action="/admin/olts/manage/secure" class="row"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
 <label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="btn sm">Secure this OLT</button></form>{{end}}
@@ -51,7 +56,7 @@
 
 {{if $st.Status.ONUs}}<section class="panel mt-3"><h2>ONUs on the OLT</h2><div class="tw"><table class="rs"><thead><tr><th>PON</th><th class="n">ID</th><th>Serial</th><th>State</th><th class="n">Rx dBm</th><th class="n">Tx dBm</th><th class="n">Distance m</th><th>Last down</th></tr></thead><tbody>
 {{range $st.Status.ONUs}}<tr><td data-label="PON">{{.PON}}</td><td class="n" data-label="ID">{{.ID}}</td><td class="mono" data-label="Serial">{{.Serial}}</td><td data-label="State"><span class="pill {{if .Online}}online{{else}}offline{{end}}">{{.State}}</span></td><td class="n" data-label="Rx">{{.RxPower}}</td><td class="n" data-label="Tx">{{.TxPower}}</td><td class="n" data-label="Distance">{{.Distance}}</td><td data-label="Last down">{{.LastDown}}</td></tr>{{end}}</tbody></table></div></section>{{end}}
-{{if $st.Status.Raw}}<section class="panel mt-3"><h2>Not understood</h2><p class="muted">The OLT printed this and the server could not read it. It is shown as it came, so the command table can be corrected.</p><pre class="mono">{{$st.Status.Raw}}</pre></section>{{end}}
+{{if $st.Status.Raw}}<section class="panel mt-3"><h2>Not understood</h2><p class="muted">The OLT printed this and the server could not read it. It is shown as it came, so the command table can be corrected.</p><pre class="mono">{{$st.Status.Raw}}</pre>{{if and $.IsOwner $st.Status.RawDebug}}<details><summary>Raw terminal text, control characters made visible</summary><pre class="mono">{{$st.Status.RawDebug}}</pre></details>{{end}}</section>{{end}}
 
 <section class="panel mt-3"><h2>Found on the PON ports</h2>
 {{if .Data.Unknown}}<h3>Found on the PON, not in inventory</h3><p class="muted">These serials are plugged into the OLT but are not in the register. The server did <b>not</b> add them.</p>

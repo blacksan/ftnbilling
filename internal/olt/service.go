@@ -73,6 +73,8 @@ type Service struct {
 	locks map[string]chan struct{}
 	// alerted rate-limits the possible-OLT alerts (key -> last sent).
 	alerted map[string]time.Time
+	// jobs are the background "Secure this OLT" runs (secjob.go), guarded by mu.
+	jobs map[string]*secJob
 }
 
 // New creates the service.
@@ -95,7 +97,7 @@ func New(o Options) *Service {
 	if o.Timeout <= 0 {
 		o.Timeout = 20 * time.Second
 	}
-	return &Service{o: o, sem: make(chan struct{}, o.MaxSessions), locks: map[string]chan struct{}{}}
+	return &Service{o: o, sem: make(chan struct{}, o.MaxSessions), locks: map[string]chan struct{}{}, jobs: map[string]*secJob{}}
 }
 
 // Dialect is the command dialect in use.
@@ -394,6 +396,7 @@ type pollResult struct {
 	onus     []store.OLTONU
 	findings []string
 	raw      string
+	rawDebug string // raw with control characters made visible, for what was not understood
 }
 
 func (s *Service) readAll(ctx context.Context, o *opened) (pollResult, error) {
@@ -404,7 +407,7 @@ func (s *Service) readAll(ctx context.Context, o *opened) (pollResult, error) {
 		return r, err
 	}
 	r.version = ParseVersion(out)
-	var raw []string
+	var raw, dbg []string
 	n := o.e.PONPorts
 	if n <= 0 {
 		n = 4
@@ -431,12 +434,14 @@ func (s *Service) readAll(ctx context.Context, o *opened) (pollResult, error) {
 		rows, bad := ParseONUInfo(pon, outOf(by, dl.CmdInfo, &raw, pon))
 		if bad != "" {
 			raw = append(raw, fmt.Sprintf("PON %d onu info, not understood:\n%s", pon, bad))
+			dbg = append(dbg, fmt.Sprintf("PON %d %s:\n%s", pon, dl.CmdInfo, by[Norm(dl.CmdInfo)].Dbg))
 		}
 		if st, ok := get(dl.CmdState); ok {
 			var bad string
 			rows, bad = MergeState(rows, pon, st)
 			if bad != "" {
 				raw = append(raw, fmt.Sprintf("PON %d state, not understood:\n%s", pon, bad))
+				dbg = append(dbg, fmt.Sprintf("PON %d %s:\n%s", pon, dl.CmdState, by[Norm(dl.CmdState)].Dbg))
 			}
 		} else if c, there := by[Norm(dl.CmdState)]; there && c.Err != nil {
 			raw = append(raw, fmt.Sprintf("PON %d state: %s", pon, errText(c.Err)))
@@ -445,6 +450,7 @@ func (s *Service) readAll(ctx context.Context, o *opened) (pollResult, error) {
 			if op, ok := get(dl.CmdOptical); ok {
 				if bad := MergeOptical(rows, pon, op); bad != "" {
 					raw = append(raw, fmt.Sprintf("PON %d optics, not understood:\n%s", pon, bad))
+					dbg = append(dbg, fmt.Sprintf("PON %d %s:\n%s", pon, dl.CmdOptical, by[Norm(dl.CmdOptical)].Dbg))
 				}
 			} else if c, there := by[Norm(dl.CmdOptical)]; there && c.Err != nil {
 				raw = append(raw, fmt.Sprintf("PON %d optics: %s", pon, errText(c.Err)))
@@ -468,6 +474,7 @@ func (s *Service) readAll(ctx context.Context, o *opened) (pollResult, error) {
 		r.findings = ParseRunning(txt).Findings()
 	}
 	r.raw = clip(Redact(strings.Join(raw, "\n")), 4000)
+	r.rawDebug = clip(Redact(strings.Join(dbg, "\n")), 6000)
 	return r, nil
 }
 
@@ -492,7 +499,7 @@ func (s *Service) record(id string, r pollResult) {
 		olt = store.OLTLabel(e)
 		now := s.now()
 		st.Status = store.OLTStatus{At: now, OK: true, Version: r.version.Summary(), Model: r.version.Model, DeviceSerial: r.version.Serial,
-			HWVersion: r.version.Hardware, SWVersion: r.version.Software, ONUs: r.onus, Raw: r.raw, Findings: r.findings}
+			HWVersion: r.version.Hardware, SWVersion: r.version.Software, ONUs: r.onus, Raw: r.raw, RawDebug: r.rawDebug, Findings: r.findings}
 		// ONUs that are on the OLT but not in the inventory: listed for the owner, never touched.
 		for _, o := range r.onus {
 			if o.Serial == "" {

@@ -42,7 +42,7 @@ func (s *Server) oltRoutes2(get, post func(string, http.HandlerFunc)) {
 	post("/admin/olts/manage/apply", s.adminOLTApply)
 	post("/admin/olts/manage/remove-plan", s.adminOLTRemovePlan)
 	post("/admin/olts/manage/remove-apply", s.adminOLTRemoveApply)
-	s.oltRoutes3(post)
+	s.oltRoutes3(get, post)
 }
 
 func manageURL(id string) string { return "/admin/olts/manage?id=" + url.QueryEscape(id) }

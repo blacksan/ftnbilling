@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // This file is the ONLY place that knows what a V-SOL OLT's command line looks like. The grammar below is the one the
@@ -70,6 +71,14 @@ type Dialect struct {
 	// VersionMode and RunningMode are the modes those two run in (the bench: configuration mode).
 	VersionMode, RunningMode Mode
 
+	// SaveTimeout is how long the save command may take (it writes flash; far longer than an ordinary command).
+	SaveTimeout time.Duration
+	// QuestionRE recognises a yes/no question at the end of the output ("... [y/N]:"). SaveConfirmRE is the one question
+	// the save may ask that the server answers with SaveConfirmAnswer; any other question is answered "n" and the save
+	// fails.
+	QuestionRE, SaveConfirmRE *regexp.Regexp
+	SaveConfirmAnswer         string
+
 	// Read commands inside a PON interface.
 	CmdInfo, CmdState, CmdOptical, CmdDistance, CmdAutoFind string
 
@@ -109,11 +118,17 @@ func VSOL() *Dialect {
 		QueryErrRE: regexp.MustCompile(`(?i)^\s*%|unknown command|unrecognized command|incomplete command|ambiguous command|invalid (input|command)`),
 
 		EnableCmd: "enable", ConfigCmd: "configure terminal", EndCmd: "end", ExitCmd: "exit", SaveCmd: "write",
-		NoPaging:    "terminal length 0", // TODO(bench): status unknown; a failure is ignored
-		VersionCmd:  "show version",
-		RunningCmd:  "show running-config",
-		VersionMode: ModeConfig,
-		RunningMode: ModeConfig,
+		// TODO(bench): the V1600GS-R's write took longer than the 20 s command timeout on the bench; its exact output and
+		// whether it asks anything are not known. Common shapes: "Building configuration...", "[OK]", progress dots.
+		SaveTimeout:       120 * time.Second,
+		QuestionRE:        regexp.MustCompile(`(?i)[\[(]\s*(y/n|yes/no|y/n/c)\s*[\])]\s*[:?]?\s*$`),
+		SaveConfirmRE:     regexp.MustCompile(`(?i)^(are you sure (you want )?to (save|write)( the| current)?( running)? config(uration)?|(save|write)( the| current)?( running)? config(uration)?( to (flash|startup( config(uration)?)?))?|overwrite (the )?(startup|saved) config(uration)?)\s*\??\s*[\[(]\s*(y/n|yes/no)\s*[\])]\s*[:?]?\s*$`),
+		SaveConfirmAnswer: "y",
+		NoPaging:          "terminal length 0", // TODO(bench): status unknown; a failure is ignored
+		VersionCmd:        "show version",
+		RunningCmd:        "show running-config",
+		VersionMode:       ModeConfig,
+		RunningMode:       ModeConfig,
 
 		CmdInfo:     "show onu info",
 		CmdState:    "show onu state",

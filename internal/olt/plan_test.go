@@ -356,3 +356,35 @@ func TestPlanWarnsAboutAHalfMadePriProfile(t *testing.T) {
 		t.Errorf("%v\n%s", p.Warnings, Redact(strings.Join(p.Commands(), "\n")))
 	}
 }
+
+func TestPlanSkipsVLAN98WhenManagedThroughTheOLTMgmtPort(t *testing.T) {
+	for _, via := range []bool{false, true} {
+		st := newEnv(t)
+		st.st.Update(func(d *store.Data) error {
+			s := d.Sites[siteID]
+			if via {
+				s.OLTMgmtPort = "ether7"
+			} else {
+				s.OLTMgmtPort = ""
+			}
+			d.Sites[siteID] = s
+			return nil
+		})
+		var w Desired
+		st.st.View(func(d *store.Data) {
+			var err error
+			w, _, err = BuildDesired(d, d.Equipment[oltID], st.state(), nil, nil, false, VSOL(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+		txt := strings.Join(VSOL().BuildPlan(w, &Running{VLANs: map[int]bool{}}).Commands(), "\n")
+		has := strings.Contains(txt, "vlan 98") // "vlan 98" and "switchport hybrid vlan 98 tagged"
+		if via && has {
+			t.Errorf("management port: the plan still has VLAN 98 lines:\n%s", txt)
+		}
+		if !via && !has {
+			t.Errorf("manual path: the plan lost VLAN 98 lines:\n%s", txt)
+		}
+	}
+}

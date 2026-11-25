@@ -256,6 +256,9 @@ func TestPollParsesAndClassifies(t *testing.T) {
 	} else if o := st.Status.ONUs[0]; o.RxPower != "-8.94" || o.TxPower != "2.55" || o.Temp != "24.465" || o.Distance != "125" {
 		t.Errorf("optics and distance: %+v", o)
 	}
+	if st.Status.Raw != "" || st.Status.RawDebug != "" {
+		t.Errorf("cursor-padded tables were not understood: %q / %q", st.Status.Raw, st.Status.RawDebug)
+	}
 	if f := strings.Join(st.Status.Findings, "\n"); !strings.Contains(f, "VSOL00000009") || !strings.Contains(f, "not in the inventory") {
 		t.Errorf("an ONU on the OLT that is not in the inventory is not listed: %v", st.Status.Findings)
 	}
@@ -577,5 +580,20 @@ func TestOneSessionPerOLT(t *testing.T) {
 	defer func() { <-lk }()
 	if err := e.svc.Poll(context.Background(), oltID, false); err != ErrBusy {
 		t.Fatalf("want ErrBusy, got %v", err)
+	}
+}
+
+func TestPollKeepsVisibleDebugCopy(t *testing.T) {
+	e := newEnv(t)
+	e.f.OddState = true
+	if err := e.svc.Poll(context.Background(), oltID, true); err != nil {
+		t.Fatal(err)
+	}
+	st := e.state()
+	if !strings.Contains(st.Status.Raw, "weird            thing") {
+		t.Errorf("raw: %q", st.Status.Raw)
+	}
+	if !strings.Contains(st.Status.RawDebug, `weird\x1b[12Cthing`) || strings.Contains(st.Status.RawDebug, "\x1b") {
+		t.Errorf("debug copy: %q", st.Status.RawDebug)
 	}
 }

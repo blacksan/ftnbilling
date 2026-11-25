@@ -356,7 +356,7 @@ func (s *Service) secureACL(pctx context.Context, o *opened, user, login, enable
 
 // The SSH restriction's own time budgets (see secureACL).
 var (
-	aclStepBudget    = 3 * time.Minute
+	aclStepBudget    = 5 * time.Minute // the lines, a verification session and a save (up to Dialect.SaveTimeout)
 	aclRestoreBudget = time.Minute
 )
 

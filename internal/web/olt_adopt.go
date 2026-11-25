@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"ispbill/internal/billing"
 	"ispbill/internal/olt"
 	"ispbill/internal/sites"
 	"ispbill/internal/store"
@@ -17,7 +18,8 @@ import (
 // OLT", the login the owner types, "Reveal password" and the router port. Nothing here prints a password except the
 // owner's Reveal page (owner, password again, audited, never cached).
 
-func (s *Server) oltRoutes3(post func(string, http.HandlerFunc)) {
+func (s *Server) oltRoutes3(get, post func(string, http.HandlerFunc)) {
+	get("/admin/olts/manage/secure-status", s.adminOLTSecureStatus)
 	post("/admin/olts/manage/adopt-check", s.adminOLTAdoptCheck)
 	post("/admin/olts/manage/secure", s.adminOLTSecure)
 	post("/admin/olts/manage/credentials", s.adminOLTCredentials)
@@ -30,6 +32,9 @@ func (s *Server) oltRoutes3(post func(string, http.HandlerFunc)) {
 func (s *Server) adoptData(r *http.Request, e store.Equipment, p *adminPage, owner bool) {
 	if v, ok := s.olt.AdoptView(e.ID); ok {
 		p.Data["Adopt"] = v
+	}
+	if owner {
+		p.Data["Secure"] = s.secureViewOf(e.ID)
 	}
 	var site store.Site
 	s.st.View(func(d *store.Data) { site = d.Sites[e.SiteID] })
@@ -46,6 +51,16 @@ func (s *Server) adoptData(r *http.Request, e store.Equipment, p *adminPage, own
 			}
 		}
 		sort.Strings(free)
+		// The configured port comes first and is the one selected: submitting the form unchanged must not move the role.
+		if cur := site.OLTMgmtPort; cur != "" {
+			choices := []string{cur}
+			for _, f := range free {
+				if f != cur {
+					choices = append(choices, f)
+				}
+			}
+			free = choices
+		}
 		p.Data["FreePorts"] = free
 	}
 }
@@ -69,6 +84,8 @@ func (s *Server) adminOLTAdoptCheck(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// adminOLTSecure starts "Secure this OLT" in the background and returns at once: the action takes minutes, longer than
+// the HTTP server (and the proxy in front of it) will hold a response. The OLT page shows the progress.
 func (s *Server) adminOLTSecure(w http.ResponseWriter, r *http.Request) {
 	id := r.PostFormValue("id")
 	to := manageURL(id)
@@ -79,13 +96,18 @@ func (s *Server) adminOLTSecure(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
-	defer cancel()
-	res, err := s.olt.Secure(ctx, id, u.Username)
-	if err != nil {
+	switch err := s.olt.StartSecure(id, u.Username); {
+	case err == nil:
+		s.back(w, r, to, "Securing started. This takes a few minutes; this page shows the progress.")
+	case errors.Is(err, olt.ErrSecureRunning):
+		s.back(w, r, to, "Securing is already running; this page shows the progress.")
+	default:
 		s.back(w, r, to, "Error: "+oltErrText(err))
-		return
 	}
+}
+
+// secureMessage is the outcome of a finished Secure, for the page.
+func secureMessage(res olt.SecureResult) string {
 	msg := "Secured: the login and enable password were replaced by generated ones, tested with a new session and saved."
 	if res.SNMPNote != "" {
 		msg += " " + res.SNMPNote
@@ -93,7 +115,67 @@ func (s *Server) adminOLTSecure(w http.ResponseWriter, r *http.Request) {
 	if res.ACLNote != "" {
 		msg += " " + res.ACLNote
 	}
-	s.back(w, r, to, msg)
+	return msg
+}
+
+// secureJSON is the status of the background Secure of an OLT (no secret in it).
+func (s *Server) secureJSON(id string) map[string]any {
+	v := s.olt.SecureStatus(id)
+	m := map[string]any{"known": v.Known, "running": v.Running, "stage": v.Stage, "interrupted": v.Interrupted, "done": v.Known && !v.Running}
+	if v.Known {
+		m["started_at"] = v.Started.UTC().Format(time.RFC3339)
+		m["by"] = v.By
+	}
+	if v.Known && !v.Running {
+		m["finished_at"] = v.Finished.UTC().Format(time.RFC3339)
+		m["ok"] = v.OK
+		if v.OK {
+			m["message"] = secureMessage(v.Result)
+			m["enable_checked"], m["snmp_removed"], m["snmp_note"] = v.Result.EnableChecked, nz(v.Result.SNMPRemoved), v.Result.SNMPNote
+			m["access_list_note"], m["access_list_done"], m["access_list_rules"], m["access_list_finding"] = v.Result.ACLNote, v.Result.ACLDone, nz(v.Result.ACLRules), v.Result.ACLFinding
+		} else {
+			m["error"] = v.Error
+		}
+	}
+	return m
+}
+
+// adminOLTSecureStatus is the JSON the OLT page's script polls while a Secure runs.
+func (s *Server) adminOLTSecureStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if _, _, ok := s.oltOf(w, r, id); !ok {
+		return
+	}
+	if _, ok := s.ownerOnly(w, r, manageURL(id)); !ok {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, s.secureJSON(id))
+}
+
+// secureView is what the OLT page shows about the background Secure.
+type secureView struct {
+	Running, Failed, Done, Interrupted bool
+	Stage, Started, Error, Message     string
+}
+
+func (s *Server) secureViewOf(id string) *secureView {
+	v := s.olt.SecureStatus(id)
+	if !v.Known && !v.Interrupted {
+		return nil
+	}
+	sv := &secureView{Running: v.Running, Interrupted: v.Interrupted, Stage: v.Stage}
+	if v.Known {
+		sv.Started = v.Started.In(billing.EAT).Format("15:04")
+		if !v.Running {
+			if v.OK {
+				sv.Done, sv.Message = true, secureMessage(v.Result)
+			} else {
+				sv.Failed, sv.Error = true, v.Error
+			}
+		}
+	}
+	return sv
 }
 
 func (s *Server) adminOLTCredentials(w http.ResponseWriter, r *http.Request) {
@@ -165,14 +247,27 @@ func (s *Server) adminOLTMgmtPort(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
 	who := sites.PortActor{Name: u.Username, Role: u.Role}
-	if n := strings.TrimSpace(r.PostFormValue("net")); n != "" {
+	var site store.Site
+	s.st.View(func(d *store.Data) { site = d.Sites[e.SiteID] })
+	port := strings.TrimSpace(r.PostFormValue("port"))
+	n := strings.TrimSpace(r.PostFormValue("net"))
+	netChanged := n != "" && n != sites.OLTMgmtNetOf(site)
+	action := r.PostFormValue("action")
+	if action == "set" && port == site.OLTMgmtPort && port != "" && !netChanged {
+		s.back(w, r, to, "Nothing changed: "+port+" is already the OLT management port, with router address "+sites.OLTMgmtNetOf(site))
+		return
+	}
+	if netChanged && action != "clear" {
 		if err := s.mgr.SetOLTMgmtNet(ctx, e.SiteID, n, u.Username); err != nil {
 			s.back(w, r, to, "Error: "+err.Error())
 			return
 		}
+		if action == "set" && port == site.OLTMgmtPort {
+			s.back(w, r, to, "The router address on "+port+" is now "+n)
+			return
+		}
 	}
-	port := strings.TrimSpace(r.PostFormValue("port"))
-	switch r.PostFormValue("action") {
+	switch action {
 	case "clear":
 		var cur string
 		s.st.View(func(d *store.Data) { cur = d.Sites[e.SiteID].OLTMgmtPort })

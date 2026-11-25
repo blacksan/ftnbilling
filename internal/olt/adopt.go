@@ -173,6 +173,19 @@ func (s *Service) AdoptSite(ctx context.Context, siteID, by string) error {
 	var firstErr error
 	for _, o := range olts {
 		if s.adoptedOrManual(o.ID) {
+			// Adopted: the poll takes over, but the pass did look at the port, so "checked" says when (and whether the
+			// OLT's MAC was there). The stage is not touched.
+			if _, there := macs[strings.ToUpper(o.MAC)]; o.MAC != "" {
+				now := s.now()
+				_ = s.setAdopt(o.ID, func(a *store.OLTAdopt, e *store.Equipment, d *store.Data) {
+					if a.Adopted {
+						a.CheckedAt = now
+						if there {
+							a.MACSeen, a.MACSeenAt = true, now
+						}
+					}
+				})
+			}
 			continue
 		}
 		r, there := macs[strings.ToUpper(o.MAC)]
@@ -493,7 +506,11 @@ func (s *Service) identify(ctx context.Context, o *opened, c cred, by string) (s
 	switch c.Source {
 	case "factory":
 		// The vendor's login works: replace it now with generated ones (the owner's action, done automatically here).
-		if _, err := s.secureIn(ctx, o, c, "system"); err != nil {
+		// Once the passwords are being changed the change must run to its end (or its restore), whatever deadline the
+		// caller had ("Check now" runs inside a web request): the saves alone may take minutes.
+		sctx, scancel := context.WithTimeout(context.WithoutCancel(ctx), secureJobTimeout)
+		defer scancel()
+		if _, err := s.secureIn(sctx, o, c, "system"); err != nil {
 			s.markAdopt(o.e.ID, store.AdoptNeedSecure, "The OLT still has its factory login. Press Secure this OLT to replace it.", errText(err))
 			return "need_secure", nil
 		}
@@ -502,7 +519,9 @@ func (s *Service) identify(ctx context.Context, o *opened, c cred, by string) (s
 		// A change of the login was interrupted: the pending login works, so it is the OLT's login now. It may never have
 		// been saved on the OLT (the server stopped before `write`): save it first, or a restart of the OLT would bring
 		// back the old login, which the server no longer keeps.
-		if err := o.sess.Save(ctx); err != nil {
+		wctx, wcancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Minute)
+		defer wcancel()
+		if err := o.sess.Save(wctx); err != nil {
 			s.markAdopt(o.e.ID, store.AdoptFailed, "The OLT works with the generated login of an interrupted change but would not save its configuration; the server tries again on its next check.", errText(err))
 			return "", err
 		}

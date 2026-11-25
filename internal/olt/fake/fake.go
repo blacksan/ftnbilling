@@ -40,6 +40,8 @@ type OLT struct {
 	NoPagingCmd bool
 	// NoOptical makes "show onu optical-info" an error.
 	NoOptical bool
+	// OddState makes "show onu state" print a line no parser knows, with a cursor-forward escape in it.
+	OddState bool
 	// FailOn: a command containing this text answers with a "% Invalid input" line.
 	FailOn string
 	// DropOn: a command containing this text closes the session that sent it, without an answer (a session the OLT drops).
@@ -55,6 +57,12 @@ type OLT struct {
 	BlockNewPass bool
 	// FailWrite makes `write` an error.
 	FailWrite bool
+	// WriteDelay makes `write` take this long before it answers (a slow flash save).
+	WriteDelay time.Duration
+	// WriteBuilding makes `write` print "Building configuration..." at once and "[OK]" after WriteDelay.
+	WriteBuilding bool
+	// WriteAsk makes `write` ask this question first; it saves only when the answer is "y".
+	WriteAsk string
 	// Communities are the SNMP communities (default public and private).
 	Communities []string
 
@@ -600,20 +608,26 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 			}
 			o.mu.Unlock()
 			out = b.String()
+		case line == "show onu state" && o.OddState:
+			out = "weird\x1b[12Cthing\r\n"
 		case line == "show onu state":
 			var b strings.Builder
-			b.WriteString("OnuIndex   Admin State  OMCC State  Phase State\n")
+			// Like the real V1600GS-R: columns are lined up with cursor-forward escapes, not with spaces.
+			b.WriteString("OnuIndex\x1b[3CAdmin State\x1b[2COMCC State\x1b[2CPhase State\x1b[2CSerial\r\n")
 			o.mu.Lock()
+			n := 0
 			for _, on := range o.onus(pon) {
-				fmt.Fprintf(&b, "GPON0/%d:%d   enable       enable      working\n", pon, on.id)
+				n++
+				fmt.Fprintf(&b, "GPON0/%d:%d\x1b[2Cenable\x1b[2Cenable\x1b[2Cworking\x1b[2C%s\r\n", pon, on.id, on.serial)
 			}
+			fmt.Fprintf(&b, "total: %d working: %d\r\n", n, n)
 			o.mu.Unlock()
 			out = b.String()
 		case line == "show onu distance":
 			var b strings.Builder
 			o.mu.Lock()
 			for _, on := range o.onus(pon) {
-				fmt.Fprintf(&b, "GPON0/%d:%d   %d m\n", pon, on.id, 120+on.id)
+				fmt.Fprintf(&b, "GPON0/%d:%d\x1b[3C%d\x1b[2Cm\r\n", pon, on.id, 120+on.id)
 			}
 			o.mu.Unlock()
 			out = b.String()
@@ -634,6 +648,44 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 		case line == "write" || line == "write memory":
 			if o.FailWrite {
 				out = "% Write failed.\n"
+				break
+			}
+			if o.WriteAsk != "" {
+				w(o.WriteAsk)
+				ans := ""
+				for {
+					b, ok := <-in
+					if !ok {
+						return
+					}
+					if b == '\n' && skipLF {
+						skipLF = false
+						continue
+					}
+					skipLF = false
+					if b == '\r' || b == '\n' {
+						skipLF = b == '\r'
+						break
+					}
+					ans += string(b)
+				}
+				w(ans + "\n")
+				if strings.TrimSpace(strings.ToLower(ans)) != "y" {
+					out = "Aborted.\n"
+					break
+				}
+			}
+			if o.WriteBuilding {
+				w("Building configuration...\n")
+			}
+			if o.WriteDelay > 0 {
+				time.Sleep(o.WriteDelay)
+			}
+			if o.WriteBuilding {
+				o.mu.Lock()
+				o.writes++
+				o.mu.Unlock()
+				out = "[OK]\n"
 				break
 			}
 			o.mu.Lock()
