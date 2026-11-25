@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"context"
 	"testing"
 
 	"ispbill/internal/store"
@@ -96,10 +97,13 @@ func TestNewDevicesSuppressACSKnownMACsOfALinkedONU(t *testing.T) {
 	}
 }
 
-// A dangling AccountID (the account was deleted, so it is no longer in d.Accounts) must NOT suppress: the device
-// is not actually in a house, so it stays listed. We check both routes: the register ONT's WAN MAC (class onu) and
-// the ACS record's management MAC.
-func TestNewDevicesDanglingAccountIDDoesNotSuppress(t *testing.T) {
+// A closed/deleted account must NOT keep an ONU suppressed. Once the house is deleted the account leaves d.Accounts
+// (it moves to ClosedAccounts, and its AccountID is no longer a live customer), so the server's "account exists"
+// guard must return false and the device comes back onto the New devices list — never hidden as if still a customer.
+// This covers the existence check against d.Accounts (not merely "AccountID is non-empty"): the ACS ONU record still
+// carries the old AccountID after the delete, yet must no longer suppress. It is valid on Postgres too: the closed
+// account row stays in the accounts table, so the ONU's account_id foreign key is still satisfied.
+func TestNewDevicesClosedAccountDoesNotSuppress(t *testing.T) {
 	e := newEnv(t)
 	e.ipoe(t, store.AccessIPoE)
 	apt := e.apt(t, "MG One", e.site)
@@ -108,23 +112,40 @@ func TestNewDevicesDanglingAccountIDDoesNotSuppress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The ONT points at an account that no longer exists, and an ACS ONU record does too.
+	acct, err := e.svc.CreateAccount(AccountInput{ApartmentID: apt.ID, SiteID: e.site, Unit: "H707", MAC: macHuawei})
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkONT(t, e, onu.ID, acct.ID)
+	// An ACS ONU record of the same house points at the account. Its management MAC is deliberately NOT near any
+	// register ONT's WAN MAC, so after the delete only the "account still exists" guard can keep it suppressed —
+	// the test fails if that guard checks "AccountID non-empty" instead of "account is in d.Accounts".
+	const acsMgmt = "00:1A:2B:3C:4D:5E"
 	if err := e.svc.st.Update(func(d *store.Data) error {
-		q := d.Equipment[onu.ID]
-		q.AccountID, q.Status = "ghost-account", store.EqInstalled
-		d.Equipment[onu.ID] = q
-		d.ONUs["o1"] = store.ONU{ID: "o1", Serial: "ZZZ", SiteID: e.site, AccountID: "ghost-account", Sec: store.ONUSec{MgmtMAC: macONUMgmt}}
+		d.ONUs["o1"] = store.ONU{ID: "o1", Serial: "ZZZ", SiteID: e.site, AccountID: acct.ID, Sec: store.ONUSec{MgmtMAC: acsMgmt}}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	e.bridgeHost(macONUWAN, "ether5", "false")
-	e.mgmtLease(macONUMgmt, "10.6.1.250")
+	e.mgmtLease(acsMgmt, "10.6.1.250")
 	e.reconcile(t)
+	// While the account is open, both MACs are suppressed.
 	got := unregByMAC(e)
-	for _, m := range []string{macONUWAN, macONUMgmt} {
+	for _, m := range []string{macONUWAN, acsMgmt} {
+		if _, ok := got[m]; ok {
+			t.Fatalf("%s of a linked ONU should be suppressed while the account is open", m)
+		}
+	}
+	// Delete the house. The account leaves d.Accounts; the ACS record keeps its (now closed) AccountID.
+	if err := e.svc.DeleteAccount(context.Background(), acct.ID, acct.Code); err != nil {
+		t.Fatal(err)
+	}
+	e.reconcile(t)
+	got = unregByMAC(e)
+	for _, m := range []string{macONUWAN, acsMgmt} {
 		if _, ok := got[m]; !ok {
-			t.Fatalf("%s with a dangling (deleted) account was suppressed — a would-be customer hidden", m)
+			t.Fatalf("%s stayed suppressed after the account was closed — a would-be customer hidden by a stale AccountID", m)
 		}
 	}
 }
