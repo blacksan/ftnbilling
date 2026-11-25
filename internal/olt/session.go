@@ -720,6 +720,20 @@ func (s *Session) Config(ctx context.Context, lines []string) error {
 }
 
 // ConfigN is Config that also says how many of the lines were sent to the OLT (the refused one included).
+// CheckAll applies the denylist to a batch of lines (as ConfigN would before sending), without sending anything.
+func (s *Session) CheckAll(lines []string) error {
+	in := s.cs
+	in.config = true
+	for _, l := range lines {
+		in.config = true
+		if err := s.checkIn(l, in); err != nil {
+			return err
+		}
+		in = s.trackIn(l, in)
+	}
+	return nil
+}
+
 func (s *Session) ConfigN(ctx context.Context, lines []string) (int, error) {
 	// Check every line before any is sent: a denied line must stop the batch before it changes anything.
 	in := s.cs

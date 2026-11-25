@@ -106,8 +106,8 @@
 {{define "admin_olt_plan"}}{{template "ahead" .}}{{$E := .Data.E}}{{$P := .Data.Plan}}
 <p><a href="/admin/olts/manage?id={{$E.ID}}">&larr; back to {{oltLabel $E}}</a></p>
 <section class="panel mt-3"><h2>{{if .Data.Remove}}Removal plan{{else}}Plan{{end}} <span class="muted">{{.Data.Cmds}} line{{if ne .Data.Cmds 1}}s{{end}}, id {{.Data.Hash}}</span></h2>
-<p class="muted">This is exactly what would be sent. Nothing has been changed. The OLT's configuration is saved first, and the lines are read back afterwards to check them.</p>
-{{range $P.Steps}}<h3>{{.Title}}</h3><pre class="mono">{{range .Lines}}{{.}}
+<p class="muted">This is exactly what would be sent. Nothing has been changed. The OLT's configuration is saved first, and the lines are read back afterwards to check them. Each step is sent on its own: a refused line stops its step and the later steps, except those marked as sent anyway.</p>
+{{range $P.Steps}}<h3>{{.Title}}</h3>{{if .Unverified}}<p><span class="pill unknown">unverified</span> <span class="muted">{{.Unverified}}</span></p>{{end}}{{if .Independent}}<p class="muted">Sent even if an earlier step is refused.</p>{{end}}<pre class="mono">{{range .Lines}}{{.}}
 {{end}}</pre>{{else}}<p>Nothing to change: the OLT already matches.</p>{{end}}
 {{range $P.Warnings}}<p><span class="eqwarn" role="note">{{.}}</span></p>{{end}}
 {{range $P.Notes}}<p class="muted">{{.}}</p>{{end}}

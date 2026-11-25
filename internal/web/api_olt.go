@@ -235,7 +235,7 @@ func planJSON(p olt.Plan, hash string) map[string]any {
 	p = p.Display() // the login in a TR-069 line is hidden
 	steps := []map[string]any{}
 	for _, st := range p.Steps {
-		steps = append(steps, map[string]any{"title": st.Title, "lines": st.Lines})
+		steps = append(steps, map[string]any{"title": st.Title, "lines": st.Lines, "independent": st.Independent, "unverified": st.Unverified})
 	}
 	adds := []map[string]any{}
 	for _, a := range p.Adds {
