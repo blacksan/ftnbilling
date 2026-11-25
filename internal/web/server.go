@@ -129,6 +129,7 @@ func New(cfg config.Config, st *store.Store, svc *billing.Service, providers map
 		"pkgOf":    func(m map[string]store.Package, id string) store.Package { return m[id] },
 		"acctOf":   func(m map[string]store.Account, id string) store.Account { return m[id] },
 		"state":    func(a store.Account) string { return billing.AccountState(a, svc.Now()) },
+		"dashHref": dashHref,
 		"f1":       func(v float64) string { return fmt.Sprintf("%.1f", v) },
 		"f0":       func(v float64) string { return fmt.Sprintf("%.0f", v) },
 		"f2":       func(v float64) string { return fmt.Sprintf("%.2f", v) },

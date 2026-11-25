@@ -31,6 +31,7 @@ func (s *Server) onuRoutes(get, post func(string, http.HandlerFunc)) {
 	})
 	get("/admin/onus", s.adminONUs)
 	get("/admin/onus/paramtree", s.adminONUParamTree)
+	get("/admin/onus/metrics", s.onuMetricsPage)
 	post("/admin/onus/link", s.adminONULink)
 	post("/admin/onus/unlink", s.adminONUUnlink)
 	post("/admin/sites/onu/enable", s.adminSiteONUEnable)
