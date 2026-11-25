@@ -173,8 +173,6 @@ class OnuViewModelsTest {
         vm.onSame(true)
         vm.onSsid("Home Net")
         vm.onPassword("correct-horse-1")
-        vm.toggleShowPassword()
-        assertTrue(vm.state.value.form.showPassword)
         vm.submit()
         await(vm.state) { !it.busy && !it.sheet }
         val body = requests("PUT /api/v1/accounts/a1/wifi").single().body.readUtf8()
@@ -433,5 +431,53 @@ class OnuViewModelsTest {
         await(vm.state) { !it.busy && it.error != null }
         assertTrue(vm.state.value.error!!.contains("already in the register"))
         assertTrue(vm.state.value.adding)
+    }
+
+    // ---- a 2.4 GHz-only box, and the current Wi-Fi password ----
+
+    private val singleRadioOnu = """{"onu":{"id":"o1","serial":"VSOL1","manufacturer":"V-SOL","model":"VSOL V414","account_id":"a1","bands":["2.4"],"has_5ghz":false,"wifi":[{"band":"2.4","ssid":"Old2G","enabled":true}]},"task":null}"""
+
+    @Test fun singleRadioBoxHasOneNetworkAndSendsSameForBoth() = runTest(main.dispatcher) {
+        routes["GET /api/v1/accounts/a1/onu"] = ok(singleRadioOnu)
+        routes["PUT /api/v1/accounts/a1/wifi"] = MockResponse().setResponseCode(202).setBody("""{"task":{"id":"t2","kind":"wifi","status":"queued","status_text":"Queued"}}""")
+        val vm = main.track(WifiViewModel("a1", repo))
+        await(vm.state) { it.onu is Loadable.Ready }
+        val onu = (vm.state.value.onu as Loadable.Ready).value.onu!!
+        assertFalse(onu.has5ghz)
+        assertEquals(listOf("2.4"), onu.bands)
+        vm.openSheet()
+        assertTrue("one name and password for the box", vm.state.value.form.same)
+        // even if the same-for-both switch was somehow off, the 5 GHz fields are not required or sent
+        vm.onSsid("Home")
+        vm.onPassword("goodpassword")
+        vm.onSame(false)
+        vm.submit()
+        await(vm.state) { !it.busy && !it.sheet }
+        val body = requests("PUT /api/v1/accounts/a1/wifi").single().body.readUtf8()
+        assertTrue(body, body.contains("\"same_for_both\":true"))
+        assertFalse(body, body.contains("ssid_5g"))
+    }
+
+    @Test fun oldServerWithoutBandInfoKeepsBothBands() = runTest(main.dispatcher) {
+        routes["GET /api/v1/accounts/a1/onu"] = ok(accountOnu)
+        val vm = main.track(WifiViewModel("a1", repo))
+        await(vm.state) { it.onu is Loadable.Ready }
+        assertTrue((vm.state.value.onu as Loadable.Ready).value.onu!!.has5ghz)
+    }
+
+    @Test fun showingTheWifiPasswordCallsTheServerAndForgetsOnClose() = runTest(main.dispatcher) {
+        routes["GET /api/v1/accounts/a1/onu"] = ok(singleRadioOnu)
+        routes["POST /api/v1/accounts/a1/wifi/password"] =
+            ok("""{"networks":[{"band":"2.4","ssid":"Home","password":"house24pass","source":"saved"}],"asked_onu":true,"note":"The ONU did not return its password."}""")
+        val vm = main.track(WifiViewModel("a1", repo))
+        await(vm.state) { it.onu is Loadable.Ready }
+        vm.showPassword()
+        await(vm.state) { !it.busy && it.reveal != null }
+        val r = vm.state.value.reveal!!
+        assertEquals("house24pass", r.networks.single().password)
+        assertEquals("saved", r.networks.single().source)
+        assertEquals(1, requests("POST /api/v1/accounts/a1/wifi/password").size)
+        vm.closeReveal()
+        assertNull(vm.state.value.reveal)
     }
 }

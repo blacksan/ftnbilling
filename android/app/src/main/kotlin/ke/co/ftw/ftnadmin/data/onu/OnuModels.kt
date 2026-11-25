@@ -113,6 +113,10 @@ data class Onu(
     val unit: String = "",
     val link: String = "",
     val wifi: List<OnuWifi> = emptyList(),
+    /** The bands of the radios the ONU reported ("2.4", "5"). */
+    val bands: List<String> = emptyList(),
+    /** False for a 2.4 GHz-only box: one Wi-Fi name and password, no 5 GHz options. An older server omits it: both bands. */
+    @SerialName("has_5ghz") val has5ghz: Boolean = true,
     val desired: OnuDesired = OnuDesired(),
     @SerialName("last_task") val lastTask: OnuTask? = null,
     @SerialName("in_inventory") val inInventory: Boolean = false,
@@ -134,6 +138,24 @@ data class Onu(
     val title: String get() = listOf(manufacturer, model).filter { it.isNotBlank() }.joinToString(" ").ifBlank { "ONU" }
     val isLinked: Boolean get() = accountId.isNotBlank()
 }
+
+/** The password of one Wi-Fi network of a house. [source] is onu (the ONU returned it), saved (the one this server set) or none. */
+@Serializable
+data class WifiKey(
+    val band: String = "",
+    val ssid: String = "",
+    val password: String = "",
+    val source: String = "",
+    val differs: Boolean = false,
+)
+
+/** POST /accounts/{id}/wifi/password: the current Wi-Fi password of the house (the customer's Wi-Fi key only). */
+@Serializable
+data class WifiReveal(
+    val networks: List<WifiKey> = emptyList(),
+    @SerialName("asked_onu") val askedOnu: Boolean = false,
+    val note: String = "",
+)
 
 /** GET /accounts/{id}/onu: [onu] is null when no ONU is linked to the house. */
 @Serializable

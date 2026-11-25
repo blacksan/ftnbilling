@@ -62,6 +62,7 @@ type Service struct {
 	capLog   map[string]time.Time
 	unkLog   []time.Time // when owners were last told about an unknown serial
 	wg       sync.WaitGroup
+	live     liveReads // pending reads of the Wi-Fi passphrase from a box (wifipass.go)
 }
 
 // New makes the service. DATA_KEY is required (passphrases and logins are sealed with it).
@@ -326,6 +327,8 @@ type ONUView struct {
 	Unit         string      `json:"unit,omitempty"`
 	Link         string      `json:"link,omitempty"`
 	WiFi         []WiFiView  `json:"wifi"`
+	Bands        []string    `json:"bands"`    // the bands of the radios the ONU reported: "2.4", "5"
+	Has5GHz      bool        `json:"has_5ghz"` // false for a 2.4 GHz-only box: one Wi-Fi name and password
 	Desired      DesiredView `json:"desired"`
 	LastTask     *TaskView   `json:"last_task,omitempty"`
 	CRApplied    bool        `json:"cr_applied"`
@@ -382,7 +385,8 @@ func taskView(t store.ONUTask) TaskView {
 func (s *Service) view(d *store.Data, o store.ONU) ONUView {
 	v := ONUView{ID: o.ID, Serial: o.Serial, Manufacturer: o.Manufacturer, Model: o.ProductClass, SoftwareVer: o.SWVersion, SiteID: o.SiteID,
 		SiteName: d.Sites[o.SiteID].Name, MgmtIP: o.MgmtIP, MACs: append([]string{}, o.MACs...), LastInform: o.LastInform, LastEvents: o.LastEvents,
-		AccountID: o.AccountID, Link: o.Link, CRApplied: o.CRApplied, WiFi: []WiFiView{}}
+		AccountID: o.AccountID, Link: o.Link, CRApplied: o.CRApplied, WiFi: []WiFiView{}, Bands: []string{}}
+	v.Bands, v.Has5GHz = append(v.Bands, bandsOf(o)...), Has5GHz(o)
 	switch o.Root {
 	case store.RootTR181:
 		v.DataModel = "TR-181"

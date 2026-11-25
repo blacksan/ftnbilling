@@ -271,6 +271,7 @@ func (s *Service) Upkeep() {
 					delete(d.ONUTasks, t.ID)
 				}
 				delete(d.ONUs, id)
+				delete(d.ONUMetrics, id)
 				changed = true
 			}
 		}

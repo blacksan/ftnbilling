@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"strings"
 
+	"ispbill/internal/config"
 	"ispbill/internal/store"
 )
 
@@ -106,7 +107,7 @@ func PlanONUMgmt(s store.Site, serverIP string, acsPort int, acsURL string, crPo
 		acsURL = fmt.Sprintf("http://%s:%d/", serverIP, acsPort)
 	}
 	if len(crPorts) == 0 {
-		crPorts = []int{7547, 30005}
+		crPorts = config.DefaultACSCRPorts()
 	}
 	p = ONUMgmtPlan{
 		N: s.ONUMgmtN, VLAN: vlan, Iface: ONUMgmtVLANName(vlan), Subnet: s.MgmtSubnet(), Gateway: s.MgmtGateway(),

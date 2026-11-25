@@ -628,6 +628,9 @@ type Data struct {
 	ONUs     map[string]ONU     `json:"onus"`
 	ONUTasks map[string]ONUTask `json:"onu_tasks"`
 
+	// ONUMetrics is the time series the ACS keeps per ONU (key: the ONU id; see onumetrics.go).
+	ONUMetrics map[string]ONUMetrics `json:"onu_metrics"`
+
 	// OUICache holds the answers of the online MAC-vendor lookup (key: the OUI "AA:BB:CC").
 	OUICache map[string]OUIEntry `json:"oui_cache"`
 
@@ -669,6 +672,9 @@ func (d *Data) init() {
 	}
 	if d.ONUTasks == nil {
 		d.ONUTasks = map[string]ONUTask{}
+	}
+	if d.ONUMetrics == nil {
+		d.ONUMetrics = map[string]ONUMetrics{}
 	}
 	if d.OUICache == nil {
 		d.OUICache = map[string]OUIEntry{}

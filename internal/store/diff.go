@@ -311,6 +311,8 @@ var tables = []table{
 		eqDeep[ONU], ONU.norm, func(v ONU) string { return v.ID }, cloneONU},
 	tbl[ONUTask]{func(d *Data) *map[string]ONUTask { return &d.ONUTasks }, func(c *ChangeSet) *Delta[ONUTask] { return &c.ONUTasks },
 		eqc[ONUTask], ONUTask.norm, func(v ONUTask) string { return v.ID }, nil},
+	tbl[ONUMetrics]{func(d *Data) *map[string]ONUMetrics { return &d.ONUMetrics }, func(c *ChangeSet) *Delta[ONUMetrics] { return &c.ONUMetrics },
+		eqDeep[ONUMetrics], ONUMetrics.norm, func(v ONUMetrics) string { return v.ID }, cloneONUMetrics},
 	tbl[OUIEntry]{func(d *Data) *map[string]OUIEntry { return &d.OUICache }, func(c *ChangeSet) *Delta[OUIEntry] { return &c.OUICache },
 		eqc[OUIEntry], OUIEntry.norm, func(v OUIEntry) string { return v.Prefix }, nil},
 	tbl[OLTState]{func(d *Data) *map[string]OLTState { return &d.OLTStates }, func(c *ChangeSet) *Delta[OLTState] { return &c.OLTStates },
@@ -499,7 +501,7 @@ func cloneData(d *Data) Data {
 		Customers: cloneMap(d.Customers, nil), Tenancies: cloneMap(d.Tenancies, nil), Apartments: cloneMap(d.Apartments, nil), ApartmentSites: cloneMap(d.ApartmentSites, nil),
 		Equipment: cloneMap(d.Equipment, nil), EquipmentEvents: cloneMap(d.EquipmentEvents, nil), Notes: cloneMap(d.Notes, nil), Settings: cloneMap(d.Settings, nil),
 		AdminUsers: cloneMap(d.AdminUsers, cloneAdminUser), AdminSessions: cloneMap(d.AdminSessions, nil), APIDevices: cloneMap(d.APIDevices, cloneAPIDevice), Registrations: cloneMap(d.Registrations, nil),
-		ONUs: cloneMap(d.ONUs, cloneONU), ONUTasks: cloneMap(d.ONUTasks, nil), OUICache: cloneMap(d.OUICache, nil), OLTStates: cloneMap(d.OLTStates, cloneOLTState),
+		ONUs: cloneMap(d.ONUs, cloneONU), ONUTasks: cloneMap(d.ONUTasks, nil), ONUMetrics: cloneMap(d.ONUMetrics, cloneONUMetrics), OUICache: cloneMap(d.OUICache, nil), OLTStates: cloneMap(d.OLTStates, cloneOLTState),
 		Events: append([]Event(nil), d.Events...),
 	}
 }

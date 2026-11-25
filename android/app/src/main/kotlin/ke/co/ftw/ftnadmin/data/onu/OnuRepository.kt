@@ -31,6 +31,9 @@ class OnuRepository(private val api: ApiClient) {
         },
     )
 
+    /** The current Wi-Fi password of the house. The server writes an audit entry for every view. */
+    suspend fun showWifiPassword(accountId: String): WifiReveal = api.post("accounts", accountId, "wifi", "password")
+
     suspend fun reboot(accountId: String): OnuTaskReply = api.post("accounts", accountId, "onu", "reboot")
 
     suspend fun refresh(accountId: String): OnuTaskReply = api.post("accounts", accountId, "onu", "refresh")

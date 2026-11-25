@@ -295,3 +295,96 @@ func TestONUConfirmFromAccountPage(t *testing.T) {
 		t.Fatal("not confirmed")
 	}
 }
+
+// The Wi-Fi card: one Wi-Fi name and password for a box with a single 2.4 GHz radio, the 5 GHz options only when the
+// box has a 5 GHz radio, and the new password is a visible text field (not a masked one) so it can be checked.
+func TestWiFiCardShowsFiveGHzOnlyWithA5GHzRadioAndNeverMasksTheNewPassword(t *testing.T) {
+	a := newONUApp(t)
+	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"Flat 9"}, "mac": {mac1}})
+	acct := a.account(t, "Flat 9")
+	a.seedONU(t, "onu1", "ZTEGC0001", acct.ID, "AA:BB:CC:DD:EE:01")
+	url0 := "/admin/accounts/view?code=" + acct.Code
+	page := a.adminGet(t, url0)
+	if strings.Contains(page, "Same name and password on 2.4 and 5 GHz") || strings.Contains(page, "Different 5 GHz") || strings.Contains(page, `name="ssid5"`) {
+		t.Fatal("a 2.4 GHz-only box shows the 5 GHz options")
+	}
+	if !strings.Contains(page, "one 2.4 GHz radio") || !strings.Contains(page, `name="ssid"`) {
+		t.Fatal("the single-network card is missing")
+	}
+	check := func(page string) {
+		t.Helper()
+		for _, name := range []string{"password", "password5"} {
+			i := strings.Index(page, `name="`+name+`"`)
+			if i < 0 {
+				continue
+			}
+			tag := page[strings.LastIndex(page[:i], "<input"):]
+			tag = tag[:strings.Index(tag, ">")]
+			if strings.Contains(tag, `type="password"`) {
+				t.Fatalf("the %s input is masked: %s", name, tag)
+			}
+		}
+		if !strings.Contains(page, `name="password" type="text"`) {
+			t.Fatal("the new password input is not a plain text field")
+		}
+	}
+	check(page)
+	// the box gets a 5 GHz radio (a swap): the options appear
+	a.st.Update(func(d *store.Data) error {
+		o := d.ONUs["onu1"]
+		o.WiFi = append(o.WiFi, store.ONUWiFi{Path: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.5.", Band: "5", SSID: "Old5G", Enabled: true})
+		d.ONUs["onu1"] = o
+		return nil
+	})
+	page = a.adminGet(t, url0)
+	if !strings.Contains(page, "Same name and password on 2.4 and 5 GHz") || !strings.Contains(page, `name="ssid5"`) || !strings.Contains(page, `name="password5"`) {
+		t.Fatal("a dual-band box lacks the 5 GHz options")
+	}
+	check(page)
+}
+
+func TestShowCurrentWiFiPasswordIsAuditedAndShowsTheSavedOne(t *testing.T) {
+	a := newONUApp(t)
+	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"Flat 9"}, "mac": {mac1}})
+	acct := a.account(t, "Flat 9")
+	a.seedONU(t, "onu1", "ZTEGC0001", acct.ID, "AA:BB:CC:DD:EE:01")
+	a.st.Update(func(d *store.Data) error { // silent ONU: nothing to ask, the saved password is shown
+		o := d.ONUs["onu1"]
+		o.LastInform = time.Now().Add(-48 * time.Hour)
+		d.ONUs["onu1"] = o
+		return nil
+	})
+	a.adminPost(t, "/admin/accounts/wifi", url.Values{"id": {acct.ID}, "ssid": {"Home Net"}, "password": {"supersecret99"}, "same": {"1"}})
+	a.acs.Wait()
+	page := a.adminGet(t, "/admin/accounts/view?code="+acct.Code)
+	if strings.Contains(page, "supersecret99") || !strings.Contains(page, "Show current Wi-Fi password") {
+		t.Fatal("the card must have the button and never print the password by itself")
+	}
+	r := a.admin("POST", "/admin/accounts/wifi/show", url.Values{"id": {acct.ID}})
+	b := body(t, r)
+	if r.StatusCode != 200 || !strings.Contains(b, "supersecret99") || !strings.Contains(b, "Old2G") {
+		t.Fatalf("not shown: %d %s", r.StatusCode, b)
+	}
+	if r.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("cache-control %q", r.Header.Get("Cache-Control"))
+	}
+	var audited bool
+	a.st.View(func(d *store.Data) {
+		for _, e := range d.Events {
+			if e.Kind == "audit" && strings.Contains(e.Msg, "viewed the Wi-Fi password for house "+acct.Code) && e.Actor != "" {
+				audited = true
+			}
+			if strings.Contains(e.Msg, "supersecret99") {
+				t.Fatalf("the password is in the audit trail: %s", e.Msg)
+			}
+		}
+	})
+	if !audited {
+		t.Fatal("no audit entry for viewing the Wi-Fi password")
+	}
+	// the OLT / ACS system logins keep their masking: the settings page still hides the ACS password before step-up
+	_, pass, _ := a.acs.Credentials()
+	if strings.Contains(a.adminGet(t, "/admin/settings/onu"), pass) {
+		t.Fatal("a system password is shown without step-up")
+	}
+}

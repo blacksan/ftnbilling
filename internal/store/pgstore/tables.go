@@ -515,6 +515,27 @@ var ouiCacheC = (&codec[store.OUIEntry]{
 	dst:  func(v *store.OUIEntry) []any { return []any{&v.Prefix, &v.Vendor, &v.Found, t_(&v.CheckedAt)} },
 }).build()
 
+var onuMetricsC = (&codec[store.ONUMetrics]{
+	name: "onu_metrics", pk: []string{"onu_id"}, key: func(v store.ONUMetrics) string { return v.ID },
+	cols: []string{"onu_id", "updated", "uptime", "reboots", "last_boot", "optical", "wan", "hosts", "gaps", "diag", "paths", "fine", "mid", "hourly"},
+	args: func(v store.ONUMetrics) []any {
+		var opt, wan any // nullable: no reading yet
+		if v.Optical != nil {
+			opt = jsonArg(v.Optical, "{}")
+		}
+		if v.WAN != nil {
+			wan = jsonArg(v.WAN, "{}")
+		}
+		return []any{v.ID, tm(v.Updated), v.Uptime, v.Reboots, nt(v.LastBoot), opt, wan, jsonArg(v.Hosts, "[]"), jsonArg(v.Gaps, "[]"), jsonArg(v.Diag, "[]"),
+			jsonArg(v.Paths, "{}"), jsonArg(v.Fine, "[]"), jsonArg(v.Mid, "[]"), jsonArg(v.Hourly, "[]")}
+	},
+	dst: func(v *store.ONUMetrics) []any {
+		return []any{&v.ID, t_(&v.Updated), &v.Uptime, &v.Reboots, t_(&v.LastBoot), jsonScan[*store.ONUOptical]{&v.Optical}, jsonScan[*store.ONUWAN]{&v.WAN},
+			jsonScan[[]store.ONUHost]{&v.Hosts}, jsonScan[[]string]{&v.Gaps}, jsonScan[[]string]{&v.Diag}, jsonScan[store.ONUMetricPaths]{&v.Paths},
+			jsonScan[[]store.MetricPoint]{&v.Fine}, jsonScan[[]store.MetricPoint]{&v.Mid}, jsonScan[[]store.MetricPoint]{&v.Hourly}}
+	},
+}).build()
+
 var oltStatesC = (&codec[store.OLTState]{
 	name: "olt_states", pk: []string{"id"}, key: func(v store.OLTState) string { return v.ID },
 	cols: []string{"id", "settings", "status", "found", "backups", "updated"},

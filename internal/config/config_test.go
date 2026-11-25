@@ -280,7 +280,7 @@ func TestACSDefaultsAndPublicRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ACSListen != "10.99.0.1:7547" || !c.ACSEnabled() || c.ACSInformInterval != 300 || c.ACSMaxPerRouter != 200 || len(c.ACSCRPorts) != 2 {
+	if c.ACSListen != "10.99.0.1:7547" || !c.ACSEnabled() || c.ACSInformInterval != 300 || c.ACSMaxPerRouter != 200 || len(c.ACSCRPorts) != 3 || c.ACSCRPorts[2] != 58000 {
 		t.Fatalf("defaults: %+v", c)
 	}
 	// The default follows WG_SUBNET.

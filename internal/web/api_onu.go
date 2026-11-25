@@ -23,6 +23,8 @@ func (s *Server) onuRoutesAPI(h func(string, string, apiFunc)) {
 	h("PUT /api/v1/accounts/{id}/wifi", operator, s.apiAccountWiFi)
 	h("POST /api/v1/accounts/{id}/onu/reboot", operator, s.apiAccountONUAction("reboot"))
 	h("POST /api/v1/accounts/{id}/onu/refresh", operator, s.apiAccountONUAction("refresh"))
+	h("POST /api/v1/accounts/{id}/wifi/password", operator, s.apiAccountWiFiPassword)
+	h("GET /api/v1/onus/{id}/metrics", operator, s.apiONUMetrics)
 	h("POST /api/v1/accounts/{id}/onu/swap", operator, s.apiAccountONUSwap)
 	h("POST /api/v1/accounts/{id}/onu/use-reported-mac", operator, s.apiAccountUseMAC)
 	h("POST /api/v1/accounts/{id}/onu/confirm", operator, s.apiAccountONUConfirm)
@@ -118,6 +120,42 @@ func (s *Server) apiAccountWiFi(w http.ResponseWriter, r *http.Request, c *apiCt
 	tv, _ := s.acs.TaskStatus(a.ID)
 	_ = t
 	writeJSON(w, http.StatusAccepted, map[string]any{"task": tv})
+}
+
+// apiAccountWiFiPassword shows the house's current Wi-Fi password (the customer's own Wi-Fi key, not a system
+// login). It is a POST because it writes an audit entry ("admin X viewed the Wi-Fi password for house Y"); the answer
+// is never cached. System credentials (OLT, ACS, ONU admin) keep their own masking and step-up.
+func (s *Server) apiAccountWiFiPassword(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	a, ok := s.accountOr404(w, r.PathValue("id"))
+	if !ok || !s.apiACS(w) {
+		return
+	}
+	res, err := s.acs.RevealWiFi(r.Context(), c.user.Username, c.ip, a.ID)
+	if err != nil {
+		s.acsErr(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, res)
+}
+
+// apiONUMetrics is the time series of one ONU: optical history, throughput, the hosts behind it and the line and
+// error counters. ?range=6h|24h|7d|30d|90d (default 24h).
+func (s *Server) apiONUMetrics(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	if !s.apiACS(w) {
+		return
+	}
+	rng, err := acs.ParseRange(r.URL.Query().Get("range"))
+	if err != nil {
+		validationErr(w, map[string]string{"range": err.Error()})
+		return
+	}
+	v, ok := s.acs.Metrics(r.PathValue("id"), rng)
+	if !ok {
+		apiErr(w, http.StatusNotFound, codeNotFound, "That ONU was not found.", nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 func (s *Server) apiAccountONUAction(kind string) apiFunc {

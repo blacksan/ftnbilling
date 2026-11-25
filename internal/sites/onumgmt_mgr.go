@@ -1,6 +1,7 @@
 package sites
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -140,11 +141,31 @@ func evalONUMgmt(e *evalCtx, it *CheckItem) {
 			have[r["comment"]] = true
 		}
 	}
+	// A rule that exists with the wrong ports (built before 58000 was allowed) is not "missing": it is healed in place.
+	var drift []string
 	for _, r := range append(fwd, in...) {
 		if !have[r.Comment] {
 			missing = append(missing, "the firewall rule \""+r.Comment+"\"")
+			continue
+		}
+		if r.Comment == ACSToONUComment {
+			if want := onuRuleDstPort(r); want != "" {
+				for _, row := range e.sn.tbl("/ip/firewall/filter") {
+					if row["comment"] == r.Comment && !rowDisabled(row) && !sameAdminValue("dst-port", row["dst-port"], want) {
+						drift = append(drift, "the ports of the rule \""+r.Comment+"\" (now "+row["dst-port"]+", should be "+want+")")
+					}
+				}
+			}
 		}
 	}
+	if len(drift) > 0 && len(missing) == 0 {
+		it.Evidence = append(it.Evidence, drift...)
+		it.Status = StatusWarn
+		it.Detail = "The firewall rule that lets the server reach the ONUs does not allow all connection-request ports (" + portList(p.CRPorts) + "). The server updates it."
+		it.Fix = CheckFix{Kind: FixAuto, Label: "Update the ONU management firewall rule", Role: store.RoleOperator}
+		return
+	}
+	missing = append(missing, drift...)
 	it.Evidence = append(it.Evidence, fmt.Sprintf("%s %s VLAN %d on %s", p.Iface, p.Subnet, p.VLAN, ONUMgmtParent(e.site)))
 	if len(missing) == 0 {
 		okItem(it, "The ONU management network "+p.Subnet+" (VLAN "+strconv.Itoa(p.VLAN)+") is in place on the router.")
@@ -174,4 +195,49 @@ func joinAnd(s []string) string {
 		}
 	}
 	return out
+}
+
+// onuRuleDstPort is the dst-port of a rule as written.
+func onuRuleDstPort(r ipoeRule) string {
+	for _, p := range r.Props {
+		if p[0] == "dst-port" {
+			return p[1]
+		}
+	}
+	return ""
+}
+
+// fixONUMgmt sets the dst-port of the "ftn: acs to onu" rule right where the router has the rule with other
+// ports (idempotent: set only when different). It never adds, removes or moves a rule.
+func fixONUMgmt(ctx context.Context, fe *fixEnv) error {
+	p, err := fe.m.ONUPlan(fe.site)
+	if err != nil {
+		return changed("%v", err)
+	}
+	fwd, _ := p.Rules()
+	var want ipoeRule
+	for _, r := range fwd {
+		if r.Comment == ACSToONUComment {
+			want = r
+		}
+	}
+	port := onuRuleDstPort(want)
+	if port == "" {
+		return nil
+	}
+	sn, err := fe.freshRead(ctx, nil, []string{"/ip/firewall/filter"})
+	if err != nil {
+		return err
+	}
+	fe.w.onuRules = map[string]bool{ACSToONUComment: true}
+	for _, row := range sn.tbl("/ip/firewall/filter") {
+		if row["comment"] != ACSToONUComment || sameAdminValue("dst-port", row["dst-port"], port) {
+			continue
+		}
+		if err := fe.w.setRow(ctx, "/ip/firewall/filter", row, map[string]string{"dst-port": port}); err != nil {
+			return err
+		}
+		fe.w.note("set the ports of the rule %q to %s", ACSToONUComment, port)
+	}
+	return nil
 }

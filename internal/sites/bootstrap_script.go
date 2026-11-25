@@ -65,7 +65,7 @@ type BootstrapInput struct {
 	WebFigDomain string
 	// ONU management (TR-069): used when the site has a management subnet (Site.ONUMgmtN > 0). ACSPort and ACSURL
 	// are the ACS the ONUs are pointed to (zero values mean tcp/7547 on the tunnel address); CRPorts the
-	// connection-request ports the server may use towards the ONUs (empty = 7547 and 30005).
+	// connection-request ports the server may use towards the ONUs (empty = 7547, 30005 and 58000).
 	ACSPort int
 	ACSURL  string
 	CRPorts []int

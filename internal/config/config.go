@@ -502,6 +502,10 @@ func checkWebFigDomain(d, base string) error {
 // DefaultACSPort is the tcp port of the ACS and the usual TR-069 connection-request port.
 const DefaultACSPort = 7547
 
+// DefaultACSCRPorts are the tcp ports the server may use for a connection request to an ONU: 7547 (TR-069 standard),
+// 30005 (common vendor port) and 58000 (V-SOL V2804N-Z / HG323-style ONUs). It returns a fresh slice.
+func DefaultACSCRPorts() []int { return []int{7547, 30005, 58000} }
+
 // loadACS reads the ACS_* settings. The default listen address is the server's tunnel address (the first
 // host of WG_SUBNET) on tcp/7547.
 func (c *Config) loadACS(get func(k, def string) string, errs *[]error) {
@@ -539,7 +543,7 @@ func (c *Config) loadACS(get func(k, def string) string, errs *[]error) {
 	if v := get("ACS_REGISTERED_ONLY", ""); v != "" {
 		c.ACSRegisteredOnly = parseBool(v)
 	}
-	c.ACSCRPorts = []int{7547, 30005}
+	c.ACSCRPorts = DefaultACSCRPorts()
 	if v := get("ACS_CR_PORTS", ""); v != "" {
 		var ports []int
 		for _, f := range SplitList(v) {

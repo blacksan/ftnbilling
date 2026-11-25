@@ -26,22 +26,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import ke.co.ftw.ftnadmin.R
 import ke.co.ftw.ftnadmin.ui.common.CheckRow
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ke.co.ftw.ftnadmin.data.onu.Onu
 import ke.co.ftw.ftnadmin.data.onu.OnuTask
+import ke.co.ftw.ftnadmin.data.onu.WifiReveal
 import ke.co.ftw.ftnadmin.ui.common.LabeledValue
 import ke.co.ftw.ftnadmin.ui.common.Loadable
 import ke.co.ftw.ftnadmin.ui.common.SectionCard
@@ -74,7 +70,8 @@ fun WifiCard(vm: WifiViewModel, canWrite: Boolean, modifier: Modifier = Modifier
             }
         }
     }
-    if (ui.sheet) ChangeWifiSheet(ui.form, ui.busy, ui.error, vm)
+    if (ui.sheet) ChangeWifiSheet(ui.form, (ui.onu as? Loadable.Ready)?.value?.onu?.has5ghz ?: true, ui.busy, ui.error, vm)
+    ui.reveal?.let { RevealDialog(it, vm::closeReveal) }
     if (ui.confirmReboot) {
         AlertDialog(
             onDismissRequest = vm::cancelReboot,
@@ -118,6 +115,9 @@ private fun OnuBody(onu: Onu, task: OnuTask?, error: String?, canWrite: Boolean,
         Text("The ONU has not reported its Wi-Fi yet.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     onu.wifi.forEach { w -> LabeledValue("${w.band} GHz", if (w.enabled) w.ssid else "${w.ssid} (off)") }
+    if (!onu.has5ghz && onu.wifi.isNotEmpty()) {
+        Text("One 2.4 GHz radio. One name and password.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
     if (onu.desired.changedOnDevice) {
         Text(
             "The Wi-Fi name on the box is not the one saved here. The tenant may have changed it. Saving again overwrites it.",
@@ -149,17 +149,18 @@ private fun OnuBody(onu: Onu, task: OnuTask?, error: String?, canWrite: Boolean,
             OutlinedButton(onClick = { vm.cancelTask(task.id) }, enabled = !busy) { Text("Cancel request") }
         }
         if (canWrite) {
+            OutlinedButton(onClick = vm::showPassword, enabled = !busy) { Text("Show Wi-Fi password") }
             Button(onClick = vm::openSheet, enabled = !busy) { Text("Change Wi-Fi") }
             FilledTonalButton(onClick = vm::askReboot, enabled = !busy) { Text("Reboot ONU") }
         }
     }
 }
 
-/** The Change Wi-Fi sheet: name and password, the same-for-both switch, and a show/hide control on the password boxes. */
+/** The Change Wi-Fi sheet: name and password (shown as typed, to avoid typos), and the 5 GHz options only when the ONU has a 5 GHz radio. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ChangeWifiSheet(form: WifiForm, busy: Boolean, error: String?, vm: WifiViewModel) {
-    val hide = if (form.showPassword) VisualTransformation.None else PasswordVisualTransformation()
+private fun ChangeWifiSheet(form: WifiForm, has5ghz: Boolean, busy: Boolean, error: String?, vm: WifiViewModel) {
+    val both = form.same || !has5ghz
     ModalBottomSheet(onDismissRequest = vm::closeSheet, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
             Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 16.dp),
@@ -167,52 +168,80 @@ private fun ChangeWifiSheet(form: WifiForm, busy: Boolean, error: String?, vm: W
         ) {
             Text("Change Wi-Fi", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
             Text(
-                "The current password is never shown. The new one is stored encrypted so it can be put back after a factory reset.",
+                "Saved encrypted. It is put back if the ONU is reset.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             OutlinedTextField(
-                form.ssid, vm::onSsid, label = { Text(if (form.same) "Wi-Fi name" else "2.4 GHz name") }, singleLine = true,
+                form.ssid, vm::onSsid, label = { Text(if (both) "Wi-Fi name" else "2.4 GHz name") }, singleLine = true,
                 isError = form.errors["ssid"] != null, supportingText = { form.errors["ssid"]?.let { Text(it) } }, modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
-                form.password, vm::onPassword, label = { Text(if (form.same) "Password" else "2.4 GHz password") }, singleLine = true,
-                visualTransformation = hide, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                trailingIcon = {
-                    IconButton(onClick = { vm.toggleShowPassword() }) {
-                        Icon(
-                            if (form.showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                            contentDescription = stringResource(if (form.showPassword) R.string.hide_password else R.string.show_password),
-                        )
-                    }
-                },
+                form.password, vm::onPassword, label = { Text(if (both) "New password" else "2.4 GHz password") }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
                 isError = form.errors["password"] != null, supportingText = { form.errors["password"]?.let { Text(it) } ?: Text("8 to 63 characters") },
                 modifier = Modifier.fillMaxWidth(),
             )
-            CheckRow(form.same, vm::onSame, stringResource(R.string.same_wifi_both_bands))
-            if (!form.same) {
-                OutlinedTextField(
-                    form.ssid5, vm::onSsid5, label = { Text("5 GHz name") }, singleLine = true,
-                    isError = form.errors["ssid5"] != null, supportingText = { form.errors["ssid5"]?.let { Text(it) } }, modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    form.password5, vm::onPassword5, label = { Text("5 GHz password") }, singleLine = true,
-                    visualTransformation = hide, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    trailingIcon = {
-                    IconButton(onClick = { vm.toggleShowPassword() }) {
-                        Icon(
-                            if (form.showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                            contentDescription = stringResource(if (form.showPassword) R.string.hide_password else R.string.show_password),
-                        )
-                    }
-                },
-                isError = form.errors["password5"] != null, supportingText = { form.errors["password5"]?.let { Text(it) } },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+            if (has5ghz) {
+                CheckRow(form.same, vm::onSame, stringResource(R.string.same_wifi_both_bands))
+                if (!form.same) {
+                    OutlinedTextField(
+                        form.ssid5, vm::onSsid5, label = { Text("5 GHz name") }, singleLine = true,
+                        isError = form.errors["ssid5"] != null, supportingText = { form.errors["ssid5"]?.let { Text(it) } }, modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        form.password5, vm::onPassword5, label = { Text("5 GHz password") }, singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+                        isError = form.errors["password5"] != null, supportingText = { form.errors["password5"]?.let { Text(it) } },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
             error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error) }
             Button(onClick = vm::submit, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(if (busy) "Sending..." else "Save and apply") }
             TextButton(onClick = vm::closeSheet, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
         }
     }
+}
+
+/** The current Wi-Fi password of the house, in the clear: it is the customer's own Wi-Fi key. Closing forgets it. */
+@Composable
+private fun RevealDialog(reveal: WifiReveal, onClose: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Wi-Fi password") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                reveal.networks.forEach { k ->
+                    val band = when (k.band) {
+                        "2.4" -> "2.4 GHz"
+                        "5" -> "5 GHz"
+                        else -> "Wi-Fi"
+                    }
+                    Text(if (k.ssid.isBlank()) band else "$band: ${k.ssid}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    SelectionContainer {
+                        Text(
+                            k.password.ifBlank { "No password known" },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    Text(
+                        when (k.source) {
+                            "onu" -> "Read from the ONU."
+                            "saved" -> "Saved here."
+                            else -> ""
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (reveal.note.isNotBlank()) {
+                    Text(reveal.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("Close") } },
+    )
 }

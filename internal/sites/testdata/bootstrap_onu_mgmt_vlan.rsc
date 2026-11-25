@@ -206,7 +206,7 @@
   /ip/firewall/filter add chain=forward action=accept connection-state=established,related comment="ftn: forward est/rel"
   /ip/firewall/filter add chain=forward action=drop connection-state=invalid comment="ftn: forward drop invalid"
   /ip/firewall/filter add chain=forward action=accept protocol=tcp in-interface=vlan99-onu out-interface=wg-ftn src-address=10.6.3.0/24 dst-address=10.99.0.1/32 dst-port=7547 comment="ftn: onu to acs"
-  /ip/firewall/filter add chain=forward action=accept protocol=tcp in-interface=wg-ftn out-interface=vlan99-onu src-address=10.99.0.1/32 dst-address=10.6.3.0/24 dst-port=7547,30005 comment="ftn: acs to onu"
+  /ip/firewall/filter add chain=forward action=accept protocol=tcp in-interface=wg-ftn out-interface=vlan99-onu src-address=10.99.0.1/32 dst-address=10.6.3.0/24 dst-port=7547,30005,58000 comment="ftn: acs to onu"
   /ip/firewall/filter add chain=forward action=drop in-interface=vlan99-onu comment="ftn: onu mgmt drop in"
   /ip/firewall/filter add chain=forward action=drop out-interface=vlan99-onu comment="ftn: onu mgmt drop out"
   /ip/firewall/filter add chain=forward action=drop in-interface=wg-ftn comment="ftn: wg no forward in"

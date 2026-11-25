@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -23,7 +24,7 @@ func TestPlanONUMgmt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Subnet != "10.6.3.0/24" || p.GatewayCIDR != "10.6.3.1/24" || p.Iface != "vlan99-onu" || p.VLAN != 99 || p.ACSURL != "http://10.99.0.1:7547/" || len(p.CRPorts) != 2 {
+	if p.Subnet != "10.6.3.0/24" || p.GatewayCIDR != "10.6.3.1/24" || p.Iface != "vlan99-onu" || p.VLAN != 99 || p.ACSURL != "http://10.99.0.1:7547/" || len(p.CRPorts) != 3 {
 		t.Fatalf("plan: %+v", p)
 	}
 	// option 43: sub-option 1, length, the URL.
@@ -173,7 +174,8 @@ func TestONUMgmtCheck(t *testing.T) {
 	sn.rows["/ip/dhcp-server"] = []routeros.Row{{"name": ONUMgmtDHCPServer, "interface": p.Iface, "disabled": "false", "add-arp": "true"}}
 	var rules []routeros.Row
 	for _, r := range append(fwd, in...) {
-		rules = append(rules, routeros.Row{"comment": r.Comment, "disabled": "false"})
+		rules = append(rules, routeros.Row(r.Body("")))
+		rules[len(rules)-1]["disabled"] = "false"
 	}
 	sn.rows["/ip/firewall/filter"] = rules
 	e := &evalCtx{m: f.m, site: site, sn: sn}
@@ -244,5 +246,55 @@ func TestONUMgmtSetupHardening(t *testing.T) {
 		if strings.Contains(r.Args(), "dst-port=53") {
 			t.Errorf("the router answers DNS to the ONUs: %s", r.Args())
 		}
+	}
+}
+
+// A router built before 58000 was allowed has the rule "ftn: acs to onu" with dst-port=7547,30005: the sweep sets
+// the ports in place (and only that), and a second pass writes nothing.
+func TestONUMgmtRuleDstPortIsHealed(t *testing.T) {
+	f, s, m := adminRig(t)
+	s, err := f.m.EnsureONUMgmt(s.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := f.m.ONUPlan(s)
+	if got := portList(p.CRPorts); got != "7547,30005,58000" {
+		t.Fatalf("default ports %s", got)
+	}
+	m.SeedRow("/interface/vlan", R{"name": p.Iface, "vlan-id": strconv.Itoa(p.VLAN), "interface": ONUMgmtParent(s), "arp": "reply-only"})
+	m.SeedRow("/ip/address", R{"address": p.GatewayCIDR, "interface": p.Iface})
+	m.SeedRow("/ip/dhcp-server", R{"name": ONUMgmtDHCPServer, "interface": p.Iface, "add-arp": "yes"})
+	fwd, in := p.Rules()
+	for _, r := range append(fwd, in...) {
+		body := r.Body("")
+		if r.Comment == ACSToONUComment {
+			body["dst-port"] = "7547,30005"
+		}
+		m.SeedRow("/ip/firewall/filter", R(body))
+	}
+	it := checkItem(t, f, s.ID, CheckONUMgmt)
+	if it.Status != StatusWarn || it.Fix.Kind != FixAuto || !strings.Contains(strings.Join(it.Evidence, " "), "58000") {
+		t.Fatalf("drift not reported as an automatic fix: %+v", it)
+	}
+	m.ResetWrites()
+	out := heal(t, f, s)
+	done := false
+	for _, o := range out {
+		if o.ID == CheckONUMgmt {
+			done = o.Err == "" && len(o.Applied) > 0
+		}
+	}
+	if !done {
+		t.Fatalf("the ONU management rule was not fixed: %+v", out)
+	}
+	for _, r := range m.Table("/ip/firewall/filter") {
+		if r["comment"] == ACSToONUComment && r["dst-port"] != "7547,30005,58000" {
+			t.Fatalf("dst-port %q", r["dst-port"])
+		}
+	}
+	m.ResetWrites()
+	heal(t, f, s)
+	if m.Writes() != 0 {
+		t.Fatalf("a second pass wrote %d", m.Writes())
 	}
 }

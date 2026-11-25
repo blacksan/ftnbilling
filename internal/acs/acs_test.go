@@ -375,6 +375,10 @@ func TestConnReqSSRFGuard(t *testing.T) {
 			t.Errorf("%s -> %q %v", u, h, err)
 		}
 	}
+	// V-SOL ONUs listen for connection requests on 58000
+	if h, err := try("http://10.6.3.20:58000/"); err != nil || h != "10.6.3.20:58000" {
+		t.Errorf("port 58000 refused: %q %v", h, err)
+	}
 	for _, u := range []string{"http://10.6.3.20:22/cr", "http://10.6.3.20:8080/cr", "ftp://10.6.3.20:7547/", "http://u:p@10.6.3.20:7547/"} {
 		if h, err := try(u); err == nil {
 			t.Errorf("%s allowed as %s", u, h)

@@ -96,6 +96,17 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 			Status:  store.OLTStatus{At: at, OK: true, Version: "V1600GS", Raw: "x", ONUs: []store.OLTONU{{PON: 1, ID: 1, Serial: "VSOL00000001", State: "online", Online: true, RxPower: "-20.1", Distance: "120"}}},
 			Found:   []store.OLTFound{{PON: 1, Serial: "VSOL00000002", FirstSeen: at, LastSeen: at, Verdict: store.OLTFoundUnknown, AlertedAt: at}},
 			Backups: []store.OLTBackup{{ID: "b1", At: at, Why: "manual", By: "brian", Size: 5, Sealed: true, Text: "c2VhbGVk"}}}
+		f1, f2, f3 := -21.5, 2.5, 41.0
+		bn, up := 1234.0, uint64(9876543210)
+		d.ONUMetrics["o1"] = store.ONUMetrics{ID: "o1", Updated: at, Uptime: 86400, Reboots: 2, LastBoot: at,
+			Optical: &store.ONUOptical{Path: "InternetGatewayDevice.WANDevice.1.X_GponInterafceConfig.", Rx: &f1, Tx: &f2, Temp: &f3, Raw: map[string]string{"RXPower": "-21.5"}},
+			WAN:     &store.ONUWAN{Path: "InternetGatewayDevice.WANDevice.1.", RxBytes: &up, TxBytes: &up, Dn: &bn, Up: &bn, Link: "Up", Counters: map[string]uint64{"EthernetErrorsSent": 3}, Deltas: map[string]uint64{"EthernetErrorsSent": 1}},
+			Hosts:   []store.ONUHost{{Name: "phone", MAC: "AA:BB:CC:00:00:09", IP: "192.168.1.5", Iface: "Home", Active: true, RxBytes: &up, Dn: &bn}},
+			Paths:   store.ONUMetricPaths{Optical: "InternetGatewayDevice.WANDevice.1.X_GponInterafceConfig.", WANs: []string{"InternetGatewayDevice.WANDevice.1."}, Hosts: "InternetGatewayDevice.LANDevice.1.Hosts.Host.", Probed: true},
+			Gaps:    []string{"bias"}, Diag: []string{"IPPingDiagnostics"},
+			Fine:   []store.MetricPoint{{T: at.Unix(), Rx: &f1, Dn: &bn}},
+			Mid:    []store.MetricPoint{{T: at.Unix() - at.Unix()%300, N: 5, Rx: &f1, DnPk: &bn}},
+			Hourly: []store.MetricPoint{{T: at.Unix() - at.Unix()%3600, N: 12, Tx: &f2}}}
 		d.Notes["n1"] = store.Note{ID: "n1", CustomerID: "c1", AccountID: "a1", SiteID: "s111111", EquipmentID: "e1", Text: "hello", Time: at}
 		d.Settings["wa.token"] = store.Setting{Key: "wa.token", Value: "c2VhbGVk", Enc: true, UpdatedAt: at}
 		d.Settings["wa.lang"] = store.Setting{Key: "wa.lang", Value: "sw", UpdatedAt: at}
