@@ -56,6 +56,7 @@ func (s *Service) program(ctx context.Context, ss *session, in Inform, onuID str
 	restarting := s.runTasks(ctx, ss, onuID, v.trust, ai.kind == authShared)
 	if ctx.Err() == nil && !restarting && v.trust == trustFull && o.Root != "" {
 		s.serveLiveRead(ctx, ss, onuID)
+		s.maybeWalk(ctx, ss, onuID, reset)
 		s.collectMetrics(ctx, ss, onuID, boot || bootstrap, needDiscover)
 	}
 }

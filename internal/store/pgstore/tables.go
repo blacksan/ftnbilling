@@ -536,6 +536,17 @@ var onuMetricsC = (&codec[store.ONUMetrics]{
 	},
 }).build()
 
+var onuTreesC = (&codec[store.ONUTree]{
+	name: "onu_trees", pk: []string{"onu_id"}, key: func(v store.ONUTree) string { return v.ID },
+	cols: []string{"onu_id", "walked_at", "root", "sw_version", "hw_version", "reason", "params", "truncated", "tree", "resolved"},
+	args: func(v store.ONUTree) []any {
+		return []any{v.ID, tm(v.WalkedAt), v.Root, v.SWVersion, v.HWVersion, v.Reason, v.Count, v.Truncated, v.Text, jsonArg(v.Resolved, "{}")}
+	},
+	dst: func(v *store.ONUTree) []any {
+		return []any{&v.ID, t_(&v.WalkedAt), &v.Root, &v.SWVersion, &v.HWVersion, &v.Reason, &v.Count, &v.Truncated, &v.Text, jsonScan[store.TreeResolved]{&v.Resolved}}
+	},
+}).build()
+
 var oltStatesC = (&codec[store.OLTState]{
 	name: "olt_states", pk: []string{"id"}, key: func(v store.OLTState) string { return v.ID },
 	cols: []string{"id", "settings", "status", "found", "backups", "updated"},

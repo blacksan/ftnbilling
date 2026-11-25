@@ -105,6 +105,7 @@ type DeviceView struct {
 // QoSView is the line and error side of the sample.
 type QoSView struct {
 	LinkStatus string            `json:"link_status,omitempty"`
+	ConnStatus string            `json:"connection_status,omitempty"` // the WAN connection status (Connected, ...), once the ONU's tree is walked
 	AccessType string            `json:"access_type,omitempty"`
 	LineDown   *float64          `json:"line_down_bps"`
 	LineUp     *float64          `json:"line_up_bps"`
@@ -225,6 +226,7 @@ func (s *Service) Metrics(onuID string, rng time.Duration) (MetricsView, bool) {
 	if m.WAN != nil {
 		v.Throughput.Current = &RateNow{DownBps: m.WAN.Dn, UpBps: m.WAN.Up, RxBytes: m.WAN.RxBytes, TxBytes: m.WAN.TxBytes, LineDown: m.WAN.LineDn, LineUp: m.WAN.LineUp, Path: m.WAN.Path}
 		v.QoS.LinkStatus, v.QoS.AccessType, v.QoS.LineDown, v.QoS.LineUp = m.WAN.Link, m.WAN.Access, m.WAN.LineDn, m.WAN.LineUp
+		v.QoS.ConnStatus = m.WAN.Conn
 		for k, n := range m.WAN.Counters {
 			v.QoS.Counters[k] = n
 		}

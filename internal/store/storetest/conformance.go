@@ -107,6 +107,10 @@ func Fixture(t testing.TB, s *store.Store) time.Time {
 			Fine:   []store.MetricPoint{{T: at.Unix(), Rx: &f1, Dn: &bn}},
 			Mid:    []store.MetricPoint{{T: at.Unix() - at.Unix()%300, N: 5, Rx: &f1, DnPk: &bn}},
 			Hourly: []store.MetricPoint{{T: at.Unix() - at.Unix()%3600, N: 12, Tx: &f2}}}
+		txt, n := store.EncodeTree([]store.TreeParam{{Path: "InternetGatewayDevice.DeviceInfo.UpTime", Value: "86400"},
+			{Path: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase", Writable: true, Secret: true}})
+		d.ONUTrees["o1"] = store.ONUTree{ID: "o1", WalkedAt: at, Root: store.RootTR098, SWVersion: "V1", HWVersion: "H1", Reason: "first", Count: n, Truncated: true, Text: txt,
+			Resolved: store.TreeResolved{Paths: map[string][]string{"optical.rx": {"InternetGatewayDevice.WANDevice.1.X_GponInterafceConfig.RXPower"}}, Gaps: []string{"optical: no bias"}, Notes: []string{"n"}}}
 		d.Notes["n1"] = store.Note{ID: "n1", CustomerID: "c1", AccountID: "a1", SiteID: "s111111", EquipmentID: "e1", Text: "hello", Time: at}
 		d.Settings["wa.token"] = store.Setting{Key: "wa.token", Value: "c2VhbGVk", Enc: true, UpdatedAt: at}
 		d.Settings["wa.lang"] = store.Setting{Key: "wa.lang", Value: "sw", UpdatedAt: at}

@@ -36,6 +36,7 @@ var WipeTables = []string{
 	"onus",             // TR-069 devices (serials, MACs, Wi-Fi names, sealed passphrases)
 	"onu_tasks",        // TR-069 task queue
 	"onu_metrics",      // TR-069 metrics time series per ONU
+	"onu_trees",        // TR-069 parameter tree per ONU
 	"olt_states",       // OLT management state (sealed enable passwords and saved configurations)
 	"tasks",            // router task and retry queue
 	"equipment_events", // equipment history

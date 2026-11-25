@@ -277,6 +277,7 @@ type wanReading struct {
 	rx, tx           *uint64
 	lineDn, lineUp   *float64
 	link, access     string
+	conn             string            // connection status, from the parameter tree's status leaf
 	counters         map[string]uint64 // without the byte counters
 	haveCommonBytes  bool
 	haveStatsCounter bool
@@ -409,7 +410,56 @@ type reading struct {
 	gaps      []string
 	diag      []string
 	paths     store.ONUMetricPaths
-	boot      bool // the session carried a BOOT event
+	boot      bool                // the session carried a BOOT event
+	res       *store.TreeResolved // the resolved parameter tree, nil until the ONU has been walked
+}
+
+// pathsFromTree takes the object paths the metrics read from the resolved parameter tree. What the tree does not have is
+// left empty (and is reported as a gap on every sample): it is never guessed.
+func pathsFromTree(res *store.TreeResolved, rd *reading, stamp string) {
+	rd.paths.Optical = res.One("optical.object")
+	rd.paths.WANs = append([]string(nil), res.Paths["wan.devices"]...)
+	rd.paths.Hosts = res.One("hosts.table")
+	rd.diag = append([]string(nil), res.Paths["diag"]...)
+	rd.paths.Probed, rd.paths.Tree = true, stamp
+}
+
+// readConnStatus reads the connection status leaves the tree found (ConnectionStatus, IP.Interface.N.Status) and keeps
+// "Connected" when any connection has it, else the first value. Only for a box that has been walked.
+func readConnStatus(ctx context.Context, ss *session, rd *reading) error {
+	if rd.res == nil || rd.wan == nil {
+		return nil
+	}
+	names := rd.res.Paths["wan.status"]
+	if len(names) == 0 {
+		return nil
+	}
+	vals, err := gpvTolerant(ctx, ss, names, "wan status", &rd.gaps)
+	if err != nil {
+		return err
+	}
+	for _, v := range vals {
+		val := strings.TrimSpace(v.Value)
+		if val == "" || len(val) > 40 {
+			continue
+		}
+		if rd.wan.conn == "" || strings.EqualFold(val, "Connected") || strings.EqualFold(val, "Up") {
+			rd.wan.conn = val
+		}
+	}
+	return nil
+}
+
+// treeGaps adds what the tree says is missing for the metrics (optical, wan, hosts).
+func treeGaps(rd *reading) {
+	if rd.res == nil {
+		return
+	}
+	for _, g := range rd.res.Gaps {
+		if strings.HasPrefix(g, "optical:") || strings.HasPrefix(g, "wan:") || strings.HasPrefix(g, "hosts:") {
+			rd.gaps = addGap(rd.gaps, g)
+		}
+	}
 }
 
 func addGap(gaps []string, g string) []string {
@@ -455,7 +505,7 @@ func applyReading(prev store.ONUMetrics, rd reading, now time.Time) store.ONUMet
 	}
 	if rd.wan != nil {
 		w := &store.ONUWAN{Path: rd.wan.path, RxBytes: rd.wan.rx, TxBytes: rd.wan.tx, LineDn: rd.wan.lineDn, LineUp: rd.wan.lineUp,
-			Link: rd.wan.link, Access: rd.wan.access, Counters: rd.wan.counters}
+			Link: rd.wan.link, Conn: rd.wan.conn, Access: rd.wan.access, Counters: rd.wan.counters}
 		if rates && prev.WAN != nil {
 			if rd.wan.rx != nil && prev.WAN.RxBytes != nil {
 				if d, ok := counterDelta(*prev.WAN.RxBytes, *rd.wan.rx, dt, maxPlausibleBps/8); ok {
@@ -539,11 +589,21 @@ func (s *Service) collectMetrics(ctx context.Context, ss *session, onuID string,
 	if !boot && !prev.Updated.IsZero() && now.Sub(prev.Updated) < minSampleGap {
 		return
 	}
+	// The paths come from the parameter tree once it has been walked (and are resolved again after every new walk);
+	// until then they are found by probing the standard names.
+	var res *store.TreeResolved
+	stamp := ""
+	s.st.View(func(d *store.Data) {
+		if t, ok := d.ONUTreeOf(onuID); ok && t.Root == o.Root {
+			r := t.Clone().Resolved
+			res, stamp = &r, strconv.FormatInt(t.WalkedAt.Unix(), 10)
+		}
+	})
 	paths := prev.Paths
-	if reprobe {
+	if reprobe || paths.Tree != stamp {
 		paths = store.ONUMetricPaths{}
 	}
-	rd, err := s.readMetrics(ctx, ss, o, paths)
+	rd, err := s.readMetrics(ctx, ss, o, paths, res, stamp)
 	if err != nil {
 		if ctx.Err() == nil {
 			s.log.Info("ACS: metrics not read", "onu", onuID, "err", err.Error())
@@ -575,9 +635,13 @@ func gpvTolerant(ctx context.Context, ss *session, names []string, what string, 
 	return vals, nil
 }
 
-func (s *Service) readMetrics(ctx context.Context, ss *session, o store.ONU, paths store.ONUMetricPaths) (reading, error) {
+func (s *Service) readMetrics(ctx context.Context, ss *session, o store.ONU, paths store.ONUMetricPaths, res *store.TreeResolved, stamp string) (reading, error) {
 	var rd reading
 	rd.paths = paths
+	rd.res = res
+	if res != nil && !rd.paths.Probed {
+		pathsFromTree(res, &rd, stamp)
+	}
 	r := o.Root
 	vals, err := gpvTolerant(ctx, ss, []string{r + "DeviceInfo.UpTime"}, "uptime", &rd.gaps)
 	if err != nil {
@@ -591,6 +655,10 @@ func (s *Service) readMetrics(ctx context.Context, ss *session, o store.ONU, pat
 	} else {
 		err = s.readMetrics098(ctx, ss, o, &rd)
 	}
+	if err == nil {
+		err = readConnStatus(ctx, ss, &rd)
+	}
+	treeGaps(&rd)
 	return rd, err
 }
 

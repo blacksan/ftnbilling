@@ -631,6 +631,9 @@ type Data struct {
 	// ONUMetrics is the time series the ACS keeps per ONU (key: the ONU id; see onumetrics.go).
 	ONUMetrics map[string]ONUMetrics `json:"onu_metrics"`
 
+	// ONUTrees is the TR-069 parameter tree found on each ONU (key: the ONU id; see onutree.go).
+	ONUTrees map[string]ONUTree `json:"onu_trees"`
+
 	// OUICache holds the answers of the online MAC-vendor lookup (key: the OUI "AA:BB:CC").
 	OUICache map[string]OUIEntry `json:"oui_cache"`
 
@@ -675,6 +678,9 @@ func (d *Data) init() {
 	}
 	if d.ONUMetrics == nil {
 		d.ONUMetrics = map[string]ONUMetrics{}
+	}
+	if d.ONUTrees == nil {
+		d.ONUTrees = map[string]ONUTree{}
 	}
 	if d.OUICache == nil {
 		d.OUICache = map[string]OUIEntry{}

@@ -63,6 +63,8 @@ type Service struct {
 	unkLog   []time.Time // when owners were last told about an unknown serial
 	wg       sync.WaitGroup
 	live     liveReads // pending reads of the Wi-Fi passphrase from a box (wifipass.go)
+	// walkSlots bounds the parameter-tree walks that run at once (paramtree.go).
+	walkSlots chan struct{}
 }
 
 // New makes the service. DATA_KEY is required (passphrases and logins are sealed with it).
@@ -72,7 +74,8 @@ func New(o Options) (*Service, error) {
 		return nil, fmt.Errorf("ONU management needs DATA_KEY: %w", err)
 	}
 	s := &Service{st: o.Store, cfg: o.Cfg, log: o.Log, box: box, now: o.Now, client: o.HTTPClient, ipOf: o.ClientIP, lease: o.Lease, alert: o.Alert,
-		sessions: map[string]*session{}, ips: map[netip.Addr]*ipState{}, kicks: map[string]Kick{}, capLog: map[string]time.Time{}}
+		sessions: map[string]*session{}, ips: map[netip.Addr]*ipState{}, kicks: map[string]Kick{}, capLog: map[string]time.Time{},
+		walkSlots: make(chan struct{}, maxConcurrentWalks)}
 	if s.log == nil {
 		s.log = slog.Default()
 	}

@@ -176,6 +176,7 @@ type cpe struct {
 	echoValue          bool                // a refusal's text echoes the value that was sent
 	crFromParams       bool                // the connection-request login is whatever the data model holds now
 	crEarly            bool                // starts its session before it answers the connection request
+	maxReq             int                 // requests of the ACS one session may carry (0 = 100)
 
 	rpcs  []string            // the RPCs the ACS sent, by name
 	sets  []map[string]string // each SetParameterValues the ACS sent
@@ -539,7 +540,11 @@ func (c *cpe) session(events ...string) error {
 		return fmt.Errorf("Inform answered %d %s", resp.StatusCode, b)
 	}
 	var next []byte // empty = send an empty POST
-	for i := 0; i < 100; i++ {
+	limit := 100
+	if c.maxReq > 0 {
+		limit = c.maxReq
+	}
+	for i := 0; i < limit; i++ {
 		resp, b, err = post(next)
 		if err != nil {
 			return err

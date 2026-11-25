@@ -55,6 +55,12 @@
 Last seen {{if .LastInform.IsZero}}never{{else}}{{eat .LastInform}}{{end}}, <b>{{if .Online}}online{{else}}silent{{end}}</b>.</p>
 <p>{{range .WiFi}}{{.Band}} GHz: <b>{{.SSID}}</b>{{if not .Enabled}} (off){{end}}<br>{{end}}{{if not .WiFi}}<span class="muted">The ONU has not reported its Wi-Fi yet.</span>{{end}}</p>
 {{with $d.Data.ONUBrief}}<p class="muted">{{if .Optical}}Optical: {{.Optical}}. {{end}}{{if .HasDev}}Devices: {{.Devices}}. {{end}}{{if .Rate}}Now: {{.Rate}}. {{end}}Read {{eat .At}}.</p>{{end}}
+{{if $d.CanWrite}}{{with $d.Data.ONUTree}}<details class="mt-2"><summary>Parameter tree ({{.Count}} params, walked {{eat .WalkedAt}})</summary>
+<p class="muted">Walked because: {{.Reason}}.{{if .Truncated}} The walk stopped at a limit, so the list is partial.{{end}} Values of passphrase, password and key parameters are never read or shown.</p>
+<p><a class="btn ghost sm" href="/admin/onus/paramtree?onu={{$d.Data.ONU.ID}}">Download (text)</a> <a class="btn ghost sm" href="/admin/onus/paramtree?onu={{$d.Data.ONU.ID}}&amp;format=json">Download (JSON)</a></p>
+{{if .Resolved}}<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr><th>Found</th><th>Path on this ONU</th></tr></thead><tbody>{{range .Resolved}}<tr><td data-label="Found"><code>{{.Key}}</code></td><td data-label="Path" class="wrap">{{range .Paths}}<code>{{.}}</code><br>{{end}}</td></tr>{{end}}</tbody></table></div>{{end}}
+{{if .Gaps}}<p class="muted">Not found in the tree:</p><ul>{{range .Gaps}}<li>{{.}}</li>{{end}}</ul>{{end}}
+{{if .Notes}}<ul class="muted">{{range .Notes}}<li>{{.}}</li>{{end}}</ul>{{end}}</details>{{else}}<p class="muted">The parameter tree has not been walked yet. It is read at the ONU's next check-in.</p>{{end}}{{end}}
 {{if .Quarantine}}<div class="flash bad">This ONU checked in from an unexpected place and is held back. Approve or block it in the ONUs list.</div>{{end}}
 {{if .MACWait}}<div class="flash bad">{{.MACWait.Text}}. Nothing is sent to it yet. An owner can trust it in the ONUs list.</div>{{end}}
 {{if .Desired.Changed}}<div class="flash bad">The Wi-Fi name on the device is not the one saved here. The tenant may have changed it on the box. Saving again will overwrite it.</div>{{end}}

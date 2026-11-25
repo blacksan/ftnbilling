@@ -355,3 +355,88 @@ func TestAPIONUBandsMetricsAndWiFiPassword(t *testing.T) {
 		t.Fatal("no audit entry")
 	}
 }
+
+// The parameter tree of an ONU: operators only, audited, the values of passphrase/password/key parameters never in it,
+// a download as plain text or JSON, and a clear answer while the tree has not been walked.
+func TestAPIONUParamTreeIsOperatorOnlyRedactedAndAudited(t *testing.T) {
+	forceACS = true
+	t.Cleanup(func() { forceACS = false })
+	r := newAPIRig(t)
+	root := store.RootTR098
+	txt, n := store.EncodeTree([]store.TreeParam{
+		{Path: root + "DeviceInfo.UpTime", Value: "1234"},
+		{Path: root + "LANDevice.1.WLANConfiguration.1.SSID", Writable: true, Value: "Home"},
+		{Path: root + "LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase", Writable: true, Secret: true, Value: "supersecret99"},
+	})
+	r.st.Update(func(d *store.Data) error {
+		s := d.Sites[r.A.ID]
+		s.ONUMgmtN = 4
+		d.Sites[r.A.ID] = s
+		d.ONUs["o1"] = store.ONU{ID: "o1", Serial: "VSOL1", Root: root, SiteID: r.A.ID, MgmtIP: "10.6.4.9", LastInform: time.Now()}
+		d.ONUs["o2"] = store.ONU{ID: "o2", Serial: "VSOL2", Root: root, SiteID: r.A.ID, MgmtIP: "10.6.4.10", LastInform: time.Now()}
+		d.ONUTrees["o1"] = store.ONUTree{ID: "o1", WalkedAt: time.Now(), Root: root, Reason: "first", Count: n, Text: txt,
+			Resolved: store.TreeResolved{Paths: map[string][]string{"wifi.ssid": {root + "LANDevice.1.WLANConfiguration.1.SSID"}}, Gaps: []string{"optical: no PON or optical object found in the parameter tree"}}}
+		return nil
+	})
+	if v := r.call(r.view.Access, "GET", "/onus/o1/paramtree", nil, nil); v.Status != 403 {
+		t.Fatalf("a viewer read the tree: %d", v.Status)
+	}
+	got := r.call(r.oper.Access, "GET", "/onus/o1/paramtree", nil, nil)
+	if got.Status != 200 {
+		t.Fatalf("%d %s", got.Status, got.Raw)
+	}
+	if strings.Contains(string(got.Raw), "supersecret99") {
+		t.Fatalf("a passphrase is in the tree: %s", got.Raw)
+	}
+	var tv struct {
+		Count  int `json:"count"`
+		Params []struct {
+			Path     string `json:"path"`
+			Writable bool   `json:"writable"`
+			Value    string `json:"value"`
+			Redacted bool   `json:"redacted"`
+		} `json:"params"`
+		Resolved struct {
+			Gaps []string `json:"gaps"`
+		} `json:"resolved"`
+	}
+	if err := json.Unmarshal(got.Raw, &tv); err != nil || tv.Count != 3 || len(tv.Params) != 3 || len(tv.Resolved.Gaps) != 1 {
+		t.Fatalf("%v %s", err, got.Raw)
+	}
+	for _, p := range tv.Params {
+		if strings.HasSuffix(p.Path, "KeyPassphrase") && (!p.Redacted || p.Value != "<redacted>" || !p.Writable) {
+			t.Fatalf("passphrase leaf: %+v", p)
+		}
+		if strings.HasSuffix(p.Path, "UpTime") && p.Value != "1234" {
+			t.Fatalf("uptime: %+v", p)
+		}
+	}
+	txtDump := r.call(r.oper.Access, "GET", "/onus/o1/paramtree?format=text&download=1", nil, nil)
+	if txtDump.Status != 200 || strings.Contains(string(txtDump.Raw), "supersecret99") || !strings.Contains(string(txtDump.Raw), "KeyPassphrase\trw\t<redacted>") ||
+		!strings.Contains(string(txtDump.Raw), "UpTime\tro\t1234") {
+		t.Fatalf("text dump %d %s", txtDump.Status, txtDump.Raw)
+	}
+	if bad := r.call(r.oper.Access, "GET", "/onus/o1/paramtree?format=xml", nil, nil); bad.Status != 400 {
+		t.Fatalf("a bad format: %d", bad.Status)
+	}
+	if nw := r.call(r.oper.Access, "GET", "/onus/o2/paramtree", nil, nil); nw.Status != 404 || !strings.Contains(string(nw.Raw), "not been walked") {
+		t.Fatalf("not walked yet: %d %s", nw.Status, nw.Raw)
+	}
+	if nf := r.call(r.oper.Access, "GET", "/onus/nope/paramtree", nil, nil); nf.Status != 404 {
+		t.Fatalf("unknown ONU: %d", nf.Status)
+	}
+	audits := 0
+	r.st.View(func(d *store.Data) {
+		for _, e := range d.Events {
+			if e.Kind == "audit" && strings.Contains(e.Msg, "ONU VSOL1 parameter tree viewed") {
+				audits++
+			}
+			if strings.Contains(e.Msg, "supersecret99") {
+				t.Fatalf("a secret in the audit trail: %s", e.Msg)
+			}
+		}
+	})
+	if audits != 2 {
+		t.Fatalf("audit entries: %d", audits)
+	}
+}

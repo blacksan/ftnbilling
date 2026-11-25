@@ -104,6 +104,7 @@ type ChangeSet struct {
 	ONUs            Delta[ONU]
 	ONUTasks        Delta[ONUTask]
 	ONUMetrics      Delta[ONUMetrics]
+	ONUTrees        Delta[ONUTree]
 	OUICache        Delta[OUIEntry]
 	OLTStates       Delta[OLTState]
 	NewEvents       []Event
@@ -115,7 +116,7 @@ func (c *ChangeSet) Empty() bool {
 		c.Accounts.Empty() && c.Tenancies.Empty() && c.Apartments.Empty() && c.ApartmentSites.Empty() && c.Orders.Empty() &&
 		c.Vouchers.Empty() && c.Payments.Empty() && c.Devices.Empty() && c.Tasks.Empty() &&
 		c.EquipmentEvents.Empty() && c.Notes.Empty() && c.Settings.Empty() &&
-		c.AdminUsers.Empty() && c.AdminSessions.Empty() && c.APIDevices.Empty() && c.Registrations.Empty() && c.ONUs.Empty() && c.ONUTasks.Empty() && c.ONUMetrics.Empty() && c.OUICache.Empty() && c.OLTStates.Empty() && len(c.NewEvents) == 0
+		c.AdminUsers.Empty() && c.AdminSessions.Empty() && c.APIDevices.Empty() && c.Registrations.Empty() && c.ONUs.Empty() && c.ONUTasks.Empty() && c.ONUMetrics.Empty() && c.ONUTrees.Empty() && c.OUICache.Empty() && c.OLTStates.Empty() && len(c.NewEvents) == 0
 }
 
 // Summary is a short human description (counts only, never row contents).
@@ -137,7 +138,7 @@ func (c *ChangeSet) Summary() string {
 		n("admin_users", len(c.AdminUsers.Upsert), len(c.AdminUsers.Delete)) + n("admin_sessions", len(c.AdminSessions.Upsert), len(c.AdminSessions.Delete)) +
 		n("api_devices", len(c.APIDevices.Upsert), len(c.APIDevices.Delete)) +
 		n("registrations", len(c.Registrations.Upsert), len(c.Registrations.Delete)) +
-		n("onus", len(c.ONUs.Upsert), len(c.ONUs.Delete)) + n("onu_tasks", len(c.ONUTasks.Upsert), len(c.ONUTasks.Delete)) + n("onu_metrics", len(c.ONUMetrics.Upsert), len(c.ONUMetrics.Delete)) + n("oui_cache", len(c.OUICache.Upsert), len(c.OUICache.Delete)) + n("olt_states", len(c.OLTStates.Upsert), len(c.OLTStates.Delete))
+		n("onus", len(c.ONUs.Upsert), len(c.ONUs.Delete)) + n("onu_tasks", len(c.ONUTasks.Upsert), len(c.ONUTasks.Delete)) + n("onu_metrics", len(c.ONUMetrics.Upsert), len(c.ONUMetrics.Delete)) + n("onu_trees", len(c.ONUTrees.Upsert), len(c.ONUTrees.Delete)) + n("oui_cache", len(c.OUICache.Upsert), len(c.OUICache.Delete)) + n("olt_states", len(c.OLTStates.Upsert), len(c.OLTStates.Delete))
 	if len(c.NewEvents) > 0 {
 		s += fmt.Sprintf(" events+%d", len(c.NewEvents))
 	}

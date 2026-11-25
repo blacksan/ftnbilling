@@ -71,6 +71,7 @@ type ONUWAN struct {
 	LineDn   *float64          `json:"line_dn,omitempty"`
 	LineUp   *float64          `json:"line_up,omitempty"`
 	Link     string            `json:"link,omitempty"`
+	Conn     string            `json:"conn,omitempty"` // the connection status of the WAN connection (Connected, ...)
 	Access   string            `json:"access,omitempty"`
 	Counters map[string]uint64 `json:"counters,omitempty"` // packets, errors, discards (totals)
 	Deltas   map[string]uint64 `json:"deltas,omitempty"`   // the same since the previous sample
@@ -95,6 +96,9 @@ type ONUMetricPaths struct {
 	WANs    []string `json:"wans,omitempty"`  // WANDevice.N. (or the TR-181 equivalent)
 	Hosts   string   `json:"hosts,omitempty"` // ...Hosts.Host.
 	Probed  bool     `json:"probed,omitempty"`
+	// Tree is the walk time (unix seconds, as text) of the parameter tree these paths were resolved from; "" = they were
+	// found by probing the standard names (the tree had not been walked yet).
+	Tree string `json:"tree,omitempty"`
 }
 
 // ONUMetrics is the record of one ONU.

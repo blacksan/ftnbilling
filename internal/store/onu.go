@@ -206,6 +206,10 @@ type ONUState struct {
 	// Returned: the box left its house (swap or unlink). It never receives a house's Wi-Fi until linked again.
 	Returned   bool      `json:"returned,omitempty"`
 	ReturnedAt time.Time `json:"returned_at,omitempty"`
+	// WalkWanted: the parameter tree (onutree.go) is to be walked at the next trusted check-in. WalkTry is when a walk
+	// was last started (a walk that failed is not tried again for an hour).
+	WalkWanted bool      `json:"walk_wanted,omitempty"`
+	WalkTry    time.Time `json:"walk_try,omitempty"`
 }
 
 // ONU is one CPE.
@@ -245,7 +249,7 @@ func (x ONU) norm() ONU {
 	q := &x.Sec.Quarantine
 	q.Since, q.LastAt, q.Alerted = nt(q.Since), nt(q.LastAt), nt(q.Alerted)
 	x.Sec.FlapSince, x.Sec.MACAlerted = nt(x.Sec.FlapSince), nt(x.Sec.MACAlerted)
-	x.State.AppliedAt, x.State.ReturnedAt = nt(x.State.AppliedAt), nt(x.State.ReturnedAt)
+	x.State.AppliedAt, x.State.ReturnedAt, x.State.WalkTry = nt(x.State.AppliedAt), nt(x.State.ReturnedAt), nt(x.State.WalkTry)
 	if x.LegacyDesired != nil {
 		c := *x.LegacyDesired
 		c.UpdatedAt = nt(c.UpdatedAt)

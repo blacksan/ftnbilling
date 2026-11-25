@@ -388,3 +388,55 @@ func TestShowCurrentWiFiPasswordIsAuditedAndShowsTheSavedOne(t *testing.T) {
 		t.Fatal("a system password is shown without step-up")
 	}
 }
+
+// The ONU card links the parameter tree (count, time, download) once it has been walked, and the download is audited and
+// never carries a passphrase.
+func TestONUCardLinksTheParameterTreeAndTheDownloadIsAudited(t *testing.T) {
+	a := newONUApp(t)
+	a.adminPost(t, "/admin/accounts/create", url.Values{"flat": {"Flat 9"}, "mac": {mac1}})
+	acct := a.account(t, "Flat 9")
+	a.seedONU(t, "onu1", "ZTEGC0001", acct.ID, "AA:BB:CC:DD:EE:01")
+	page := a.adminGet(t, "/admin/accounts/view?code="+acct.Code)
+	if !strings.Contains(page, "has not been walked yet") || strings.Contains(page, "/admin/onus/paramtree") {
+		t.Fatal("the card should say the tree is not walked yet")
+	}
+	root := store.RootTR098
+	txt, n := store.EncodeTree([]store.TreeParam{{Path: root + "DeviceInfo.UpTime", Value: "5"},
+		{Path: root + "LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase", Secret: true, Value: "supersecret99"}})
+	a.st.Update(func(d *store.Data) error {
+		d.ONUTrees["onu1"] = store.ONUTree{ID: "onu1", WalkedAt: time.Now(), Root: root, Reason: "first", Count: n, Text: txt,
+			Resolved: store.TreeResolved{Paths: map[string][]string{"hosts.table": {root + "LANDevice.1.Hosts.Host."}}, Gaps: []string{"optical: no PON or optical object found in the parameter tree"}}}
+		return nil
+	})
+	page = a.adminGet(t, "/admin/accounts/view?code="+acct.Code)
+	for _, want := range []string{"Parameter tree (2 params, walked", "/admin/onus/paramtree?onu=onu1", "hosts.table", "optical: no PON or optical object"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("the card lacks %q", want)
+		}
+	}
+	if strings.Contains(page, "supersecret99") || strings.Contains(page, "onclick=") {
+		t.Fatal("secret or inline script on the card")
+	}
+	r := a.admin("GET", "/admin/onus/paramtree?onu=onu1", nil)
+	b := body(t, r)
+	if r.StatusCode != 200 || strings.Contains(b, "supersecret99") || !strings.Contains(b, "KeyPassphrase\tro\t<redacted>") || !strings.Contains(r.Header.Get("Content-Disposition"), "attachment") {
+		t.Fatalf("download: %d %q %s", r.StatusCode, r.Header.Get("Content-Disposition"), b)
+	}
+	if r.Header.Get("Cache-Control") != "no-store" || !strings.HasPrefix(r.Header.Get("Content-Type"), "text/plain") {
+		t.Fatalf("headers: %v", r.Header)
+	}
+	var audited bool
+	a.st.View(func(d *store.Data) {
+		for _, e := range d.Events {
+			if e.Kind == "audit" && strings.Contains(e.Msg, "parameter tree downloaded by") {
+				audited = true
+			}
+		}
+	})
+	if !audited {
+		t.Fatal("the download was not audited")
+	}
+	if nf := a.admin("GET", "/admin/onus/paramtree?onu=nope", nil); nf.StatusCode != 404 {
+		t.Fatalf("unknown ONU: %d", nf.StatusCode)
+	}
+}

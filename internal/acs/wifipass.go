@@ -106,13 +106,30 @@ func (s *Service) serveLiveRead(ctx context.Context, ss *session, onuID string) 
 	if o.Root != store.RootTR181 {
 		leaves = append(leaves, "PreSharedKey.1.PreSharedKey")
 	}
+	var res store.TreeResolved
+	s.st.View(func(d *store.Data) {
+		if t, ok := d.ONUTreeOf(onuID); ok {
+			res = t.Clone().Resolved
+		}
+	})
 	got := map[string]string{}
 	for _, band := range []string{"2.4", "5"} {
 		w, ok := primary(o.WiFi, band)
 		if !ok {
 			continue
 		}
-		for _, leaf := range leaves {
+		// The passphrase leaf the parameter tree found on this network goes first: it settles KeyPassphrase against
+		// PreSharedKey.1.PreSharedKey for this box (the tree has the KeyPassphrase leaf or it has not).
+		bandLeaves := leaves
+		if l := resolvedPassLeaf(res, apPath(w)); l != "" {
+			bandLeaves = []string{l}
+			for _, x := range leaves {
+				if x != l {
+					bandLeaves = append(bandLeaves, x)
+				}
+			}
+		}
+		for _, leaf := range bandLeaves {
 			name := apPath(w) + leaf
 			vals, f, err := ss.gpv(ctx, []string{name})
 			if err != nil {
@@ -254,4 +271,15 @@ const liveReadWait = 12 * time.Second
 func (s *Service) online(o store.ONU) bool {
 	iv := s.informEvery()
 	return !o.LastInform.IsZero() && s.now().Sub(o.LastInform) < 3*iv
+}
+
+// resolvedPassLeaf returns the passphrase leaf (relative to the network's object) that the parameter tree resolved for
+// the network at ap, "" when the tree has none.
+func resolvedPassLeaf(res store.TreeResolved, ap string) string {
+	for _, p := range res.Paths["wifi.passphrase"] {
+		if strings.HasPrefix(p, ap) && len(p) > len(ap) {
+			return p[len(ap):]
+		}
+	}
+	return ""
 }
