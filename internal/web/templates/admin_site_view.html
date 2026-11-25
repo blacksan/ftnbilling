@@ -31,14 +31,14 @@
 <dt>Revenue this month</dt><dd>{{kes .ThisMonth}} <span class="muted">last month {{kes .LastMonth}}</span></dd>
 </dl></section>{{end}}
 </div>
-{{with .Data.WF}}{{if .On}}<section class="panel" data-webfig><div class="panel-h"><h2>WebFig access</h2><form method="post" action="/admin/routers/webfig" class="row"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button class="ghost sm"{{if not $X.Reachable}} disabled title="The router is not reachable right now"{{end}}>Open WebFig</button></form></div>
+{{with .Data.WF}}{{if .On}}<section class="panel" data-webfig><div class="panel-h"><h2>WebFig access</h2><form method="post" action="/admin/routers/webfig"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button class="ghost sm"{{if not $X.Reachable}} disabled title="The router is not reachable right now"{{end}}>Open WebFig</button></form></div>
 <p class="muted">Opens through the server on its own address and asks for your password and code again.{{if not $X.Reachable}} Not available while the router is unreachable.{{end}}</p>
 {{if .Sessions}}<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr><th>Who</th><th>From</th><th>Opened</th><th>Ends by</th><th></th></tr></thead><tbody>
 {{range .Sessions}}<tr><td data-label="Who">{{.User}}</td><td class="mono" data-label="From">{{.IP}}</td><td data-label="Opened">{{eat .Started}}</td><td data-label="Ends by">{{eat .Expires}}</td>
 <td><form method="post" action="/admin/routers/webfig/end"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="sid" value="{{.ID}}"><button class="ghost sm">End</button></form></td></tr>{{end}}</tbody></table></div>
 {{else}}<p class="muted nil">No WebFig session is open on this router.</p>{{end}}
 {{if .Activity}}<h3>Recent activity</h3><ul class="checks">{{range .Activity}}<li><span class="muted">{{eat .Time}}</span> {{.Msg}} <span class="muted">{{.Actor}}{{if .IP}} from {{.IP}}{{end}}</span></li>{{end}}</ul>{{end}}
-<p class="muted">A session belongs to one browser and one router. It ends after 30 minutes without use, or 2 hours after it opened.</p></section>{{end}}{{end}}
+<p class="muted">A session is tied to one browser and router. It ends after 30 minutes idle or 2 hours.</p></section>{{end}}{{end}}
 {{with .Data.Rep}}<section class="panel"><h2>Revenue by month</h2>{{if .Months}}<div class="tw" style="border:0;margin:0"><table class="rs"><thead><tr><th>Month</th><th class="n">Payments</th><th class="n">KES</th></tr></thead><tbody>{{range .Months}}<tr><td data-label="Month">{{.Month}}</td><td class="n" data-label="Payments">{{.Payments}}</td><td class="n" data-label="KES">{{num .KES}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted nil">No payments through this router yet.</p>{{end}}</section>{{end}}
 </div>
 
@@ -47,20 +47,20 @@
 {{with .Data.SetupView}}<section class="panel"><div class="panel-h"><h2>Set-up progress</h2><span class="pill {{if eq .State "ready"}}live{{else}}waiting{{end}}" data-setup-state>{{setupState .State}}</span></div>
 <div data-setup-view aria-live="polite">{{template "setup_steps" .}}</div></section>{{end}}
 <section class="panel"><div class="panel-h"><h2>Set up the router</h2></div>
-{{if .Data.Cmd}}<p>Paste this one line in the router's terminal (WinBox, New Terminal). It works once, for {{.Data.TTL}} minutes. The router then builds itself; nothing else is typed on it.</p>
+{{if .Data.Cmd}}<p>Paste this line in the router terminal (WinBox, New Terminal). One use, expires in {{.Data.TTL}} minutes. The router builds itself.</p>
 <p class="bad" data-ports-notice><strong>{{.Data.PortsNotice}}</strong></p><p>{{.Data.PasteHint}}</p>
 <div class="cmdbox"><textarea id="joincmd" readonly rows="3" aria-label="Bootstrap line">{{.Data.Cmd}}</textarea><button type="button" class="btn" data-copy-from="#joincmd">Copy line</button></div>
-<details><summary>If the line fails with a certificate error</summary><p class="muted">The router's clock is probably wrong or it has no certificate store. Correct the clock first. If that is not possible, this line is the same without the certificate check.</p>
+<details><summary>If the line fails with a certificate error</summary><p class="muted">Usually a wrong router clock. Fix the clock first, or use this line without the certificate check.</p>
 <div class="cmdbox"><textarea id="joincmd2" readonly rows="3" aria-label="Bootstrap line without certificate check">{{.Data.CmdNoCheck}}</textarea><button type="button" class="btn ghost" data-copy-from="#joincmd2">Copy line</button></div></details>
 <p class="muted">Shown only now. Expires {{eat .Data.CmdExpires}}. Do not paste it into chat.</p>
-<form method="post" action="/admin/routers/join/revoke"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button class="ghost sm">Cancel this line</button></form>
+<form method="post" action="/admin/routers/join/revoke" class="f"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button class="ghost">Cancel this line</button></form>
 {{else}}{{if and .Data.Insecure (not .Data.AllowInsecure)}}<p class="bad">PUBLIC_BASE_URL must start with https:// before a line can be made.</p>{{end}}
-<p class="muted">The router must run RouterOS 7 with the right clock. The line erases the router and builds it again, so use it on a new router, or on one you mean to rebuild. If the router asks for its reset button to be pressed (fetch is off in device mode), press it and paste the same line again.</p>
+<p class="muted">Needs RouterOS 7 and a correct clock. The line erases and rebuilds the router: use a new one, or one you mean to rebuild. If it asks for the reset button (fetch off in device mode), press it and paste the line again.</p>
 <p class="bad" data-ports-notice><strong>{{.Data.PortsNotice}}</strong></p><p class="muted">{{.Data.PasteHint}}</p>
-{{if .CanWrite}}<form method="post" action="/admin/routers/join"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button>{{if .Data.Status.Joined}}Make a new line (rebuilds the router){{else}}Make the line{{end}}</button></form>{{end}}{{end}}</section>
+{{if .CanWrite}}<form method="post" action="/admin/routers/join" class="f"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button>{{if .Data.Status.Joined}}Make a new line (rebuilds the router){{else}}Make the line{{end}}</button></form>{{end}}{{end}}</section>
 <section class="panel"><div class="panel-h"><h2>Automatic fixes</h2><span class="pill {{if .Data.Pause.Paused}}paused{{else}}online{{end}}" data-autofix-state>{{if .Data.Pause.Paused}}paused{{if .Data.Pause.Until}} until {{eat .Data.Pause.Until}}{{end}}{{else}}on{{end}}</span></div>
-<p class="muted">The server fixes safe problems by itself, and keeps customer DNS, the customer DHCP server and traffic reporting on. Pause this while you change one of them on purpose: nothing is then applied by itself (a customer port you save is still applied).</p>
-{{if eq .Role "owner"}}<form method="post" action="/admin/routers/auto-fixes" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
+<p class="muted">The server fixes safe problems itself and keeps customer DNS, DHCP and traffic reporting on. Pause while you change one on purpose (saved customer ports are still applied).</p>
+{{if eq .Role "owner"}}<form method="post" action="/admin/routers/auto-fixes" class="f"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
 {{if .Data.Pause.Paused}}<input type="hidden" name="paused" value="0"><button class="ghost">Resume automatic fixes</button>{{else}}<input type="hidden" name="paused" value="1"><label class="field">Until (optional)<input type="datetime-local" name="until"></label><button class="ghost">Pause automatic fixes</button>{{end}}</form>{{end}}</section>
 <section class="panel"><div class="panel-h"><h2>Checks</h2><button type="button" class="ghost sm" data-recheck>Check again</button></div>
 <p class="muted" data-checks-sum aria-live="polite"></p><ul class="checks" data-checks><li class="ph">Reading the router.</li></ul></section>
@@ -68,8 +68,8 @@
 <p class="muted">{{eat .At}}{{if .ROS}} &middot; RouterOS {{.ROS}}{{end}}</p><pre class="rep">{{range .Lines}}{{.}}
 {{end}}</pre></section>{{end}}
 {{if eq .Role "owner"}}<section class="panel danger"><div class="panel-h"><h2 class="bad">Reset router</h2></div>
-<p class="muted">Forgets this router's tunnel key, API password and join state on the server, and queues every house again for when the router is set up. Accounts are kept. The router itself is not touched: pasting a new line erases and rebuilds it. Type the router name to confirm.</p>
-<form method="post" action="/admin/routers/setup/reset" class="row" data-reset-router><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
+<p class="muted">Forgets the tunnel key, API password and join state, and re-queues every house for the next setup. Accounts are kept; the router is untouched (a new line erases and rebuilds it). Type the router name to confirm.</p>
+<form method="post" action="/admin/routers/setup/reset" class="f" data-reset-router><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
 <input name="confirm_name" placeholder="{{$s.Name}}" required autocomplete="off" aria-label="Type the router name to reset it"><button class="ghost">Reset router</button></form></section>{{end}}
 </div>
 
@@ -81,7 +81,7 @@
 {{else if eq $tab "ports"}}
 <section class="panel" data-ports="{{$s.ID}}" data-name="{{$s.Name}}" data-role="{{.Role}}">
 <div class="panel-h"><h2>Ports</h2><span class="muted" data-ports-at aria-live="polite"></span></div>
-<p class="muted">Every physical port of the router, with its role, speed, traffic and MAC. The server sets roles on the router by itself and keeps them there; nothing is typed on the router. The Internet uplink (WAN) is locked.</p>
+<p class="muted">Every port with role, speed, traffic and MAC. The server sets and keeps the roles. The WAN uplink is locked.</p>
 <p class="flash bad" role="status" data-ports-warn hidden>The router could not be read just now. These are the last readings the server kept.</p>
 <p class="cport" role="status" data-ports-apply hidden></p>
 <div class="tw ports"><table class="rs"><thead><tr><th>Port</th><th>Role</th><th data-col="link">Link</th><th>State</th><th class="n">Receive</th><th class="n">Send</th><th>MAC</th><th>Actions</th></tr></thead><tbody data-ports-body><tr><td colspan="8" class="muted">Reading the router.</td></tr></tbody></table></div>
@@ -89,48 +89,48 @@
 </section>
 
 {{else if eq $tab "plans"}}
-<section class="panel"><h2>Plans at this router</h2><p class="muted" style="margin:6px 0 12px">Hide a plan here, or give it a different price. Prices must stay unique inside the router.</p>
-<form method="post" action="/admin/routers/packages"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
+<section class="panel"><h2>Plans at this router</h2><p class="muted" style="margin:6px 0 12px">Hide a plan or set a different price here. Prices must stay unique within the router.</p>
+<form method="post" action="/admin/routers/packages" class="f f-wide"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
 <div class="tw" style="margin:0"><table><thead><tr><th>Plan</th><th class="n">Shared price</th><th>Hidden here</th><th>Price here (KES, 0 = shared)</th></tr></thead><tbody>
-{{range .Data.Pkgs}}{{$o := index $s.PkgOverrides .ID}}<tr><td>{{.Name}}</td><td class="n">{{num .PriceKES}}</td><td><input type="checkbox" name="hidden_{{.ID}}" value="1"{{if $o.Hidden}} checked{{end}} aria-label="Hide {{.Name}}"></td><td><input name="price_{{.ID}}" type="number" min="0" value="{{if $o.PriceKES}}{{$o.PriceKES}}{{else}}0{{end}}" style="width:100px" aria-label="Price for {{.Name}}"></td></tr>{{end}}</tbody></table></div>
-<p class="mt-3"><button>Save plans</button></p></form></section>
+{{range .Data.Pkgs}}{{$o := index $s.PkgOverrides .ID}}<tr><td>{{.Name}}</td><td class="n">{{num .PriceKES}}</td><td><input type="checkbox" name="hidden_{{.ID}}" value="1"{{if $o.Hidden}} checked{{end}} aria-label="Hide {{.Name}}"></td><td><input name="price_{{.ID}}" type="number" min="0" value="{{if $o.PriceKES}}{{$o.PriceKES}}{{else}}0{{end}}" class="num" aria-label="Price for {{.Name}}"></td></tr>{{end}}</tbody></table></div>
+<button>Save plans</button></form></section>
 
 {{else if eq $tab "profile"}}
 <div class="grid c2">
 <section class="panel"><h2>Details</h2>
-<form method="post" action="/admin/routers/update" class="mt-3 stack-col"{{if $s.WGPublicKey}} data-plumb{{if .Data.Pause.Paused}} data-paused{{end}} data-olt-default="sfp-sfpplus1" data-olt="{{.Data.Eff.OLTInterface}}" data-vlan="{{.Data.Eff.VLANID}}" data-lanports="{{.Data.Eff.LANPorts}}" data-name="{{$s.Name}}"{{end}}><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="confirm" value=""><input type="hidden" name="confirmname" value=""><input type="hidden" name="orig_lanports" value="{{.Data.Eff.LANPorts}}"><input type="hidden" name="orig_customerports" value="{{.Data.Eff.CustomerPorts}}"><input type="hidden" name="orig_olt" value="{{.Data.Eff.OLTInterface}}"><input type="hidden" name="orig_vlan" value="{{.Data.Eff.VLANID}}">
+<form method="post" action="/admin/routers/update" class="f mt-3"{{if $s.WGPublicKey}} data-plumb{{if .Data.Pause.Paused}} data-paused{{end}} data-olt-default="sfp-sfpplus1" data-olt="{{.Data.Eff.OLTInterface}}" data-vlan="{{.Data.Eff.VLANID}}" data-lanports="{{.Data.Eff.LANPorts}}" data-name="{{$s.Name}}"{{end}}><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="confirm" value=""><input type="hidden" name="confirmname" value=""><input type="hidden" name="orig_lanports" value="{{.Data.Eff.LANPorts}}"><input type="hidden" name="orig_customerports" value="{{.Data.Eff.CustomerPorts}}"><input type="hidden" name="orig_olt" value="{{.Data.Eff.OLTInterface}}"><input type="hidden" name="orig_vlan" value="{{.Data.Eff.VLANID}}">
 {{template "sitefields" $s}}
 {{with .Data.CustPort}}{{if .Text}}<p class="cport {{.State}}" data-cport="{{.State}}" role="status">{{.Text}}</p>{{end}}{{if .OLTMessage}}<p class="cport error" role="status">OLT uplink: {{.OLTMessage}}</p>{{end}}{{end}}
 {{if .Data.Ports}}<datalist id="router-ports">{{range .Data.Ports}}<option value="{{.}}">{{end}}</datalist>{{end}}
-<details><summary>Router layout</summary><div class="mt-3 stack-col">{{template "sitelayout" .Data.Eff}}<p class="muted">Admin LAN, OLT uplink and customer ports are set up on the router by the server as soon as you save (and healed by the sweep); use the Ports tab to enable, disable or move a port. The internet uplink is never changed by the server. Other layout changes apply to the next line and to metrics.</p></div></details>
-<div><button>Save</button></div></form></section>
+<details><summary>Router layout</summary><div class="f mt-3">{{template "sitelayout" .Data.Eff}}<p class="muted">Admin LAN, OLT uplink and customer ports are applied on save and kept in place; use the Ports tab to enable, disable or move a port. The internet uplink is never changed. Other changes apply to the next line and to metrics.</p></div></details>
+<button>Save</button></form></section>
 {{with .Data.Rep}}<section class="panel"><h2>Location</h2>
-<h2>Went live</h2><p class="muted">Where the router is, and its equipment and apartments, are kept on the apartment and on the <a href="/admin/routers/view?id={{$s.ID}}&amp;tab=equipment">Equipment tab</a>.</p>
-<form method="post" action="/admin/routers/profile" class="mt-3 stack-col"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="address" value="{{$s.Address}}"><input type="hidden" name="lat" value="{{if $s.Lat}}{{$s.Lat}}{{end}}"><input type="hidden" name="lng" value="{{if $s.Lng}}{{$s.Lng}}{{end}}">
-<label class="field">Date the router went live<input type="date" name="go_live" value="{{day $s.GoLive}}"></label><div><button class="ghost">Save the date</button></div></form></section>{{end}}
+<h2>Went live</h2><p class="muted">Location, equipment and apartments are kept on the apartment and the <a href="/admin/routers/view?id={{$s.ID}}&amp;tab=equipment">Equipment tab</a>.</p>
+<form method="post" action="/admin/routers/profile" class="f mt-3"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="address" value="{{$s.Address}}"><input type="hidden" name="lat" value="{{if $s.Lat}}{{$s.Lat}}{{end}}"><input type="hidden" name="lng" value="{{if $s.Lng}}{{$s.Lng}}{{end}}">
+<label class="field">Date the router went live<input type="date" name="go_live" value="{{day $s.GoLive}}"></label><button class="ghost">Save the date</button></form></section>{{end}}
 </div>
 
 {{else}}
 <div class="grid c2">
 <section class="panel"><h2>Router actions</h2>
-<form method="post" action="/admin/routers/sync" class="mt-3 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button class="ghost">Reconcile now</button><span class="muted">normally automatic</span></form>
-<form method="post" action="/admin/routers/disable" class="mt-3 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="disable" value="{{if $s.Disabled}}0{{else}}1{{end}}"><button class="ghost">{{if $s.Disabled}}Resume this router{{else}}Pause this router{{end}}</button><span class="muted">paused: no collection, no router changes; tenants cannot buy</span></form>
-<form method="post" action="/admin/routers/reboot" class="mt-3 row" data-reboot><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
-<input name="confirm_name" placeholder="{{$s.Name}}" required autocomplete="off" aria-label="Type the router name to reboot it" style="flex:1;min-width:220px"><button class="ghost">Reboot router</button></form>
-<p class="mt-2 muted">Type the router name. Customers lose their connection for a minute or two. Not possible while the router is being set up, and once every 10 minutes.</p></section>
+<form method="post" action="/admin/routers/sync" class="mt-3 f"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><button class="ghost">Reconcile now</button></form>
+<form method="post" action="/admin/routers/disable" class="mt-3 f"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input type="hidden" name="disable" value="{{if $s.Disabled}}0{{else}}1{{end}}"><button class="ghost">{{if $s.Disabled}}Resume this router{{else}}Pause this router{{end}}</button><p class="muted">Paused: no collection or router changes; tenants cannot buy.</p></form>
+<form method="post" action="/admin/routers/reboot" class="mt-3 f" data-reboot><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
+<input name="confirm_name" placeholder="{{$s.Name}}" required autocomplete="off" aria-label="Type the router name to reboot it" ><button class="ghost">Reboot router</button></form>
+<p class="mt-2 muted">Type the router name. Customers lose connection for a minute or two. Not during setup; once per 10 minutes.</p></section>
 {{if eq .Role "owner"}}<section class="panel danger"><div class="panel-h"><h2 class="bad">Reset router</h2></div>
-<p class="muted">Forgets this router's tunnel key, API password and join state on the server, and queues every house again for when the router is set up. Accounts are kept. The router itself is not touched: pasting a new line erases and rebuilds it. Type the router name to confirm.</p>
-<form method="post" action="/admin/routers/setup/reset" class="row" data-reset-router><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
-<input name="confirm_name" placeholder="{{$s.Name}}" required autocomplete="off" aria-label="Type the router name to reset it" style="flex:1;min-width:220px"><button class="ghost">Reset router</button></form></section>{{end}}
-<section class="panel danger"><h2 class="bad">Remove router</h2>{{if .Data.Accounts}}<p class="muted" style="margin:6px 0 10px">{{.Data.Accounts}} house{{if ne .Data.Accounts 1}}s are{{else}} is{{end}} on this router. Move or close {{if eq .Data.Accounts 1}}it{{else}}them{{end}} first; a router can only be removed when it has no houses.</p>{{else}}<p class="muted" style="margin:6px 0 10px">Its payments stay in the ledger. Type the router name to confirm.</p>{{end}}
-<form method="post" action="/admin/routers/remove" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input name="confirm" placeholder="{{$s.Name}}" required autocomplete="off" aria-label="Router name" style="flex:1;min-width:220px"{{if .Data.Accounts}} disabled{{end}}><button{{if .Data.Accounts}} disabled title="Not possible while houses are on this router"{{end}}>Remove</button></form></section>
+<p class="muted">Forgets the tunnel key, API password and join state, and re-queues every house for the next setup. Accounts are kept; the router is untouched (a new line erases and rebuilds it). Type the router name to confirm.</p>
+<form method="post" action="/admin/routers/setup/reset" class="f" data-reset-router><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}">
+<input name="confirm_name" placeholder="{{$s.Name}}" required autocomplete="off" aria-label="Type the router name to reset it" ><button class="ghost">Reset router</button></form></section>{{end}}
+<section class="panel danger"><h2 class="bad">Remove router</h2>{{if .Data.Accounts}}<p class="muted" style="margin:6px 0 10px">{{.Data.Accounts}} house{{if ne .Data.Accounts 1}}s are{{else}} is{{end}} on this router. Move or close {{if eq .Data.Accounts 1}}it{{else}}them{{end}} first.</p>{{else}}<p class="muted" style="margin:6px 0 10px">Its payments stay in the ledger. Type the router name to confirm.</p>{{end}}
+<form method="post" action="/admin/routers/remove" class="f"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$s.ID}}"><input name="confirm" placeholder="{{$s.Name}}" required autocomplete="off" aria-label="Router name" {{if .Data.Accounts}} disabled{{end}}><button{{if .Data.Accounts}} disabled title="Not possible while houses are on this router"{{end}}>Remove</button></form></section>
 </div>
 {{end}}
 {{template "afoot" .}}{{end}}
 
 {{define "rt_clients"}}{{$d := .}}
 <div id="rt-live" data-refresh="10">
-<form method="get" action="/admin/routers/view" class="row clients-search" role="search"><input type="hidden" name="id" value="{{.Data.Site.ID}}"><input type="hidden" name="tab" value="clients">
+<form method="get" action="/admin/routers/view" class="f clients-search" role="search"><input type="hidden" name="id" value="{{.Data.Site.ID}}"><input type="hidden" name="tab" value="clients">
 <input type="search" name="q" value="{{.Data.Q}}" placeholder="Search house number, tenant, code, IP, MAC, vendor" aria-label="Search clients" data-clients-q autocomplete="off"><button class="ghost">Search</button>
 {{with .Data.Counts}}<span class="muted">{{.Flats}} houses, {{.Online}} online, {{.Unregistered}} not registered</span>{{end}}</form>
 {{if not .Data.Reachable}}<p class="flash bad" role="status">The router could not be read just now. Rates and devices are the last ones the server kept.</p>{{end}}

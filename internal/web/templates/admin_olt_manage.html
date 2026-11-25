@@ -2,8 +2,8 @@
 <p><a href="/admin/olts/view?id={{$E.ID}}">&larr; OLT details</a> &middot; <a href="/admin/olts/adopt?id={{$E.ID}}">Manual setup (console snippet)</a> &middot; <a href="/admin/equipment?tab=olt">all OLTs</a></p>
 
 {{with .Data.Job}}{{if or .Running .UnfinishedSecure .UnfinishedApply}}<section class="panel mt-3" role="status"{{if .Running}} {{if $.IsOwner}}data-job-poll="/admin/olts/manage/job-status?id={{$E.ID}}" data-running="1"{{else}}data-reload="5"{{end}}{{end}}>
-{{if .Running}}<p><b>{{.Label}}&hellip;</b> started {{.Started}}. <span data-job-stage>{{.Stage}}</span></p><p class="muted">This takes a few minutes. The page updates by itself. Nothing else can be started on this OLT until it ends.</p>{{end}}
-{{if .UnfinishedSecure}}<p><span class="pill suspended">unfinished</span> A Secure did not finish (the server stopped, or it failed half way). The new login it set is kept encrypted; the server tries it at its next check of the OLT.</p>{{end}}
+{{if .Running}}<p><b>{{.Label}}&hellip;</b> started {{.Started}}. <span data-job-stage>{{.Stage}}</span></p><p class="muted">Takes a few minutes. The page updates itself. Nothing else can start on this OLT meanwhile.</p>{{end}}
+{{if .UnfinishedSecure}}<p><span class="pill suspended">unfinished</span> Secure did not finish (server stopped or failed part way). The new login is kept encrypted and tried at the next check.</p>{{end}}
 {{if .UnfinishedApply}}<p><span class="pill suspended">unfinished</span> {{.ApplyNote}}</p>{{end}}</section>{{end}}{{end}}
 
 {{with .Data.Last}}<section class="panel mt-3" data-last-change><div class="panel-h"><h2>Last change</h2><span class="muted">{{.Label}} by {{.By}}, {{.Started}} &ndash; {{.Finished}}</span></div>
@@ -13,7 +13,7 @@
 {{if .Refused}}<p>The OLT refused (or did not answer) <span class="mono">{{.Refused}}</span>:</p><pre class="mono">{{.RefusedOut}}</pre>{{end}}
 {{if .Failed}}<p>Failed steps:</p><ul>{{range .Failed}}<li>{{.}}</li>{{end}}</ul>{{end}}
 {{if .Skipped}}<p>Skipped steps:</p><ul>{{range .Skipped}}<li>{{.}}</li>{{end}}</ul>{{end}}
-<p class="muted">Shown until the next Apply, Secure or Check now ends.</p></section>{{end}}
+<p class="muted">Shown until the next Apply, Secure or Check.</p></section>{{end}}
 
 {{if .Data.Audit}}<section class="panel mt-3"><h2>Recent audit entries for this OLT</h2><div class="tw"><table class="rs"><thead><tr><th>When</th><th>Who</th><th>What</th></tr></thead><tbody>
 {{range .Data.Audit}}<tr><td data-label="When">{{.At}}</td><td data-label="Who">{{.By}}</td><td data-label="What" class="wrap">{{.Msg}}</td></tr>{{end}}</tbody></table></div><p class="muted">The last 10, owners only; secrets are hidden.</p></section>{{end}}
@@ -27,30 +27,30 @@
 {{if .ACLRules}}<h3 class="mt-2">Login access list on the OLT</h3><ul class="mono">{{range .ACLRules}}<li>{{.}}</li>{{end}}</ul>{{end}}
 {{if .ACLDone}}<p class="muted">SSH limited to the router (the OLT allows SSH only from listed addresses). The server can only test from the router's address: check from another PC that SSH is refused.</p>{{end}}
 {{if .ACLFinding}}<p><span class="eqwarn" role="note">{{.ACLFinding}}</span></p>{{end}}
-{{if $.CanWrite}}<div class="row mt-2"><form method="post" action="/admin/olts/manage/adopt-check"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><button class="btn sm">Check now</button></form></div>{{end}}
+{{if $.CanWrite}}<div class="btns mt-2"><form method="post" action="/admin/olts/manage/adopt-check"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><button>Check now</button></form></div>{{end}}
 </section>{{end}}
 
 {{if .IsOwner}}<section class="panel mt-3"><h2>OLT management port and login</h2>
-<p class="muted">Give a spare router port the role <b>OLT management</b> and cable the OLT's management port (GE0/2, factory address 192.168.8.200) to it. The server gives that port an address and firewall rules so that only this server can reach the OLT's SSH; the OLT gets no other access and no internet. It adopts the OLT only when its MAC is on that port and its serial number is the one in the inventory.</p>
-<form method="post" action="/admin/olts/manage/mgmt-port" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="action" value="set">
-<label class="field">Router port<select name="port">{{range .Data.FreePorts}}<option value="{{.}}"{{if eq . $.Data.MgmtPort}} selected{{end}}>{{.}}{{if eq . $.Data.MgmtPort}} (now){{end}}</option>{{else}}<option value="">no spare port found</option>{{end}}</select></label>
-<label class="field">Router address on it<input name="net" value="{{.Data.MgmtNet}}" class="mono"></label><button class="btn sm">Use this port</button></form>
+<p class="muted">Cable the OLT management port (GE0/2, factory address 192.168.8.200) to a spare router port. Only this server can reach the OLT's SSH; the OLT gets no internet. It is adopted only when its MAC is on that port and its serial matches the inventory.</p>
+<form method="post" action="/admin/olts/manage/mgmt-port" class="f"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="action" value="set">
+<label class="field half">Router port<select name="port">{{range .Data.FreePorts}}<option value="{{.}}"{{if eq . $.Data.MgmtPort}} selected{{end}}>{{.}}{{if eq . $.Data.MgmtPort}} (now){{end}}</option>{{else}}<option value="">no spare port found</option>{{end}}</select></label>
+<label class="field half">Router address<input name="net" value="{{.Data.MgmtNet}}" class="mono"></label><button>Use this port</button></form>
 {{if .Data.MgmtPort}}<p class="mt-2">Now: <b class="mono">{{.Data.MgmtPort}}</b>, router address <span class="mono">{{.Data.MgmtNet}}</span>.</p>
-<form method="post" action="/admin/olts/manage/mgmt-port" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="action" value="clear"><button class="btn ghost sm">Remove the role and the router rules</button></form>{{end}}
+<form method="post" action="/admin/olts/manage/mgmt-port" class="f"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="action" value="clear"><button class="ghost">Remove role and router rules</button></form>{{end}}
 {{with .Data.Adopt}}{{if .CanSecure}}<h3 class="mt-3">Secure this OLT</h3>
-<p class="muted">Replaces the OLT's login and enable password with long generated ones, tests them in a new SSH session while the old one stays open, and only then saves. If the test fails the old password is put back. It also removes the default SNMP communities (public, private), so SNMP is off, and limits SSH to the router (the OLT allows SSH only from listed addresses).</p>
-<form method="post" action="/admin/olts/manage/secure" class="row"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
-<label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="btn sm">Secure this OLT</button></form>{{end}}
+<p class="muted">Sets long generated login and enable passwords, tested in a new SSH session before saving (the old ones come back if the test fails). Removes the default SNMP communities and limits SSH to the router.</p>
+<form method="post" action="/admin/olts/manage/secure" class="f"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
+<label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button>Secure this OLT</button></form>{{end}}
 <h3 class="mt-3">The OLT's login{{if .NeedLogin}} <span class="pill suspended">needed</span>{{end}}</h3>
-<p class="muted">{{if .NeedLogin}}The server could not log in. Type the login the OLT has now. {{end}}The password is stored encrypted and never shown, except to an owner who types their password again below.</p>
-<form method="post" action="/admin/olts/manage/credentials"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
+<p class="muted">{{if .NeedLogin}}Login failed. Enter the OLT's current login. {{end}}Stored encrypted. An owner can reveal it with their own password.</p>
+<form method="post" action="/admin/olts/manage/credentials" class="f"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
 <div class="two3"><label class="field">Login name<input name="user" value="admin" autocomplete="off" class="mono" required></label>
 <label class="field">Password<input name="pass" type="password" autocomplete="new-password" required></label>
 <label class="field">Enable password<input name="enable" type="password" autocomplete="new-password" placeholder="none"></label></div>
-<div class="row mt-2"><label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="btn ghost sm">Save and check</button></div></form>
-{{if .HasLogin}}<form method="post" action="/admin/olts/manage/reveal" class="row mt-2"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
-<label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="btn ghost sm">Reveal the OLT's password</button></form>{{end}}{{end}}
-<form method="post" action="/admin/olts/manage/manual" class="row mt-2"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="on" value="{{if .Data.Adopt.Manual}}0{{else}}1{{end}}"><button class="btn ghost sm">{{if .Data.Adopt.Manual}}Use the OLT management port again{{else}}Set up by hand instead (console snippet){{end}}</button></form>
+<div class="row"><label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="ghost">Save and check</button></div></form>
+{{if .HasLogin}}<form method="post" action="/admin/olts/manage/reveal" class="f mt-2"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
+<label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="ghost">Reveal the OLT password</button></form>{{end}}{{end}}
+<form method="post" action="/admin/olts/manage/manual" class="f mt-2"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="on" value="{{if .Data.Adopt.Manual}}0{{else}}1{{end}}"><button class="ghost">{{if .Data.Adopt.Manual}}Use the management port again{{else}}Set up by hand (console snippet){{end}}</button></form>
 </section>{{end}}
 
 <section class="panel mt-3"><div class="panel-h"><h2>Status</h2>
@@ -62,10 +62,10 @@
 {{range $st.Status.Findings}}<p><span class="eqwarn" role="note">{{.}}</span></p>{{end}}
 <p><b>{{.Data.Online}}</b> of {{.Data.Total}} ONU{{if ne .Data.Total 1}}s{{end}} online</p>
 {{else}}<p><span class="pill suspended">not reachable</span> <span class="muted">{{$st.Status.Error}}</span></p>{{end}}
-{{if .CanWrite}}{{if .Data.Configured}}<div class="row mt-2">
-<form method="post" action="/admin/olts/manage/test"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><button class="btn ghost sm">Test connection</button></form>
-<form method="post" action="/admin/olts/manage/poll"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><button class="btn ghost sm">Read now</button></form>
-<form method="post" action="/admin/olts/manage/backup"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><button class="btn ghost sm">Back up the configuration now</button></form></div>{{end}}{{end}}</section>
+{{if .CanWrite}}{{if .Data.Configured}}<div class="btns mt-2">
+<form method="post" action="/admin/olts/manage/test"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><button class="ghost">Test connection</button></form>
+<form method="post" action="/admin/olts/manage/poll"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><button class="ghost">Read now</button></form>
+<form method="post" action="/admin/olts/manage/backup"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><button class="ghost">Back up now</button></form></div>{{end}}{{end}}</section>
 
 {{if $st.Status.ONUs}}<section class="panel mt-3"><h2>ONUs on the OLT</h2><div class="tw"><table class="rs"><thead><tr><th>PON</th><th class="n">ID</th><th>Serial</th><th>State</th><th class="n">Rx dBm</th><th class="n">Tx dBm</th><th class="n">Distance m</th><th>Last down</th></tr></thead><tbody>
 {{range $st.Status.ONUs}}<tr><td data-label="PON">{{.PON}}</td><td class="n" data-label="ID">{{.ID}}</td><td class="mono" data-label="Serial">{{.Serial}}</td><td data-label="State"><span class="pill {{if .Online}}online{{else}}offline{{end}}">{{.State}}</span></td><td class="n" data-label="Rx">{{.RxPower}}</td><td class="n" data-label="Tx">{{.TxPower}}</td><td class="n" data-label="Distance">{{.Distance}}</td><td data-label="Last down">{{.LastDown}}</td></tr>{{end}}</tbody></table></div></section>{{end}}
@@ -82,48 +82,48 @@
 {{if .IsOwner}}
 <section class="panel mt-3"><h2>Let the server configure this OLT</h2>
 <p>Provisioning is <b>{{if $S.Provisioning}}ON{{else}}OFF{{end}}</b>{{if $S.ProvisioningBy}} <span class="muted">(set by {{$S.ProvisioningBy}} {{eats $S.ProvisioningAt}})</span>{{end}}. Command syntax checked: <b>{{if $S.DialectChecked}}yes{{else}}no{{end}}</b>{{if $S.CheckedBy}} <span class="muted">({{$S.CheckedBy}} {{eats $S.CheckedAt}})</span>{{end}}.</p>
-<p class="muted">Off by default. With both on, the server saves the OLT's configuration, then authorises ONUs that are in the inventory, given to a house, and plugged into the right PON, and sets up their services. It never removes anything by itself, and it never adds a serial that is not in the inventory. {{.Data.Note}}</p>
-<form method="post" action="/admin/olts/manage/plan" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><button class="btn sm">Preview the plan</button></form>
-<form method="post" action="/admin/olts/manage/dialect" class="row mt-2"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="on" value="{{if $S.DialectChecked}}0{{else}}1{{end}}">
-<label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="btn ghost sm">{{if $S.DialectChecked}}Mark the syntax as not checked{{else}}The plan preview looks right: mark the command syntax as checked{{end}}</button></form>
-<form method="post" action="/admin/olts/manage/provisioning" class="row mt-2"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="on" value="{{if $S.Provisioning}}0{{else}}1{{end}}">
-<label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="btn {{if $S.Provisioning}}ghost {{end}}sm">{{if $S.Provisioning}}Stop letting the server configure this OLT{{else}}Let the server configure this OLT{{end}}</button></form>
+<p class="muted">Off by default. When on and the syntax is checked, the server backs up the configuration, then authorises inventory ONUs that are given to a house and on the right PON. It never removes anything and never adds a serial outside the inventory. {{.Data.Note}}</p>
+<form method="post" action="/admin/olts/manage/plan" class="f"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><button>Preview the plan</button></form>
+<form method="post" action="/admin/olts/manage/dialect" class="f mt-2"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="on" value="{{if $S.DialectChecked}}0{{else}}1{{end}}">
+<label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="ghost">{{if $S.DialectChecked}}Mark syntax unchecked{{else}}Mark syntax checked{{end}}</button></form>
+<form method="post" action="/admin/olts/manage/provisioning" class="f mt-2"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="on" value="{{if $S.Provisioning}}0{{else}}1{{end}}">
+<label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button{{if $S.Provisioning}} class="ghost"{{end}}>{{if $S.Provisioning}}Stop provisioning{{else}}Start provisioning{{end}}</button></form>
 {{if .Data.Held}}<h3>Held</h3><p class="muted">These ONUs are in the inventory but were not added. The owners were told.</p>{{end}}
 </section>
 
 <section class="panel mt-3"><h2>Connection</h2>
-<form method="post" action="/admin/olts/manage/settings"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
-<div class="two3"><label class="field">Protocol<select name="proto"><option value="ssh"{{if eq .Data.Proto "ssh"}} selected{{end}}>SSH</option><option value="telnet"{{if eq .Data.Proto "telnet"}} selected{{end}}>Telnet</option></select></label>
-<label class="field">OLT port<input name="port" type="number" min="1" max="65535" value="{{.Data.Port}}"></label>
+<form method="post" action="/admin/olts/manage/settings" class="f"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
+<div class="two3"><label class="field half">Protocol<select name="proto"><option value="ssh"{{if eq .Data.Proto "ssh"}} selected{{end}}>SSH</option><option value="telnet"{{if eq .Data.Proto "telnet"}} selected{{end}}>Telnet</option></select></label>
+<label class="field half">OLT port<input name="port" type="number" min="1" max="65535" value="{{.Data.Port}}"></label>
 <label class="field">Enable password<input name="enable_pass" type="password" autocomplete="new-password" placeholder="{{if .Data.HasEnable}}stored, leave empty to keep{{else}}none{{end}}"></label></div>
-<div class="two3 mt-2"><label class="field">OLT management VLAN<input name="mgmt_vlan" type="number" min="2" max="4094" value="{{.Data.MgmtVLAN}}"></label>
-<label class="field">Uplink port (to the router)<input name="uplink" value="{{.Data.Uplink}}" placeholder="0/1" class="mono"></label>
-<label class="field">Internet VLAN on the OLT<input name="internet_vlan" type="number" min="0" max="4094" value="{{$S.InternetVLAN}}" placeholder="from the router">{{with .Data.InetVLANNote}}<span class="muted">{{.}}</span>{{end}}</label></div>
-<p class="muted">Login name and password are on the <a href="/admin/olts/view?id={{$E.ID}}">OLT details</a> page. The password and the enable password are stored encrypted and never shown. {{if $S.HostKey}}SSH host key pinned: <span class="mono">{{$S.HostKey}}</span> <label class="ck muted"><input type="checkbox" name="clear_hostkey" value="1"> forget it (after replacing the OLT)</label>{{else}}The SSH host key is pinned the first time the server connects, and shown here.{{end}}
+<div class="two3"><label class="field half">Management VLAN<input name="mgmt_vlan" type="number" min="2" max="4094" value="{{.Data.MgmtVLAN}}"></label>
+<label class="field half">Uplink port<input name="uplink" value="{{.Data.Uplink}}" placeholder="0/1" class="mono"></label>
+<label class="field half">Internet VLAN<input name="internet_vlan" type="number" min="0" max="4094" value="{{$S.InternetVLAN}}" placeholder="from the router">{{with .Data.InetVLANNote}}<span class="muted">{{.}}</span>{{end}}</label></div>
+<p class="muted">Login is on the <a href="/admin/olts/view?id={{$E.ID}}">OLT details</a> page. {{if $S.HostKey}}SSH host key: <span class="mono">{{$S.HostKey}}</span> <label class="ck muted"><input type="checkbox" name="clear_hostkey" value="1"> forget it (after replacing the OLT)</label>{{else}}The SSH host key is pinned on first connect.{{end}}
 {{if .Data.HasEnable}} <label class="ck muted"><input type="checkbox" name="clear_enable" value="1"> remove the enable password</label>{{end}}</p>
-<div class="row mt-2"><label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button>Save</button></div></form></section>
+<div class="row"><label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button>Save</button></div></form></section>
 
 <section class="panel mt-3"><h2>Saved configurations</h2>
-<p class="muted">The last {{len .Data.Backups}} copies of the running configuration (at most 20), one before every change the server makes. Passwords and keys are hidden when shown.</p>
+<p class="muted">Last {{len .Data.Backups}} copies (max 20), one before each server change. Secrets are hidden.</p>
 {{if .Data.Backups}}<div class="tw"><table class="rs"><thead><tr><th>When</th><th>Why</th><th>By</th><th class="n">Size</th><th></th></tr></thead><tbody>
 {{range .Data.Backups}}<tr><td data-label="When">{{.At}}</td><td data-label="Why">{{.Why}}</td><td data-label="By">{{.By}}</td><td class="n" data-label="Size">{{.Size}}</td><td><a class="btn ghost sm" href="/admin/olts/backup?id={{$E.ID}}&amp;b={{.ID}}">View</a> <a class="btn ghost sm" href="/admin/olts/backup?id={{$E.ID}}&amp;b={{.ID}}&amp;dl=1">Download</a></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">None yet.</p>{{end}}</section>
 
-{{if $st.Status.ONUs}}<section class="panel mt-3"><h2>Remove an ONU from the OLT</h2><p class="muted">Only on your say-so, never automatically: you see the command first and confirm with your password.</p>
-<form method="post" action="/admin/olts/manage/remove-plan" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><label class="field">Serial<select name="serial">{{range $st.Status.ONUs}}{{if .Serial}}<option value="{{.Serial}}">{{.Serial}} (PON {{.PON}}, ID {{.ID}})</option>{{end}}{{end}}</select></label><button class="btn ghost sm">Show the removal plan</button></form></section>{{end}}
+{{if $st.Status.ONUs}}<section class="panel mt-3"><h2>Remove an ONU from the OLT</h2><p class="muted">Manual only. You see the command first and confirm with your password.</p>
+<form method="post" action="/admin/olts/manage/remove-plan" class="f"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><label class="field">Serial<select name="serial">{{range $st.Status.ONUs}}{{if .Serial}}<option value="{{.Serial}}">{{.Serial}} (PON {{.PON}}, ID {{.ID}})</option>{{end}}{{end}}</select></label><button class="ghost">Show removal plan</button></form></section>{{end}}
 {{end}}
 {{template "afoot" .}}{{end}}
 
 {{define "admin_olt_plan"}}{{template "ahead" .}}{{$E := .Data.E}}{{$P := .Data.Plan}}
 <p><a href="/admin/olts/manage?id={{$E.ID}}">&larr; back to {{oltLabel $E}}</a></p>
 <section class="panel mt-3"><h2>{{if .Data.Remove}}Removal plan{{else}}Plan{{end}} <span class="muted">{{.Data.Cmds}} line{{if ne .Data.Cmds 1}}s{{end}}, id {{.Data.Hash}}</span></h2>
-<p class="muted">This is exactly what would be sent. Nothing has been changed. The OLT's configuration is saved first, and the lines are read back afterwards to check them. Each step is sent on its own: a refused line stops its step and the later steps, except those marked as sent anyway.</p>
+<p class="muted">Exactly what would be sent; nothing has changed. The configuration is saved first and read back after. A refused line stops its step and later steps, except those marked as sent anyway.</p>
 {{range $P.Steps}}<h3>{{.Title}}</h3>{{if .Unverified}}<p><span class="pill unknown">unverified</span> <span class="muted">{{.Unverified}}</span></p>{{end}}{{if .Independent}}<p class="muted">Sent even if an earlier step is refused.</p>{{end}}<pre class="mono">{{range .Lines}}{{.}}
 {{end}}</pre>{{else}}<p>Nothing to change: the OLT already matches.</p>{{end}}
 {{range $P.Warnings}}<p><span class="eqwarn" role="note">{{.}}</span></p>{{end}}
 {{range $P.Notes}}<p class="muted">{{.}}</p>{{end}}
 {{if $P.Adds}}<h3>ONUs that will be authorised</h3><ul>{{range $P.Adds}}<li><span class="mono">{{.Serial}}</span> on PON {{.PON}} as ONU {{.ID}} {{if .Label}}({{.Label}}){{end}}</li>{{end}}</ul>{{end}}
-{{if .Data.Cmds}}{{if .Data.MayApply}}<form method="post" action="{{if .Data.Remove}}/admin/olts/manage/remove-apply{{else}}/admin/olts/manage/apply{{end}}" class="row mt-3"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="hash" value="{{.Data.Hash}}">{{if .Data.Remove}}<input type="hidden" name="serial" value="{{.Data.Remove}}">{{end}}
-<label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="btn sm">{{if .Data.Remove}}Remove the ONU{{else}}Apply these lines{{end}}</button></form>
+{{if .Data.Cmds}}{{if .Data.MayApply}}<form method="post" action="{{if .Data.Remove}}/admin/olts/manage/remove-apply{{else}}/admin/olts/manage/apply{{end}}" class="f mt-3"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="hash" value="{{.Data.Hash}}">{{if .Data.Remove}}<input type="hidden" name="serial" value="{{.Data.Remove}}">{{end}}
+<label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button>{{if .Data.Remove}}Remove the ONU{{else}}Apply these lines{{end}}</button></form>
 {{else}}<p class="muted mt-3">The server may not change this OLT yet: turn provisioning on and mark the command syntax as checked on the previous page, after reading this plan.</p>{{end}}{{end}}
 </section>
 {{template "afoot" .}}{{end}}

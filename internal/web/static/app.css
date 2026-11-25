@@ -242,8 +242,9 @@ details>summary{cursor:pointer;font-weight:500;color:var(--ink-2)}
 .card details,.panel details{margin-top:8px}
 pre.out{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r1);padding:var(--sp-3);overflow:auto;max-height:420px;font:var(--fs-13)/1.5 var(--f-mono);margin:var(--sp-2) 0 0}
 .cbu small{display:block;margin-top:8px}.cbu code{display:block;font-size:12px}
-.copyline{display:flex;gap:8px;align-items:stretch}
-.copyline textarea,.copyline input{flex:1;font:13px/1.45 var(--f-mono);min-height:44px}
+.copyline{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--sp-3)}
+.copyline>button,.copyline>.btn{justify-self:center;width:60%;min-width:min(100%,12rem);white-space:normal}
+.copyline textarea,.copyline input{width:100%;font:13px/1.45 var(--f-mono);min-height:44px}
 .searchbar{display:flex;gap:var(--sp-2);margin:0 0 var(--sp-4);flex-wrap:wrap}
 .searchbar input{flex:1;min-width:200px}
 .bar{height:8px;background:var(--surface-3);border-radius:4px;overflow:hidden;margin:8px 0 4px}.bar i{display:block;height:100%;background:var(--chart-1);border-radius:4px}
@@ -278,7 +279,10 @@ dialog.modal[open]{animation:rise .22s var(--ease)}
 .mcard>header{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--sp-3);margin-bottom:var(--sp-4)}
 .mcard h2{font:600 var(--fs-20)/1.25 var(--f-sans);letter-spacing:-.015em}
 .mcard .stack{display:flex;flex-direction:column;gap:var(--sp-4)}
-.mcard footer{display:flex;flex-wrap:wrap;gap:var(--sp-2);justify-content:flex-end;margin-top:var(--sp-5)}
+.mcard footer{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--sp-3);margin-top:var(--sp-5)}
+.mcard footer>*{width:100%;min-width:0;margin:0;min-height:var(--ctl-h);padding:0 var(--sp-3);line-height:1.2;white-space:normal;text-align:center}
+.mcard footer>:only-child{grid-column:1/-1;justify-self:center;width:60%;min-width:min(100%,12rem)}
+.mcard footer>:first-child:nth-last-child(n+3),.mcard footer>:first-child:nth-last-child(n+3)~*{grid-column:1/-1}
 .two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:var(--sp-3)}
 .two>*{min-width:0}
 
@@ -492,9 +496,9 @@ pre.code{background:var(--surface-2);border:1px solid var(--line);border-radius:
 
 /* ---- additions used by the page templates ------------------------------------------------ */
 .stack-col{display:grid;gap:16px;align-content:start;min-width:0}
-.cmdbox{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:start;margin:10px 0}
+.cmdbox{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--sp-3);margin:var(--sp-3) 0}
+.cmdbox>button,.cmdbox>.btn{justify-self:center;width:60%;min-width:min(100%,12rem)}
 .cmdbox textarea{width:100%;font:400 var(--fs-13)/1.5 var(--f-mono);background:var(--surface-2);color:var(--ink);border:1px solid var(--field);border-radius:var(--r1);padding:12px;resize:vertical;min-height:84px}
-@media (max-width:640px){.cmdbox{grid-template-columns:1fr}}
 pre.rep{margin:var(--sp-3) 0 0;padding:var(--sp-3) var(--sp-4);background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r1);font:400 var(--fs-12)/1.55 var(--f-mono);overflow:auto;max-height:320px;white-space:pre-wrap}
 .topo-wrap{overflow-x:auto}
 .tabnote{margin-left:auto;align-self:center;font-size:13px}
@@ -632,3 +636,44 @@ body.vprint{background:#fff;color:#000;padding:16px;font:14px var(--f-sans)}
   /* bottom sheet on phones */
   .netpanel{position:fixed;left:0;right:0;bottom:0;z-index:40;max-height:70vh;border-radius:var(--r4) var(--r4) 0 0;border-bottom:0;box-shadow:0 -8px 24px rgba(15,23,42,.28)}
 }
+
+/* ---- form system: one field width, buttons below the fields ------------------------------
+   .f is a two-column grid capped at --form-w. Every field spans both columns; .half
+   puts two short fields (VLAN, port) side by side. Buttons always sit below the fields:
+   one is centred at 60% of the field, two split the field width 50/50 on one line, three
+   or more stack at full width. .btns gives a group of one-button forms the same rule. */
+:root{--form-w:30rem}
+.f,.f fieldset{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--sp-3);align-items:start;min-width:0}
+.f{width:100%;max-width:var(--form-w)}
+.f.panel,.f.card{max-width:calc(var(--form-w) + 2*var(--sp-5) + 2px)}
+.f fieldset{border:0;padding:0;margin:0}
+.f fieldset.panel{border:1px solid var(--line);padding:var(--sp-4)}
+.f legend{padding:0 var(--sp-1);font-weight:600}
+.f .row,.f .two,.f .two3{display:contents}
+.f>*,.f .row>*,.f .two>*,.f .two3>*,.f fieldset>*{grid-column:1/-1;min-width:0;margin-top:0;margin-bottom:0}
+.f label:not(.ck):not(.pkg),.f .field{display:block;font:500 var(--fs-13)/1.3 var(--f-sans);color:var(--ink)}
+.f label>input:not([type=checkbox]):not([type=radio]),.f label>select,.f label>textarea{display:block;width:100%;max-width:100%;margin-top:6px}
+.f label>input:not([type=checkbox]):not([type=radio]),.f label>select{height:var(--ctl-h)}
+.f label>textarea{min-height:88px;resize:vertical}
+.f .half{grid-column:span 1}
+.f p,.f .muted{margin:0}
+.f :is(.row,.two,.two3)>:is(input,select,textarea):not([type=hidden]):not([type=checkbox]):not([type=radio]){display:block;width:100%}
+:is(.f,.f .row)>button:not(.lnk){grid-column:1/-1;justify-self:center;width:60%;min-width:min(100%,12rem);min-height:var(--ctl-h);padding:0 var(--sp-3);font-size:var(--fs-14);line-height:1.2;white-space:normal;text-align:center;border-radius:var(--r1)}
+:is(.f,.f .row)>button:not(.lnk):nth-of-type(1):nth-last-of-type(2),:is(.f,.f .row)>button:not(.lnk):nth-of-type(2):nth-last-of-type(1){grid-column:span 1;width:100%;min-width:0}
+:is(.f,.f .row)>button:not(.lnk):nth-of-type(1):nth-last-of-type(n+3),:is(.f,.f .row)>button:not(.lnk):nth-of-type(1):nth-last-of-type(n+3)~button:not(.lnk){grid-column:1/-1;width:100%;min-width:0}
+.btns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--sp-3);width:100%;max-width:var(--form-w);margin:var(--sp-3) 0 0}
+.btns>*{width:100%;min-width:0;margin:0}
+.btns>form{display:block}
+.btns :is(button,.btn){width:100%;min-width:0;min-height:var(--ctl-h);padding:0 var(--sp-3);font-size:var(--fs-14);line-height:1.2;white-space:normal;text-align:center;border-radius:var(--r1)}
+.btns>:only-child{grid-column:1/-1;justify-self:center;width:60%;min-width:min(100%,12rem)}
+.btns>:first-child:nth-last-child(n+3),.btns>:first-child:nth-last-child(n+3)~*{grid-column:1/-1}
+.f details label+label{margin-top:var(--sp-3)}
+.f>input:not([type=hidden]):not([type=checkbox]):not([type=radio]),.f>select,.f .row>input:not([type=hidden]):not([type=checkbox]):not([type=radio]),.f .row>select{display:block;width:100%;height:var(--ctl-h);min-height:var(--ctl-h)}
+.tw td form.f{display:grid}
+.tw td .btns>form{display:block}
+.f .chk-list label{display:flex}
+.f .pkgs{margin:0}
+.f.f-wide{max-width:none}
+.tw td input.num{width:6rem}
+.tw td.ufm{min-width:15rem;max-width:20rem;white-space:normal}
+.f>textarea,.f .row>textarea{display:block;width:100%;min-height:88px;resize:vertical}

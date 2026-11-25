@@ -10,7 +10,7 @@
 {{template "stat" (dict "K" "Active" "V" .Data.ActiveN "S" "with paid time" "Icon" "check" "Tone" "ok")}}
 {{template "stat" (dict "K" "Online now" "V" .Data.OnlineN "S" "connected" "Icon" "live")}}
 </div>
-<form method="get" action="/admin/apartments" class="row clients-search" role="search"><input type="search" name="q" value="{{.Data.Q}}" placeholder="Search apartment, address, caretaker or landlord" aria-label="Search apartments" autocomplete="off"><button class="ghost">Search</button></form>
+<form method="get" action="/admin/apartments" class="f clients-search" role="search"><input type="search" name="q" value="{{.Data.Q}}" placeholder="Search apartment, address, caretaker or landlord" aria-label="Search apartments" autocomplete="off"><button class="ghost">Search</button></form>
 {{if .Data.Rows}}<div class="tw"><table class="rs"><thead><tr><th>Apartment</th><th>Routers</th><th class="n">Houses active / total</th><th class="n">Online now</th><th>Caretaker</th></tr></thead><tbody>
 {{range .Data.Rows}}<tr><td class="who"><b><a href="/admin/apartments/view?id={{.ID}}">{{.Name}}</a></b><span>{{.Address}}</span>{{with .MapURL}}<a class="maplink" href="{{.}}" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>View on map</a>{{end}}</td>
 <td data-label="Routers" class="wrap">{{range $i, $r := .Routers}}{{if $i}}, {{end}}<a href="/admin/routers/view?id={{$r.ID}}">{{$r.Name}}</a>{{else}}<span class="pill drift">no router</span>{{end}}</td>
@@ -31,7 +31,7 @@
 {{range $a.Routers}}<tr><td class="wrap" data-label="Router"><a href="/admin/routers/view?id={{.ID}}">{{.Name}}</a></td><td class="muted" data-label="Houses">{{index $a.AccountRouters .ID}} houses</td>
 <td>{{if $d.CanWrite}}<form method="post" action="/admin/apartments/unlink" class="i" data-confirm="Stop {{.Name}} serving {{$a.Name}}?"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$a.ID}}"><input type="hidden" name="site" value="{{.ID}}"><button class="ghost sm">Unlink</button></form>{{end}}</td></tr>
 {{else}}<tr><td class="muted">No router serves this apartment, so none of its houses can be provisioned.</td></tr>{{end}}</table>
-{{if and $d.CanWrite $a.Unlinked}}<form method="post" action="/admin/apartments/link" class="mt-3 row"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$a.ID}}">
+{{if and $d.CanWrite $a.Unlinked}}<form method="post" action="/admin/apartments/link" class="mt-3 f"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$a.ID}}">
 <label class="field">Link a router<select name="site">{{range $a.Unlinked}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label><button>Link</button></form>{{end}}
 <p class="mt-2 muted">A router can serve several apartments, and a large apartment can have several routers. A router cannot be unlinked while houses of this apartment are on it.</p></section>
 <section class="panel"><h2>People</h2>
@@ -46,31 +46,31 @@
 <td data-label="State"><span class="pill {{state .}}">{{state .}}</span></td><td data-label="Problem">{{with index $d.Data.Issue .ID}}<span class="bad">{{.}}</span>{{end}}</td></tr>{{end}}</tbody></table></div>
 {{else}}<p class="muted nil">No houses yet. Use Add customer and pick this apartment.</p>{{end}}</section>
 {{template "apt_equipment" .}}
-{{if $d.CanWrite}}<section class="mt-4 panel danger"><h2 class="bad">Remove apartment</h2>{{if $a.Accounts}}<p class="muted" style="margin:6px 0 10px">{{len $a.Accounts}} house{{if ne (len $a.Accounts) 1}}s belong{{else}} belongs{{end}} to this apartment. Move or close {{if eq (len $a.Accounts) 1}}it{{else}}them{{end}} first; an apartment can only be removed when no account, open or closed, belongs to it.</p>{{else}}<p class="muted" style="margin:6px 0 10px">Only possible when no account, open or closed, belongs to it.</p>{{end}}
-<form method="post" action="/admin/apartments/delete" data-confirm="Remove {{$a.Name}}?"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$a.ID}}"><button{{if $a.Accounts}} disabled title="Not possible while houses belong to it"{{end}}>Remove</button></form></section>{{end}}
+{{if $d.CanWrite}}<section class="mt-4 panel danger"><h2 class="bad">Remove apartment</h2>{{if $a.Accounts}}<p class="muted" style="margin:6px 0 10px">{{len $a.Accounts}} house{{if ne (len $a.Accounts) 1}}s belong{{else}} belongs{{end}} to it. Move or close {{if eq (len $a.Accounts) 1}}it{{else}}them{{end}} first (open or closed accounts both block removal).</p>{{else}}<p class="muted" style="margin:6px 0 10px">Only when no account, open or closed, belongs to it.</p>{{end}}
+<form method="post" action="/admin/apartments/delete" class="f" data-confirm="Remove {{$a.Name}}?"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="id" value="{{$a.ID}}"><button{{if $a.Accounts}} disabled title="Not possible while houses belong to it"{{end}}>Remove</button></form></section>{{end}}
 {{template "afoot" .}}{{end}}
 
 {{define "contactfields"}}<fieldset class="mt-3 panel"><legend>{{.Title}} (optional)</legend>
 <div class="two"><label class="field">Name<input name="{{.P}}_name" value="{{.C.Name}}" maxlength="80" autocomplete="off"></label>
-<label class="field">Phone<input name="{{.P}}_phone" value="{{.C.Phone}}" inputmode="tel" placeholder="0712 345 678" autocomplete="off"></label></div>
-<div class="two"><label class="field">Alternative phone<input name="{{.P}}_phone2" value="{{.C.Phone2}}" inputmode="tel" autocomplete="off"></label>
+<label class="field half">Phone<input name="{{.P}}_phone" value="{{.C.Phone}}" inputmode="tel" placeholder="0712 345 678" autocomplete="off"></label></div>
+<div class="two"><label class="field half">Alt. phone<input name="{{.P}}_phone2" value="{{.C.Phone2}}" inputmode="tel" autocomplete="off"></label>
 <label class="field">Email<input name="{{.P}}_email" type="email" value="{{.C.Email}}" maxlength="120" autocomplete="off"></label></div>
 <label class="field">Notes<input name="{{.P}}_notes" value="{{.C.Notes}}" maxlength="300"></label></fieldset>{{end}}
 
 {{define "admin_apartment_form"}}{{template "ahead" .}}{{$d := .}}{{$c := .Data.Cur}}
-<form method="post" action="/admin/apartments/save" class="stack-col panel"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$c.ID}}">
+<form method="post" action="/admin/apartments/save" class="f panel"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$c.ID}}">
 <div class="two"><label class="field">Apartment name<input name="name" value="{{$c.Name}}" required maxlength="80" placeholder="MG One Central" autofocus></label>
 <label class="field">Address or area<input name="address" value="{{$c.Address}}" maxlength="200" placeholder="Street, estate, town"></label></div>
 <label class="field">Notes<input name="notes" value="{{$c.Notes}}" maxlength="300"></label>
 <div class="field"><label for="gps">GPS location (optional)</label>
 <div class="row"><input id="gps" name="gps" value="{{.Data.GPS}}" maxlength="400" inputmode="text" placeholder="-1.2921, 36.8219" autocomplete="off" spellcheck="false" aria-describedby="gps-help gps-note">
 <button type="button" class="ghost" data-gps-fill="gps" data-gps-note="gps-note" hidden>Use this device's location</button></div>
-<p class="muted" id="gps-help" style="margin:6px 0 0">In Google Maps, right-click the spot and click the numbers to copy them, then paste here. A Google Maps link that shows the coordinates also works. Leave empty if unknown.</p>
+<p class="muted" id="gps-help" style="margin:6px 0 0">Right-click the spot in Google Maps, click the numbers to copy, and paste here. A Maps link with coordinates also works.</p>
 <p class="muted" id="gps-note" role="status" aria-live="polite" style="margin:4px 0 0"></p></div>
 <fieldset class="panel"><legend>Routers that serve it</legend><input type="hidden" name="routers_set" value="{{if not .Data.IsNew}}1{{end}}">
 <div class="stack-col">{{range .Data.AllRouters}}<label class="ck"><input type="checkbox" name="router" value="{{.ID}}"{{if index $d.Data.Linked .ID}} checked{{end}}> {{.Name}}</label>{{else}}<p class="muted nil">No routers yet. Add one first.</p>{{end}}</div></fieldset>
 {{template "contactfields" (dict "Title" "Caretaker" "P" "caretaker" "C" $c.Caretaker)}}
 {{template "contactfields" (dict "Title" "Landlord / agent" "P" "landlord" "C" $c.Landlord)}}
-<div class="row"><button>Save</button><a class="btn ghost" href="{{if $c.ID}}/admin/apartments/view?id={{$c.ID}}{{else}}/admin/apartments{{end}}">Cancel</a></div></form>
+<div class="btns"><button>Save</button><a class="btn ghost" href="{{if $c.ID}}/admin/apartments/view?id={{$c.ID}}{{else}}/admin/apartments{{end}}">Cancel</a></div></form>
 <script src="{{static "gps.js"}}" defer></script>
 {{template "afoot" .}}{{end}}

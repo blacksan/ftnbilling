@@ -1,5 +1,5 @@
 {{define "admin_settings_wa"}}{{template "ahead" .}}{{template "set_tabs" .}}
-<p class="muted">WhatsApp Business Cloud API. Changes apply at once, no restart. A value saved here wins over the environment file; secrets are shown only as the last four characters.</p>
+<p class="muted">WhatsApp Business Cloud API. Applies at once. Saved values override the environment file; secrets show the last four characters.</p>
 {{if .Data.Paused}}<div class="flash bad">WhatsApp sending is paused: {{.Data.Paused}}. Fix the token, then send a test below to resume.</div>{{end}}
 {{template "set_form" (dict "P" . "Fields" .Data.Fields "Action" "/admin/settings/whatsapp")}}
 <div class="grid2">
@@ -10,78 +10,78 @@
 <tr><td>Meta verified the URL</td><td>{{if .Data.VerifiedAt}}{{eat .Data.VerifiedAt}}{{else}}not yet{{end}}</td></tr>
 <tr><td>Last signed event</td><td>{{if .Data.LastEvent}}{{eat .Data.LastEvent}}{{else}}none yet{{end}}</td></tr></table></div>
 <div class="card"><b>Send a test message</b>
-{{if .Data.Configured}}<form method="post" action="/admin/settings/whatsapp/test" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+{{if .Data.Configured}}<form method="post" action="/admin/settings/whatsapp/test" class="mt-2 f"><input type="hidden" name="_csrf" value="{{.CSRF}}">
 <label>Template<select name="template">{{range .Data.Templates}}<option>{{.}}</option>{{end}}</select></label>
 <label>To<select name="to">{{range .Data.Numbers}}<option>{{.}}</option>{{end}}</select></label><button>Send test</button></form>
-<p class="muted">Sent today: {{.Data.WAToday}}{{if .Data.WALimit}} of {{.Data.WALimit}}{{end}}. Tests go only to your admin numbers, with sample values.</p>
+<p class="muted">Sent today: {{.Data.WAToday}}{{if .Data.WALimit}} of {{.Data.WALimit}}{{end}}. Tests go to admin numbers only.</p>
 {{else}}<p class="muted">Save the access token and the phone number ID first.</p>{{end}}</div>
 {{if .Data.HasAlerts}}<div class="card"><b>Outage notices to tenants</b>
-<form method="post" action="/admin/settings/whatsapp" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<form method="post" action="/admin/settings/whatsapp" class="mt-2 f"><input type="hidden" name="_csrf" value="{{.CSRF}}">
 <label>Mode<select name="notice">{{$m := .Data.Notice.OutageNotice}}<option{{if eq $m "off"}} selected{{end}}>off</option><option{{if eq $m "manual"}} selected{{end}}>manual</option><option{{if eq $m "auto"}} selected{{end}}>auto</option></select></label>
-<label>Automatic after (minutes)<input type="number" name="auto_min" value="{{.Data.Notice.AutoMin}}" style="width:90px"></label><button>Save</button></form>
-<p class="muted">off: never; manual: you press a button on the alert; auto: sent after the outage lasts that long.</p></div>{{end}}
+<label>Auto after (minutes)<input type="number" name="auto_min" value="{{.Data.Notice.AutoMin}}"></label><button>Save</button></form>
+<p class="muted">Manual: send from the alert. Auto: send after the outage lasts that long.</p></div>{{end}}
 </div>{{template "afoot" .}}{{end}}
 
 {{define "admin_settings_mpesa"}}{{template "ahead" .}}{{template "set_tabs" .}}
-<p class="muted">Safaricom Daraja. Changes apply at once. {{if not .Data.Enabled}}<b>M-Pesa is off until the consumer key, secret, shortcode and passkey are all set.</b>{{end}}</p>
+<p class="muted">Safaricom Daraja. Applies at once. {{if not .Data.Enabled}}<b>M-Pesa is off until the consumer key, secret, shortcode and passkey are all set.</b>{{end}}</p>
 {{if and .Data.Enabled (not .Data.HTTPS)}}<div class="flash bad">Daraja only calls https:// addresses. Set the public URL below to your https address.</div>{{end}}
 {{template "set_form" (dict "P" . "Fields" .Data.Fields "Action" "/admin/settings/mpesa")}}
 <div class="grid2">
 <div class="card"><b>Callback URLs</b>
 <div class="cbu"><small class="muted">STK result</small><code>{{.Data.URLStk}}</code><small class="muted">C2B validation</small><code>{{.Data.URLVal}}</code><small class="muted">C2B confirmation</small><code>{{.Data.URLConf}}</code></div>
-{{if not .Data.Revealed}}<form method="post" action="/admin/settings/mpesa/urls" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Current admin password<input type="password" name="current_password" autocomplete="current-password"></label><button>Show with token</button></form>{{end}}
+{{if not .Data.Revealed}}<form method="post" action="/admin/settings/mpesa/urls" class="mt-2 f"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Admin password<input type="password" name="current_password" autocomplete="current-password"></label><button>Show with token</button></form>{{end}}
 {{if .Data.Production}}<div class="mt-2 flash bad"><b>Production warning.</b> Safaricom calls the URLs you registered, and it will not register new ones until the old ones are deleted (through the Daraja portal or Safaricom support: it answers "URLs are already registered"). Replacing or going back on the token changes the URLs. The old token keeps working for 7 days so payments are not lost, but you must get the new URLs registered inside that time. A second change before then ends the first grace period.</div>{{end}}
 {{with .Data.PrevUntil}}<p class="muted">The previous token still works until {{eat .}}.</p>{{end}}
-<form method="post" action="/admin/settings/mpesa/rotate-token" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Current admin password<input type="password" name="current_password" autocomplete="current-password"></label>{{if .Data.Production}}<label><input type="checkbox" name="confirm_reregister" value="1"> I understand the URLs must be registered again with Safaricom</label>{{end}}<button>{{if .Data.HasToken}}Replace the token{{else}}Create a token{{end}}</button></form>
-<p class="muted">The token is part of the URL so only Safaricom can post payments. After replacing it, register the URLs again.</p></div>
+<form method="post" action="/admin/settings/mpesa/rotate-token" class="mt-2 f"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Admin password<input type="password" name="current_password" autocomplete="current-password"></label>{{if .Data.Production}}<label class="ck"><input type="checkbox" name="confirm_reregister" value="1"> I understand the URLs must be registered again with Safaricom</label>{{end}}<button>{{if .Data.HasToken}}Replace the token{{else}}Create a token{{end}}</button></form>
+<p class="muted">The token is part of the URL. After replacing it, register the URLs again.</p></div>
 <div class="card"><b>Test the connection</b>
-<form method="post" action="/admin/settings/mpesa/oauth-test" style="margin:6px 0"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button>Test key and secret</button> <span class="muted">asks Daraja for an access token</span></form>
-<form method="post" action="/admin/settings/mpesa/register-c2b" style="margin:6px 0"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button>Register the C2B URLs</button> <span class="muted">tells Daraja where to send Paybill payments</span></form>
-<form method="post" action="/admin/settings/mpesa/stk-test" class="row" style="margin:6px 0"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Your phone<input name="phone" placeholder="0712 345 678" autocomplete="off"></label><button>Send KES 1 prompt</button></form>
+<form method="post" action="/admin/settings/mpesa/oauth-test" class="f mt-2"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button>Test key and secret</button></form>
+<form method="post" action="/admin/settings/mpesa/register-c2b" class="f mt-2"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button>Register C2B URLs</button></form>
+<form method="post" action="/admin/settings/mpesa/stk-test" class="f mt-2"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Your phone<input name="phone" placeholder="0712 345 678" autocomplete="off"></label><button>Send KES 1 prompt</button></form>
 {{if .Data.Production}}<p class="muted">Production: the KES 1 is real money. It is recorded as an unmatched payment noted "settings test".</p>{{end}}
-<form method="post" action="/admin/settings/mpesa/receipt-test" class="row" style="margin:6px 0"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>A real M-Pesa receipt<input name="receipt" placeholder="e.g. QGH7XXXXXX" autocomplete="off" maxlength="12"></label><button{{if not .Data.HasInitiator}} disabled style="opacity:.45;cursor:not-allowed"{{end}}>Test receipt confirmation</button></form>
+<form method="post" action="/admin/settings/mpesa/receipt-test" class="f mt-2"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>A real M-Pesa receipt<input name="receipt" placeholder="e.g. QGH7XXXXXX" autocomplete="off" maxlength="12"></label><button{{if not .Data.HasInitiator}} disabled{{end}}>Test receipt confirmation</button></form>
 <p class="muted">Receipt confirmation is <b>{{if .Data.ConfirmOn}}on{{else}}off{{end}}</b>.{{if .Data.ConfirmOn}} Each C2B confirmation and STK success is checked with Daraja before it is credited.{{else}} {{.Data.ConfirmWhy}}{{end}} To turn it on: save the initiator name and security credential, press the button above with a receipt from your M-Pesa statement and see that Daraja confirms it, then set "Confirm receipts with Daraja" to auto or on. A wrong credential would hold every payment for 15 minutes and then list it under Unmatched, so test first.</p>
 {{with .Data.RTest}}<div class="card"><b>Receipt test for {{.Receipt}}:</b> <span class="pill {{.Status}}">{{.Status}}</span><p>{{.Verdict}}</p>{{if .Sent}}<details><summary>Daraja's immediate reply</summary><pre class="mono" style="white-space:pre-wrap">{{.Sent}}</pre></details>{{end}}{{if .Raw}}<details open><summary>Daraja's answer, as received</summary><pre class="mono" style="white-space:pre-wrap">{{.Raw}}</pre></details>{{end}}</div>{{end}}
 {{with .Data.Test}}<p data-stk="{{.CheckoutID}}"><b>Test payment:</b> <span data-stk-status class="pill {{.Status}}">{{.Status}}</span> <span data-stk-detail>{{.Detail}}</span></p>{{end}}</div>
 </div>{{template "afoot" .}}{{end}}
 
 {{define "admin_settings_email"}}{{template "ahead" .}}{{template "set_tabs" .}}
-<p class="muted">Email for alerts, in addition to WhatsApp. Changes apply at once.</p>
+<p class="muted">Alert email, in addition to WhatsApp. Applies at once.</p>
 {{template "set_form" (dict "P" . "Fields" .Data.Fields "Action" "/admin/settings/email")}}
 <div class="card"><b>Send a test email</b>
-{{if .Data.Configured}}<form method="post" action="/admin/settings/email/test" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>To<input name="to" value="{{range $i, $r := .Data.Recipients}}{{if eq $i 0}}{{$r}}{{end}}{{end}}" autocomplete="off"></label><button>Send test</button></form>
+{{if .Data.Configured}}<form method="post" action="/admin/settings/email/test" class="mt-2 f"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>To<input name="to" value="{{range $i, $r := .Data.Recipients}}{{if eq $i 0}}{{$r}}{{end}}{{end}}" autocomplete="off"></label><button>Send test</button></form>
 {{else}}<p class="muted">Save the mail server and the From address first.</p>{{end}}</div>
 {{template "afoot" .}}{{end}}
 
 {{define "admin_settings_equipment"}}{{template "ahead" .}}{{template "set_tabs" .}}
 <p class="muted">Importing equipment lists is done on the <a href="/admin/equipment?tab=onu">Equipment page</a>.</p>
-<div class="card"><b>Find a MAC address</b><p class="muted">Asks every connected router's router: its DHCP leases. Each router gets 5 seconds.</p>
-<form method="get" action="/admin/settings/equipment/find" class="row"><label>MAC address<input name="mac" value="{{.Data.MAC}}" placeholder="AA:BB:CC:DD:EE:FF" autocomplete="off"></label><button>Find</button></form>
+<div class="card"><b>Find a MAC address</b><p class="muted">Checks DHCP leases on every connected router (5 s each).</p>
+<form method="get" action="/admin/settings/equipment/find" class="f"><label>MAC address<input name="mac" value="{{.Data.MAC}}" placeholder="AA:BB:CC:DD:EE:FF" autocomplete="off"></label><button>Find</button></form>
 {{if .Data.Searched}}{{if .Data.Found}}<table class="mt-2"><tr><th>Router</th><th>IP</th><th>Name</th><th>State</th><th>Seen in</th></tr>{{range .Data.Found}}<tr><td>{{.Site}}</td><td>{{.IP}}</td><td>{{.Host}}</td><td>{{.State}}</td><td>{{.Source}}</td></tr>{{end}}</table>{{else}}<p class="muted">Not seen on any router.{{if .Data.FindNote}} {{.Data.FindNote}}{{end}}</p>{{end}}{{end}}</div>
 <div class="card"><b>ONUs in stock with a MAC address</b>{{if .Data.Rows}}<div class="tw" style="border:0"><table><tr><th>MAC</th><th>Serial</th><th>Model</th><th>Router</th><th>Status</th></tr>{{range .Data.Rows}}<tr><td><a href="/admin/settings/equipment/find?mac={{.E.MAC}}">{{.E.MAC}}</a></td><td>{{.E.Serial}}</td><td>{{.E.Model}}</td><td>{{.Site}}</td><td>{{eqStat .E.Status}}</td></tr>{{end}}</table></div>{{else}}<p class="muted">None.</p>{{end}}</div>
 {{template "afoot" .}}{{end}}
 
 {{define "admin_tools"}}{{template "ahead" .}}{{template "set_tabs" .}}
 {{if not .Data.Sites}}<div class="card muted">No connected router yet. Tools run on a router's router.</div>{{else}}
-<p class="muted">Ping and traceroute run from the router's router, or from this server (then the router choice is ignored); From: router means the selected router's router. Targets must be a plain IP address or host name.</p>
+<p class="muted">Run from the selected router or from this server. Target: IP address or host name.</p>
 <div class="grid2">
-<div class="card"><b>Ping</b><form method="post" action="/admin/tools/ping" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}">
-<label>Router<select name="site">{{range .Data.Sites}}<option value="{{.ID}}"{{if eq .ID $.Data.SiteID}} selected{{end}}>{{.Name}}</option>{{end}}</select></label><label>From<select name="from"><option value="router"{{if ne $.Data.From "server"}} selected{{end}}>router</option><option value="server"{{if eq $.Data.From "server"}} selected{{end}}>this server</option></select></label><label>Target<input name="target" value="8.8.8.8" autocomplete="off"></label><button>Ping</button></form></div>
-<div class="card"><b>Traceroute</b><form method="post" action="/admin/tools/traceroute" class="mt-2 row"><input type="hidden" name="_csrf" value="{{.CSRF}}">
-<label>Router<select name="site">{{range .Data.Sites}}<option value="{{.ID}}"{{if eq .ID $.Data.SiteID}} selected{{end}}>{{.Name}}</option>{{end}}</select></label><label>From<select name="from"><option value="router"{{if ne $.Data.From "server"}} selected{{end}}>router</option><option value="server"{{if eq $.Data.From "server"}} selected{{end}}>this server</option></select></label><label>Target<input name="target" value="8.8.8.8" autocomplete="off"></label><button>Trace</button></form></div>
+<div class="card"><b>Ping</b><form method="post" action="/admin/tools/ping" class="mt-2 f"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<label>Router<select name="site">{{range .Data.Sites}}<option value="{{.ID}}"{{if eq .ID $.Data.SiteID}} selected{{end}}>{{.Name}}</option>{{end}}</select></label><label class="half">From<select name="from"><option value="router"{{if ne $.Data.From "server"}} selected{{end}}>router</option><option value="server"{{if eq $.Data.From "server"}} selected{{end}}>this server</option></select></label><label class="half">Target<input name="target" value="8.8.8.8" autocomplete="off"></label><button>Ping</button></form></div>
+<div class="card"><b>Traceroute</b><form method="post" action="/admin/tools/traceroute" class="mt-2 f"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<label>Router<select name="site">{{range .Data.Sites}}<option value="{{.ID}}"{{if eq .ID $.Data.SiteID}} selected{{end}}>{{.Name}}</option>{{end}}</select></label><label class="half">From<select name="from"><option value="router"{{if ne $.Data.From "server"}} selected{{end}}>router</option><option value="server"{{if eq $.Data.From "server"}} selected{{end}}>this server</option></select></label><label class="half">Target<input name="target" value="8.8.8.8" autocomplete="off"></label><button>Trace</button></form></div>
 </div>
 {{with .Data.Result}}<div class="card"><b>{{.Tool}}</b> {{.Target}} <span class="muted">on {{.Site}}, {{eat .Ran}}</span>
 {{if .Err}}<p class="bad">{{.Err}}</p>{{end}}
 {{if .Hops}}<table><tr><th class="n">Hop</th><th>Address</th><th class="n">Loss</th><th class="n">Sent</th><th class="n">Last</th><th class="n">Avg</th><th class="n">Best</th><th class="n">Worst</th></tr>{{range .Hops}}<tr><td class="n">{{.N}}</td><td>{{.Address}}</td><td class="n">{{.Loss}}</td><td class="n">{{.Sent}}</td><td class="n">{{.Last}}</td><td class="n">{{.Avg}}</td><td class="n">{{.Best}}</td><td class="n">{{.Worst}}</td></tr>{{end}}</table>{{end}}
 {{if .Output}}<pre class="out">{{.Output}}</pre>{{end}}</div>{{end}}
-<div class="card"><b>Router console</b><p class="muted">One plain RouterOS command, such as <code>/ip address print where interface=ether1</code>. No scripting: <code>; [ ] { } $ :</code> and quotes with those inside are refused. Read-only commands (print, get, monitor ... once, export, ping, tool traceroute) run at once; print always shows one line per item with secret values hidden. add, set, remove, enable, disable and reset-counters need the router name and your password. reboot and shutdown are refused here: use the Reboot button on the router's Danger tab. Users, scripts, the scheduler, services, certificates, WireGuard changes, files and secrets are never run. Every submission is logged (command with secrets masked, outcome, size; never the output).</p>
-<form method="post" action="/admin/tools/console"><input type="hidden" name="_csrf" value="{{.CSRF}}">
-<div class="row"><label>Router<select name="site">{{range .Data.Sites}}<option value="{{.ID}}"{{if eq .ID $.Data.SiteID}} selected{{end}}>{{.Name}}</option>{{end}}</select></label><label style="flex:1">Command<input name="cmd" value="{{.Data.Cmd}}" style="width:100%;font-family:monospace" placeholder="/ip/dhcp-server/lease/print" autocomplete="off"></label></div>
-<div class="mt-2 row"><label>To change something: type the router name<input name="confirm_site" autocomplete="off"></label><label>Current admin password<input type="password" name="current_password" autocomplete="current-password"></label><button>Run</button></div></form></div>{{end}}
+<div class="card"><b>Router console</b><p class="muted">One plain RouterOS command, e.g. <code>/ip address print where interface=ether1</code>. No scripting: <code>; [ ] { } $ :</code> are refused. Read-only commands (print, get, monitor ... once, export, ping, tool traceroute) run at once, secrets hidden. add, set, remove, enable, disable and reset-counters need the router name and your password. reboot and shutdown: use the router's Danger tab. Users, scripts, scheduler, services, certificates, WireGuard, files and secrets are never run. Every submission is logged with secrets masked, never the output.</p>
+<form method="post" action="/admin/tools/console" class="f"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<div class="row"><label>Router<select name="site">{{range .Data.Sites}}<option value="{{.ID}}"{{if eq .ID $.Data.SiteID}} selected{{end}}>{{.Name}}</option>{{end}}</select></label><label>Command<input name="cmd" value="{{.Data.Cmd}}" class="mono" placeholder="/ip/dhcp-server/lease/print" autocomplete="off"></label></div>
+<div class="row"><label>Router name (needed to change something)<input name="confirm_site" autocomplete="off"></label><label>Admin password<input type="password" name="current_password" autocomplete="current-password"></label><button>Run</button></div></form></div>{{end}}
 {{template "afoot" .}}{{end}}
 
 {{define "admin_settings_support"}}{{template "ahead" .}}{{template "set_tabs" .}}
-<p class="muted">The contacts on every page a walled device sees (the payment, waiting, receipt and registration pages). Changes apply at once.{{if not .Data.NoManager}} Leave a box empty to hide that contact.{{end}}</p>
+<p class="muted">Contacts shown on the payment, waiting, receipt and registration pages. Applies at once.{{if not .Data.NoManager}} Empty hides a contact.{{end}}</p>
 {{template "set_form" (dict "P" . "Fields" .Data.Fields "Action" "/admin/settings/support")}}
 <div class="card"><b>What visitors see</b>
 <table><tr><td>Call</td><td>{{if .Data.Phone}}{{.Data.Phone}}{{else}}<span class="muted">hidden</span>{{end}}</td></tr>
