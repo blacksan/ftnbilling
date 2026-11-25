@@ -67,10 +67,14 @@ type Session struct {
 	raw  []byte
 	// answered is len(raw) when the last pagination marker was answered.
 	answered int
-	mode     Mode
-	prompt   string
-	enable   string
-	Timeout  time.Duration // per command (default 20 s)
+	// asked is len(raw) when readUntil last stopped at a question (the same question is not returned twice).
+	asked int
+	// SaveTimeout overrides Dialect.SaveTimeout (tests).
+	SaveTimeout time.Duration
+	mode        Mode
+	prompt      string
+	enable      string
+	Timeout     time.Duration // per command (default 20 s)
 	// Protect is the management VLAN: nothing may be removed under it.
 	Protect int
 	cs      cstate // where the lines sent so far have left the CLI (inside the management interface, inside a sub-mode)
@@ -132,8 +136,9 @@ func (s *Session) write(line string) error {
 type stopAt int
 
 const (
-	stopPrompt stopAt = iota
-	stopLogin         // also stop at a user or password prompt
+	stopPrompt   stopAt = iota
+	stopLogin           // also stop at a user or password prompt
+	stopQuestion        // also stop at a yes/no question (Dialect.QuestionRE)
 )
 
 // readUntil reads until the prompt (or, with stopLogin, a login prompt), answers pagination, and returns the cleaned
@@ -158,6 +163,9 @@ func (s *Session) readUntil(ctx context.Context, timeout time.Duration, st stopA
 			case s.d.PromptRE.MatchString(tl):
 				return s.tidy(text[:lastNL+1]), tl, nil
 			case st == stopLogin && (s.d.UserRE.MatchString(tl) || s.d.PasswordRE.MatchString(tl)):
+				return s.tidy(text[:lastNL+1]), tl, nil
+			case st == stopQuestion && s.d.QuestionRE != nil && s.d.QuestionRE.MatchString(tl) && len(s.raw) > s.asked:
+				s.asked = len(s.raw)
 				return s.tidy(text[:lastNL+1]), tl, nil
 			}
 		}
@@ -743,12 +751,63 @@ func (s *Session) Save(ctx context.Context) error {
 	if err := s.raise(ctx, ModePriv); err != nil {
 		return err
 	}
-	out, err := s.exec(ctx, s.d.SaveCmd, false)
-	if err != nil {
+	cmd := s.d.SaveCmd
+	if err := s.check(cmd); err != nil {
 		return err
 	}
+	to := s.SaveTimeout
+	if to <= 0 {
+		to = s.d.SaveTimeout
+	}
+	if to < s.Timeout {
+		to = s.Timeout
+	}
+	s.raw, s.answered, s.asked = nil, 0, 0
+	if err := s.write(cmd); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(to)
+	confirmed := false
+	var out, last string
+	for {
+		var err error
+		out, last, err = s.readUntil(ctx, time.Until(deadline), stopQuestion)
+		if err != nil {
+			s.Transcript = append(s.Transcript, Entry{Cmd: Redact(cmd), Err: err.Error()})
+			if errors.Is(err, ErrTimeout) {
+				return fmt.Errorf("the save did not finish within %s: %w", to, err)
+			}
+			return err
+		}
+		if s.d.PromptRE.MatchString(last) {
+			break
+		}
+		// A yes/no question: only the save's own confirmation is answered, once.
+		if !confirmed && s.d.SaveConfirmRE != nil && s.d.SaveConfirmRE.MatchString(last) {
+			confirmed = true
+			if err := s.write(s.d.SaveConfirmAnswer); err != nil {
+				return err
+			}
+			continue
+		}
+		_ = s.write("n")
+		_, pl, _ := s.readUntil(ctx, s.Timeout, stopPrompt)
+		if pl != "" {
+			s.setPrompt(pl)
+		}
+		q := Redact(clip(last, 200))
+		s.Transcript = append(s.Transcript, Entry{Cmd: Redact(cmd), Out: q, Err: "unexpected question, answered n"})
+		return &CmdError{Cmd: cmd, Output: "the OLT asked \"" + q + "\", which is not the save confirmation; it was answered n"}
+	}
+	s.setPrompt(last)
+	s.track(cmd)
+	if i := strings.IndexByte(out, '\n'); i >= 0 && (Norm(out[:i]) == Norm(cmd) || strings.HasSuffix(Norm(out[:i]), Norm(cmd))) {
+		out = out[i+1:]
+	}
+	out = strings.TrimSpace(out)
+	s.Transcript = append(s.Transcript, Entry{Cmd: Redact(cmd), Out: Redact(clip(out, 600))})
 	if failed(s.d.ErrorRE, out) {
-		return &CmdError{Cmd: s.d.SaveCmd, Output: out}
+		return &CmdError{Cmd: cmd, Output: out}
 	}
 	return nil
 }

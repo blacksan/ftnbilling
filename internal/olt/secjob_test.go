@@ -74,3 +74,20 @@ func TestSecureStatusReportsAnInterruptedSecure(t *testing.T) {
 		t.Fatalf("%+v", v)
 	}
 }
+
+// The bench: Secure failed at the save because `write` took longer than one command may. The save has its own budget.
+func TestSecureSurvivesASlowChattySave(t *testing.T) {
+	a := newAdoptEnv(t)
+	a.adopt(t)
+	a.svc.o.Timeout = time.Second
+	a.f.WriteBuilding, a.f.WriteDelay = true, 2*time.Second
+	if err := a.svc.StartSecure(oltID, "olga"); err != nil {
+		t.Fatal(err)
+	}
+	if v := waitSecure(t, a); !v.OK {
+		t.Fatalf("%+v", v)
+	}
+	if !a.adoptState().Secured {
+		t.Fatalf("%+v", a.adoptState())
+	}
+}

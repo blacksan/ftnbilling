@@ -12,8 +12,10 @@ import (
 // SecureStatus reports it. One job per OLT; the session lock still serialises it with every other OLT operation. The
 // result is stored as before (OLTAdopt notes, audit); the job record here only feeds the progress display.
 
-// secureJobTimeout bounds one background Secure.
-const secureJobTimeout = 10 * time.Minute
+// secureJobTimeout bounds one background Secure: about twenty commands, two sessions and two saves of up to
+// Dialect.SaveTimeout each, with room to spare. The SSH access list step runs on its own budget (aclStepBudget, then
+// aclRestoreBudget), detached from this one, so that its undo is never cut short.
+const secureJobTimeout = 15 * time.Minute
 
 // ErrSecureRunning: a Secure of this OLT is already in progress.
 var ErrSecureRunning = errors.New("Secure this OLT is already running for this OLT")

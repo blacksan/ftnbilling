@@ -57,6 +57,12 @@ type OLT struct {
 	BlockNewPass bool
 	// FailWrite makes `write` an error.
 	FailWrite bool
+	// WriteDelay makes `write` take this long before it answers (a slow flash save).
+	WriteDelay time.Duration
+	// WriteBuilding makes `write` print "Building configuration..." at once and "[OK]" after WriteDelay.
+	WriteBuilding bool
+	// WriteAsk makes `write` ask this question first; it saves only when the answer is "y".
+	WriteAsk string
 	// Communities are the SNMP communities (default public and private).
 	Communities []string
 
@@ -642,6 +648,44 @@ func (o *OLT) cli(rw io.ReadWriter, telnet bool) {
 		case line == "write" || line == "write memory":
 			if o.FailWrite {
 				out = "% Write failed.\n"
+				break
+			}
+			if o.WriteAsk != "" {
+				w(o.WriteAsk)
+				ans := ""
+				for {
+					b, ok := <-in
+					if !ok {
+						return
+					}
+					if b == '\n' && skipLF {
+						skipLF = false
+						continue
+					}
+					skipLF = false
+					if b == '\r' || b == '\n' {
+						skipLF = b == '\r'
+						break
+					}
+					ans += string(b)
+				}
+				w(ans + "\n")
+				if strings.TrimSpace(strings.ToLower(ans)) != "y" {
+					out = "Aborted.\n"
+					break
+				}
+			}
+			if o.WriteBuilding {
+				w("Building configuration...\n")
+			}
+			if o.WriteDelay > 0 {
+				time.Sleep(o.WriteDelay)
+			}
+			if o.WriteBuilding {
+				o.mu.Lock()
+				o.writes++
+				o.mu.Unlock()
+				out = "[OK]\n"
 				break
 			}
 			o.mu.Lock()
