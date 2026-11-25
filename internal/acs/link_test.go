@@ -1,6 +1,7 @@
 package acs
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -195,5 +196,52 @@ func TestTR069SerialFindsTheONT(t *testing.T) {
 	d.Equipment["e"] = e
 	if _, ok := d.ONTBySerial("T1X"); ok {
 		t.Fatal("a retired item was found")
+	}
+}
+
+// A box already checks in as the item (under its GPON serial): an unknown check-in whose serial embeds the item's MAC is
+// another box. It is not suggested and cannot be linked; and if the owner sets the TR-069 serial anyway (edit form or
+// PUT), the copy is held as a second device record and the real box keeps its house.
+func TestAForgedSerialCannotTakeAnItemWhoseBoxAlreadyChecksIn(t *testing.T) {
+	f := newFixture(t)
+	f.strict(true)
+	f.inventory("V26051300697", "VSOL00127E0F", vsolWAN, "a1")
+	c := linkedWithOwnLogin(t, f, "VSOL00127E0F", "10.6.3.20")
+	real := f.onuBySerial("VSOL00127E0F")
+	if real.AccountID != "a1" {
+		t.Fatalf("setup: %+v", real)
+	}
+	a := newZTE(t, f, vsolSerial, "10.6.3.21") // "12345" + the label MAC, lease ...03:15 near the WAN MAC
+	if err := a.session("0 BOOTSTRAP"); err != nil {
+		t.Fatal(err)
+	}
+	l := f.svc.UnknownONUs("")
+	if len(l) != 1 || len(l[0].Suggestions) != 0 {
+		t.Fatalf("the item whose box checks in was suggested: %+v", l)
+	}
+	if _, err := f.svc.LinkUnknown("owner", "", "eq-V26051300697", vsolSerial); !errors.Is(err, ErrItemInUse) {
+		t.Fatalf("linked a second box to an item in use: %v", err)
+	}
+	f.st.Update(func(d *store.Data) error { // the owner's edit form / PUT /equipment/{id}/tr069-serial
+		e := d.Equipment["eq-V26051300697"]
+		e.TR069Serial = vsolSerial
+		d.Equipment[e.ID] = e
+		return nil
+	})
+	for _, ev := range []string{"0 BOOTSTRAP", "2 PERIODIC"} {
+		if err := a.session(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settle(f, c, a)
+	if a.setCount() != 0 {
+		t.Fatalf("the copy got settings: %v", a.rpcs)
+	}
+	dup := f.onuBySerial(vsolSerial)
+	if dup.ID == "" || dup.Sec.MACCheck != store.MACWaiting || dup.AccountID != "" || !strings.Contains(dup.Sec.MACWaitNote, "second device record") {
+		t.Fatalf("copy: %+v acct=%q", dup.Sec, dup.AccountID)
+	}
+	if now := f.onuBySerial("VSOL00127E0F"); now.AccountID != "a1" || now.State.Returned {
+		t.Fatalf("the real box lost its house: %+v", now)
 	}
 }

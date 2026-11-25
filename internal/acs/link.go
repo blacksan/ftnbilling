@@ -20,6 +20,9 @@ var (
 	ErrNotUnknown = errors.New("that serial is not on the unknown ONU list (it may have been added or expired): reload the list")
 	ErrNoItem     = errors.New("that inventory item does not exist")
 	ErrItemUnfit  = errors.New("only an ONT that is not retired and has no TR-069 serial yet can be linked")
+	// ErrItemInUse: a box already checks in as the item under its serial or GPON serial, so the unknown check-in is not
+	// that box (it would be a second one claiming the item and its house).
+	ErrItemInUse = errors.New("that inventory item's ONU already checks in under its serial: the unknown ONU is another box")
 )
 
 const maxSuggestions = 5
@@ -74,14 +77,25 @@ func modelLike(a, b string) bool {
 	return a == b || strings.Contains(a, b) || strings.Contains(b, a)
 }
 
-// Suggest lists the inventory items (ONTs that are not retired and have no TR-069 serial) the unknown check-in may be,
-// strongest first. A suggestion is a hint for the owner, never a decision.
+// itemHasRecord: a device record already checks in as the item (under its serial or GPON serial).
+func itemHasRecord(d *store.Data, e store.Equipment) (store.ONU, bool) {
+	if l := d.ONUsOfSerial(e.Serial, e.GPONSerial, e.TR069Serial); len(l) > 0 {
+		return l[0], true
+	}
+	return store.ONU{}, false
+}
+
+// Suggest lists the inventory items (ONTs that are not retired, have no TR-069 serial and whose box does not already check
+// in) the unknown check-in may be, strongest first. A suggestion is a hint for the owner, never a decision.
 func Suggest(d *store.Data, u UnknownONU) []Suggestion {
 	out := []Suggestion{}
 	serial := strings.ToUpper(strings.Join(strings.Fields(u.Serial), ""))
 	for _, e := range d.Equipment {
 		if e.Kind != store.KindONT || e.Status == store.EqRetired || e.TR069Serial != "" {
 			continue
+		}
+		if _, ok := itemHasRecord(d, e); ok {
+			continue // its box already checks in: the unknown one is another box (a copy embedding its MAC, say)
 		}
 		var why []string
 		strength := 0
@@ -177,6 +191,9 @@ func (s *Service) LinkUnknown(by, ip, equipmentID, serial string) (store.Equipme
 		}
 		if n == store.NormSerial(e.Serial) || n == store.NormSerial(e.GPONSerial) {
 			return ErrItemUnfit
+		}
+		if o, ok := itemHasRecord(d, e); ok {
+			return fmt.Errorf("%w (as %s)", ErrItemInUse, o.Serial)
 		}
 		e.TR069Serial, e.UpdatedAt = n, now
 		d.Equipment[e.ID] = e

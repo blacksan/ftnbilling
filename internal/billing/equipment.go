@@ -74,7 +74,7 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 	tr069 := ""
 	if in.TR069Serial != nil {
 		tr069 = store.NormSerial(cleanText(*in.TR069Serial, 60))
-		if tr069 == strings.Join(strings.Fields(serial), "") || tr069 == gpon {
+		if tr069 == store.NormSerial(serial) || tr069 == store.NormSerial(gpon) {
 			tr069 = "" // the same serial twice says nothing
 		}
 		if tr069 != "" && kind != store.KindONT {
@@ -159,8 +159,9 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 			}
 		}
 		oldSite := e.SiteID
-		if exists && e.Kind == store.KindONT && !strings.EqualFold(e.MAC, mac) {
-			d.ClearMACTrust(e.Serial, e.GPONSerial, e.TR069Serial, serial, gpon, tr069) // a trusted MAC was trusted against the old WAN MAC
+		if exists && e.Kind == store.KindONT && (!strings.EqualFold(e.MAC, mac) || store.NormSerial(e.TR069Serial) != tr069) {
+			// a trusted MAC was trusted against the old WAN MAC, or for the box the old TR-069 serial named
+			d.ClearMACTrust(e.Serial, e.GPONSerial, e.TR069Serial, serial, gpon, tr069)
 		}
 		e.Kind, e.Serial, e.MAC, e.GPONSerial, e.TR069Serial = kind, serial, mac, gpon, tr069
 		e.Model, e.Firmware, e.Notes = cleanText(in.Model, 60), cleanText(in.Firmware, 40), cleanText(in.Notes, 300)

@@ -65,12 +65,14 @@ class OnuRepository(private val api: ApiClient) {
 
     /**
      * Owner only: the serial an unknown ONU reported becomes the TR-069 serial of the inventory item [equipmentId]. The
-     * server refuses (409) when the serial is no longer on the unknown list or the item cannot take it.
+     * server refuses (409) when the serial is no longer on the unknown list or the item cannot take it. [password] is the
+     * owner's own password (step-up): 400 without it, 403 when it is wrong.
      */
-    suspend fun linkUnknown(serial: String, equipmentId: String): RegisterItem =
+    suspend fun linkUnknown(serial: String, equipmentId: String, password: String): RegisterItem =
         api.post("onus", "unknown", "link", body = buildJsonObject {
             put("serial", serial)
             put("equipment_id", equipmentId)
+            put("password", password)
         })
 
     suspend fun forRouter(siteId: String): List<Onu> = api.get<ItemList<Onu>>("sites", siteId, "onus").items

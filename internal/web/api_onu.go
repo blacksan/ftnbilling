@@ -62,7 +62,7 @@ func (s *Server) acsErr(w http.ResponseWriter, err error) {
 		validationErr(w, map[string]string{fe.Field: fe.Msg})
 	case errors.Is(err, acs.ErrNoONU), errors.Is(err, acs.ErrONUGone), errors.Is(err, acs.ErrNoAccount), errors.Is(err, acs.ErrNoItem):
 		apiErr(w, http.StatusNotFound, codeNotFound, err.Error(), nil)
-	case errors.Is(err, acs.ErrNothingToConfirm), errors.Is(err, acs.ErrNotQuarantined), errors.Is(err, acs.ErrTaskGone), errors.Is(err, acs.ErrTwoPlaces), errors.Is(err, acs.ErrNotWaiting), errors.Is(err, acs.ErrNoLeaseMAC), errors.Is(err, acs.ErrLeaseMoved), errors.Is(err, acs.ErrNotUnknown), errors.Is(err, acs.ErrItemUnfit):
+	case errors.Is(err, acs.ErrNothingToConfirm), errors.Is(err, acs.ErrNotQuarantined), errors.Is(err, acs.ErrTaskGone), errors.Is(err, acs.ErrTwoPlaces), errors.Is(err, acs.ErrNotWaiting), errors.Is(err, acs.ErrNoLeaseMAC), errors.Is(err, acs.ErrLeaseMoved), errors.Is(err, acs.ErrNotUnknown), errors.Is(err, acs.ErrItemUnfit), errors.Is(err, acs.ErrItemInUse):
 		apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
 	case errors.Is(err, acs.ErrLinked), errors.Is(err, acs.ErrONULinked), errors.Is(err, acs.ErrSite):
 		apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
@@ -239,6 +239,7 @@ func (s *Server) apiLinkUnknownONU(w http.ResponseWriter, r *http.Request, c *ap
 	var req struct {
 		Serial      string `json:"serial"`
 		EquipmentID string `json:"equipment_id"`
+		Password    string `json:"password"` // the owner's own password (step-up, as on the web page)
 	}
 	if !decode(w, r, &req, false) {
 		return
@@ -252,6 +253,9 @@ func (s *Server) apiLinkUnknownONU(w http.ResponseWriter, r *http.Request, c *ap
 	}
 	if len(fields) > 0 {
 		validationErr(w, fields)
+		return
+	}
+	if !s.apiStepUp(w, c, req.Password) {
 		return
 	}
 	e, err := s.acs.LinkUnknown(c.user.Username, c.ip, req.EquipmentID, req.Serial)
@@ -268,6 +272,7 @@ func (s *Server) apiLinkUnknownONU(w http.ResponseWriter, r *http.Request, c *ap
 func (s *Server) apiEquipmentTR069Serial(w http.ResponseWriter, r *http.Request, c *apiCtx) {
 	var req struct {
 		TR069Serial string `json:"tr069_serial"`
+		Password    string `json:"password"` // the owner's own password (step-up, as on the web page)
 	}
 	if !decode(w, r, &req, false) {
 		return
@@ -277,6 +282,9 @@ func (s *Server) apiEquipmentTR069Serial(w http.ResponseWriter, r *http.Request,
 	s.st.View(func(d *store.Data) { cur, ok = d.Equipment[r.PathValue("id")] })
 	if !ok || cur.Kind != store.KindONT {
 		apiErr(w, http.StatusNotFound, codeNotFound, "Not found.", nil)
+		return
+	}
+	if !s.apiStepUp(w, c, req.Password) {
 		return
 	}
 	e, err := s.svc.SaveEquipment(billing.EquipmentInput{ID: cur.ID, Kind: cur.Kind, Serial: cur.Serial, GPONSerial: cur.GPONSerial, TR069Serial: &req.TR069Serial,
@@ -470,6 +478,7 @@ func (s *Server) apiEquipmentAdd(w http.ResponseWriter, r *http.Request, c *apiC
 		GPONSerial string `json:"gpon_serial"`
 		// TR069Serial (owner only; ignored for others): the serial the box reports over TR-069 when it differs.
 		TR069Serial *string `json:"tr069_serial"`
+		Password    string  `json:"password"` // the owner's own password, needed only with a tr069_serial
 		MAC         string  `json:"mac"`
 		Model       string  `json:"model"`
 		Notes       string  `json:"notes"`
@@ -495,6 +504,9 @@ func (s *Server) apiEquipmentAdd(w http.ResponseWriter, r *http.Request, c *apiC
 	}
 	if c.user.Role != store.RoleOwner {
 		req.TR069Serial = nil
+	}
+	if req.TR069Serial != nil && strings.TrimSpace(*req.TR069Serial) != "" && !s.apiStepUp(w, c, req.Password) {
+		return // the TR-069 serial decides which box is this ONU: behind the owner's password, like the other paths
 	}
 	e, err := s.svc.SaveEquipment(billing.EquipmentInput{Kind: req.Kind, Serial: req.Serial, GPONSerial: req.GPONSerial, TR069Serial: req.TR069Serial, MAC: req.MAC, Model: req.Model, Notes: req.Notes,
 		SetPlacement: req.OLTID != "" || req.PONPort != 0, OLTID: req.OLTID, PONPort: req.PONPort})
