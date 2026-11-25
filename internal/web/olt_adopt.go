@@ -86,6 +86,9 @@ func (s *Server) adminOLTAdoptCheck(w http.ResponseWriter, r *http.Request) {
 
 // runningMsg is the flash for a start refused because a job holds the OLT's slot.
 func runningMsg(err error) string {
+	if olt.ByPass(err) {
+		return err.Error() + "."
+	}
 	if k, ok := olt.RunningKind(err); ok {
 		return k.Label() + " is already running for this OLT; this page shows the progress."
 	}
@@ -232,16 +235,24 @@ func (s *Server) adminOLTCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.olt.SetCredentials(id, r.PostFormValue("user"), r.PostFormValue("pass"), r.PostFormValue("enable"), u.Username); err != nil {
+		if errors.Is(err, olt.ErrJobRunning) {
+			s.back(w, r, to, "Error: the login was not saved. "+runningMsg(err))
+			return
+		}
 		s.back(w, r, to, "Error: "+err.Error())
 		return
 	}
-	ctx, cancel := s.oltCtx(r)
-	defer cancel()
-	if err := s.olt.AdoptCheck(ctx, id, u.Username); err != nil && !errors.Is(err, olt.ErrNoPort) && !errors.Is(err, olt.ErrNoRouter) {
+	// Then "Check now", in the background like the button (with the new login it may adopt, and then secure, the OLT).
+	switch err := s.olt.StartCheck(id, u.Username); {
+	case err == nil:
+		s.back(w, r, to, "Login saved. Checking started; this page shows the progress.")
+	case errors.Is(err, olt.ErrNoPort), errors.Is(err, olt.ErrNoRouter), errors.Is(err, olt.ErrAdoptOff):
+		s.back(w, r, to, "Login saved")
+	case errors.Is(err, olt.ErrJobRunning):
+		s.back(w, r, to, "Login saved. "+runningMsg(err))
+	default:
 		s.back(w, r, to, "Login saved. The check: "+oltErrText(err))
-		return
 	}
-	s.back(w, r, to, "Login saved and checked")
 }
 
 // adminOLTRevealLogin shows the stored login and enable password once, to an owner who typed their password again.

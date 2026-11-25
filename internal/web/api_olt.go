@@ -396,6 +396,10 @@ func (s *Server) apiOLTCredentials(w http.ResponseWriter, r *http.Request, c *ap
 		return
 	}
 	if err := s.olt.SetCredentials(r.PathValue("id"), req.User, req.Pass, req.Enable, c.user.Username); err != nil {
+		if errors.Is(err, olt.ErrJobRunning) {
+			s.apiOLTErr(w, err)
+			return
+		}
 		validationErr(w, map[string]string{"pass": err.Error()})
 		return
 	}

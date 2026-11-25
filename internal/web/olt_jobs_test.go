@@ -1,6 +1,7 @@
 package web_test
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/url"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"ispbill/internal/olt"
 	"ispbill/internal/store"
 )
 
@@ -204,5 +206,76 @@ func TestOLTJobPollScript(t *testing.T) {
 	}
 	if strings.Contains(js, "data-secure-poll") {
 		t.Error("the old secure-only poll attribute is still in app.js")
+	}
+}
+
+// Removing an ONU and "Save and check" of a typed login no longer hold the request: the removal is an Apply job, the check
+// after the save is a Check job. A login cannot be typed over a running job. The API answers 202 with Location.
+func TestOLTRemoveAndCredentialsUseTheJobSlot(t *testing.T) {
+	o := newOLTRig(t)
+	o.f.SetRunning("vlan 100\n" + "interface gpon 0/1\n  onu add 3 profile default sn VSOL00000001\n")
+	o.f.WriteBuilding, o.f.WriteDelay = true, 1500*time.Millisecond
+	p := "/olts/" + o.id
+	if g := o.call(o.owner.Access, "PUT", p+"/provisioning", map[string]any{"enabled": true, "dialect_checked": true, "password": o.ownerW.Pass}, nil); g.Status != 200 {
+		t.Fatalf("provisioning: %d %s", g.Status, g.Raw)
+	}
+	_, hash, err := o.svc2.PlanRemove(context.Background(), o.id, "VSOL00000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl := &http.Client{CheckRedirect: noRedirect}
+	ob := signIn(t, o.ts, o.srv, o.st, o.ownerW)
+	post := func(path string, v url.Values) string {
+		t.Helper()
+		v.Set("id", o.id)
+		resp := ob.Do(cl, o.ts.URL, "POST", path, v)
+		resp.Body.Close()
+		if resp.StatusCode != 303 {
+			t.Fatalf("%s: %d", path, resp.StatusCode)
+		}
+		loc, _ := url.QueryUnescape(resp.Header.Get("Location"))
+		return loc
+	}
+	t0 := time.Now()
+	if loc := post("/admin/olts/manage/remove-apply", url.Values{"serial": {"VSOL00000001"}, "hash": {hash}, "current_password": {o.ownerW.Pass}}); !strings.Contains(loc, "Removing started") || time.Since(t0) > time.Second {
+		t.Fatalf("remove: %s after %v", loc, time.Since(t0))
+	}
+	if v := o.svc2.JobStatus(o.id); !v.Running || v.Kind != olt.JobApply {
+		t.Fatalf("%+v", v)
+	}
+	// While it runs: a typed login is refused (web and API), and the API apply answers 409.
+	var before string
+	o.st.View(func(d *store.Data) { before = d.Equipment[o.id].MgmtPass })
+	if loc := post("/admin/olts/manage/credentials", url.Values{"user": {"admin"}, "pass": {"typed-over-a-job"}, "current_password": {o.ownerW.Pass}}); !strings.Contains(loc, "not saved") {
+		t.Errorf("credentials during a job: %s", loc)
+	}
+	if g := o.call(o.owner.Access, "PUT", p+"/credentials", map[string]any{"password": o.ownerW.Pass, "user": "admin", "pass": "typed-over-a-job"}, nil); g.Status != 409 {
+		t.Errorf("API credentials during a job: %d %s", g.Status, g.Raw)
+	}
+	var after string
+	o.st.View(func(d *store.Data) { after = d.Equipment[o.id].MgmtPass })
+	if after != before {
+		t.Fatal("the login was changed while a job ran")
+	}
+	for end := time.Now().Add(60 * time.Second); time.Now().Before(end) && o.svc2.JobStatus(o.id).Running; time.Sleep(25 * time.Millisecond) {
+	}
+	if v := o.svc2.JobStatus(o.id); !v.OK || !v.Apply.Verified {
+		t.Fatalf("removal: %+v", v)
+	}
+	if !strings.Contains(strings.Join(o.f.Lines(), "\n"), "no onu 3") {
+		t.Fatal("not removed")
+	}
+	// The API apply: 202, the status URL in Location and in the body.
+	pl := o.call(o.owner.Access, "POST", p+"/plan", nil, nil)
+	h2, _ := pl.JSON(t)["hash"].(string)
+	g := o.call(o.owner.Access, "POST", p+"/apply", map[string]any{"hash": h2, "password": o.ownerW.Pass}, nil)
+	if g.Status != 202 || g.Header.Get("Location") != "/api/v1"+p+"/job" || g.JSON(t)["status_url"] != "/api/v1"+p+"/job" {
+		t.Fatalf("API apply: %d %v %s", g.Status, g.Header, g.Raw)
+	}
+	for end := time.Now().Add(60 * time.Second); time.Now().Before(end) && o.svc2.JobStatus(o.id).Running; time.Sleep(25 * time.Millisecond) {
+	}
+	// After the job: the typed login is saved (the OLT's own, so the rig keeps working) and the check is not run inline.
+	if loc := post("/admin/olts/manage/credentials", url.Values{"user": {o.f.User}, "pass": {o.f.Pass}, "current_password": {o.ownerW.Pass}}); !strings.Contains(loc, "msg=Login saved") {
+		t.Errorf("credentials: %s", loc)
 	}
 }

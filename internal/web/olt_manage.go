@@ -394,10 +394,18 @@ func (s *Server) adminOLTRemoveApply(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// As Apply: the password and the reviewed removal plan are checked here, the removal (backup, the line, a save of up to
+	// two minutes, a read back) runs in the background on the OLT's one job slot.
 	ctx, cancel := s.oltCtx(r)
 	defer cancel()
-	res, err := s.olt.ApplyRemove(ctx, id, r.PostFormValue("serial"), r.PostFormValue("hash"), u.Username)
-	s.back(w, r, to, applyMsg(res, err))
+	switch err := s.olt.StartRemove(ctx, id, r.PostFormValue("serial"), r.PostFormValue("hash"), u.Username); {
+	case err == nil:
+		s.back(w, r, to, "Removing started. This takes a few minutes; this page shows the progress.")
+	case errors.Is(err, olt.ErrJobRunning):
+		s.back(w, r, to, runningMsg(err))
+	default:
+		s.back(w, r, to, "Error: "+oltErrText(err))
+	}
 }
 
 // adminOLTAdopt shows how to make a factory OLT reachable: the short snippet for the OLT console and the script for
