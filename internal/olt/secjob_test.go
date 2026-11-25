@@ -2,6 +2,7 @@ package olt
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,5 +90,21 @@ func TestSecureSurvivesASlowChattySave(t *testing.T) {
 	}
 	if !a.adoptState().Secured {
 		t.Fatalf("%+v", a.adoptState())
+	}
+}
+
+// The bench note read "the old password <redacted> restored": the stored note of a failed Secure must be readable.
+func TestSecureFailureNoteIsReadable(t *testing.T) {
+	a := newAdoptEnv(t)
+	a.adopt(t)
+	a.f.FailWrite = true
+	if err := a.svc.StartSecure(oltID, "olga"); err != nil {
+		t.Fatal(err)
+	}
+	v := waitSecure(t, a)
+	for _, txt := range []string{v.Error, a.adoptState().Error} {
+		if !strings.Contains(txt, "the old password was restored and nothing was saved") || strings.Contains(txt, "<redacted> restored") {
+			t.Errorf("note: %q", txt)
+		}
 	}
 }

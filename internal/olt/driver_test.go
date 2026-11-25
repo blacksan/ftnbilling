@@ -318,3 +318,30 @@ func TestRedact(t *testing.T) {
 		t.Fatal("redaction ate an ordinary line")
 	}
 }
+
+// The server's own notes go through Redact too (errText): its prose must stay readable, its secrets must not.
+func TestRedactKeepsTheServersProse(t *testing.T) {
+	for _, note := range []string{
+		"the OLT would not save its configuration (olt: the OLT did not answer in time); the old password was restored and nothing was saved",
+		"the new password did not work in a new session",
+		"Secured: the login and enable password were replaced by generated ones",
+		"SSH host key of OLT Alpha pinned on first use",
+		"OLT Alpha: SSH host key changed",
+		"the generated one is stored and can be revealed; the old login password was restored.",
+		"there was no known enable password to restore",
+	} {
+		if got := Redact(note); got != note {
+			t.Errorf("prose changed:\n %s\n %s", note, got)
+		}
+	}
+	for in, secret := range map[string]string{
+		"password Pa55w0rdXyz":                 "Pa55w0rdXyz",
+		"user login-password admin Gen3rated1": "Gen3rated1",
+		"password: hunter2":                    "hunter2",
+		"community private":                    "private",
+	} {
+		if strings.Contains(Redact(in), secret) {
+			t.Errorf("%q survived in %q", secret, Redact(in))
+		}
+	}
+}

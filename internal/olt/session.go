@@ -813,9 +813,55 @@ func (s *Session) Save(ctx context.Context) error {
 }
 
 // Redact hides what looks like a secret in text that is shown or stored.
+//
+// The server's own notes use the same words in prose ("the old password was restored", "the SSH host key of the OLT"),
+// so a value that is a plain English word of those notes, or only punctuation, is left as it is: no generated or typed
+// secret is one of them, and a note stays readable.
 func Redact(s string) string {
-	s = userPassRE.ReplaceAllString(s, "${1}<redacted>")
-	return redactRE.ReplaceAllString(s, "${1}<redacted>")
+	s = redactWith(userPassRE, s)
+	return redactWith(redactRE, s)
+}
+
+func redactWith(re *regexp.Regexp, s string) string {
+	locs := re.FindAllStringSubmatchIndex(s, -1)
+	if len(locs) == 0 {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for _, l := range locs {
+		val := s[l[3]:l[1]] // the value after the key word (group 1 is the key word and what follows it)
+		if proseWord(val) {
+			continue
+		}
+		b.WriteString(s[last:l[3]])
+		b.WriteString("<redacted>")
+		last = l[1]
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+// proseWords are the words that follow a key word in the server's own notes and errors. A secret is never one of them.
+var proseWords = map[string]bool{}
+
+func init() {
+	for _, w := range strings.Fields(`a an the and or but nor so then than as at by for from in into of on onto to with without
+		is are was were be been being has have had do does did done not no yes it its this that these those there here
+		now still again only also just yet already all any each every both either neither
+		works worked work working failed fails fail kept stored changed restored replaced reset set sent saved removed
+		added tried tested checked verified matched mismatch changes change pinned unknown missing wrong ok
+		could would should will can may might must cannot isn't wasn't doesn't didn't`) {
+		proseWords[w] = true
+	}
+}
+
+func proseWord(v string) bool {
+	w := strings.ToLower(strings.TrimRight(v, ".,;:!?)]\"'"))
+	if w == "" {
+		return true // only punctuation ("the password." / "password)")
+	}
+	return proseWords[w]
 }
 
 // userPassRE: "user login-password NAME PASSWORD" and "user enable-password NAME PASSWORD" (the name is not the secret, the
