@@ -55,6 +55,19 @@ type OLTSettings struct {
 
 	// Adopt is how far the OLT has come with being taken over through the router's OLT management port.
 	Adopt OLTAdopt `json:"adopt,omitempty"`
+
+	// Job marks a background job that changes the OLT's configuration (a plan apply) from its start to its end. A mark that
+	// is still here with no job running means the server stopped in the middle of it.
+	Job OLTJobMark `json:"job,omitempty"`
+}
+
+// OLTJobMark is the durable trace of a running background apply: no secret, only what the page needs to say that it was
+// interrupted. Kind "" = none.
+type OLTJobMark struct {
+	Kind string    `json:"kind,omitempty"`
+	By   string    `json:"by,omitempty"`
+	At   time.Time `json:"at,omitempty"`
+	Plan string    `json:"plan,omitempty"` // the hash of the plan that was being applied
 }
 
 // OLT adoption states (OLTAdopt.Stage): the next thing that has to happen.

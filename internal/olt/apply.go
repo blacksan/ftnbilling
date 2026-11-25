@@ -86,12 +86,28 @@ func (s *Service) Plan(ctx context.Context, id string) (Plan, string, error) {
 		p, _, err = s.computePlan(ctx, o)
 		return err
 	})
+	if err == nil {
+		// Reading the plan again is the answer to "unfinished": the plan is built from what the OLT has now.
+		s.clearStaleMark(id)
+	}
 	return p, p.Hash(), err
+}
+
+// clearStaleMark forgets the mark of an interrupted apply when no job runs.
+func (s *Service) clearStaleMark(id string) {
+	if s.busy(id) == nil {
+		s.clearJobMark(id)
+	}
 }
 
 // Apply runs the plan the owner reviewed (its hash). It saves the running configuration first, sends the lines, saves,
 // re-reads and compares, and writes an audit entry with the (redacted) transcript. The first refused line stops it.
 func (s *Service) Apply(ctx context.Context, id, wantHash, by string) (Result, error) {
+	return s.apply(ctx, id, wantHash, by, nil)
+}
+
+// apply is Apply with a stage report (nil = none): the background job tells the page what it is doing.
+func (s *Service) apply(ctx context.Context, id, wantHash, by string, stage func(string)) (Result, error) {
 	var res Result
 	err := s.withSession(ctx, id, true, func(o *opened) error {
 		if err := s.mayConfigure(o.st); err != nil {
@@ -104,7 +120,7 @@ func (s *Service) Apply(ctx context.Context, id, wantHash, by string) (Result, e
 		if wantHash == "" || p.Hash() != wantHash {
 			return ErrPlanChanged
 		}
-		res, err = s.applyPlan(ctx, o, p, "before a configuration change", by, s.verifyPlan(id, false))
+		res, err = s.applyPlan(ctx, o, p, "before a configuration change", by, s.verifyPlan(id, false), stage)
 		return err
 	})
 	return res, err
@@ -112,12 +128,16 @@ func (s *Service) Apply(ctx context.Context, id, wantHash, by string) (Result, e
 
 // applyPlan is the one place the server writes to an OLT: backup, send, save, verify, audit. The caller has checked
 // permission.
-func (s *Service) applyPlan(ctx context.Context, o *opened, p Plan, why, by string, verify verifier) (Result, error) {
+func (s *Service) applyPlan(ctx context.Context, o *opened, p Plan, why, by string, verify verifier, stage func(string)) (Result, error) {
 	var res Result
 	cmds := p.Commands()
 	if len(cmds) == 0 {
 		return res, nil
 	}
+	if stage == nil {
+		stage = func(string) {}
+	}
+	stage("Saving a copy of the configuration")
 	b, _, err := s.backupIn(ctx, o, why, by)
 	if err != nil {
 		return res, fmt.Errorf("the configuration could not be saved first, nothing was changed: %w", err)
@@ -126,12 +146,14 @@ func (s *Service) applyPlan(ctx context.Context, o *opened, p Plan, why, by stri
 	// From the first configuration line on, the batch runs to its end (or its first refused line) even when the web
 	// request that started it is cancelled or times out: stopping half way would leave a half-made ONU or VLAN in the
 	// running configuration, unsaved. The OLT's own per-command timeouts still apply.
-	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), applyWriteBudget)
 	defer cancel()
 	before := len(o.sess.Transcript)
+	stage(fmt.Sprintf("Sending %d lines", len(cmds)))
 	n, cerr := o.sess.ConfigN(wctx, cmds)
 	res.Sent = redactAll(cmds[:n])
 	if cerr == nil {
+		stage("Saving on the OLT")
 		cerr = o.sess.Save(wctx)
 	}
 	res.Entries = append([]Entry(nil), o.sess.Transcript[before:]...)
@@ -145,6 +167,7 @@ func (s *Service) applyPlan(ctx context.Context, o *opened, p Plan, why, by stri
 	// The ONUs it authorised are placed on this OLT before the check, so that the check looks at their services too.
 	s.afterApply(o, p)
 	// Verify: read it back; nothing the plan wanted may be missing.
+	stage("Reading back")
 	text, err := s.readRunning(wctx, o.sess)
 	if err == nil {
 		run := ParseRunning(text)
@@ -248,7 +271,7 @@ func (s *Service) autoProvision(ctx context.Context, o *opened) {
 	if len(p.Adds) == 0 {
 		return
 	}
-	res, err := s.applyPlan(ctx, o, p, "before automatic ONU add", "system", s.verifyPlan(o.e.ID, true))
+	res, err := s.applyPlan(ctx, o, p, "before automatic ONU add", "system", s.verifyPlan(o.e.ID, true), nil)
 	if err != nil {
 		s.markFound(o.e.ID, ready, store.OLTFoundFailed, errText(err))
 		return
@@ -322,7 +345,7 @@ func (s *Service) ApplyRemove(ctx context.Context, id, serial, wantHash, by stri
 		if wantHash == "" || p.Hash() != wantHash {
 			return ErrPlanChanged
 		}
-		res, err = s.applyPlan(ctx, o, p, "before removing an ONU", by, verifyRemoved(serial))
+		res, err = s.applyPlan(ctx, o, p, "before removing an ONU", by, verifyRemoved(serial), nil)
 		return err
 	})
 	return res, err

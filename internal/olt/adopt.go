@@ -338,21 +338,31 @@ func (s *Service) alertOnce(key, subject, msg string) {
 
 // AdoptCheck is the "Check now" of the OLT page: one adoption pass for the router of this OLT.
 func (s *Service) AdoptCheck(ctx context.Context, id, by string) error {
+	siteID, err := s.checkSite(id)
+	if err != nil {
+		return err
+	}
+	return s.AdoptSite(ctx, siteID, by)
+}
+
+// checkSite is what "Check now" can answer at once: the router the OLT is on and its OLT management port (it records the
+// finding when either is missing).
+func (s *Service) checkSite(id string) (string, error) {
 	e, _, ok := s.Load(id)
 	if !ok {
-		return ErrNotFound
+		return "", ErrNotFound
 	}
 	if e.SiteID == "" {
 		s.markAdopt(id, store.AdoptNoRouter, "Put the OLT on a router first (edit the OLT).", "")
-		return ErrNoRouter
+		return "", ErrNoRouter
 	}
 	var port string
 	s.o.Store.View(func(d *store.Data) { port = d.Sites[e.SiteID].OLTMgmtPort })
 	if port == "" {
 		s.markAdopt(id, store.AdoptNoPort, "Give a spare router port the role OLT management, then cable the OLT's management port to it.", "")
-		return ErrNoPort
+		return "", ErrNoPort
 	}
-	return s.AdoptSite(ctx, e.SiteID, by)
+	return e.SiteID, nil
 }
 
 // credCandidates are the logins to try, in order. The vendor's factory login only when the OLT has no stored login and the

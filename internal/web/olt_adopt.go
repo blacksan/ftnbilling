@@ -19,7 +19,8 @@ import (
 // owner's Reveal page (owner, password again, audited, never cached).
 
 func (s *Server) oltRoutes3(get, post func(string, http.HandlerFunc)) {
-	get("/admin/olts/manage/secure-status", s.adminOLTSecureStatus)
+	get("/admin/olts/manage/job-status", s.adminOLTJobStatus)
+	get("/admin/olts/manage/secure-status", s.adminOLTJobStatus) // the first name of the same endpoint
 	post("/admin/olts/manage/adopt-check", s.adminOLTAdoptCheck)
 	post("/admin/olts/manage/secure", s.adminOLTSecure)
 	post("/admin/olts/manage/credentials", s.adminOLTCredentials)
@@ -33,9 +34,7 @@ func (s *Server) adoptData(r *http.Request, e store.Equipment, p *adminPage, own
 	if v, ok := s.olt.AdoptView(e.ID); ok {
 		p.Data["Adopt"] = v
 	}
-	if owner {
-		p.Data["Secure"] = s.secureViewOf(e.ID)
-	}
+	p.Data["Job"] = s.jobViewOf(e.ID)
 	var site store.Site
 	s.st.View(func(d *store.Data) { site = d.Sites[e.SiteID] })
 	p.Data["MgmtPort"], p.Data["MgmtNet"] = site.OLTMgmtPort, sites.OLTMgmtNetOf(site)
@@ -65,23 +64,32 @@ func (s *Server) adoptData(r *http.Request, e store.Equipment, p *adminPage, own
 	}
 }
 
+// adminOLTAdoptCheck starts "Check now" in the background: the pass may secure a factory OLT, which takes minutes.
 func (s *Server) adminOLTAdoptCheck(w http.ResponseWriter, r *http.Request) {
 	id := r.PostFormValue("id")
 	if _, _, ok := s.oltOf(w, r, id); !ok {
 		return
 	}
 	u, _ := userOf(r)
-	ctx, cancel := s.oltCtx(r)
-	defer cancel()
-	err := s.olt.AdoptCheck(ctx, id, u.Username)
-	switch {
+	to := manageURL(id)
+	switch err := s.olt.StartCheck(id, u.Username); {
 	case err == nil:
-		s.back(w, r, manageURL(id), "Checked the OLT management port")
-	case errors.Is(err, olt.ErrNoPort), errors.Is(err, olt.ErrNoRouter):
-		s.back(w, r, manageURL(id), "Error: "+err.Error())
+		s.back(w, r, to, "Checking started; this page shows the progress.")
+	case errors.Is(err, olt.ErrJobRunning):
+		s.back(w, r, to, runningMsg(err))
+	case errors.Is(err, olt.ErrNoPort), errors.Is(err, olt.ErrNoRouter), errors.Is(err, olt.ErrAdoptOff):
+		s.back(w, r, to, "Error: "+err.Error())
 	default:
-		s.back(w, r, manageURL(id), "Error: "+oltErrText(err))
+		s.back(w, r, to, "Error: "+oltErrText(err))
 	}
+}
+
+// runningMsg is the flash for a start refused because a job holds the OLT's slot.
+func runningMsg(err error) string {
+	if k, ok := olt.RunningKind(err); ok {
+		return k.Label() + " is already running for this OLT; this page shows the progress."
+	}
+	return "Another job is already running for this OLT; this page shows the progress."
 }
 
 // adminOLTSecure starts "Secure this OLT" in the background and returns at once: the action takes minutes, longer than
@@ -99,8 +107,8 @@ func (s *Server) adminOLTSecure(w http.ResponseWriter, r *http.Request) {
 	switch err := s.olt.StartSecure(id, u.Username); {
 	case err == nil:
 		s.back(w, r, to, "Securing started. This takes a few minutes; this page shows the progress.")
-	case errors.Is(err, olt.ErrSecureRunning):
-		s.back(w, r, to, "Securing is already running; this page shows the progress.")
+	case errors.Is(err, olt.ErrJobRunning):
+		s.back(w, r, to, runningMsg(err))
 	default:
 		s.back(w, r, to, "Error: "+oltErrText(err))
 	}
@@ -118,30 +126,57 @@ func secureMessage(res olt.SecureResult) string {
 	return msg
 }
 
-// secureJSON is the status of the background Secure of an OLT (no secret in it).
-func (s *Server) secureJSON(id string) map[string]any {
-	v := s.olt.SecureStatus(id)
+// jobMessage is the outcome of a finished job, for the page.
+func jobMessage(v olt.JobStatus) string {
+	switch v.Kind {
+	case olt.JobSecure:
+		return secureMessage(v.Secure)
+	case olt.JobApply:
+		return applyMsg(v.Apply, nil)
+	}
+	return "Checked the OLT management port"
+}
+
+// jobJSON is the status of the latest background job of an OLT: Secure, Apply or Check (no secret in it).
+func (s *Server) jobJSON(id string) map[string]any {
+	v := s.olt.JobStatus(id)
 	m := map[string]any{"known": v.Known, "running": v.Running, "stage": v.Stage, "interrupted": v.Interrupted, "done": v.Known && !v.Running}
+	if v.Interrupted {
+		m["interrupted_kind"] = string(v.InterruptedKind)
+		if v.InterruptedKind == olt.JobApply {
+			m["interrupted_note"] = applyInterrupted
+		}
+	}
 	if v.Known {
+		m["kind"], m["label"] = string(v.Kind), v.Kind.Label()
 		m["started_at"] = v.Started.UTC().Format(time.RFC3339)
 		m["by"] = v.By
 	}
 	if v.Known && !v.Running {
 		m["finished_at"] = v.Finished.UTC().Format(time.RFC3339)
 		m["ok"] = v.OK
-		if v.OK {
-			m["message"] = secureMessage(v.Result)
-			m["enable_checked"], m["snmp_removed"], m["snmp_note"] = v.Result.EnableChecked, nz(v.Result.SNMPRemoved), v.Result.SNMPNote
-			m["access_list_note"], m["access_list_done"], m["access_list_rules"], m["access_list_finding"] = v.Result.ACLNote, v.Result.ACLDone, nz(v.Result.ACLRules), v.Result.ACLFinding
-		} else {
+		if !v.OK {
 			m["error"] = v.Error
+			return m
+		}
+		m["message"] = jobMessage(v)
+		switch v.Kind {
+		case olt.JobSecure:
+			r := v.Secure
+			m["enable_checked"], m["snmp_removed"], m["snmp_note"] = r.EnableChecked, nz(r.SNMPRemoved), r.SNMPNote
+			m["access_list_note"], m["access_list_done"], m["access_list_rules"], m["access_list_finding"] = r.ACLNote, r.ACLDone, nz(r.ACLRules), r.ACLFinding
+		case olt.JobApply:
+			m["backup_id"], m["sent"], m["verified"], m["remaining"] = v.Apply.Backup, len(v.Apply.Sent), v.Apply.Verified, nz(v.Apply.Remaining)
 		}
 	}
 	return m
 }
 
-// adminOLTSecureStatus is the JSON the OLT page's script polls while a Secure runs.
-func (s *Server) adminOLTSecureStatus(w http.ResponseWriter, r *http.Request) {
+// applyInterrupted is what the page says when the server stopped in the middle of an apply.
+const applyInterrupted = "An Apply did not finish (the server stopped). Some of its lines may be on the OLT. Open Plan to read the plan again: it is built from what the OLT has now, so nothing is applied twice."
+
+// adminOLTJobStatus is the JSON the OLT page's script polls while a job runs. Owners only, never cached.
+func (s *Server) adminOLTJobStatus(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	if _, _, ok := s.oltOf(w, r, id); !ok {
 		return
@@ -150,32 +185,40 @@ func (s *Server) adminOLTSecureStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, s.secureJSON(id))
+	writeJSON(w, http.StatusOK, s.jobJSON(id))
 }
 
-// secureView is what the OLT page shows about the background Secure.
-type secureView struct {
-	Running, Failed, Done, Interrupted bool
-	Stage, Started, Error, Message     string
+// jobView is what the OLT page shows about the latest background job.
+type jobView struct {
+	Running, Failed, Done             bool
+	Kind, Label, Stage                string
+	Started, Error, Message           string
+	UnfinishedSecure, UnfinishedApply bool
+	ApplyNote                         string
 }
 
-func (s *Server) secureViewOf(id string) *secureView {
-	v := s.olt.SecureStatus(id)
+func (s *Server) jobViewOf(id string) *jobView {
+	v := s.olt.JobStatus(id)
 	if !v.Known && !v.Interrupted {
 		return nil
 	}
-	sv := &secureView{Running: v.Running, Interrupted: v.Interrupted, Stage: v.Stage}
+	jv := &jobView{Running: v.Running, Stage: v.Stage}
+	if v.Interrupted && !v.Running {
+		jv.UnfinishedSecure, jv.UnfinishedApply = v.InterruptedKind == olt.JobSecure, v.InterruptedKind == olt.JobApply
+		jv.ApplyNote = applyInterrupted
+	}
 	if v.Known {
-		sv.Started = v.Started.In(billing.EAT).Format("15:04")
+		jv.Kind, jv.Label = string(v.Kind), v.Kind.Label()
+		jv.Started = v.Started.In(billing.EAT).Format("15:04")
 		if !v.Running {
 			if v.OK {
-				sv.Done, sv.Message = true, secureMessage(v.Result)
+				jv.Done, jv.Message = true, jobMessage(v)
 			} else {
-				sv.Failed, sv.Error = true, v.Error
+				jv.Failed, jv.Error = true, v.Error
 			}
 		}
 	}
-	return sv
+	return jv
 }
 
 func (s *Server) adminOLTCredentials(w http.ResponseWriter, r *http.Request) {

@@ -1,6 +1,13 @@
 {{define "admin_olt_manage"}}{{template "ahead" .}}{{$E := .Data.E}}{{$S := .Data.Set}}{{$st := .Data.S}}
 <p><a href="/admin/olts/view?id={{$E.ID}}">&larr; OLT details</a> &middot; <a href="/admin/olts/adopt?id={{$E.ID}}">Manual setup (console snippet)</a> &middot; <a href="/admin/equipment?tab=olt">all OLTs</a></p>
 
+{{with .Data.Job}}<section class="panel mt-3" role="status"{{if .Running}} {{if $.IsOwner}}data-job-poll="/admin/olts/manage/job-status?id={{$E.ID}}" data-running="1"{{else}}data-reload="5"{{end}}{{end}}>
+{{if .Running}}<p><b>{{.Label}}&hellip;</b> started {{.Started}}. <span data-job-stage>{{.Stage}}</span></p><p class="muted">This takes a few minutes. The page updates by itself. Nothing else can be started on this OLT until it ends.</p>
+{{else if .Done}}<p><span class="pill active">done</span> {{.Message}}</p>
+{{else if .Failed}}<p><span class="pill suspended">{{.Label}} failed</span> {{.Error}}</p>{{end}}
+{{if .UnfinishedSecure}}<p><span class="pill suspended">unfinished</span> A Secure did not finish (the server stopped, or it failed half way). The new login it set is kept encrypted; the server tries it at its next check of the OLT.</p>{{end}}
+{{if .UnfinishedApply}}<p><span class="pill suspended">unfinished</span> {{.ApplyNote}}</p>{{end}}</section>{{end}}
+
 {{with .Data.Adopt}}<section class="panel mt-3"><div class="panel-h"><h2>Adoption</h2>
 <span class="muted">{{if not .CheckedAt.IsZero}}checked {{eats .CheckedAt}}{{else}}not checked yet{{end}}</span></div>
 <p><b>Next:</b> {{.Note}}</p>
@@ -20,11 +27,6 @@
 {{if .Data.MgmtPort}}<p class="mt-2">Now: <b class="mono">{{.Data.MgmtPort}}</b>, router address <span class="mono">{{.Data.MgmtNet}}</span>.</p>
 <form method="post" action="/admin/olts/manage/mgmt-port" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="action" value="clear"><button class="btn ghost sm">Remove the role and the router rules</button></form>{{end}}
 {{with .Data.Adopt}}{{if .CanSecure}}<h3 class="mt-3">Secure this OLT</h3>
-{{with $.Data.Secure}}<div class="panel" data-secure-poll="/admin/olts/manage/secure-status?id={{$E.ID}}"{{if .Running}} data-running="1"{{end}}>
-{{if .Running}}<p><b>Securing&hellip;</b> started {{.Started}}. <span data-secure-stage>{{.Stage}}</span></p><p class="muted">This takes a few minutes. The page updates by itself.</p>
-{{else if .Done}}<p><span class="pill active">done</span> {{.Message}}</p>
-{{else if .Failed}}<p><span class="pill suspended">failed</span> {{.Error}}</p>
-{{else if .Interrupted}}<p><span class="pill suspended">unfinished</span> A Secure did not finish (the server stopped, or it failed half way). The new login it set is kept encrypted; the server tries it at its next check of the OLT.</p>{{end}}</div>{{end}}
 <p class="muted">Replaces the OLT's login and enable password with long generated ones, tests them in a new SSH session while the old one stays open, and only then saves. If the test fails the old password is put back. It also removes the default SNMP communities (public, private), so SNMP is off.</p>
 <form method="post" action="/admin/olts/manage/secure" class="row"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
 <label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="btn sm">Secure this OLT</button></form>{{end}}

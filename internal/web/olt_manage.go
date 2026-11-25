@@ -337,10 +337,18 @@ func (s *Server) adminOLTApply(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// The password was checked above and the plan is compared with the one the owner reviewed here, in the request; the
+	// apply itself (minutes: a save alone may take two) runs in the background and the page shows its progress.
 	ctx, cancel := s.oltCtx(r)
 	defer cancel()
-	res, err := s.olt.Apply(ctx, id, r.PostFormValue("hash"), u.Username)
-	s.back(w, r, to, applyMsg(res, err))
+	switch err := s.olt.StartApply(ctx, id, r.PostFormValue("hash"), u.Username); {
+	case err == nil:
+		s.back(w, r, to, "Applying started. This takes a few minutes; this page shows the progress.")
+	case errors.Is(err, olt.ErrJobRunning):
+		s.back(w, r, to, runningMsg(err))
+	default:
+		s.back(w, r, to, "Error: "+oltErrText(err))
+	}
 }
 
 func applyMsg(res olt.Result, err error) string {
