@@ -536,7 +536,7 @@ func (s *Service) UnregisteredOnline(has func(siteID string) bool) int {
 				if _, isOLT := d.OLTByMAC(dv.MAC); isOLT && dv.Source != store.DeviceSourceOLTMgmt {
 					continue // an OLT needs nothing from the operator: it is not a new device to deal with
 				}
-				if dv.Source == store.DeviceSourceONUMgmt && len(d.OpenAccountsByMAC(dv.MAC)) == 0 {
+				if onuMgmtDevice(d, dv) {
 					continue // an ONU's TR-069 WAN needs nothing from the operator either
 				}
 				n++
@@ -872,7 +872,7 @@ func classifyLocked(d *store.Data, dv store.Device, router bool) DeviceClass {
 	if router {
 		return DeviceClass{Class: ClassRouter}
 	}
-	if dv.Source == store.DeviceSourceONUMgmt && len(d.OpenAccountsByMAC(dv.MAC)) == 0 { // an account's MAC wins
+	if onuMgmtDevice(d, dv) {
 		return classifyONUMgmt(d, dv)
 	}
 	if dv.Source == store.DeviceSourceOLTMgmt {
@@ -950,9 +950,23 @@ func classifyONUMgmt(d *store.Data, dv store.Device) DeviceClass {
 // ONUMgmtMACError: the MAC is an ONU's TR-069 WAN on the management network, not a customer's device.
 var ErrONUMgmtMAC = errors.New("That MAC is an ONU's TR-069 management address, not a customer device")
 
-// onuMgmtMACLocked refuses a MAC the router showed on the ONU-management network (unless an account already has it).
+// onuMgmtDevice: the device is an ONU's TR-069 WAN. An account's MAC wins, and so does a register ONT's WAN MAC: an ONU whose
+// firmware uses one MAC for its TR-069 and its internet WAN is still created as the house's ONU (class onu).
+func onuMgmtDevice(d *store.Data, dv store.Device) bool {
+	if dv.Source != store.DeviceSourceONUMgmt || len(d.OpenAccountsByMAC(dv.MAC)) > 0 {
+		return false
+	}
+	_, isONT := d.ONTByMAC(dv.MAC)
+	return !isONT
+}
+
+// onuMgmtMACLocked refuses a MAC the router showed on the ONU-management network (unless an account already has it, or it
+// is a register ONT's WAN MAC).
 func onuMgmtMACLocked(d *store.Data, mac string) error {
 	if len(d.OpenAccountsByMAC(mac)) > 0 {
+		return nil
+	}
+	if _, isONT := d.ONTByMAC(mac); isONT {
 		return nil
 	}
 	for _, dv := range d.Devices {

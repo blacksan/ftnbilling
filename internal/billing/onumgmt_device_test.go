@@ -97,3 +97,22 @@ func TestAnAccountsMACIsNeverReclassifiedAsONUManagement(t *testing.T) {
 		t.Fatal("an account's MAC is listed as a device")
 	}
 }
+
+// An ONU whose firmware uses one MAC for its TR-069 WAN and its internet WAN: the register's WAN MAC wins, so the house's
+// customer is still created with it (class onu), although the MAC also holds a management lease.
+func TestARegisterWANMACOnTheManagementNetworkIsStillTheONU(t *testing.T) {
+	e := newEnv(t)
+	e.ipoe(t, store.AccessIPoE)
+	apt := e.apt(t, "MG One", e.site)
+	if _, err := e.svc.SaveEquipment(EquipmentInput{Kind: "ont", Serial: "V26051300697", MAC: macONUWAN, Model: "V2804N-Z"}); err != nil {
+		t.Fatal(err)
+	}
+	e.mgmtLease(macONUWAN, "10.6.1.250")
+	e.reconcile(t)
+	if c := unregByMAC(e)[macONUWAN].Class; c.Class != ClassONU || !c.Creatable {
+		t.Fatalf("%+v", c)
+	}
+	if _, err := e.svc.CreateAccount(AccountInput{ApartmentID: apt.ID, SiteID: e.site, Unit: "P1", MAC: macONUWAN}); errors.Is(err, ErrONUMgmtMAC) {
+		t.Fatalf("the ONU's own WAN MAC was refused: %v", err)
+	}
+}
