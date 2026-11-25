@@ -90,12 +90,15 @@ func itemHasRecord(d *store.Data, e store.Equipment) (store.ONU, bool) {
 func Suggest(d *store.Data, u UnknownONU) []Suggestion {
 	out := []Suggestion{}
 	serial := strings.ToUpper(strings.Join(strings.Fields(u.Serial), ""))
+	recorded := map[string]bool{} // serials device records check in with (one pass, not one per item)
+	for _, o := range d.ONUs {
+		if n := store.NormSerial(o.Serial); n != "" {
+			recorded[n] = true
+		}
+	}
 	for _, e := range d.Equipment {
 		if e.Kind != store.KindONT || e.Status == store.EqRetired || e.TR069Serial != "" {
 			continue
-		}
-		if _, ok := itemHasRecord(d, e); ok {
-			continue // its box already checks in: the unknown one is another box (a copy embedding its MAC, say)
 		}
 		var why []string
 		strength := 0
@@ -130,6 +133,9 @@ func Suggest(d *store.Data, u UnknownONU) []Suggestion {
 		}
 		if len(why) == 0 {
 			continue
+		}
+		if recorded[store.NormSerial(e.Serial)] || recorded[store.NormSerial(e.GPONSerial)] {
+			continue // its box already checks in: the unknown one is another box (a copy embedding its MAC, say)
 		}
 		label := e.Serial
 		if label == "" {
