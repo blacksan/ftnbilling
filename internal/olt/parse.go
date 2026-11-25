@@ -187,12 +187,20 @@ func ParseONUState(pon int, out string) (rows []store.OLTONU, unparsed string) {
 				r.Serial = NormSerial(m[1])
 			}
 		}
-		// The phase state is the last column ("enable enable working"); any other word is kept as the raw state.
+		// The phase state is the last column ("enable enable working"). Where the last column is no state word (a
+		// "Dying Gasp" in two words, or a column after the phase), the columns are searched together; only when none
+		// is known is the last word kept as the raw state.
 		if len(cols) > 0 {
 			last := strings.ToLower(cols[len(cols)-1])
-			for _, w := range stateWords {
-				if w.re.MatchString(last) {
-					r.State, r.Online = w.name, w.online
+			all := strings.Join(cols, " ")
+			for _, txt := range []string{last, all} {
+				for _, w := range stateWords {
+					if w.re.MatchString(txt) {
+						r.State, r.Online = w.name, w.online
+						break
+					}
+				}
+				if r.State != "" {
 					break
 				}
 			}

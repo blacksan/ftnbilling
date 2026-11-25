@@ -113,3 +113,59 @@ func TestAutoFindBareIndex(t *testing.T) {
 		t.Errorf("%+v", f)
 	}
 }
+
+func TestRenderMalformedEscapeKeepsLineFeed(t *testing.T) {
+	for in, want := range map[string]string{
+		"a\x1b[\nb\n":                    "a\nb\n",
+		"a\x1b[12\nb\n":                  "a\nb\n",
+		"a\x1b\nb\n":                     "a\nb\n",
+		"a\x1b(\nb\n":                    "a\nb\n",
+		"a\x1b[-1Cb\n":                   "a1Cb\n", // "-" is no parameter byte: the sequence ends there, the rest is text
+		"a\x1b[99999999999999999999Cb\n": "a b\n",
+	} {
+		if got := render([]byte(in)); got != want {
+			t.Errorf("%q: %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestBlankMoreThenShortRedraw(t *testing.T) {
+	re := VSOL().MoreRE
+	raw := []byte("row1\r\n--More--")
+	blankMore(raw, re)
+	raw = append(raw, "\rab\r\nrow3\r\n"...)
+	if got := render(raw); got != "row1\nab\nrow3\n" {
+		t.Errorf("%q", got)
+	}
+	// Backspaces over the marker still line up (same length).
+	raw = []byte("x\r\n -- More -- ")
+	blankMore(raw, re)
+	raw = append(raw, strings.Repeat("\b", 14)+"y\n"...)
+	if got := render(raw); got != "x\ny\n" {
+		t.Errorf("%q", got)
+	}
+}
+
+func TestDebugCopyRedactsWhatTheRenderedLineHides(t *testing.T) {
+	raw := []byte("ONU\x1b[2C1\r\n\x1b[4Cpassword\x1b[2C:\x1b[1Ctopsecret99\r\nok\x1b[3Cdone")
+	got := debugCopy(raw, 4000)
+	if strings.Contains(got, "topsecret99") {
+		t.Fatalf("secret in the debug copy: %q", got)
+	}
+	if !strings.Contains(got, `ONU\x1b[2C1\r`) || !strings.Contains(got, `ok\x1b[3Cdone`) {
+		t.Errorf("other lines not kept visible: %q", got)
+	}
+}
+
+func TestParseONUStateStateNotLast(t *testing.T) {
+	rows, bad := ParseONUState(1, "1:1  enable  enable  Dying Gasp  VSOL00127e0f\n1:2  enable  enable  working  VSOL00127e10  2025-01-01\n")
+	if bad != "" || len(rows) != 2 {
+		t.Fatalf("%q %+v", bad, rows)
+	}
+	if rows[0].State != "dying-gasp" || rows[0].Online {
+		t.Errorf("row 0: %+v", rows[0])
+	}
+	if rows[1].State != "online" || !rows[1].Online {
+		t.Errorf("row 1: %+v", rows[1])
+	}
+}

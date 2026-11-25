@@ -149,6 +149,7 @@ func (s *Session) readUntil(ctx context.Context, timeout time.Duration, st stopA
 		if tl != "" {
 			switch {
 			case s.d.MoreRE.MatchString(line) && len(s.raw) > s.answered:
+				blankMore(s.raw, s.d.MoreRE)
 				s.answered = len(s.raw)
 				if err := s.write(" "); err != nil { // a space turns the page; no end of line
 					return "", "", err
@@ -178,6 +179,21 @@ func (s *Session) readUntil(ctx context.Context, timeout time.Duration, st stopA
 		case <-ctx.Done():
 			return clean(s.raw), "", ctx.Err()
 		}
+	}
+}
+
+// blankMore overwrites the pagination marker on the last line of raw with blanks of the same length, so the marker
+// cannot survive in the rendered text when the OLT redraws the line with a carriage return and a shorter line (the
+// marker's tail would show through) and every column position stays as the OLT counted it.
+func blankMore(raw []byte, re *regexp.Regexp) {
+	from := bytes.LastIndexByte(raw, '\n') + 1
+	locs := re.FindAllIndex(raw[from:], -1)
+	if len(locs) == 0 {
+		return
+	}
+	l := locs[len(locs)-1]
+	for k := from + l[0]; k < from+l[1]; k++ {
+		raw[k] = ' '
 	}
 }
 
@@ -561,7 +577,7 @@ func (s *Session) exec(ctx context.Context, line string, trusted bool) (string, 
 	}
 	s.setPrompt(last)
 	s.track(line)
-	s.lastDbg = visible(s.raw, 4000)
+	s.lastDbg = debugCopy(s.raw, 4000)
 	// The first line is the OLT echoing what was typed.
 	if i := strings.IndexByte(out, '\n'); i >= 0 {
 		if Norm(out[:i]) == Norm(line) || strings.HasSuffix(Norm(out[:i]), Norm(line)) {

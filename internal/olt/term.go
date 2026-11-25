@@ -82,6 +82,9 @@ func escape(b []byte, i int, line *[]rune, col *int) int {
 	if i+1 >= len(b) {
 		return len(b) // cut off: the stream is rendered again as more of it arrives
 	}
+	if b[i+1] < 0x20 {
+		return i + 1 // a lone ESC: the control character after it (a line feed) is not part of it
+	}
 	switch b[i+1] {
 	case '[':
 		j := i + 2
@@ -95,11 +98,17 @@ func escape(b []byte, i int, line *[]rune, col *int) int {
 		if j >= len(b) {
 			return len(b)
 		}
+		if b[j] < 0x40 || b[j] > 0x7e {
+			return j // malformed: no final byte; what follows (a line feed) is kept
+		}
 		csi(b[j], ps, line, col)
 		return j + 1
 	case '(', ')', '*', '+', '#', '%':
 		if i+2 >= len(b) {
 			return len(b)
+		}
+		if b[i+2] < 0x20 {
+			return i + 2
 		}
 		return i + 3
 	default:
@@ -203,6 +212,27 @@ func visible(b []byte, limit int) string {
 		if sb.Len() >= limit {
 			sb.WriteString("...")
 			break
+		}
+	}
+	return sb.String()
+}
+
+// debugCopy is visible() line by line, except that a line whose rendered text holds something Redact hides is given
+// rendered and redacted: in the visible form an escape can stand between a key word and its value ("\x1b[4Cpassword")
+// so that Redact would not see the word. Rendering works line by line, so a raw line and its rendered line match.
+func debugCopy(raw []byte, limit int) string {
+	var sb strings.Builder
+	for k, l := range strings.Split(string(raw), "\n") {
+		if k > 0 {
+			sb.WriteByte('\n')
+		}
+		if r := render([]byte(l)); Redact(r) != r {
+			sb.WriteString(Redact(r))
+		} else {
+			sb.WriteString(visible([]byte(l), limit))
+		}
+		if sb.Len() >= limit {
+			return clip(sb.String(), limit)
 		}
 	}
 	return sb.String()
