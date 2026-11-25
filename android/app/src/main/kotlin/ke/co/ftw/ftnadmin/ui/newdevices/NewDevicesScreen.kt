@@ -344,9 +344,13 @@ private fun DeviceSheetContent(
             if (d.deviceClass.label.isNotBlank()) {
                 Text(d.deviceClass.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             }
-            if (d.deviceClass.isOlt) {
+            if (d.deviceClass.isOlt || d.deviceClass.isOnuMgmt) {
                 Text(
-                    "This is an OLT of the equipment register, not a customer. It can only be dismissed from this list.",
+                    if (d.deviceClass.isOnuMgmt) {
+                        "This is an ONU's TR-069 management address, not a customer. It can only be dismissed from this list."
+                    } else {
+                        "This is an OLT of the equipment register, not a customer. It can only be dismissed from this list."
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

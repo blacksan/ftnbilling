@@ -446,9 +446,13 @@ data class DeviceClassInfo(
     val isOlt: Boolean get() = kind == KIND_OLT
     val isOnu: Boolean get() = kind == KIND_ONU
 
+    /** An ONU's TR-069 WAN on the management network: equipment, never a customer, never attachable. */
+    val isOnuMgmt: Boolean get() = kind == KIND_ONU_MGMT
+
     companion object {
         const val KIND_OLT = "olt"
         const val KIND_ONU = "onu"
+        const val KIND_ONU_MGMT = "onu_mgmt"
         const val KIND_UNKNOWN = "unknown"
     }
 }

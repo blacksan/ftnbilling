@@ -332,6 +332,9 @@ func (s *Service) CreateAccount(in AccountInput) (store.Account, error) {
 		if err := oltMACLocked(d, mac); err != nil {
 			return err
 		}
+		if err := onuMgmtMACLocked(d, mac); err != nil {
+			return err
+		}
 		if other, ok := d.AccountByMAC(mac); ok {
 			return duplicateMAC(d, other, aptID)
 		}
@@ -436,6 +439,9 @@ func (s *Service) ChangeMAC(ctx context.Context, id, rawMAC string) error {
 			return ErrNotFound
 		}
 		if err := oltMACLocked(d, mac); err != nil {
+			return err
+		}
+		if err := onuMgmtMACLocked(d, mac); err != nil {
 			return err
 		}
 		if other, ok := d.AccountByMAC(mac); ok && other.ID != id {

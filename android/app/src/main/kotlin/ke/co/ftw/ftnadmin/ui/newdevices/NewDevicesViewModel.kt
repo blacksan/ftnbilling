@@ -291,7 +291,7 @@ class NewDevicesViewModel(
         val apt = sh.apartmentId ?: return
         if (sh.flat.isBlank()) return
         // An OLT is equipment: it never becomes a customer.
-        if (!sh.device.deviceClass.creatable || sh.device.deviceClass.isOlt) return
+        if (!sh.device.deviceClass.creatable || sh.device.deviceClass.isOlt || sh.device.deviceClass.isOnuMgmt) return
         val eq = sh.device.deviceClass.equipmentId.takeIf { sh.device.deviceClass.isOnu }
         run(sh, "${sh.flat.trim()} created") {
             repo.create(

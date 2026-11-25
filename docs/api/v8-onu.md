@@ -53,3 +53,5 @@ A task is `queued` until the ONU checks in, `sending` while the ACS talks to it,
 | `POST /equipment/import` | operator | `{lines}`: one ONU per line, `serial,mac,model[,gpon serial]` (or `kind,serial,mac,model`). `{added, skipped: ["line 2: ..."]}` |
 
 Status values: `in_stock`, `installed`, `faulty`, `returned`, `retired`. A serial (either kind) and a MAC cannot be on two items. A house MAC that is another apartment's still falls under the MAC-in-another-apartment rule when the ONU is given out.
+
+New devices: a MAC that holds a lease of the ONU-management DHCP server (`ftn-onu-dhcp`) or is seen on its VLAN (`vlan<id>-onu`) is an ONU's TR-069 WAN, not a customer device. It has `class: {kind: "onu_mgmt", label: "ONU management (TR-069) — <model · serial of the matching registered ONU | unknown ONU>", creatable: false, attachable: false}`; the ONU is the one whose ACS device record is bound to that MAC or address, else the only register ONT whose WAN MAC is within 8 of it (same OUI). Create customer and attach are refused (422 on `mac`), and it is left out of Clients and Live now. A MAC that is a customer account's MAC is never classed this way.
