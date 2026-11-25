@@ -17,7 +17,23 @@ var (
 	serialRE = regexp.MustCompile(`\b([A-Za-z]{4}[0-9A-Fa-f]{8})\b`)
 	ponRE    = regexp.MustCompile(`(?i)\b(?:gpon|pon)?\s*0/(\d+)(?::(\d+|--|-))?`)
 	numRE    = regexp.MustCompile(`-?\d+(?:\.\d+)?`)
+	// startRE is an ONU index with its "GPON0/" prefix missing: "1:1" is PON 1, ONU 1.
+	startRE = regexp.MustCompile(`^(\d+):(\d+|--|-)(?:\s|$)`)
 )
+
+// onuIndex finds the ONU index of a row: ponRE anywhere in the line, else a bare "<pon>:<id>" at its start. rest is
+// the text after the index.
+func onuIndex(t string) (pon int, id string, rest string, ok bool) {
+	if p := ponRE.FindStringSubmatch(t); p != nil {
+		n, _ := strconv.Atoi(p[1])
+		return n, p[2], t[strings.Index(t, p[0])+len(p[0]):], true
+	}
+	if p := startRE.FindStringSubmatch(t); p != nil {
+		n, _ := strconv.Atoi(p[1])
+		return n, p[2], t[len(p[0]):], true
+	}
+	return 0, "", "", false
+}
 
 // NormSerial is a GPON serial in the form it is compared in.
 func NormSerial(s string) string { return store.NormSerial(s) }
@@ -44,6 +60,8 @@ func ParseAutoFindOn(pon0 int, out string) []Found {
 		}
 		pon := pon0
 		if p := ponRE.FindStringSubmatch(l); p != nil {
+			pon, _ = strconv.Atoi(p[1])
+		} else if p := startRE.FindStringSubmatch(strings.TrimSpace(l)); p != nil {
 			pon, _ = strconv.Atoi(p[1])
 		}
 		f := Found{PON: pon, Serial: NormSerial(m[1])}
@@ -144,31 +162,51 @@ func ParseONUState(pon int, out string) (rows []store.OLTONU, unparsed string) {
 		if t == "" || strings.HasPrefix(t, "---") {
 			continue
 		}
-		p := ponRE.FindStringSubmatch(t)
-		if p == nil || p[2] == "" || p[2] == "-" || p[2] == "--" {
+		port, idS, rest, ok := onuIndex(t)
+		if !ok || idS == "" || idS == "-" || idS == "--" {
 			if !headerLine(t) {
 				bad = append(bad, t)
 			}
 			continue
 		}
-		port, _ := strconv.Atoi(p[1])
-		id, _ := strconv.Atoi(p[2])
+		id, _ := strconv.Atoi(idS)
 		if port == 0 {
 			port = pon
 		}
 		r := store.OLTONU{PON: port, ID: id}
-		if m := serialRE.FindStringSubmatch(t); m != nil {
-			r.Serial = NormSerial(m[1])
+		var cols []string // the columns after the index, without the serial
+		for _, f := range strings.Fields(rest) {
+			if m := serialRE.FindStringSubmatch(f); m != nil && m[1] == f {
+				r.Serial = NormSerial(f)
+				continue
+			}
+			cols = append(cols, f)
 		}
-		for _, w := range stateWords {
-			if w.re.MatchString(t) {
-				r.State, r.Online = w.name, w.online
-				break
+		if r.Serial == "" {
+			if m := serialRE.FindStringSubmatch(t); m != nil {
+				r.Serial = NormSerial(m[1])
+			}
+		}
+		// The phase state is the last column ("enable enable working"); any other word is kept as the raw state.
+		if len(cols) > 0 {
+			last := strings.ToLower(cols[len(cols)-1])
+			for _, w := range stateWords {
+				if w.re.MatchString(last) {
+					r.State, r.Online = w.name, w.online
+					break
+				}
+			}
+			if r.State == "" {
+				r.State = last
 			}
 		}
 		if r.State == "" {
-			f := strings.Fields(t)
-			r.State = strings.ToLower(f[len(f)-1])
+			for _, w := range stateWords {
+				if w.re.MatchString(t) {
+					r.State, r.Online = w.name, w.online
+					break
+				}
+			}
 		}
 		rows = append(rows, r)
 	}
@@ -177,6 +215,9 @@ func ParseONUState(pon int, out string) (rows []store.OLTONU, unparsed string) {
 
 func headerLine(t string) bool {
 	l := strings.ToLower(t)
+	if strings.HasPrefix(l, "total") && strings.Contains(l, ":") { // "total: 1 working: 1"
+		return true
+	}
 	return strings.Contains(l, "onuindex") || strings.Contains(l, "admin state") || strings.Contains(l, "phase") || strings.Contains(l, "onu id") || strings.HasPrefix(l, "onu ") ||
 		strings.Contains(l, "equipment") || strings.Contains(l, "auth mode") || strings.Contains(l, "authmode")
 }
@@ -299,33 +340,63 @@ func MergeOpticalBlocks(rows []store.OLTONU, pon int, out string) (ok bool, unpa
 	return ok, strings.Join(bad, "\n")
 }
 
-// MergeDistance adds the ranging distance of "show onu distance" to rows. Its layout is not known (TODO(bench)): a
-// line with an ONU index and a whole number gives that ONU's distance; nothing else is reported, because the table is
-// optional.
+// MergeDistance adds the ranging distance of "show onu distance" to rows. The layout is not known (TODO(bench)), so
+// three are read: a row "GPON0/1:1  123 m" (also "1:1  123", "123(m)", "123 meters"), a block with "ONU ID : 1" and
+// "Distance : 123 m", and a key : value line with the index ("ONU : GPON0/1:1"). Nothing is reported for what cannot be
+// read, because the table is optional.
 func MergeDistance(rows []store.OLTONU, pon int, out string) {
-	for _, l := range strings.Split(out, "\n") {
-		t := strings.TrimSpace(l)
-		p := ponRE.FindStringSubmatch(t)
-		if p == nil || p[2] == "" || p[2] == "-" || p[2] == "--" {
-			continue
-		}
-		id, _ := strconv.Atoi(p[2])
-		rest := t[strings.Index(t, p[0])+len(p[0]):]
-		var dist string
-		for _, f := range strings.Fields(rest) {
-			if n := strings.TrimSuffix(strings.ToLower(f), "m"); n != "" && strings.Trim(n, "0123456789") == "" {
-				dist = n
-			}
-		}
-		if dist == "" {
-			continue
-		}
+	set := func(id int, dist string) {
 		for i := range rows {
 			if rows[i].PON == pon && rows[i].ID == id {
 				rows[i].Distance = dist
 			}
 		}
 	}
+	cur := -1
+	for _, l := range strings.Split(out, "\n") {
+		t := strings.TrimSpace(l)
+		if m := kvRE.FindStringSubmatch(t); m != nil && !strings.Contains(m[1], "/") && !startRE.MatchString(t) {
+			key := strings.ToLower(strings.Join(strings.Fields(m[1]), " "))
+			switch {
+			case key == "onu id" || key == "onu" || key == "onuid" || key == "onu index":
+				cur = -1
+				if _, idS, _, ok := onuIndex(m[2]); ok && idS != "-" && idS != "--" {
+					cur, _ = strconv.Atoi(idS)
+				} else if n, err := strconv.Atoi(strings.TrimSpace(m[2])); err == nil {
+					cur = n
+				}
+			case strings.Contains(key, "distance") || strings.Contains(key, "range"):
+				if d := distField(strings.Fields(m[2])); d != "" && cur >= 0 {
+					set(cur, d)
+				}
+			}
+			continue
+		}
+		_, idS, rest, ok := onuIndex(t)
+		if !ok || idS == "" || idS == "-" || idS == "--" {
+			continue
+		}
+		id, _ := strconv.Atoi(idS)
+		if d := distField(strings.Fields(rest)); d != "" {
+			set(id, d)
+		}
+	}
+}
+
+// distField is the last field that is a whole number of metres ("123", "123m", "(123m)", "123(m)"); "m" or "meter(s)"
+// as a field of its own is a unit and is skipped.
+func distField(fs []string) string {
+	var dist string
+	for _, f := range fs {
+		n := strings.ToLower(strings.Trim(f, "()"))
+		n = strings.TrimSuffix(strings.TrimSuffix(n, "meters"), "meter")
+		n = strings.TrimSuffix(strings.TrimSuffix(n, "(m)"), "m")
+		n = strings.Trim(n, "()")
+		if n != "" && strings.Trim(n, "0123456789") == "" {
+			dist = n
+		}
+	}
+	return dist
 }
 
 var (

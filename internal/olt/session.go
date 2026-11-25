@@ -79,27 +79,12 @@ type Session struct {
 	// NewHostKey is the fingerprint seen when none was pinned (the caller pins it).
 	NewHostKey string
 	closer     func()
+	// lastDbg is the last command's raw output with its control characters made visible (diagnostics only).
+	lastDbg string
 }
 
-var ansiRE = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][A-Za-z0-9]|\x1b[=>]`)
-
-// clean applies backspaces, drops CR, NUL and terminal escapes.
-func clean(b []byte) string {
-	b = ansiRE.ReplaceAll(b, nil)
-	out := make([]byte, 0, len(b))
-	for _, c := range b {
-		switch c {
-		case '\r', 0:
-		case 8, 127:
-			if n := len(out); n > 0 && out[n-1] != '\n' {
-				out = out[:n-1]
-			}
-		default:
-			out = append(out, c)
-		}
-	}
-	return string(out)
-}
+// clean replays terminal output (see render): cursor movement, carriage returns, backspaces and escapes.
+func clean(b []byte) string { return render(b) }
 
 func newSession(d *Dialect, rw io.ReadWriteCloser, eol string) *Session {
 	s := &Session{d: d, rw: rw, eol: eol, in: make(chan []byte, 64), Timeout: 20 * time.Second, mode: ModeUser}
@@ -576,6 +561,7 @@ func (s *Session) exec(ctx context.Context, line string, trusted bool) (string, 
 	}
 	s.setPrompt(last)
 	s.track(line)
+	s.lastDbg = visible(s.raw, 4000)
 	// The first line is the OLT echoing what was typed.
 	if i := strings.IndexByte(out, '\n'); i >= 0 {
 		if Norm(out[:i]) == Norm(line) || strings.HasSuffix(Norm(out[:i]), Norm(line)) {
@@ -644,7 +630,8 @@ func (s *Session) show(ctx context.Context, cmd string) (string, error) {
 type CmdOut struct {
 	Cmd string
 	Out string
-	Err error // a refusal by the OLT (*CmdError); other errors end the Query
+	Err error  // a refusal by the OLT (*CmdError); other errors end the Query
+	Dbg string // the raw output with control characters made visible, for diagnosing a layout
 }
 
 // QueryEach runs a Query (a read-only sequence that may sit in configuration mode) and returns each command's own
@@ -657,13 +644,14 @@ func (s *Session) QueryEach(ctx context.Context, q Query) ([]CmdOut, error) {
 	var res []CmdOut
 	var hard error
 	for _, c := range q.Cmds {
+		s.lastDbg = ""
 		out, err := s.show(ctx, c)
 		var ce *CmdError
 		if err != nil && !errors.As(err, &ce) {
 			hard = err
 			break
 		}
-		res = append(res, CmdOut{Cmd: c, Out: out, Err: err})
+		res = append(res, CmdOut{Cmd: c, Out: out, Err: err, Dbg: s.lastDbg})
 	}
 	s.lower(ctx)
 	return res, hard
