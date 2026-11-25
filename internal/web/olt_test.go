@@ -150,16 +150,14 @@ func TestNewDevicesClassificationAndOLTGuard(t *testing.T) {
 	a.seedBridgeDevice(t, tONUMAC, "ether5")
 	a.seedBridgeDevice(t, "6C:1F:F7:BB:46:94", "ether5")
 	page := a.adminGet(t, "/admin/devices")
-	for _, want := range []string{"OLT V1600GS-R Block A OLT", "ONU F601 · ZTEG1", "This is an OLT, not a customer", `data-equipment=`, `data-noaddr="1"`} {
+	for _, want := range []string{"ONU F601 · ZTEG1", `data-equipment=`, `data-noaddr="1"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("devices page lacks %q", want)
 		}
 	}
-	// the OLT row has no Create customer / Attach: cut its row out and look
-	i := strings.Index(page, tOLTMAC)
-	row := page[i : i+strings.Index(page[i:], "</tr>")]
-	if strings.Contains(row, "Create customer") || strings.Contains(row, "Attach") || !strings.Contains(row, "Dismiss") {
-		t.Fatalf("OLT row actions: %s", row)
+	// the adopted OLT is known to the server: it is not a new device
+	if strings.Contains(page, tOLTMAC) || strings.Contains(page, "This is an OLT, not a customer") {
+		t.Fatal("a known OLT is listed under New devices")
 	}
 	// server guard: a customer on the OLT's MAC is refused, in the dialog's JSON and for attach
 	apt := a.aptID(t)
@@ -301,5 +299,30 @@ func TestOLTPasswordRevealIsRateLimited(t *testing.T) {
 	r := a.admin("POST", "/admin/olts/reveal", url.Values{"id": {oid}, "current_password": {pw}})
 	if b := body(t, r); strings.Contains(b, "Olt-Secret-99") || !strings.Contains(r.Header.Get("Location"), "too+many") {
 		t.Fatalf("the sixth reveal went through: %d %s", r.StatusCode, r.Header.Get("Location"))
+	}
+}
+
+func TestONUManagementRowOfAnUnlinkedONUStaysWithADismiss(t *testing.T) {
+	a := newONUApp(t)
+	const mgmt = "68:22:9F:12:7E:11"
+	now := time.Now()
+	if err := a.st.Update(func(d *store.Data) error {
+		d.Devices[store.DeviceKey(a.site, mgmt)] = store.Device{SiteID: a.site, MAC: mgmt, Source: store.DeviceSourceONUMgmt, IP: "10.6.1.250", FirstSeen: now, LastSeen: now, Online: true, Hits: 1}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page := a.adminGet(t, "/admin/devices")
+	i := strings.Index(page, mgmt)
+	if i < 0 {
+		t.Fatal("the management MAC of an ONU that is not linked yet must stay listed")
+	}
+	row := page[i : i+strings.Index(page[i:], "</tr>")]
+	if !strings.Contains(row, "Open ONU management") || !strings.Contains(row, "Dismiss") || strings.Contains(row, "Create customer") {
+		t.Fatalf("row: %s", row)
+	}
+	a.adminPost(t, "/admin/devices/dismiss", url.Values{"site": {a.site}, "mac": {mgmt}})
+	if strings.Contains(a.adminGet(t, "/admin/devices"), mgmt) {
+		t.Fatal("dismissed row still listed")
 	}
 }
