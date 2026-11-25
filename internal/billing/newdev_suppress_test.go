@@ -95,3 +95,69 @@ func TestNewDevicesSuppressACSKnownMACsOfALinkedONU(t *testing.T) {
 		t.Fatal("unknown MAC suppressed")
 	}
 }
+
+// A dangling AccountID (the account was deleted, so it is no longer in d.Accounts) must NOT suppress: the device
+// is not actually in a house, so it stays listed. We check both routes: the register ONT's WAN MAC (class onu) and
+// the ACS record's management MAC.
+func TestNewDevicesDanglingAccountIDDoesNotSuppress(t *testing.T) {
+	e := newEnv(t)
+	e.ipoe(t, store.AccessIPoE)
+	apt := e.apt(t, "MG One", e.site)
+	o := e.olt(t, OLTInput{Name: "Block A OLT", Model: "V1600GS-R", MAC: macOLT, RouterPort: "ether3", PONPorts: 4, PONApartments: map[int][]string{1: {apt.ID}}})
+	onu, err := e.svc.SaveEquipment(EquipmentInput{Kind: "ont", Serial: "V26051300697", GPONSerial: "VSOL00127E0F", MAC: macONUWAN, Model: "V2804N-Z", SetPlacement: true, OLTID: o.ID, PONPort: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The ONT points at an account that no longer exists, and an ACS ONU record does too.
+	if err := e.svc.st.Update(func(d *store.Data) error {
+		q := d.Equipment[onu.ID]
+		q.AccountID, q.Status = "ghost-account", store.EqInstalled
+		d.Equipment[onu.ID] = q
+		d.ONUs["o1"] = store.ONU{ID: "o1", Serial: "ZZZ", SiteID: e.site, AccountID: "ghost-account", Sec: store.ONUSec{MgmtMAC: macONUMgmt}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.bridgeHost(macONUWAN, "ether5", "false")
+	e.mgmtLease(macONUMgmt, "10.6.1.250")
+	e.reconcile(t)
+	got := unregByMAC(e)
+	for _, m := range []string{macONUWAN, macONUMgmt} {
+		if _, ok := got[m]; !ok {
+			t.Fatalf("%s with a dangling (deleted) account was suppressed — a would-be customer hidden", m)
+		}
+	}
+}
+
+// An ambiguous management MAC — two register ONTs, both linked, both within 8 of it — must NOT resolve, so it is
+// NOT suppressed. A loose near-match that picked either one would hide the management address of a third ONU.
+func TestNewDevicesAmbiguousNearMatchDoesNotSuppress(t *testing.T) {
+	e := newEnv(t)
+	e.ipoe(t, store.AccessIPoE)
+	apt1 := e.apt(t, "MG One", e.site)
+	apt2 := e.apt(t, "MG Two", e.site)
+	// Two in-stock ONTs whose WAN MACs are both within 8 of macONUMgmt (…7E:11): …7E:10 and …7E:18.
+	ont1, err := e.svc.SaveEquipment(EquipmentInput{Kind: "ont", Serial: "S1", MAC: "68:22:9F:12:7E:10", Model: "V2804N-Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ont2, err := e.svc.SaveEquipment(EquipmentInput{Kind: "ont", Serial: "S2", MAC: "68:22:9F:12:7E:18", Model: "V2804N-Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a1, err := e.svc.CreateAccount(AccountInput{ApartmentID: apt1.ID, SiteID: e.site, Unit: "H1", MAC: macHuawei})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2, err := e.svc.CreateAccount(AccountInput{ApartmentID: apt2.ID, SiteID: e.site, Unit: "H2", MAC: "00:E0:FC:12:34:57"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkONT(t, e, ont1.ID, a1.ID)
+	linkONT(t, e, ont2.ID, a2.ID)
+	e.mgmtLease(macONUMgmt, "10.6.1.250")
+	e.reconcile(t)
+	if _, ok := unregByMAC(e)[macONUMgmt]; !ok {
+		t.Fatal("an ambiguous management MAC (two linked near-matches) was suppressed — the match was not unique")
+	}
+}
