@@ -312,3 +312,7 @@ func (d *Data) OLTStateOf(id string) OLTState {
 // DeviceSourceOLTMgmt is Device.Source of a device seen on a router's OLT management port that is not (or not yet proven to
 // be) an OLT of the inventory: it is listed under New devices as a "Possible OLT" and is never configured.
 const DeviceSourceOLTMgmt = "oltmgmt"
+
+// DeviceSourceONUMgmt is Device.Source of a MAC that holds a lease from the router's ONU-management DHCP server or is seen on
+// its ONU-management VLAN: the TR-069 WAN of an ONU, never a customer device.
+const DeviceSourceONUMgmt = "onumgmt"

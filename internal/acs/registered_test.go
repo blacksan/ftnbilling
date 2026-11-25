@@ -113,7 +113,7 @@ func TestUnknownListExpiresAndIsBounded(t *testing.T) {
 	before := f.alertCount()
 	for i := 0; i < unknownMax+20; i++ {
 		_ = f.st.Update(func(d *store.Data) error {
-			if a, _ := f.svc.noteUnknown(d, Inform{Serial: fmt.Sprintf("FAKE%04d", i), OUI: "0019C6"}, store.Site{ID: "s1"}, "10.6.3.9", f.svc.now()); a != "" {
+			if a, _ := f.svc.noteUnknown(d, Inform{Serial: fmt.Sprintf("FAKE%04d", i), OUI: "0019C6"}, store.Site{ID: "s1"}, "10.6.3.9", leaseResult{}, f.svc.now()); a != "" {
 				f.mu.Lock()
 				f.alerts = append(f.alerts, a)
 				f.mu.Unlock()

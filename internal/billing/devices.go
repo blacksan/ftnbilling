@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +35,20 @@ const (
 type devObs struct {
 	mac, ip, host, source, port string
 	online                      bool
+	// mgmt: the MAC holds a lease of the ONU-management DHCP server or sits on the ONU-management VLAN (an ONU's TR-069 WAN).
+	mgmt bool
+}
+
+// The router objects of the ONU management network (internal/sites/onumgmt.go names them; billing cannot import sites).
+const (
+	onuMgmtDHCPServer = "ftn-onu-dhcp"
+	onuMgmtVLANPrefix = "vlan"
+	onuMgmtVLANSuffix = "-onu"
+)
+
+// isONUMgmtIface: the VLAN interface of the ONU management network (vlan99-onu).
+func isONUMgmtIface(name string) bool {
+	return strings.HasPrefix(name, onuMgmtVLANPrefix) && strings.HasSuffix(name, onuMgmtVLANSuffix) && len(name) > len(onuMgmtVLANPrefix)+len(onuMgmtVLANSuffix)
 }
 
 // ErrRouterOwnMAC: an account cannot be given a MAC that is one of a router's own interfaces.
@@ -59,7 +74,7 @@ func (s *Service) readFacts(ctx context.Context, rt routeros.Client, siteID stri
 			}
 		}
 	}
-	hosts, herr := rt.RowsProps(ctx, pathBridgeHost, nil, []string{"mac-address", "on-interface", "local", "bridge"})
+	hosts, herr := rt.RowsProps(ctx, pathBridgeHost, nil, []string{"mac-address", "on-interface", "local", "bridge", "vid"})
 	if herr == nil {
 		f.hostsOK = true
 		f.hosts = hosts
@@ -150,17 +165,43 @@ func (s *Service) collectDevicesX(site store.Site, pl netplan.Plan, hasPlan, com
 		o.online = o.online || online
 		return o
 	}
+	// ONU management: a MAC with a lease of the management DHCP server, an ARP row on its VLAN interface, or a bridge host
+	// on that VLAN is an ONU's TR-069 WAN, whatever address it has (the management subnet is not the customer network).
+	mgmt := map[string]bool{}
+	markMgmt := func(mac string) {
+		if m, err := NormalizeMAC(mac); err == nil {
+			mgmt[m] = true
+		}
+	}
+	for _, r := range leases {
+		if r["server"] == onuMgmtDHCPServer {
+			markMgmt(r["mac-address"])
+		}
+	}
+	for _, r := range arp {
+		if isONUMgmtIface(r["interface"]) {
+			markMgmt(r["mac-address"])
+		}
+	}
+	for _, r := range facts.hosts {
+		if r["local"] == "true" || r["local"] == "yes" {
+			continue
+		}
+		if isONUMgmtIface(r["on-interface"]) || (site.ONUMgmtVLAN > 1 && r["vid"] == strconv.Itoa(site.ONUMgmtVLAN)) {
+			markMgmt(r["mac-address"])
+		}
+	}
 	for _, r := range leases {
 		if isOurs(r) {
 			continue
 		}
-		upsert(r["mac-address"], firstNonEmpty(r["active-address"], r["address"]), r["host-name"], "dhcp", r["status"] == "bound", false)
+		upsert(r["mac-address"], firstNonEmpty(r["active-address"], r["address"]), r["host-name"], "dhcp", r["status"] == "bound", mgmt[strings.ToUpper(r["mac-address"])])
 	}
 	for _, r := range arp {
 		if isOurs(r) {
 			continue // our static entry says nothing about whether the flat is there
 		}
-		upsert(r["mac-address"], r["address"], "", "arp", arpOnline(r), false)
+		upsert(r["mac-address"], r["address"], "", "arp", arpOnline(r), mgmt[strings.ToUpper(r["mac-address"])])
 	}
 	// Layer-2 only: a device on a customer port that has not asked for an address (no lease, no ARP row).
 	// An address from DHCP or ARP above wins; the bridge entry adds the port and keeps it online.
@@ -190,7 +231,9 @@ func (s *Service) collectDevicesX(site store.Site, pl netplan.Plan, hasPlan, com
 	ps.mu.Unlock()
 	obs := make([]devObs, 0, len(order))
 	for _, m := range order {
-		obs = append(obs, *byMAC[m])
+		o := *byMAC[m]
+		o.mgmt = mgmt[m]
+		obs = append(obs, o)
 	}
 	s.noteDevices(site.ID, obs, complete)
 }
@@ -240,6 +283,9 @@ func (s *Service) noteDevices(siteID string, obs []devObs, complete bool) {
 					dev.Source = o.source
 				}
 			} // portal and dismissed are kept
+			if o.mgmt && (dev.Source == "" || dev.Source == "bridge" || dev.Source == "dhcp" || dev.Source == "arp") {
+				dev.Source = store.DeviceSourceONUMgmt // sticky: the later passes that only see it at layer 2 leave it as it is
+			}
 			d.Devices[key] = dev
 			changed = true
 		}
@@ -490,6 +536,9 @@ func (s *Service) UnregisteredOnline(has func(siteID string) bool) int {
 				if _, isOLT := d.OLTByMAC(dv.MAC); isOLT && dv.Source != store.DeviceSourceOLTMgmt {
 					continue // an OLT needs nothing from the operator: it is not a new device to deal with
 				}
+				if onuMgmtDevice(d, dv) {
+					continue // an ONU's TR-069 WAN needs nothing from the operator either
+				}
 				n++
 			}
 		}
@@ -546,7 +595,7 @@ func (s *Service) suggest(list []UnregDevice) {
 	now := s.now()
 	perSite := map[string][]int{} // site -> indexes of online devices
 	for i, u := range list {
-		if u.Online && u.BelongsTo == nil && u.Class.Class != ClassOLT && u.Class.Class != ClassPossibleOLT {
+		if u.Online && u.BelongsTo == nil && u.Class.Class != ClassOLT && u.Class.Class != ClassPossibleOLT && u.Class.Class != ClassONUMgmt {
 			perSite[u.SiteID] = append(perSite[u.SiteID], i)
 		}
 	}
@@ -789,6 +838,9 @@ const (
 	ClassOLT     = "olt"     // the MAC of an OLT of the register
 	ClassONU     = "onu"     // the WAN MAC of an ONU of the register
 	ClassUnknown = "unknown" // nothing known
+	// ClassONUMgmt: the TR-069 WAN of an ONU on the ONU-management network (a lease of its DHCP server, or seen on its VLAN).
+	// Not a customer device: not creatable, not attachable, hidden from the customer lists.
+	ClassONUMgmt = "onu_mgmt"
 	// ClassPossibleOLT: a device on a router's OLT management port that is not (or not yet proven to be) an OLT of the register.
 	ClassPossibleOLT = "possible_olt"
 )
@@ -813,12 +865,15 @@ type DeviceClass struct {
 // no account here (returned, faulty, or another house's) is still listed, without Create customer, so it can be
 // attached or dismissed like on the New devices page.
 func (c DeviceClass) IsEquipment() bool {
-	return c.Class == ClassOLT || c.Class == ClassRouter
+	return c.Class == ClassOLT || c.Class == ClassRouter || c.Class == ClassONUMgmt
 }
 
 func classifyLocked(d *store.Data, dv store.Device, router bool) DeviceClass {
 	if router {
 		return DeviceClass{Class: ClassRouter}
+	}
+	if onuMgmtDevice(d, dv) {
+		return classifyONUMgmt(d, dv)
 	}
 	if dv.Source == store.DeviceSourceOLTMgmt {
 		label := "Possible OLT"
@@ -837,6 +892,89 @@ func classifyLocked(d *store.Data, dv store.Device, router bool) DeviceClass {
 		return c
 	}
 	return DeviceClass{Class: ClassUnknown, Creatable: true, NeverAsked: dv.IP == "" && dv.Source == "bridge"}
+}
+
+// macNear24: same OUI and the last 24 bits within 8 (the V-SOL case: label ...0F, WAN ...10, TR-069 WAN ...11).
+func macNear24(a, b string) bool {
+	ca, ok1 := store.CanonMAC(a)
+	cb, ok2 := store.CanonMAC(b)
+	if !ok1 || !ok2 || ca[:8] != cb[:8] {
+		return false
+	}
+	var x, y int64
+	fmt.Sscanf(strings.ReplaceAll(ca[9:], ":", ""), "%x", &x)
+	fmt.Sscanf(strings.ReplaceAll(cb[9:], ":", ""), "%x", &y)
+	if x < y {
+		x, y = y, x
+	}
+	return x-y <= 8
+}
+
+// classifyONUMgmt names the ONU behind a management MAC: the ACS device record bound to that MAC (or address) first, then
+// the register's ONT whose WAN MAC is within 8 of it. No match: "unknown ONU".
+func classifyONUMgmt(d *store.Data, dv store.Device) DeviceClass {
+	c := DeviceClass{Class: ClassONUMgmt}
+	who := "unknown ONU"
+	var inv store.Equipment
+	found := false
+	for _, o := range d.ONUs {
+		if o.SiteID == dv.SiteID && ((o.Sec.MgmtMAC != "" && strings.EqualFold(o.Sec.MgmtMAC, dv.MAC)) || (dv.IP != "" && o.MgmtIP == dv.IP)) {
+			if e, ok := d.ONTBySerial(o.Serial); ok {
+				inv, found = e, true
+			} else {
+				who = "ONU " + o.Serial
+			}
+			break
+		}
+	}
+	if !found {
+		ids := make([]string, 0, 2)
+		for id, e := range d.Equipment {
+			if e.Kind == store.KindONT && e.Status != store.EqRetired && e.MAC != "" && macNear24(e.MAC, dv.MAC) {
+				ids = append(ids, id)
+			}
+		}
+		sort.Strings(ids)
+		if len(ids) == 1 { // two candidates say nothing
+			inv, found = d.Equipment[ids[0]], true
+		}
+	}
+	if found {
+		who = strings.TrimSpace(firstNonEmpty(inv.Model, "ONU") + " · " + firstNonEmpty(inv.Serial, inv.GPONSerial, "no serial"))
+		c.EquipmentID = inv.ID
+	}
+	c.Label = "ONU management (TR-069) — " + who
+	return c
+}
+
+// ONUMgmtMACError: the MAC is an ONU's TR-069 WAN on the management network, not a customer's device.
+var ErrONUMgmtMAC = errors.New("That MAC is an ONU's TR-069 management address, not a customer device")
+
+// onuMgmtDevice: the device is an ONU's TR-069 WAN. An account's MAC wins, and so does a register ONT's WAN MAC: an ONU whose
+// firmware uses one MAC for its TR-069 and its internet WAN is still created as the house's ONU (class onu).
+func onuMgmtDevice(d *store.Data, dv store.Device) bool {
+	if dv.Source != store.DeviceSourceONUMgmt || len(d.OpenAccountsByMAC(dv.MAC)) > 0 {
+		return false
+	}
+	_, isONT := d.ONTByMAC(dv.MAC)
+	return !isONT
+}
+
+// onuMgmtMACLocked refuses a MAC the router showed on the ONU-management network (unless an account already has it, or it
+// is a register ONT's WAN MAC).
+func onuMgmtMACLocked(d *store.Data, mac string) error {
+	if len(d.OpenAccountsByMAC(mac)) > 0 {
+		return nil
+	}
+	if _, isONT := d.ONTByMAC(mac); isONT {
+		return nil
+	}
+	for _, dv := range d.Devices {
+		if dv.Source == store.DeviceSourceONUMgmt && strings.EqualFold(dv.MAC, mac) {
+			return ErrONUMgmtMAC
+		}
+	}
+	return nil
 }
 
 // ClassifyMAC classes a MAC seen on a router (service entry point for the API and tests).

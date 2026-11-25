@@ -466,7 +466,7 @@ func NormSerial(s string) string {
 }
 
 // ONTBySerial finds an ONT of the equipment register by the serial an ONU reports over TR-069, matching its
-// Serial or its GPONSerial. Retired items are skipped.
+// Serial, GPONSerial or TR069Serial. Retired items are skipped.
 func (d *Data) ONTBySerial(serial string) (Equipment, bool) {
 	n := NormSerial(serial)
 	if n == "" {
@@ -478,7 +478,7 @@ func (d *Data) ONTBySerial(serial string) (Equipment, bool) {
 		if e.Kind != KindONT || e.Status == EqRetired {
 			continue
 		}
-		if NormSerial(e.Serial) == n || NormSerial(e.GPONSerial) == n {
+		if NormSerial(e.Serial) == n || NormSerial(e.GPONSerial) == n || NormSerial(e.TR069Serial) == n {
 			// an installed item beats a stock one when (wrongly) two carry the serial
 			if !found || e.Status == EqInstalled {
 				best, found = e, true

@@ -443,6 +443,8 @@ func (s *Server) billingErr(w http.ResponseWriter, err error, mac string) {
 		validationErr(w, map[string]string{"mac": billing.ErrRouterOwnMAC.Error()})
 	case errors.Is(err, billing.ErrOLTMAC):
 		validationErr(w, map[string]string{"mac": err.Error()}) // "That MAC belongs to OLT <name>"
+	case errors.Is(err, billing.ErrONUMgmtMAC):
+		validationErr(w, map[string]string{"mac": err.Error()})
 	case errors.Is(err, billing.ErrConfirmNoAddress):
 		apiErr(w, http.StatusConflict, codeConfirmRequired, err.Error()+" Send confirm_no_address: true to create it anyway.", map[string]any{"mac": mac, "field": "confirm_no_address"})
 	case errors.Is(err, billing.ErrBadMAC):

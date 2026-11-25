@@ -359,7 +359,7 @@ func (s *Server) apiUnregDismiss(w http.ResponseWriter, r *http.Request, c *apiC
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// apiDeviceClass is a New devices row's place in the equipment hierarchy: kind is "olt" (no Create customer or
+// apiDeviceClass is a New devices row's place in the equipment hierarchy: kind is "olt" or "onu_mgmt" (an ONU's TR-069 WAN: no Create customer or
 // Attach: dismiss only), "onu" (an ONU of the register; create the customer with equipment_id) or "unknown"
 // (never_asked: the device only showed up at layer 2, creating a customer needs confirm_no_address).
 func apiDeviceClass(c billing.DeviceClass) map[string]any {
@@ -368,5 +368,5 @@ func apiDeviceClass(c billing.DeviceClass) map[string]any {
 		ids = []string{}
 	}
 	return map[string]any{"kind": c.Class, "label": c.Label, "equipment_id": c.EquipmentID, "creatable": c.Creatable,
-		"attachable": c.Class != billing.ClassOLT && c.Class != billing.ClassPossibleOLT, "never_asked": c.NeverAsked, "apartment_ids": ids}
+		"attachable": c.Class != billing.ClassOLT && c.Class != billing.ClassPossibleOLT && c.Class != billing.ClassONUMgmt, "never_asked": c.NeverAsked, "apartment_ids": ids}
 }

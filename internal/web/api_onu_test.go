@@ -1,6 +1,7 @@
 package web_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -188,5 +189,77 @@ func TestAPIONUTrustIsOwnerOnlyAndUnknownListWorks(t *testing.T) {
 	}
 	if u := r.call(r.view.Access, "GET", "/onus/unknown", nil, nil); u.Status != 200 || !strings.Contains(string(u.Raw), `"items"`) {
 		t.Fatalf("%d %s", u.Status, u.Raw)
+	}
+}
+
+func TestAPILinkUnknownONUIsOwnerOnlyAndAudited(t *testing.T) {
+	forceACS = true
+	t.Cleanup(func() { forceACS = false })
+	r := newAPIRig(t)
+	now := time.Now()
+	r.st.Update(func(d *store.Data) error {
+		s := d.Sites[r.A.ID]
+		s.ONUMgmtN = 4
+		d.Sites[r.A.ID] = s
+		d.Equipment["eqv"] = store.Equipment{ID: "eqv", Kind: store.KindONT, Serial: "V26051300697", GPONSerial: "VSOL00127E0F", MAC: "68:22:9F:12:7E:10", Model: "V2804N-Z", Status: store.EqInStock, CreatedAt: now}
+		b, _ := json.Marshal([]map[string]any{{"serial": "1234568229F127E0F", "oui": "00E0DF", "model": "VSOL V414", "site_id": r.A.ID, "lease_mac": "68:22:9F:12:7E:11",
+			"first_seen": now, "last_seen": now, "count": 2}})
+		d.Settings["acs.unknown"] = store.Setting{Key: "acs.unknown", Value: string(b), UpdatedAt: now}
+		return nil
+	})
+	g := r.call(r.view.Access, "GET", "/onus/unknown", nil, nil)
+	if g.Status != 200 || !strings.Contains(string(g.Raw), `"equipment_id":"eqv"`) || !strings.Contains(string(g.Raw), "in the serial") || !strings.Contains(string(g.Raw), "management MAC 68:22:9F:12:7E:11 near WAN MAC 68:22:9F:12:7E:10") {
+		t.Fatalf("%d %s", g.Status, g.Raw)
+	}
+	body := map[string]any{"serial": "1234568229F127E0F", "equipment_id": "eqv"}
+	for name, tok := range map[string]string{"viewer": r.view.Access, "operator": r.oper.Access} {
+		if v := r.call(tok, "POST", "/onus/unknown/link", body, nil); v.Status != 403 {
+			t.Fatalf("%s linked an unknown ONU: %d", name, v.Status)
+		}
+		if v := r.call(tok, "PUT", "/equipment/eqv/tr069-serial", map[string]any{"tr069_serial": "X"}, nil); v.Status != 403 {
+			t.Fatalf("%s set a TR-069 serial: %d", name, v.Status)
+		}
+	}
+	// the owner's own password is needed (step-up, as on the web page)
+	if v := r.call(r.owner.Access, "POST", "/onus/unknown/link", body, nil); v.Status != 400 {
+		t.Fatalf("linked without the password: %d %s", v.Status, v.Raw)
+	}
+	if v := r.call(r.owner.Access, "PUT", "/equipment/eqv/tr069-serial", map[string]any{"tr069_serial": "X"}, nil); v.Status != 400 {
+		t.Fatalf("set a TR-069 serial without the password: %d %s", v.Status, v.Raw)
+	}
+	if v := r.call(r.owner.Access, "POST", "/onus/unknown/link", map[string]any{"serial": "1234568229F127E0F", "equipment_id": "eqv", "password": "wrong-password-xx"}, nil); v.Status != 403 {
+		t.Fatalf("linked with a wrong password: %d %s", v.Status, v.Raw)
+	}
+	body["password"] = r.ownerW.Pass
+	if v := r.call(r.owner.Access, "POST", "/onus/unknown/link", map[string]any{"serial": "NOTLISTED", "equipment_id": "eqv", "password": r.ownerW.Pass}, nil); v.Status != 409 {
+		t.Fatalf("%d %s", v.Status, v.Raw)
+	}
+	if v := r.call(r.owner.Access, "POST", "/onus/unknown/link", map[string]any{"serial": "1234568229F127E0F", "equipment_id": "nope", "password": r.ownerW.Pass}, nil); v.Status != 404 {
+		t.Fatalf("%d %s", v.Status, v.Raw)
+	}
+	v := r.call(r.owner.Access, "POST", "/onus/unknown/link", body, nil)
+	if v.Status != 200 || !strings.Contains(string(v.Raw), `"tr069_serial":"1234568229F127E0F"`) {
+		t.Fatalf("%d %s", v.Status, v.Raw)
+	}
+	if strings.Contains(string(v.Raw), "mgmt_pass\":\"") && !strings.Contains(string(v.Raw), `"mgmt_pass":""`) {
+		t.Fatalf("a secret in the answer: %s", v.Raw)
+	}
+	if u := r.call(r.view.Access, "GET", "/onus/unknown", nil, nil); !strings.Contains(string(u.Raw), `"items":[]`) {
+		t.Fatalf("still unknown: %s", u.Raw)
+	}
+	audited := false
+	r.st.View(func(d *store.Data) {
+		for _, ev := range d.Events {
+			if ev.Kind == "audit" && strings.Contains(ev.Msg, "1234568229F127E0F") {
+				audited = true
+			}
+		}
+	})
+	if !audited {
+		t.Fatal("no audit entry")
+	}
+	// the owner can clear it again
+	if c := r.call(r.owner.Access, "PUT", "/equipment/eqv/tr069-serial", map[string]any{"tr069_serial": "", "password": r.ownerW.Pass}, nil); c.Status != 200 || strings.Contains(string(c.Raw), `"tr069_serial"`) {
+		t.Fatalf("%d %s", c.Status, c.Raw)
 	}
 }

@@ -32,6 +32,8 @@ func (s *Server) onuRoutesAPI(h func(string, string, apiFunc)) {
 	h("POST /api/v1/onus/{id}/block", operator, s.apiONUDecide("block"))
 	h("POST /api/v1/onus/{id}/trust", store.RoleOwner, s.apiONUDecide("trust"))
 	h("GET /api/v1/onus/unknown", viewer, s.apiUnknownONUs)
+	h("POST /api/v1/onus/unknown/link", store.RoleOwner, s.apiLinkUnknownONU)
+	h("PUT /api/v1/equipment/{id}/tr069-serial", store.RoleOwner, s.apiEquipmentTR069Serial)
 	h("POST /api/v1/onus/{id}/unblock", operator, s.apiONUDecide("unblock"))
 	h("GET /api/v1/sites/{id}/onus", viewer, s.apiSiteONUs)
 	h("GET /api/v1/onus", viewer, s.apiONUs)
@@ -58,9 +60,9 @@ func (s *Server) acsErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.As(err, &fe):
 		validationErr(w, map[string]string{fe.Field: fe.Msg})
-	case errors.Is(err, acs.ErrNoONU), errors.Is(err, acs.ErrONUGone), errors.Is(err, acs.ErrNoAccount):
+	case errors.Is(err, acs.ErrNoONU), errors.Is(err, acs.ErrONUGone), errors.Is(err, acs.ErrNoAccount), errors.Is(err, acs.ErrNoItem):
 		apiErr(w, http.StatusNotFound, codeNotFound, err.Error(), nil)
-	case errors.Is(err, acs.ErrNothingToConfirm), errors.Is(err, acs.ErrNotQuarantined), errors.Is(err, acs.ErrTaskGone), errors.Is(err, acs.ErrTwoPlaces), errors.Is(err, acs.ErrNotWaiting), errors.Is(err, acs.ErrNoLeaseMAC), errors.Is(err, acs.ErrLeaseMoved):
+	case errors.Is(err, acs.ErrNothingToConfirm), errors.Is(err, acs.ErrNotQuarantined), errors.Is(err, acs.ErrTaskGone), errors.Is(err, acs.ErrTwoPlaces), errors.Is(err, acs.ErrNotWaiting), errors.Is(err, acs.ErrNoLeaseMAC), errors.Is(err, acs.ErrLeaseMoved), errors.Is(err, acs.ErrNotUnknown), errors.Is(err, acs.ErrItemUnfit), errors.Is(err, acs.ErrItemInUse):
 		apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
 	case errors.Is(err, acs.ErrLinked), errors.Is(err, acs.ErrONULinked), errors.Is(err, acs.ErrSite):
 		apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
@@ -226,6 +228,77 @@ func (s *Server) apiUnknownONUs(w http.ResponseWriter, r *http.Request, c *apiCt
 		items = []acs.UnknownONU{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// apiLinkUnknownONU: POST /onus/unknown/link {serial, equipment_id} (owner): the serial an unknown ONU reported becomes
+// the TR-069 serial of the inventory item. The serial must be on the unknown list now.
+func (s *Server) apiLinkUnknownONU(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	if !s.apiACS(w) {
+		return
+	}
+	var req struct {
+		Serial      string `json:"serial"`
+		EquipmentID string `json:"equipment_id"`
+		Password    string `json:"password"` // the owner's own password (step-up, as on the web page)
+	}
+	if !decode(w, r, &req, false) {
+		return
+	}
+	fields := map[string]string{}
+	if strings.TrimSpace(req.Serial) == "" {
+		fields["serial"] = "the serial the ONU reported is required"
+	}
+	if strings.TrimSpace(req.EquipmentID) == "" {
+		fields["equipment_id"] = "choose the inventory item"
+	}
+	if len(fields) > 0 {
+		validationErr(w, fields)
+		return
+	}
+	if !s.apiStepUp(w, c, req.Password) {
+		return
+	}
+	e, err := s.acs.LinkUnknown(c.user.Username, c.ip, req.EquipmentID, req.Serial)
+	if err != nil {
+		s.acsErr(w, err)
+		return
+	}
+	c.audit(s, "unknown ONU "+e.TR069Serial+" linked to inventory item "+e.ID)
+	writeJSON(w, http.StatusOK, s.equipDTO(e))
+}
+
+// apiEquipmentTR069Serial: PUT /equipment/{id}/tr069-serial {tr069_serial} (owner) sets or clears (empty) the serial an
+// ONT reports over TR-069 when it is neither its serial nor its GPON serial.
+func (s *Server) apiEquipmentTR069Serial(w http.ResponseWriter, r *http.Request, c *apiCtx) {
+	var req struct {
+		TR069Serial string `json:"tr069_serial"`
+		Password    string `json:"password"` // the owner's own password (step-up, as on the web page)
+	}
+	if !decode(w, r, &req, false) {
+		return
+	}
+	var cur store.Equipment
+	var ok bool
+	s.st.View(func(d *store.Data) { cur, ok = d.Equipment[r.PathValue("id")] })
+	if !ok || cur.Kind != store.KindONT {
+		apiErr(w, http.StatusNotFound, codeNotFound, "Not found.", nil)
+		return
+	}
+	if !s.apiStepUp(w, c, req.Password) {
+		return
+	}
+	e, err := s.svc.SaveEquipment(billing.EquipmentInput{ID: cur.ID, Kind: cur.Kind, Serial: cur.Serial, GPONSerial: cur.GPONSerial, TR069Serial: &req.TR069Serial,
+		MAC: cur.MAC, Model: cur.Model, Firmware: cur.Firmware, SiteID: cur.SiteID, Notes: cur.Notes})
+	if err != nil {
+		if strings.Contains(err.Error(), "already in the register") {
+			apiErr(w, http.StatusConflict, codeBadState, err.Error(), nil)
+			return
+		}
+		validationErr(w, map[string]string{"tr069_serial": err.Error()})
+		return
+	}
+	c.audit(s, "register: ONT "+e.Serial+" TR-069 serial set to "+e.TR069Serial)
+	writeJSON(w, http.StatusOK, s.equipDTO(e))
 }
 
 func (s *Server) apiAccountONUSwap(w http.ResponseWriter, r *http.Request, c *apiCtx) {
@@ -403,11 +476,14 @@ func (s *Server) apiEquipmentAdd(w http.ResponseWriter, r *http.Request, c *apiC
 		Kind       string `json:"kind"`
 		Serial     string `json:"serial"`
 		GPONSerial string `json:"gpon_serial"`
-		MAC        string `json:"mac"`
-		Model      string `json:"model"`
-		Notes      string `json:"notes"`
-		OLTID      string `json:"olt_id"`   // an ONU's OLT (optional)
-		PONPort    int    `json:"pon_port"` // and its PON port (optional)
+		// TR069Serial (owner only; ignored for others): the serial the box reports over TR-069 when it differs.
+		TR069Serial *string `json:"tr069_serial"`
+		Password    string  `json:"password"` // the owner's own password, needed only with a tr069_serial
+		MAC         string  `json:"mac"`
+		Model       string  `json:"model"`
+		Notes       string  `json:"notes"`
+		OLTID       string  `json:"olt_id"`   // an ONU's OLT (optional)
+		PONPort     int     `json:"pon_port"` // and its PON port (optional)
 	}
 	if !decode(w, r, &req, false) {
 		return
@@ -426,7 +502,13 @@ func (s *Server) apiEquipmentAdd(w http.ResponseWriter, r *http.Request, c *apiC
 		validationErr(w, fields)
 		return
 	}
-	e, err := s.svc.SaveEquipment(billing.EquipmentInput{Kind: req.Kind, Serial: req.Serial, GPONSerial: req.GPONSerial, MAC: req.MAC, Model: req.Model, Notes: req.Notes,
+	if c.user.Role != store.RoleOwner {
+		req.TR069Serial = nil
+	}
+	if req.TR069Serial != nil && strings.TrimSpace(*req.TR069Serial) != "" && !s.apiStepUp(w, c, req.Password) {
+		return // the TR-069 serial decides which box is this ONU: behind the owner's password, like the other paths
+	}
+	e, err := s.svc.SaveEquipment(billing.EquipmentInput{Kind: req.Kind, Serial: req.Serial, GPONSerial: req.GPONSerial, TR069Serial: req.TR069Serial, MAC: req.MAC, Model: req.Model, Notes: req.Notes,
 		SetPlacement: req.OLTID != "" || req.PONPort != 0, OLTID: req.OLTID, PONPort: req.PONPort})
 	if err != nil {
 		if errors.Is(err, billing.ErrDuplicateEquipmentMAC) {

@@ -404,6 +404,16 @@ func (s *Server) adminEquipmentSave(w http.ResponseWriter, r *http.Request) {
 	in := billing.EquipmentInput{ID: r.PostFormValue("id"), Kind: r.PostFormValue("kind"), Serial: r.PostFormValue("serial"),
 		MAC: r.PostFormValue("mac"), Model: r.PostFormValue("model"), Firmware: r.PostFormValue("firmware"), GPONSerial: r.PostFormValue("gpon_serial"),
 		SiteID: r.PostFormValue("site"), Notes: r.PostFormValue("notes")}
+	if _, sent := r.PostForm["tr069_serial"]; sent {
+		// The TR-069 serial decides which box is this ONU: only an owner sets it, behind their password, when it changes.
+		v := r.PostFormValue("tr069_serial")
+		if u, _ := userOf(r); u.Role == store.RoleOwner && s.tr069SerialChanged(in.ID, v) {
+			if !s.reauth(w, r, "/admin/equipment/view?id="+url.QueryEscape(in.ID)) {
+				return
+			}
+			in.TR069Serial = &v
+		}
+	}
 	if in.ID == "" && in.SiteID == "" {
 		in.SiteID = s.scopeOf(r).ID
 	}
@@ -425,6 +435,13 @@ func (s *Server) adminEquipmentSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.back(w, r, "/admin/equipment/view?id="+url.QueryEscape(e.ID), "Saved")
+}
+
+// tr069SerialChanged: does the form's TR-069 serial differ from the stored one (normalised)?
+func (s *Server) tr069SerialChanged(id, v string) bool {
+	var cur string
+	s.st.View(func(d *store.Data) { cur = d.Equipment[id].TR069Serial })
+	return store.NormSerial(v) != store.NormSerial(cur)
 }
 
 func (s *Server) adminEquipmentImport(w http.ResponseWriter, r *http.Request) {

@@ -127,7 +127,7 @@ func (s *Service) decide(d *store.Data, in Inform, site store.Site, ip netip.Add
 		if _, ok := d.ONTBySerial(in.Serial); !ok {
 			// Not in the ONU inventory: answered, and nothing else. It is listed for the owner, and no device record is made.
 			var wrote bool
-			v.alert, wrote = s.noteUnknown(d, in, site, ipS, now)
+			v.alert, wrote = s.noteUnknown(d, in, site, ipS, lease, now)
 			v.state, v.trust, v.noWrite = stUnregistered, trustNone, !wrote
 			return cur, v
 		}

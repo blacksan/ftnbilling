@@ -28,16 +28,19 @@ func TestCustomerFlow_DismissedDeviceStaysOutOfClients(t *testing.T) {
 // from the device list or from a bound lease.
 func TestClients_EquipmentIsNotAClient(t *testing.T) {
 	now := time.Now()
-	olt := "48:21:B8:10:D7:72"
+	olt, mgmt := "48:21:B8:10:D7:72", "68:22:9F:12:7E:11"
 	classify := func(m string) billing.DeviceClass {
 		if m == olt {
 			return billing.DeviceClass{Class: billing.ClassOLT}
 		}
+		if m == mgmt { // an ONU's TR-069 WAN on the management network
+			return billing.DeviceClass{Class: billing.ClassONUMgmt}
+		}
 		return billing.DeviceClass{Class: billing.ClassUnknown, Creatable: true}
 	}
 	in := ClientInput{Now: now, Classify: classify,
-		Devices: []ClientDevice{{MAC: olt, Online: true, LastSeen: now}, {MAC: "AA:BB:CC:00:00:02", Online: true, LastSeen: now}},
-		Tables:  LiveTables{Leases: []LiveLease{{MAC: olt, IP: "10.5.50.2", Status: "bound"}}}}
+		Devices: []ClientDevice{{MAC: olt, Online: true, LastSeen: now}, {MAC: mgmt, Online: true, LastSeen: now}, {MAC: "AA:BB:CC:00:00:02", Online: true, LastSeen: now}},
+		Tables:  LiveTables{Leases: []LiveLease{{MAC: olt, IP: "10.5.50.2", Status: "bound"}, {MAC: mgmt, IP: "10.6.1.250", Status: "bound"}}}}
 	var macs []string
 	for _, c := range MergeClients(in) {
 		macs = append(macs, c.MAC)

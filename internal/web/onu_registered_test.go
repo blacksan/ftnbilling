@@ -89,3 +89,56 @@ func TestUnknownONUsAreListedWithAnAddToInventoryShortcut(t *testing.T) {
 		t.Fatal("the add form is not prefilled")
 	}
 }
+
+func TestUnknownONUSuggestsTheInventoryItemAndTheOwnerLinksIt(t *testing.T) {
+	a := newONUApp(t)
+	now := time.Now()
+	a.st.Update(func(d *store.Data) error {
+		d.Equipment["eqv"] = store.Equipment{ID: "eqv", Kind: store.KindONT, Serial: "V26051300697", GPONSerial: "VSOL00127E0F", MAC: "68:22:9F:12:7E:10", Model: "V2804N-Z", Status: store.EqInStock, CreatedAt: now}
+		d.Settings["acs.unknown"] = store.Setting{Key: "acs.unknown", UpdatedAt: now, Value: `[{"serial":"1234568229F127E0F","oui":"00E0DF","model":"VSOL V414","site_id":"` + a.site + `","site_name":"Block","ip":"10.6.5.9","lease_mac":"68:22:9F:12:7E:11","first_seen":"` + now.Format(time.RFC3339) + `","last_seen":"` + now.Format(time.RFC3339) + `","count":3}]`}
+		return nil
+	})
+	for _, path := range []string{"/admin/routers/view?id=" + a.site + "&tab=onus", "/admin/equipment?tab=onu", "/admin/onus"} {
+		page := a.adminGet(t, path)
+		for _, want := range []string{"Looks like", "VSOL00127E0F", "68:22:9F:12:7E:0F in the serial", "management MAC 68:22:9F:12:7E:11 near WAN MAC 68:22:9F:12:7E:10", "Link to this ONU", "would make a duplicate", "Add to inventory"} {
+			if !strings.Contains(page, want) {
+				t.Fatalf("%s: %q missing", path, want)
+			}
+		}
+	}
+	link := func(pass string) {
+		_ = body(t, a.admin("POST", "/admin/onus/link-unknown", url.Values{"item": {"eqv"}, "serial": {"1234568229F127E0F"}, "current_password": {pass}}))
+	}
+	tr := func() (s string) {
+		a.st.View(func(d *store.Data) { s = d.Equipment["eqv"].TR069Serial })
+		return
+	}
+	link("wrong")
+	if tr() != "" {
+		t.Fatal("linked with a wrong password")
+	}
+	link(pw)
+	if tr() != "1234568229F127E0F" {
+		t.Fatalf("not linked: %q", tr())
+	}
+	if page := a.adminGet(t, "/admin/onus"); strings.Contains(page, "Looks like") {
+		t.Fatal("still listed as unknown")
+	}
+	// the item's edit form shows it and changing it needs the password
+	page := a.adminGet(t, "/admin/equipment/view?id=eqv")
+	if !strings.Contains(page, `name="tr069_serial" value="1234568229F127E0F"`) {
+		t.Fatal("the edit form does not show the TR-069 serial")
+	}
+	save := func(v, pass string) {
+		_ = body(t, a.admin("POST", "/admin/equipment/save", url.Values{"id": {"eqv"}, "kind": {"ont"}, "serial": {"V26051300697"}, "gpon_serial": {"VSOL00127E0F"}, "mac": {"68:22:9F:12:7E:10"},
+			"model": {"V2804N-Z"}, "tr069_serial": {v}, "current_password": {pass}}))
+	}
+	save("", "wrong")
+	if tr() == "" {
+		t.Fatal("cleared with a wrong password")
+	}
+	save("", pw)
+	if tr() != "" {
+		t.Fatalf("not cleared: %q", tr())
+	}
+}

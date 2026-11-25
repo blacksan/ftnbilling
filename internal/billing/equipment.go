@@ -16,6 +16,9 @@ type EquipmentInput struct {
 	ID, Kind, Serial, MAC, Model, Firmware, SiteID, Notes string
 	// GPONSerial is the OLT-side serial of an ONT when it differs from Serial (the TR-069 serial).
 	GPONSerial string
+	// TR069Serial is the serial the box reports in its CWMP DeviceId when it is neither Serial nor GPONSerial. nil leaves
+	// the stored value as it is (callers that only change another field); a pointer to "" clears it.
+	TR069Serial *string
 	// SetPlacement applies OLTID and PONPort to an ONT (optional OLT and PON port); without it they are left as they are.
 	SetPlacement bool
 	OLTID        string
@@ -68,6 +71,16 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 	if gpon != "" && kind != store.KindONT {
 		return store.Equipment{}, errors.New("only an ONT has a GPON serial")
 	}
+	tr069 := ""
+	if in.TR069Serial != nil {
+		tr069 = store.NormSerial(cleanText(*in.TR069Serial, 60))
+		if tr069 == store.NormSerial(serial) || tr069 == store.NormSerial(gpon) {
+			tr069 = "" // the same serial twice says nothing
+		}
+		if tr069 != "" && kind != store.KindONT {
+			return store.Equipment{}, errors.New("only an ONT has a TR-069 serial")
+		}
+	}
 	mac := ""
 	if strings.TrimSpace(in.MAC) != "" {
 		m, err := NormalizeMAC(in.MAC)
@@ -93,8 +106,8 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 				if o.ID == in.ID || o.Kind != store.KindONT {
 					continue
 				}
-				for _, mine := range []string{serial, gpon} {
-					if n := store.NormSerial(mine); n != "" && (store.NormSerial(o.Serial) == n || store.NormSerial(o.GPONSerial) == n) {
+				for _, mine := range []string{serial, gpon, tr069} {
+					if n := store.NormSerial(mine); n != "" && (store.NormSerial(o.Serial) == n || store.NormSerial(o.GPONSerial) == n || store.NormSerial(o.TR069Serial) == n) {
 						return fmt.Errorf("an ONT with serial number %s is already in the register", mine)
 					}
 				}
@@ -104,6 +117,12 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 		e, exists := d.Equipment[in.ID]
 		if in.ID != "" && !exists {
 			return ErrNotFound
+		}
+		if in.TR069Serial == nil {
+			tr069 = e.TR069Serial // not part of this edit: kept
+			if tr069 != "" && kind != store.KindONT {
+				tr069 = ""
+			}
 		}
 		if !exists {
 			e = store.Equipment{ID: RandomID(), Status: store.EqInStock, CreatedAt: now}
@@ -140,10 +159,11 @@ func (s *Service) SaveEquipment(in EquipmentInput) (store.Equipment, error) {
 			}
 		}
 		oldSite := e.SiteID
-		if exists && e.Kind == store.KindONT && !strings.EqualFold(e.MAC, mac) {
-			d.ClearMACTrust(e.Serial, e.GPONSerial, serial, gpon) // a trusted MAC was trusted against the old WAN MAC
+		if exists && e.Kind == store.KindONT && (!strings.EqualFold(e.MAC, mac) || store.NormSerial(e.TR069Serial) != tr069) {
+			// a trusted MAC was trusted against the old WAN MAC, or for the box the old TR-069 serial named
+			d.ClearMACTrust(e.Serial, e.GPONSerial, e.TR069Serial, serial, gpon, tr069)
 		}
-		e.Kind, e.Serial, e.MAC, e.GPONSerial = kind, serial, mac, gpon
+		e.Kind, e.Serial, e.MAC, e.GPONSerial, e.TR069Serial = kind, serial, mac, gpon, tr069
 		e.Model, e.Firmware, e.Notes = cleanText(in.Model, 60), cleanText(in.Firmware, 40), cleanText(in.Notes, 300)
 		if e.AccountID == "" {
 			e.SiteID = in.SiteID
@@ -257,14 +277,14 @@ func returnLocked(d *store.Data, key string, e store.Equipment, status, note str
 	if e.Kind == store.KindONT && e.AccountID != "" && from == store.EqInstalled {
 		// The box leaves its house: its ONU row is unlinked now and a factory reset waits for its next check-in, so the
 		// old tenant's Wi-Fi name and password do not go to whoever gets the box next.
-		for _, o := range d.ONUsOfSerial(e.Serial, e.GPONSerial) {
+		for _, o := range d.ONUsOfSerial(e.Serial, e.GPONSerial, e.TR069Serial) {
 			if o.AccountID == e.AccountID {
 				d.ReleaseONU(o.ID, now, "system")
 			}
 		}
 	}
 	if e.Kind == store.KindONT && status != store.EqInstalled {
-		d.ClearMACTrust(e.Serial, e.GPONSerial) // out of service (also when it was not at a house): no trusted MAC survives
+		d.ClearMACTrust(e.Serial, e.GPONSerial, e.TR069Serial) // out of service (also when it was not at a house): no trusted MAC survives
 	}
 	e.AccountID, e.Status, e.UpdatedAt = "", status, now
 	if status != store.EqInstalled && !(e.Kind == store.KindOLT && status == store.EqFaulty) {

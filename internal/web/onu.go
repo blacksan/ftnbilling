@@ -44,6 +44,7 @@ func (s *Server) onuRoutes(get, post func(string, http.HandlerFunc)) {
 	post("/admin/onus/approve", s.adminONUApprove)
 	post("/admin/onus/block", s.adminONUBlock)
 	post("/admin/onus/trust", s.adminONUTrust)
+	post("/admin/onus/link-unknown", s.adminONULinkUnknown)
 	post("/admin/onus/unblock", s.adminONUUnblock)
 	post("/admin/onus/task/cancel", s.adminONUTaskCancel)
 	post("/admin/onus/adminpw", s.adminONUAdminPW)
@@ -247,6 +248,27 @@ func (s *Server) adminONUTrust(w http.ResponseWriter, r *http.Request) {
 		s.audit(r, "ONU management MAC trusted for "+r.PostFormValue("onu"))
 	}
 	s.back(w, r, to, msgOr(err, "Trusted. The ONU gets its settings at its next check-in."))
+}
+
+// adminONULinkUnknown links the serial an unknown ONU reported to an inventory item (its TR-069 serial). Owner only,
+// behind the owner's own password, audited. Never done automatically: serials and MACs can be faked.
+func (s *Server) adminONULinkUnknown(w http.ResponseWriter, r *http.Request) {
+	if s.acsOff(w, r) {
+		return
+	}
+	to := s.onuBack(r, "/admin/onus")
+	if u, _ := userOf(r); u.Role != store.RoleOwner {
+		s.back(w, r, to, "Error: only an owner can link an unknown ONU to an inventory item")
+		return
+	}
+	if !s.reauth(w, r, to) {
+		return
+	}
+	e, err := s.acs.LinkUnknown(s.actorOf(r), realIP(r), r.PostFormValue("item"), r.PostFormValue("serial"))
+	if err == nil {
+		s.audit(r, "unknown ONU "+e.TR069Serial+" linked to inventory item "+e.ID)
+	}
+	s.back(w, r, to, msgOr(err, "Linked. The ONU is the registered one from its next check-in."))
 }
 
 func (s *Server) adminONUBlock(w http.ResponseWriter, r *http.Request) {
