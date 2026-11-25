@@ -75,6 +75,11 @@ type OLT struct {
 	ACLMatch string
 	// ACLShow selects the layout of `show login-access-list`: "" = a status line and a table, "lines" = config lines.
 	ACLShow string
+	// ACLExclusive is the V1600GS-R's rule (bench, after PR #39): the rules of one protocol are either all permit (an
+	// allowlist: only the listed sources may log in) or all deny; adding the other kind is refused with the OLT's own text
+	// "add failed, protocol has permit rule,please detele it first!" (or "... has deny rule ..."). IPv4 and IPv6 rules of a
+	// protocol count together.
+	ACLExclusive bool
 	// ACLNoState leaves `login-access-list enable|disable` out of the running configuration (a firmware that does not print it).
 	ACLNoState bool
 
@@ -973,6 +978,21 @@ func (o *OLT) aclAllows(proto string) bool {
 		}
 		return true
 	}
+	if o.ACLExclusive {
+		// An allowlist when the protocol has permit rules: only a listed source logs in.
+		permits := false
+		for _, r := range o.acl {
+			if !r.v6 && r.proto == proto && r.action == "permit" {
+				permits = true
+				if match(r) {
+					return true
+				}
+			}
+		}
+		if permits {
+			return false
+		}
+	}
 	allowed, decided := true, false
 	for _, r := range o.acl {
 		if !match(r) {
@@ -1070,6 +1090,13 @@ func (o *OLT) aclLine(f []string) string {
 			return "% Invalid input detected at '^' marker.\n"
 		}
 	}
+	if !no && o.ACLExclusive {
+		for _, x := range o.acl {
+			if x.proto == r.proto && x.action != r.action {
+				return "add failed, protocol has " + x.action + " rule,please detele it first!\n"
+			}
+		}
+	}
 	for i, x := range o.acl {
 		if x == r {
 			if no {
@@ -1085,6 +1112,9 @@ func (o *OLT) aclLine(f []string) string {
 	o.acl = append(o.acl, r)
 	return ""
 }
+
+// ACLLine runs one `[no] login-access-list ...` line as the CLI would and returns what it prints.
+func (o *OLT) ACLLine(line string) string { return o.aclLine(strings.Fields(line)) }
 
 // ACLRules are the login-access-list rules now configured, as the running configuration prints them (after the leading
 // "login-access-list ").

@@ -192,13 +192,12 @@ func VSOL() *Dialect {
 		regexp.MustCompile(`^user (login|enable)-password [A-Za-z][A-Za-z0-9_-]{0,31} [A-Za-z0-9]{24,64}$`),
 		// Only the two default SNMP communities, by name.
 		regexp.MustCompile(`^no snmp-server community (public|private)$`),
-		// SSH only (never telnet, snmp or web): permit one host (the router's OLT-management address), deny every other
-		// IPv4 and IPv6 source, switch the list on; and the same lines with `no` (the undo when a new session cannot log in).
-		// Bench grammar: `login-access-list <permit|deny> <telnet|web|snmp|ssh> A.B.C.D A.B.C.D` (address and MASK),
-		// `login-access-list ipv6 <permit|deny> <...> X:X::X:X/M`, `login-access-list enable`.
+		// SSH only (never telnet, snmp or web): permit one host (the router's OLT-management address) and switch the list
+		// on; and the permit with `no` (the undo when a new session cannot log in). The V1600GS-R keeps a protocol's rules
+		// either all permit (an allowlist) or all deny and refuses the other kind ("add failed, protocol has permit rule"),
+		// so no deny line is ever sent. Bench grammar: `login-access-list <permit|deny> <telnet|web|snmp|ssh> A.B.C.D
+		// A.B.C.D` (address and MASK), `login-access-list enable`.
 		regexp.MustCompile(`^(no )?login-access-list permit ssh ((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d) 255\.255\.255\.255$`),
-		regexp.MustCompile(`^(no )?login-access-list deny ssh 0\.0\.0\.0 0\.0\.0\.0$`),
-		regexp.MustCompile(`^(no )?login-access-list ipv6 deny ssh ::/0$`),
 		regexp.MustCompile(`^login-access-list enable$`),
 		regexp.MustCompile(`^exit$`),
 	}
@@ -495,16 +494,17 @@ func (d *Dialect) SecureSNMPLines(words []string) []string {
 // ShowACLCmd lists the login access list (layout not captured on the bench: read leniently, with the running config).
 const ShowACLCmd = "show login-access-list"
 
-// ACLPlan is the SSH restriction: the exact lines, in the order they are sent (permit first, then the denies).
+// ACLPlan is the SSH restriction: the exact lines, in the order they are sent (the permit, then the list on).
 type ACLPlan struct {
-	Source               string
-	Permit, Deny4, Deny6 string
-	Enable               string
-	Disable              string // only to undo Enable, through the restore path
+	Source  string
+	Permit  string
+	Enable  string
+	Disable string // only to undo Enable, through the restore path
 }
 
-// SecureACLPlan builds the lines that allow SSH from the one address src (a host: mask 255.255.255.255) and deny it from
-// everywhere else. src must be a plain unicast IPv4 address.
+// SecureACLPlan builds the line that allows SSH from the one address src (a host: mask 255.255.255.255). On this firmware
+// a protocol with permit rules is an allowlist: every other source is refused without a deny rule (and a deny beside a
+// permit is refused by the OLT). src must be a plain unicast IPv4 address.
 func (d *Dialect) SecureACLPlan(src string) (ACLPlan, error) {
 	a, err := netip.ParseAddr(strings.TrimSpace(src))
 	if err != nil || !a.Is4() || a.IsUnspecified() || a.IsLoopback() || a.IsMulticast() || a == netip.AddrFrom4([4]byte{255, 255, 255, 255}) {
@@ -512,8 +512,6 @@ func (d *Dialect) SecureACLPlan(src string) (ACLPlan, error) {
 	}
 	return ACLPlan{Source: a.String(),
 		Permit: "login-access-list permit ssh " + a.String() + " 255.255.255.255",
-		Deny4:  "login-access-list deny ssh 0.0.0.0 0.0.0.0",
-		Deny6:  "login-access-list ipv6 deny ssh ::/0",
 		Enable: "login-access-list enable", Disable: "login-access-list disable"}, nil
 }
 

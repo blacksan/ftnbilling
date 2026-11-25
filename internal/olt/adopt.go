@@ -623,6 +623,7 @@ type AdoptView struct {
 	SNMPNote, ACLNote  string
 	ACLRules           []string // login-access-list rules read back from the OLT
 	ACLFinding         string
+	ACLDone            bool // SSH is limited to the router (verified from the router's address only)
 	HasLogin           bool
 }
 
@@ -649,7 +650,7 @@ func (s *Service) AdoptView(id string) (AdoptView, bool) {
 	a := st.Settings.Adopt
 	v.Stage, v.Note, v.Error, v.Manual, v.CheckedAt, v.Secured = a.Stage, a.Note, a.Error, a.Manual, a.CheckedAt, a.Secured
 	v.Port, v.SNMPNote, v.ACLNote = site.OLTMgmtPort, a.SNMPNote, a.ACLNote
-	v.ACLRules, v.ACLFinding = a.ACLRules, a.ACLFinding
+	v.ACLRules, v.ACLFinding, v.ACLDone = a.ACLRules, a.ACLFinding, a.ACLDone
 	v.HasLogin = e.MgmtUser != "" && e.MgmtPass != ""
 	step := func(label, state, detail string) { v.Steps = append(v.Steps, AdoptStep{label, state, detail}) }
 	yn := func(b bool) string {
@@ -710,7 +711,7 @@ func (s *Service) AdoptView(id string) (AdoptView, bool) {
 		} else if strings.HasPrefix(a.ACLNote, "Couldn't restrict SSH") {
 			acl = "fail"
 		}
-		step("SSH access list", acl, firstNonEmpty(a.ACLNote, "Not done yet."))
+		step("SSH limited to the router", acl, firstNonEmpty(a.ACLNote, "Not done yet."))
 	}
 	v.CanSecure = a.SerialOK == "ok" && !a.Secured && (v.HasLogin || a.FactoryOK)
 	v.NeedLogin = a.Stage == store.AdoptNeedLogin

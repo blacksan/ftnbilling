@@ -171,34 +171,50 @@ func (a ACLState) RuleStrings() []string {
 	return out
 }
 
-func (p ACLPlan) rules() (permit, deny4, deny6 ACLRule) {
-	return ACLRule{Action: "permit", Proto: "ssh", Addr: p.Source, Mask: "255.255.255.255"},
-		ACLRule{Action: "deny", Proto: "ssh", Addr: "0.0.0.0", Mask: "0.0.0.0"},
-		ACLRule{V6: true, Action: "deny", Proto: "ssh", Addr: "::/0"}
+func (p ACLPlan) rule() ACLRule {
+	return ACLRule{Action: "permit", Proto: "ssh", Addr: p.Source, Mask: "255.255.255.255"}
 }
 
 // readACL reads the running configuration and `show login-access-list`. The running configuration must be readable; the
-// show command's layout is not known, so its failure is ignored.
-func (s *Service) readACL(ctx context.Context, o *opened) (ACLState, error) {
+// show command's layout is not known, so its failure is ignored. It also returns the running configuration.
+func (s *Service) readACL(ctx context.Context, o *opened) (ACLState, string, error) {
 	run, err := s.readRunning(ctx, o.sess)
 	if err != nil {
-		return ACLState{}, err
+		return ACLState{}, "", err
 	}
 	show, _ := o.sess.ShowAt(ctx, ModeConfig, ShowACLCmd)
-	return ParseACL(run, show), nil
+	return ParseACL(run, show), run, nil
 }
 
-// secureACL restricts SSH to the router's OLT-management address. The OLT's rule order is not known, so: the permit goes in
-// first, then the two denies, and the list is switched on last (only when it was off); a NEW SSH session (it arrives from
-// the router's address, like every session of the server) must then log in while the old session stays open; only then is
-// the configuration saved. If it cannot, the list is switched off again (if this step switched it on), the denies and the
-// permit are removed again through the old session, nothing is saved and the note says SSH was left open. If even that
-// fails (the old session broke), nothing was saved, so a power cycle of the OLT undoes the rules: the owners are alerted.
-// Lines already present are skipped. Telnet, snmp and web rules are never touched.
+// mixedRE is the V1600GS-R's refusal of a permit beside a deny (or the reverse) for one protocol:
+// "add failed, protocol has permit rule,please detele it first!".
+var mixedRE = regexp.MustCompile(`(?i)has (permit|deny) rule`)
+
+// ipv6AddrRE: the OLT has an IPv6 address configured (an interface line `ipv6 address X/M`).
+var ipv6AddrRE = regexp.MustCompile(`(?im)^\s*ipv6 address\s+[0-9a-f:]+`)
+
+// ACLNoteDone is the note of a restriction in force (the page shows it as is).
+const aclLimited = "SSH limited to the router (the OLT allows SSH only from listed addresses): "
+
+// secureACL limits SSH to the router's OLT-management address. On the V1600GS-R a protocol's rules are either all permit
+// (an allowlist: only the listed sources may log in) or all deny, and the OLT refuses to add the other kind ("add failed,
+// protocol has permit rule"). So the step sends only `login-access-list permit ssh <router> 255.255.255.255`, and switches
+// the list on last (only when it was off); a NEW SSH session (it arrives from the router's address, like every session of
+// the server) must then log in while the old session stays open; only then is the configuration saved. If it cannot, the
+// list is switched off again (if this step switched it on) and the permit removed again through the old session, nothing
+// is saved and the note says SSH was left open. If even that fails (the old session broke), nothing was saved, so a power
+// cycle of the OLT undoes the rule: the owners are alerted. An OLT whose list already denies SSH by rule (deny-list mode)
+// is left as it is: a permit cannot be added beside a deny, and the server does not remove the owner's rules. Telnet,
+// snmp and web rules are never touched. No IPv6 line is sent (a deny is not possible beside the permit); when the OLT has
+// an IPv6 address, that SSH over IPv6 is not limited is a finding.
+//
+// saved reports that this step ran the save (which also saves whatever earlier steps of the same session changed). stuck
+// reports that its rules could not all be undone: the running configuration then holds unverified rules, and nothing more
+// may be saved in this session (a power cycle is the way back).
 //
 // The step runs on its own time budget, detached from the caller's: once a line is sent, the verification and the undo
 // must not be cut short by the web request's deadline.
-func (s *Service) secureACL(pctx context.Context, o *opened, user, login, enable, serial, by string, res *SecureResult) {
+func (s *Service) secureACL(pctx context.Context, o *opened, user, login, enable, serial, by string, res *SecureResult) (saved, stuck bool) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(pctx), aclStepBudget)
 	defer cancel()
 	dl := s.o.Dialect
@@ -209,7 +225,7 @@ func (s *Service) secureACL(pctx context.Context, o *opened, user, login, enable
 	}
 	if s.o.SSHSource == nil {
 		res.ACLNote = "SSH is not restricted: the server does not know which address the OLT sees its sessions from. The OLT is only reachable through the router's OLT management port."
-		return
+		return false, stuck
 	}
 	var src string
 	var serr error
@@ -223,45 +239,43 @@ func (s *Service) secureACL(pctx context.Context, o *opened, user, login, enable
 	})
 	if serr != nil {
 		left("The router's address toward the OLT is not known (" + errText(serr) + "). Nothing was changed.")
-		return
+		return false, stuck
 	}
 	plan, err := dl.SecureACLPlan(src)
 	if err != nil {
 		left("The router's address toward the OLT cannot be used (" + errText(err) + "). Nothing was changed.")
-		return
+		return false, stuck
 	}
-	before, err := s.readACL(ctx, o)
+	before, _, err := s.readACL(ctx, o)
 	if err != nil {
 		left("The access list could not be read (" + errText(err) + "). Nothing was changed.")
-		return
+		return false, stuck
 	}
 	if before.Enabled == nil {
 		// Without it the step could add rules to a list that is off and report SSH restricted.
 		left("The OLT's configuration does not show whether the access list is on (no `login-access-list enable` or `disable` line). Nothing was changed.")
-		return
+		return false, stuck
+	}
+	if before.HasRule("deny", "ssh") {
+		left("The OLT's access list already denies SSH by rule (" + strings.Join(sshRules(before, "deny"), "; ") + "). This OLT keeps a service's rules either all permit or all deny, so the server cannot add its permit for " + plan.Source + " beside them, and it does not remove the owner's rules. Nothing was changed.")
+		return false, stuck
 	}
 	turnOn := !*before.Enabled
 	if turnOn && (before.HasRule("deny", "web") || before.HasRule("permit", "web")) {
 		// Switching the list on would bring the owner's web rules into force, and the new SSH session cannot check those.
 		left("The access list is off and holds rules for the web interface; switching it on could lock the web interface out. Nothing was changed.")
-		return
+		return false, stuck
 	}
-	pr, d4, d6 := plan.rules()
+	pr := plan.rule()
 	var send []string
 	if !before.Has(pr) {
 		send = append(send, plan.Permit)
-	}
-	if !before.Has(d4) {
-		send = append(send, plan.Deny4)
-	}
-	if !before.Has(d6) {
-		send = append(send, plan.Deny6)
 	}
 	if turnOn {
 		send = append(send, plan.Enable)
 	}
 	// restore undoes the first n lines of send, in reverse order: the list goes off first (if this step switched it on),
-	// then the denies come off, then the permit. It runs on a fresh budget of its own.
+	// then the permit comes off. It runs on a fresh budget of its own.
 	restore := func(n int, why string) {
 		rctx, rcancel := context.WithTimeout(context.WithoutCancel(pctx), aclRestoreBudget)
 		defer rcancel()
@@ -280,6 +294,7 @@ func (s *Service) secureACL(pctx context.Context, o *opened, user, login, enable
 			}
 		}
 		if len(bad) > 0 {
+			stuck = true
 			left(why + " The rules could NOT all be removed again (" + strings.Join(bad, "; ") + "), and the server may be locked out of the OLT's SSH. Nothing was saved: power-cycle the OLT to undo the rules (do not save its configuration from the web interface first).")
 			if s.o.Alert != nil {
 				s.o.Alert("OLT "+label+": power-cycle the OLT to undo the SSH access list",
@@ -306,52 +321,88 @@ func (s *Service) secureACL(pctx context.Context, o *opened, user, login, enable
 						break
 					}
 				}
+				if mixedRE.MatchString(ce.Output) {
+					restore(n, "The OLT refused the permit because the list already holds the other kind of SSH rule ("+errText(err)+"); this OLT keeps a service's rules either all permit or all deny.")
+					return false, stuck
+				}
 			}
 			restore(n, "The OLT refused a line ("+errText(err)+").")
-			return
+			return false, stuck
 		}
 	}
 	// A new session, while the old one stays open.
 	if _, err := s.verifyNew(ctx, o, user, login, enable, serial); err != nil {
 		if len(send) == 0 {
-			left("The rules for " + plan.Source + " are already on the OLT, but a new session could not log in (" + errText(err) + "). Nothing was changed.")
-			return
+			left("The rule for " + plan.Source + " is already on the OLT, but a new session could not log in (" + errText(err) + "). Nothing was changed.")
+			return false, stuck
 		}
-		restore(len(send), "A new SSH session from "+plan.Source+" could not log in once the rules were on ("+errText(err)+").")
-		return
+		restore(len(send), "A new SSH session from "+plan.Source+" could not log in once the rule was on ("+errText(err)+").")
+		return false, stuck
 	}
-	// Read back: the rules must be there and the list on.
-	after, err := s.readACL(ctx, o)
-	if err != nil || !after.Has(pr) || !after.Has(d4) || !after.Has(d6) || after.Enabled == nil || !*after.Enabled {
-		why := "The rules (and the list switched on) could not be read back from the OLT."
+	// Read back: the permit must be there, no SSH deny beside it, and the list on.
+	after, run, err := s.readACL(ctx, o)
+	if err != nil || !after.Has(pr) || after.HasRule("deny", "ssh") || after.Enabled == nil || !*after.Enabled {
+		why := "The rule (and the list switched on) could not be read back from the OLT."
 		if err != nil {
 			why += " (" + errText(err) + ")"
 		}
 		if len(send) == 0 {
 			left(why + " Nothing was changed.")
-			return
+			return false, stuck
 		}
 		restore(len(send), why)
-		return
+		return false, stuck
 	}
 	if len(send) > 0 {
 		if err := o.sess.Save(ctx); err != nil {
 			// The running rules are undone. If the save did complete despite the error, what it saved is the restriction a
 			// new session was just verified with.
 			restore(len(send), "The OLT would not save its configuration ("+errText(err)+").")
-			return
+			return false, stuck
 		}
+		saved = true
 	}
 	res.ACLDone, res.ACLRules = true, after.RuleStrings()
 	if len(send) == 0 {
-		res.ACLNote = "SSH was already restricted to " + plan.Source + "; a new session from it logged in."
+		res.ACLNote = aclLimited + plan.Source + " was already the listed address; a new session from it logged in."
 	} else {
-		res.ACLNote = "SSH is restricted to " + plan.Source + " (the router's address toward the OLT) and denied from everywhere else; a new session from it logged in before the configuration was saved."
+		res.ACLNote = aclLimited + plan.Source + " (the router's address toward the OLT); a new session from it logged in before the configuration was saved."
 	}
+	if others := otherPermits(after, pr); len(others) > 0 {
+		res.ACLNote += " SSH is also allowed from rules the server did not add: " + strings.Join(others, "; ") + "."
+	}
+	var finding []string
 	if !after.HasRule("deny", "web") {
-		res.ACLFinding = "The OLT's web interface (HTTPS) is reachable from the management network: the access list has no rule for web. The server does not change web rules."
+		finding = append(finding, "The OLT's web interface (HTTPS) is reachable from the management network: the access list has no rule for web. The server does not change web rules.")
 	}
-	s.auditNote(o.e.ID, by, "OLT "+label+": SSH restricted to "+plan.Source+", verified with a new session, configuration saved")
+	if ipv6AddrRE.MatchString(run) {
+		finding = append(finding, "IPv6 SSH is not restricted: the OLT has an IPv6 address, and the list's SSH rule is for IPv4 only (a deny cannot be added beside a permit on this OLT).")
+	}
+	res.ACLFinding = strings.Join(finding, " ")
+	s.auditNote(o.e.ID, by, "OLT "+label+": SSH limited to "+plan.Source+" (permit-only list), verified with a new session, configuration saved")
+	return saved, false
+}
+
+// sshRules are the list's SSH rules of one action, for a note.
+func sshRules(a ACLState, action string) []string {
+	var out []string
+	for _, r := range a.Rules {
+		if r.Proto == "ssh" && r.Action == action {
+			out = append(out, r.String())
+		}
+	}
+	return out
+}
+
+// otherPermits are the SSH permits other than the server's own.
+func otherPermits(a ACLState, own ACLRule) []string {
+	var out []string
+	for _, r := range a.Rules {
+		if r.Proto == "ssh" && r.Action == "permit" && r != own {
+			out = append(out, r.String())
+		}
+	}
+	return out
 }
 
 // The SSH restriction's own time budgets (see secureACL).

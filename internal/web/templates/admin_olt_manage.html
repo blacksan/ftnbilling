@@ -15,6 +15,7 @@
 {{if .Steps}}<div class="tw"><table class="rs"><thead><tr><th>Step</th><th>State</th><th>Detail</th></tr></thead><tbody>
 {{range .Steps}}<tr><td data-label="Step">{{.Label}}</td><td data-label="State"><span class="pill {{if eq .State "ok"}}live{{else if eq .State "fail"}}suspended{{else}}unknown{{end}}">{{if eq .State "ok"}}done{{else if eq .State "fail"}}problem{{else if eq .State "off"}}skipped{{else}}to do{{end}}</span></td><td data-label="Detail">{{.Detail}}</td></tr>{{end}}</tbody></table></div>{{end}}
 {{if .ACLRules}}<h3 class="mt-2">Login access list on the OLT</h3><ul class="mono">{{range .ACLRules}}<li>{{.}}</li>{{end}}</ul>{{end}}
+{{if .ACLDone}}<p class="muted">SSH limited to the router (the OLT allows SSH only from listed addresses). The server can only test from the router's address: check from another PC that SSH is refused.</p>{{end}}
 {{if .ACLFinding}}<p><span class="eqwarn" role="note">{{.ACLFinding}}</span></p>{{end}}
 {{if $.CanWrite}}<div class="row mt-2"><form method="post" action="/admin/olts/manage/adopt-check"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><button class="btn sm">Check now</button></form></div>{{end}}
 </section>{{end}}
@@ -27,7 +28,7 @@
 {{if .Data.MgmtPort}}<p class="mt-2">Now: <b class="mono">{{.Data.MgmtPort}}</b>, router address <span class="mono">{{.Data.MgmtNet}}</span>.</p>
 <form method="post" action="/admin/olts/manage/mgmt-port" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}"><input type="hidden" name="action" value="clear"><button class="btn ghost sm">Remove the role and the router rules</button></form>{{end}}
 {{with .Data.Adopt}}{{if .CanSecure}}<h3 class="mt-3">Secure this OLT</h3>
-<p class="muted">Replaces the OLT's login and enable password with long generated ones, tests them in a new SSH session while the old one stays open, and only then saves. If the test fails the old password is put back. It also removes the default SNMP communities (public, private), so SNMP is off.</p>
+<p class="muted">Replaces the OLT's login and enable password with long generated ones, tests them in a new SSH session while the old one stays open, and only then saves. If the test fails the old password is put back. It also removes the default SNMP communities (public, private), so SNMP is off, and limits SSH to the router (the OLT allows SSH only from listed addresses).</p>
 <form method="post" action="/admin/olts/manage/secure" class="row"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{$E.ID}}">
 <label class="field">Your password<input name="current_password" type="password" autocomplete="current-password" required></label><button class="btn sm">Secure this OLT</button></form>{{end}}
 <h3 class="mt-3">The OLT's login{{if .NeedLogin}} <span class="pill suspended">needed</span>{{end}}</h3>

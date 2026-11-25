@@ -39,6 +39,7 @@ func newAdoptEnv(t *testing.T) *aenv {
 	a := &aenv{env: e, logs: &bytes.Buffer{}}
 	e.f.SetCreds(factoryUser, factoryPass, "")
 	e.f.FactoryACL()
+	e.f.ACLExclusive = true // the V1600GS-R: a protocol's rules are all permit or all deny
 	if err := e.st.Update(func(d *store.Data) error {
 		s := d.Sites[siteID]
 		s.OLTMgmtPort = "ether5"
@@ -638,7 +639,7 @@ func TestAdoptViewChecklist(t *testing.T) {
 			t.Fatalf("%s is %q: %+v", l, states[l], v.Steps)
 		}
 	}
-	if states["SSH access list"] != "ok" {
+	if states["SSH limited to the router"] != "ok" {
 		t.Fatalf("the access list step must be done: %+v", v.Steps)
 	}
 	if v.Stage != store.AdoptSecured || !v.Secured {
@@ -695,6 +696,8 @@ func TestSecureShapesAreTheOnlyUserPasswordSNMPLines(t *testing.T) {
 		{"login-access-list disable"}, {"login-access-list clear"}, {"no login-access-list enable"},
 		{"login-access-list permit ssh 10.0.0.1 255.255.255.0"}, {"login-access-list permit ssh 999.0.0.1 255.255.255.255"}, {"login-access-list permit ssh 10.0.0.1 255.255.255.255 "}, {"login-access-list  permit ssh 10.0.0.1 255.255.255.255"}, {"login-access-list permit ssh 0.0.0.0 0.0.0.0"}, {"login-access-list permit ssh 10.0.0.1"},
 		{"login-access-list deny ssh 10.0.0.1 255.255.255.255"}, {"login-access-list deny ssh 0.0.0.0 0.0.0.0 extra"}, {"login-access-list ipv6 deny ssh fe80::/10"},
+		// No deny line at all any more: the V1600GS-R refuses a deny beside a permit for one protocol.
+		{"login-access-list deny ssh 0.0.0.0 0.0.0.0"}, {"login-access-list ipv6 deny ssh ::/0"}, {"no login-access-list deny ssh 0.0.0.0 0.0.0.0"}, {"no login-access-list ipv6 deny ssh ::/0"},
 		{"login-access-list ipv6 permit ssh ::/0"}, {"login-access-list permit ssh 10.0.0.1 255.255.255.255\nlogin-access-list deny telnet 0.0.0.0 0.0.0.0"},
 		{"no login-access-list permit ssh 10.0.0.1 255.255.255.0"},
 		{"user login-password admin " + good + "\nreboot"}, {"write erase"}, {"reboot"},
@@ -802,17 +805,17 @@ func TestDefaultCommunitiesFoundAnywhereInTheLine(t *testing.T) {
 func aclSecureLine(l, src string) bool {
 	l = strings.TrimPrefix(l, "no ")
 	switch l {
-	case "login-access-list permit ssh " + src + " 255.255.255.255", "login-access-list deny ssh 0.0.0.0 0.0.0.0", "login-access-list ipv6 deny ssh ::/0", "login-access-list enable":
+	case "login-access-list permit ssh " + src + " 255.255.255.255", "login-access-list enable":
 		return true
 	}
 	return false
 }
 
-// checkACLRules: the factory telnet/snmp denies are untouched, and the three SSH rules are there.
+// checkACLRules: the factory telnet/snmp denies are untouched, and the one SSH permit is there (no SSH deny).
 func checkACLRules(t *testing.T, got []string, src string) {
 	t.Helper()
 	want := []string{"deny telnet 0.0.0.0 0.0.0.0", "ipv6 deny telnet ::/0", "deny snmp 0.0.0.0 0.0.0.0", "ipv6 deny snmp ::/0",
-		"permit ssh " + src + " 255.255.255.255", "deny ssh 0.0.0.0 0.0.0.0", "ipv6 deny ssh ::/0"}
+		"permit ssh " + src + " 255.255.255.255"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("access list rules:\n got %q\nwant %q", got, want)
 	}
