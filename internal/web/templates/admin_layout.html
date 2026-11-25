@@ -65,19 +65,19 @@
 
 {{define "m_addcustomer"}}<dialog class="modal" id="addcustomer" aria-labelledby="ac-t"><form method="post" action="/admin/accounts/create" class="mcard" data-ajax="customer"><input type="hidden" name="_csrf" value="{{.CSRF}}">
 <header><h2 id="ac-t">Add customer</h2><button type="button" class="ibtn" data-close aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></header>
-<div class="stack" data-step="form">
-<div class="two"><label class="field">Name<input name="tenant" autocomplete="off" placeholder="e.g. Jane Wanjiru"></label><label class="field">Phone<input name="phone" inputmode="tel" autocomplete="off" placeholder="e.g. 0712 345 678"></label></div>
-<div class="two"><label class="field">Apartment<select name="apartment_id" required data-apt-select><option value="">Choose an apartment</option>{{range .Data.AptOpts}}<option value="{{.ID}}" data-routers="{{range $i, $r := .Routers}}{{if $i}},{{end}}{{$r}}{{end}}" data-address="{{.Address}}" data-subs="{{.Subscribers}}" data-router-names="{{range $i, $r := .RouterNames}}{{if $i}}, {{end}}{{$r}}{{end}}">{{.Name}}</option>{{end}}</select></label>
-<label class="field">House number<input name="unit" required autocomplete="off" placeholder="e.g. B4"></label></div>
+<div class="f" data-step="form">
+<div class="two"><label class="field half">Name<input name="tenant" autocomplete="off" placeholder="e.g. Jane Wanjiru"></label><label class="field half">Phone<input name="phone" inputmode="tel" autocomplete="off" placeholder="e.g. 0712 345 678"></label></div>
+<div class="two"><label class="field half">Apartment<select name="apartment_id" required data-apt-select><option value="">Choose an apartment</option>{{range .Data.AptOpts}}<option value="{{.ID}}" data-routers="{{range $i, $r := .Routers}}{{if $i}},{{end}}{{$r}}{{end}}" data-address="{{.Address}}" data-subs="{{.Subscribers}}" data-router-names="{{range $i, $r := .RouterNames}}{{if $i}}, {{end}}{{$r}}{{end}}">{{.Name}}</option>{{end}}</select></label>
+<label class="field half">House number<input name="unit" required autocomplete="off" placeholder="e.g. B4"></label></div>
 {{if not .Data.AptOpts}}<p class="hint">No apartments yet. <a href="/admin/apartments/new">Create one</a> first.</p>{{end}}
 <fieldset class="field" style="border:0;padding:0;margin:0"><legend style="font:600 13px var(--f-sans);padding:0;margin-bottom:6px">Plan</legend>
 <div class="pkgs">{{range .Pkgs}}<label class="pkg"><input type="radio" name="package" value="{{.ID}}"><b>{{.Name}}</b><span>{{.SpeedMbps}} Mbps &middot; {{dur .DurationMin}}</span><em>{{kes .PriceKES}}</em></label>{{else}}<p class="muted">No plans yet. <a href="/admin/packages">Create one</a> first.</p>{{end}}</div></fieldset>
-<label class="field" data-router-field>Router<select name="site" data-router-select><option value="">Choose a router</option>{{range .Sites}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select><span class="hint" data-router-hint>Only needed when the apartment has more than one router.</span></label>
-{{if .Data.ONUStock}}<div class="field"><label for="ac-onu" style="display:block">ONU from the register</label><select id="ac-onu" name="equipment_id" style="width:100%;margin-top:5px"><option value="">None: type the MAC below</option>{{range .Data.ONUStock}}<option value="{{.ID}}" data-apts="{{range $i, $a := .ApartmentIDs}}{{if $i}},{{end}}{{$a}}{{end}}" data-mac="{{.MAC}}">{{.Serial}}{{if .Model}} ({{.Model}}){{end}} {{.MAC}}</option>{{end}}</select><small class="muted" data-onu-hint>The ONU's WAN MAC becomes the house MAC. Leave the MAC empty when you choose one. The apartment is preselected from the ONU's PON port when it is recorded.</small></div>{{end}}
+<label class="field" data-router-field>Router<select name="site" data-router-select><option value="">Choose a router</option>{{range .Sites}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select><span class="hint" data-router-hint>Only if the apartment has several routers.</span></label>
+{{if .Data.ONUStock}}<div class="field"><label for="ac-onu">ONU from the register</label><select id="ac-onu" name="equipment_id"><option value="">None: type the MAC below</option>{{range .Data.ONUStock}}<option value="{{.ID}}" data-apts="{{range $i, $a := .ApartmentIDs}}{{if $i}},{{end}}{{$a}}{{end}}" data-mac="{{.MAC}}">{{.Serial}}{{if .Model}} ({{.Model}}){{end}} {{.MAC}}</option>{{end}}</select><small class="muted" data-onu-hint>Its WAN MAC becomes the house MAC; leave the MAC empty. The apartment is preselected from its PON port.</small></div>{{end}}
 <input type="hidden" name="confirm_no_address" value="">
-<div class="field"><label for="ac-mac" style="display:block">MAC address of the ONU</label><input id="ac-mac" name="mac" {{if not .Data.ONUStock}}required {{end}}autocomplete="off" spellcheck="false" placeholder="e.g. AA:BB:CC:DD:EE:FF" style="width:100%;margin-top:5px;font-family:var(--f-mono)">
+<div class="field"><label for="ac-mac">MAC address of the ONU</label><input id="ac-mac" name="mac" {{if not .Data.ONUStock}}required {{end}}autocomplete="off" spellcheck="false" placeholder="e.g. AA:BB:CC:DD:EE:FF" class="mono">
 <span class="hint" data-mac-hint>Pick a device this router can see, or paste the MAC.</span><div class="devlist" data-devlist></div></div>
-<label class="ck"><input type="checkbox" name="activate" value="1"><span><b>Activate now</b><small>Gives the first period free. Leave it off if they will pay by M-Pesa: they land on the payment page.</small></span></label>
+<label class="ck"><input type="checkbox" name="activate" value="1"><span><b>Activate now</b><small>Gives the first period free. Leave off if they pay by M-Pesa.</small></span></label>
 </div>
 <div class="prov" data-step="status" hidden aria-live="polite"></div>
 <footer data-step="form"><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn">Add customer</button></footer>
@@ -86,18 +86,18 @@
 
 {{define "m_addrouter"}}<dialog class="modal" id="addrouter" aria-labelledby="ar-t"><form method="post" action="/admin/routers/create" class="mcard" data-ajax="router"><input type="hidden" name="_csrf" value="{{.CSRF}}">
 <header><h2 id="ar-t">Add router</h2><button type="button" class="ibtn" data-close aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></header>
-<div class="stack" data-step="form">
-<label class="field">Router name<input name="name" required maxlength="60" autocomplete="off" placeholder="e.g. Riverside comms room RB5009"><span class="hint">Name the box, for example by its comms room: the team sees this name.</span></label>
+<div class="f" data-step="form">
+<label class="field">Router name<input name="name" required maxlength="60" autocomplete="off" placeholder="e.g. Riverside comms room RB5009"><span class="hint">Name it by its comms room; the team sees this.</span></label>
 <fieldset class="field" style="border:0;padding:0;margin:0"><legend style="font:600 13px var(--f-sans);padding:0;margin-bottom:6px">Apartments this router serves</legend>
-<div class="chk-list">{{range .Data.AptOpts}}<label><input type="checkbox" name="apartment" value="{{.ID}}"> {{.Name}}</label>{{else}}<p class="muted" style="margin:0">No apartments yet. <a href="/admin/apartments/new">Create one</a>, then link this router on its page.</p>{{end}}</div><span class="hint">You can change this later on the apartment's page.</span></fieldset>
-<p class="hint">The server sets the router up from one line you paste on it. The router is erased and built again, so use a new router or one you mean to rebuild.</p>
+<div class="chk-list">{{range .Data.AptOpts}}<label><input type="checkbox" name="apartment" value="{{.ID}}"> {{.Name}}</label>{{else}}<p class="muted" style="margin:0">No apartments yet. <a href="/admin/apartments/new">Create one</a>, then link this router on its page.</p>{{end}}</div><span class="hint">Changeable later on the apartment page.</span></fieldset>
+<p class="hint">The server builds the router from one pasted line. The router is erased: use a new one or one you mean to rebuild.</p>
 <details><summary>Router layout</summary><div class="mt-3 stack">{{with .Data.RouterDefaults}}{{template "sitelayout" .}}<label class="field">Support phone<input name="support" value="{{.SupportPhone}}" placeholder="optional"></label>{{end}}</div></details>
 </div>
 <div class="stack" data-step="status" hidden aria-live="polite">
-<p><b>Paste this one line</b> into the router's terminal (WinBox, then New Terminal). It works once and expires in {{.Data.JoinTTL}} minutes. The router builds itself; nothing else is typed on it.</p>
+<p><b>Paste this line</b> in the router terminal (WinBox, New Terminal). One use, expires in {{.Data.JoinTTL}} minutes. The router builds itself.</p>
 <p class="bad"><strong>{{.Data.RouterPortsNotice}}</strong></p><p class="muted">{{.Data.RouterPasteHint}}</p>
 <div class="copyline"><textarea readonly rows="3" data-join-cmd aria-label="Join command"></textarea><button type="button" class="btn" data-copy-from="[data-join-cmd]">Copy</button></div>
-<details><summary>Certificate error?</summary><p class="muted">Correct the router's clock first. If that is not possible, this is the same line without the certificate check.</p><div class="copyline"><textarea readonly rows="3" data-join-cmd2 aria-label="Join command without certificate check"></textarea><button type="button" class="btn ghost" data-copy-from="[data-join-cmd2]">Copy</button></div></details>
+<details><summary>Certificate error?</summary><p class="muted">Fix the router clock first, or use this line without the certificate check.</p><div class="copyline"><textarea readonly rows="3" data-join-cmd2 aria-label="Join command without certificate check"></textarea><button type="button" class="btn ghost" data-copy-from="[data-join-cmd2]">Copy</button></div></details>
 <div class="prov"><div class="row2"><span class="spin" data-join-spin></span><span data-join-text>Waiting for the line to be pasted</span></div></div>
 </div>
 <footer data-step="form"><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn">Create router</button></footer>

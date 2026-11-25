@@ -6,15 +6,15 @@
 <div class="card"><b>You</b><table class="mt-2"><tr><td>User</td><td>{{.Data.Me.Username}}</td></tr><tr><td>Role</td><td><span class="pill applied">{{.Data.Me.Role}}</span></td></tr>
 <tr><td>Authenticator</td><td>{{if .Data.Enrolled}}<span class="ok">set up</span>, {{.Data.CodesLeft}} recovery codes left{{else}}<span class="bad">not set up</span>{{end}}</td></tr></table></div>
 <div class="card"><b>Change password</b>
-<form method="post" action="/admin/security/password" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}">
-<label>Current password<input type="password" name="current_password" autocomplete="current-password" required></label><label>Authenticator code<input type="text" name="totp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" size="9" required></label>
-<label>New password (12 or more characters)<input type="password" name="new_password" autocomplete="new-password" required></label>
+<form method="post" action="/admin/security/password" class="f"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<label>Current password<input type="password" name="current_password" autocomplete="current-password" required></label><label>Authenticator code<input type="text" name="totp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" required></label>
+<label>New password (12+ characters)<input type="password" name="new_password" autocomplete="new-password" required></label>
 <label>New password again<input type="password" name="confirm_password" autocomplete="new-password" required></label><button>Change password</button></form>
-<p class="muted">Changing it signs you out everywhere else, browsers and phones.</p></div>
+<p class="muted">Signs you out everywhere else.</p></div>
 </div>
 <div class="card"><b>New recovery codes</b>
-<form method="post" action="/admin/security/recovery" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}">
-<label>Current password<input type="password" name="current_password" autocomplete="current-password" required></label><label>Authenticator code<input type="text" name="totp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" size="9" required></label>
+<form method="post" action="/admin/security/recovery" class="f"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<label>Current password<input type="password" name="current_password" autocomplete="current-password" required></label><label>Authenticator code<input type="text" name="totp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" required></label>
 <button>Make new codes</button></form>
 <p class="muted">The old codes stop working.</p></div>
 
@@ -22,7 +22,7 @@
 <div class="tw"><table><tr><th>Since</th><th>Last active</th><th>Address</th><th>Browser</th><th></th></tr>
 {{range .Data.Sessions}}<tr><td>{{eat .CreatedAt}}</td><td>{{eat .LastSeenAt}}</td><td>{{.IP}}</td><td class="nw">{{.UserAgent}}</td>
 <td>{{if .Current}}<span class="pill applied">this one</span>{{else}}<form class="i" method="post" action="/admin/security/sessions/revoke"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><button class="lnk">Sign out</button></form>{{end}}</td></tr>{{end}}</table></div>
-<form class="mt-2" method="post" action="/admin/security/sessions/revoke"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="all" value="1"><button class="ghost">Sign out everywhere else</button></form>
+<form class="f mt-2" method="post" action="/admin/security/sessions/revoke"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="all" value="1"><button class="ghost">Sign out everywhere else</button></form>
 
 <h3>Phones (the app)</h3>
 <div class="tw"><table><tr>{{if .Data.IsOwner}}<th>User</th>{{end}}<th>Name</th><th>Model</th><th>App</th><th>Added</th><th>Last seen</th><th>Address</th><th></th></tr>
@@ -34,17 +34,17 @@
 <h3>Users</h3>
 <div class="tw"><table><tr><th>Name</th><th>Role</th><th>Authenticator</th><th>State</th><th>Actions (needs your password)</th></tr>
 {{range .Data.Users}}<tr><td>{{.Username}}</td><td><span class="pill applied">{{.Role}}</span></td><td>{{if .Enrolled}}set up{{else}}<span class="bad">not yet</span>{{end}}</td><td>{{if .Disabled}}<span class="pill refunded">disabled</span>{{else}}<span class="pill applied">active</span>{{end}}</td>
-<td>{{if not .Self}}<form class="row" method="post" action="/admin/security/users/role"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}">
-<select name="role">{{$r := .Role}}{{range $.Data.Roles}}<option{{if eq . $r}} selected{{end}}>{{.}}</option>{{end}}</select><input type="password" name="current_password" placeholder="your password" autocomplete="current-password" size="14"><input type="text" name="totp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" size="9" required><button>Set role</button></form>
-<form class="row" method="post" action="/admin/security/users/{{if .Disabled}}enable{{else}}disable{{end}}"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><input type="password" name="current_password" placeholder="your password" autocomplete="current-password" size="14"><input type="text" name="totp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" size="9" required><button>{{if .Disabled}}Enable{{else}}Disable{{end}}</button></form>
-<form class="row" method="post" action="/admin/security/users/reset2fa"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><input type="password" name="current_password" placeholder="your password" autocomplete="current-password" size="14"><input type="text" name="totp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" size="9" required><button>Reset authenticator</button></form>{{else}}<span class="muted">you</span>{{end}}</td></tr>{{end}}</table></div>
+<td class="ufm">{{if not .Self}}<form class="f" method="post" action="/admin/security/users/role"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}">
+<select name="role">{{$r := .Role}}{{range $.Data.Roles}}<option{{if eq . $r}} selected{{end}}>{{.}}</option>{{end}}</select><input type="password" name="current_password" placeholder="your password" aria-label="Your password" autocomplete="current-password"><input type="text" name="totp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" aria-label="Authenticator code" required><button>Set role</button></form>
+<form class="f" method="post" action="/admin/security/users/{{if .Disabled}}enable{{else}}disable{{end}}"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><input type="password" name="current_password" placeholder="your password" aria-label="Your password" autocomplete="current-password"><input type="text" name="totp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" aria-label="Authenticator code" required><button>{{if .Disabled}}Enable{{else}}Disable{{end}}</button></form>
+<form class="f" method="post" action="/admin/security/users/reset2fa"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><input type="password" name="current_password" placeholder="your password" aria-label="Your password" autocomplete="current-password"><input type="text" name="totp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" aria-label="Authenticator code" required><button>Reset authenticator</button></form>{{else}}<span class="muted">you</span>{{end}}</td></tr>{{end}}</table></div>
 <div class="card"><b>Add a user</b>
-<form method="post" action="/admin/security/users/create" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}">
-<label>User name<input name="username" autocomplete="off" required></label>
-<label>Role<select name="role">{{range .Data.Roles}}<option{{if eq . "operator"}} selected{{end}}>{{.}}</option>{{end}}</select></label>
-<label>Password for them (12 or more)<input type="password" name="password" autocomplete="new-password" required></label>
-<label>Your password<input type="password" name="current_password" autocomplete="current-password" required></label><label>Authenticator code<input type="text" name="totp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" size="9" required></label><button>Create</button></form>
-<p class="muted">Viewer reads. Operator also records payments and edits customers and accounts. Owner also manages settings, router set-up, users and national IDs. A setup code is shown once; they use it at their first sign-in.</p></div>
+<form method="post" action="/admin/security/users/create" class="f"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+<label class="half">User name<input name="username" autocomplete="off" required></label>
+<label class="half">Role<select name="role">{{range .Data.Roles}}<option{{if eq . "operator"}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+<label>Their password (12+ characters)<input type="password" name="password" autocomplete="new-password" required></label>
+<label>Your password<input type="password" name="current_password" autocomplete="current-password" required></label><label>Authenticator code<input type="text" name="totp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" required></label><button>Create</button></form>
+<p class="muted">Viewer reads. Operator also records payments and edits customers and accounts. Owner also manages settings, router set-up, users and national IDs. The setup code is shown once, for their first sign-in.</p></div>
 
 <h3>Audit log</h3>
 <p>Who changed what is kept on its own page: <a href="/admin/audit">see the audit trail</a>.</p>

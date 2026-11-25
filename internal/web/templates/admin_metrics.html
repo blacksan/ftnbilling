@@ -2,8 +2,8 @@
 <p><span class="seg">{{range .Data.Periods}}<a href="/admin/metrics?period={{.}}&sort={{$.Data.Sort}}"{{if eq (printf "%s" .) $P}} class="on"{{end}}>{{.Label}}</a>{{end}}</span>
 <span class="muted">&nbsp; {{eat $R.From}} to now &middot; {{if eq $R.Tier 0}}5-minute{{else if eq $R.Tier 1}}hourly{{else}}daily{{end}} buckets</span></p>
 {{if $R.RouterErr}}<div class="flash bad">The router did not answer the last collection: {{$R.RouterErr}}. Numbers below are what was collected before.</div>{{end}}
-{{if .Data.Mock}}<form method="post" action="/admin/metrics/demo" class="card"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="period" value="{{$P}}">
-<b>Demo mode (ROUTER_MOCK).</b> <span class="muted">Generate 35 days of synthetic history for the current accounts so the charts have something to show.</span> <button>Generate demo history</button></form>{{end}}
+{{if .Data.Mock}}<form method="post" action="/admin/metrics/demo" class="f card"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="period" value="{{$P}}">
+<p><b>Demo mode (ROUTER_MOCK).</b> <span class="muted">Generates 35 days of synthetic history for the charts.</span></p><button>Generate demo history</button></form>{{end}}
 
 <div class="tiles">
 <div class="tile {{if $R.FUPWarn}}warn{{end}}">WAN this month vs fair-use limit

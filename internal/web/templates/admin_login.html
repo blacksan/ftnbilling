@@ -13,7 +13,7 @@
 <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
 <details><summary>First <span class="nb">sign-in</span>? Enter the setup code</summary>
 <label>Setup code<input name="setup_code" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="xxxx-xxxx-xxxx-xxxx"></label>
-<p class="muted">The setup code was printed when the server was installed. It is only needed until you have set up the authenticator.</p></details>
+<p class="muted">Printed at install. Needed only until the authenticator is set up.</p></details>
 <button type="submit">Continue</button></form>
 {{template "authfoot" .}}{{end}}
 
@@ -34,10 +34,10 @@
 {{if .Done}}<h1>You are signed in</h1><div class="ok">Two-factor sign-in is set up.</div>
 <p><b>Save your recovery codes.</b> Each works once if you lose your phone. They are not shown again.</p>
 <div class="codes">{{range .Codes}}<span>{{.}}</span>{{end}}</div>
-<p class="muted">Keep them somewhere safe and offline (a password manager or paper).</p>
+<p class="muted">Store them offline: password manager or paper.</p>
 <form method="get" action="/admin"><button type="submit">I have saved them, continue</button></form>
 {{else}}
-<h1>Set up your authenticator</h1><p class="muted">Signing in as <b>{{.Username}}</b>. Admin pages need a code from an authenticator app (Google Authenticator, Aegis, 1Password, ...).</p>
+<h1>Set up your authenticator</h1><p class="muted">Signing in as <b>{{.Username}}</b>. Admin pages need a code from an authenticator app (Google Authenticator, Aegis, 1Password).</p>
 {{if .Error}}<div class="err" role="alert">{{.Error}}</div>{{end}}
 {{if .Secret}}<p>1. Scan this code with the app:</p><img class="qr" src="/admin/security/enrol/qr.png" alt="QR code for the authenticator app" width="220" height="220">
 <details><summary>Cannot scan? Type the key instead</summary><p><code>{{.Secret}}</code></p><p class="muted">Time based, 6 digits, 30 seconds.</p></details>
