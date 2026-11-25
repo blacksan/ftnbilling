@@ -1,7 +1,7 @@
 {{define "onu_list"}}{{$d := .P}}{{$free := .Free}}{{$next := .Next}}
 {{if .ONUs}}<div class="tw atop"><table class="rs"><thead><tr><th>Serial</th><th>Model</th><th>Router</th><th>Address</th><th>Last seen</th><th>House</th><th>Wi-Fi as reported</th><th>Register</th></tr></thead><tbody>
 {{range .ONUs}}<tr>
-<td data-label="Serial"><code>{{.Serial}}</code></td><td data-label="Model" class="wrap">{{.Manufacturer}} {{.Model}}<br><span class="muted">{{.DataModel}}</span></td><td data-label="Router" class="wrap">{{.SiteName}}</td><td data-label="Address"><code>{{.MgmtIP}}</code></td>
+<td data-label="Serial"><code>{{.Serial}}</code>{{if $d.CanWrite}}<br><a href="/admin/onus/metrics?onu={{.ID}}">Metrics</a>{{end}}</td><td data-label="Model" class="wrap">{{.Manufacturer}} {{.Model}}<br><span class="muted">{{.DataModel}}</span></td><td data-label="Router" class="wrap">{{.SiteName}}</td><td data-label="Address"><code>{{.MgmtIP}}</code></td>
 <td data-label="Last seen" class="wrap" style="min-width:120px">{{if .LastInform.IsZero}}never{{else}}{{eats .LastInform}}{{end}} <span class="pill {{if .Online}}active{{else}}suspended{{end}}">{{if .Online}}online{{else}}silent{{end}}</span>
 {{if .Blocked}}<span class="pill suspended">blocked</span>{{if $d.CanWrite}} <form method="post" action="/admin/onus/unblock" style="display:inline"><input type="hidden" name="_csrf" value="{{$d.CSRF}}"><input type="hidden" name="onu" value="{{.ID}}"><input type="hidden" name="next" value="{{$next}}"><button class="ghost sm">Unblock</button></form>{{end}}{{end}}
 {{if .SharedOnly}}<div class="muted" title="This box refused its own ACS login, so it uses the shared one: its identity is weaker.">shared login only</div>{{end}}
@@ -55,6 +55,7 @@
 Last seen {{if .LastInform.IsZero}}never{{else}}{{eat .LastInform}}{{end}}, <b>{{if .Online}}online{{else}}silent{{end}}</b>.</p>
 <p>{{range .WiFi}}{{.Band}} GHz: <b>{{.SSID}}</b>{{if not .Enabled}} (off){{end}}<br>{{end}}{{if not .WiFi}}<span class="muted">The ONU has not reported its Wi-Fi yet.</span>{{end}}</p>
 {{with $d.Data.ONUBrief}}<p class="muted">{{if .Optical}}Optical: {{.Optical}}. {{end}}{{if .HasDev}}Devices: {{.Devices}}. {{end}}{{if .Rate}}Now: {{.Rate}}. {{end}}Read {{eat .At}}.</p>{{end}}
+{{if $d.CanWrite}}<p class="mt-2"><a class="btn ghost sm" href="/admin/onus/metrics?onu={{.ID}}">Metrics and graphs</a></p>{{end}}
 {{if $d.CanWrite}}{{with $d.Data.ONUTree}}<details class="mt-2"><summary>Parameter tree ({{.Count}} params, walked {{eat .WalkedAt}})</summary>
 <p class="muted">Walked because: {{.Reason}}.{{if .Truncated}} Stopped at a limit; list is partial.{{end}} Passphrase, password and key values are never read or shown.</p>
 <p><a class="btn ghost sm" href="/admin/onus/paramtree?onu={{$d.Data.ONU.ID}}">Download (text)</a> <a class="btn ghost sm" href="/admin/onus/paramtree?onu={{$d.Data.ONU.ID}}&amp;format=json">Download (JSON)</a></p>
