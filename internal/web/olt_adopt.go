@@ -51,6 +51,16 @@ func (s *Server) adoptData(r *http.Request, e store.Equipment, p *adminPage, own
 			}
 		}
 		sort.Strings(free)
+		// The configured port comes first and is the one selected: submitting the form unchanged must not move the role.
+		if cur := site.OLTMgmtPort; cur != "" {
+			choices := []string{cur}
+			for _, f := range free {
+				if f != cur {
+					choices = append(choices, f)
+				}
+			}
+			free = choices
+		}
 		p.Data["FreePorts"] = free
 	}
 }
@@ -237,14 +247,27 @@ func (s *Server) adminOLTMgmtPort(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
 	who := sites.PortActor{Name: u.Username, Role: u.Role}
-	if n := strings.TrimSpace(r.PostFormValue("net")); n != "" {
+	var site store.Site
+	s.st.View(func(d *store.Data) { site = d.Sites[e.SiteID] })
+	port := strings.TrimSpace(r.PostFormValue("port"))
+	n := strings.TrimSpace(r.PostFormValue("net"))
+	netChanged := n != "" && n != sites.OLTMgmtNetOf(site)
+	action := r.PostFormValue("action")
+	if action == "set" && port == site.OLTMgmtPort && port != "" && !netChanged {
+		s.back(w, r, to, "Nothing changed: "+port+" is already the OLT management port, with router address "+sites.OLTMgmtNetOf(site))
+		return
+	}
+	if netChanged && action != "clear" {
 		if err := s.mgr.SetOLTMgmtNet(ctx, e.SiteID, n, u.Username); err != nil {
 			s.back(w, r, to, "Error: "+err.Error())
 			return
 		}
+		if action == "set" && port == site.OLTMgmtPort {
+			s.back(w, r, to, "The router address on "+port+" is now "+n)
+			return
+		}
 	}
-	port := strings.TrimSpace(r.PostFormValue("port"))
-	switch r.PostFormValue("action") {
+	switch action {
 	case "clear":
 		var cur string
 		s.st.View(func(d *store.Data) { cur = d.Sites[e.SiteID].OLTMgmtPort })

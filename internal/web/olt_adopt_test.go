@@ -189,3 +189,37 @@ func TestOLTRawDebugCopyOwnerOnly(t *testing.T) {
 		t.Errorf("an operator sees the debug copy (or not the section)")
 	}
 }
+
+// The bench: the select showed ether4 although the OLT is on ether6; saving the card unchanged must leave it on ether6.
+func TestOLTMgmtPortFormKeepsTheConfiguredPort(t *testing.T) {
+	o := newOLTRig(t)
+	if err := o.st.Update(func(d *store.Data) error {
+		s := d.Sites[o.A.ID]
+		s.OLTMgmtPort = "ether6"
+		d.Sites[o.A.ID] = s
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cl := &http.Client{CheckRedirect: noRedirect}
+	ob := signIn(t, o.ts, o.srv, o.st, o.ownerW)
+	resp := ob.Do(cl, o.ts.URL, "GET", "/admin/olts/manage?id="+url.QueryEscape(o.id), nil)
+	bs, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	page := string(bs)
+	if !strings.Contains(page, `<option value="ether6" selected>`) || !strings.Contains(page, `name="net" value="192.168.8.1/24"`) {
+		i := strings.Index(page, `name="port"`)
+		t.Fatalf("the configured port or address is not preselected: %s", page[max(i, 0):min(len(page), max(i, 0)+400)])
+	}
+	resp = ob.Do(cl, o.ts.URL, "POST", "/admin/olts/manage/mgmt-port", url.Values{"id": {o.id}, "action": {"set"}, "port": {"ether6"}, "net": {"192.168.8.1/24"}})
+	resp.Body.Close()
+	loc, _ := url.QueryUnescape(resp.Header.Get("Location"))
+	if !strings.Contains(loc, "Nothing changed") {
+		t.Errorf("unchanged form: %q", loc)
+	}
+	var port string
+	o.st.View(func(d *store.Data) { port = d.Sites[o.A.ID].OLTMgmtPort })
+	if port != "ether6" {
+		t.Errorf("the role moved to %q", port)
+	}
+}
