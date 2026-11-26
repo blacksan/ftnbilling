@@ -188,45 +188,6 @@ jobs:
           gradle -p android assembleRelease \
             -PversionName="$VERSION" \
             -PversionCode=${{ github.run_number }}
-      - name: Add v1 (JAR) signature
-        env:
-          ANDROID_SIGNING_ENV_FILE: ${{ runner.temp }}/ftn-signing/signing.env
-          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/ftn-signing/release.jks
-        run: |
-          # AGP 9.1.x builds a v2-only APK for minSdk 26 even with enableV1Signing = true, so the APK is
-          # re-signed here with the same key and v1 + v2 + v3 all on. The certificate does not change.
-          # The next step still checks the signer, the certificate and that v1 is present.
-          set -eu
-          apk=$(ls android/app/build/outputs/apk/release/*.apk | head -n1)
-          tools=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n1)
-          key_alias=""; ks_pass=""; key_pass=""
-          while IFS= read -r line || [ -n "$line" ]; do
-            line="${line%$'\r'}"
-            name="${line%%=*}"
-            val="${line#*=}"
-            case "$val" in
-              \"*\") val="${val#\"}"; val="${val%\"}" ;;
-              \'*\') val="${val#\'}"; val="${val%\'}" ;;
-            esac
-            case "$name" in
-              ANDROID_KEY_ALIAS) key_alias="$val" ;;
-              ANDROID_KEYSTORE_PASSWORD) ks_pass="$val" ;;
-              ANDROID_KEY_PASSWORD) key_pass="$val" ;;
-            esac
-          done < "$ANDROID_SIGNING_ENV_FILE"
-          # Passwords reach apksigner through its own environment, never the command line.
-          export FTN_KS_PASS="$ks_pass" FTN_KEY_PASS="$key_pass"
-          work="$RUNNER_TEMP/ftn-resign"
-          mkdir -p "$work"
-          # Align first, sign last: signing must come after zipalign.
-          "$tools/zipalign" -f -p 4 "$apk" "$work/aligned.apk"
-          "$tools/apksigner" sign --ks "$ANDROID_KEYSTORE_PATH" --ks-key-alias "$key_alias" \
-            --ks-pass env:FTN_KS_PASS --key-pass env:FTN_KEY_PASS \
-            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
-            --out "$work/signed.apk" "$work/aligned.apk"
-          "$tools/zipalign" -c -p 4 "$work/signed.apk"
-          mv -f "$work/signed.apk" "$apk"
-          rm -rf "$work"
       - name: Verify signature and signing certificate
         run: |
           set -eu
@@ -243,9 +204,10 @@ jobs:
             echo "::error::Signing certificate mismatch. APK is signed with $got but the app expects $want. Not publishing."
             exit 1
           fi
-          # Phones on Android 8.0 and 8.1 can only check an update's signer from a v1 (JAR) signature.
-          if ! grep -q 'Verified using v1 scheme (JAR signing): true' "$RUNNER_TEMP/apksigner.txt"; then
-            echo "::error::The APK has no v1 (JAR) signature, so Android 8.x phones cannot verify updates. Check the "Add v1 (JAR) signature" step."
+          # Android 9+ reads an update's signer from the v2 signature; v1 JAR signing is not required
+          # (the newer build tools do not emit it for minSdk 26, and the admin phones are all Android 9+).
+          if ! grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' "$RUNNER_TEMP/apksigner.txt"; then
+            echo "::error::The APK has no v2 signature, so the app cannot verify updates. Check the release signing config in android/app/build.gradle.kts."
             exit 1
           fi
           echo "Signing certificate matches the expected SHA-256."
