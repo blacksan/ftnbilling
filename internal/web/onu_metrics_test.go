@@ -38,10 +38,30 @@ func TestONUMetricsDashboardRendersChartsTableAndEscapes(t *testing.T) {
 	seedONUMetrics(t, a, "onu1", time.Now())
 	page := a.adminGet(t, "/admin/onus/metrics?onu=onu1&range=6h")
 	for _, want := range []string{"Speed over time", "Optical levels", "Devices behind the ONU", "Line and errors", "<svg", "<path ", `class="cband"`, "dBm", "Mbit/s",
-		"Numbers behind the chart", "errors_rx", "bias: not found", "tv", "192.168.1.11", "1.0 Gbit/s"} {
+		"errors_rx", "bias: not found", "tv", "192.168.1.11", "1.0 Gbit/s"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("page lacks %q", want)
 		}
+	}
+	for _, gone := range []string{"Numbers behind", "Module temperature", "Module voltage", "Laser bias current", "The same data as JSON", "/api/v1/onus/"} {
+		if strings.Contains(page, gone) {
+			t.Fatalf("page still has removed element %q", gone)
+		}
+	}
+	for _, kept := range []string{"Receive power (Rx)", "Transmit power (Tx)", "Speed over time"} {
+		if !strings.Contains(page, kept) {
+			t.Fatalf("page lost %q", kept)
+		}
+	}
+	// the devices are one compact table: a header row with every column and one row per host, scrollable (.tw), not stacked
+	dev := page[strings.Index(page, "Devices behind the ONU"):strings.Index(page, "Line and errors")]
+	for _, h := range []string{">Name</a></th>", ">MAC</a></th>", ">IP</a></th>", ">Connected by</a></th>", "<th>State</th>", ">Down</a></th>", ">Up</a></th>", ">Received</th>", ">Sent</th>"} {
+		if !strings.Contains(dev, h) {
+			t.Fatalf("devices header lacks %q", h)
+		}
+	}
+	if strings.Count(dev, "<table") != 1 || !strings.Contains(dev, `<div class="tw"><table>`) || strings.Count(dev, "<tr>") != 3 || strings.Contains(dev, "data-label") || strings.Contains(dev, `class="rs"`) {
+		t.Fatalf("devices are not one compact table with a header and two rows: %s", dev)
 	}
 	if strings.Contains(page, "<script>alert(1)") || strings.Contains(page, "<img src=x") || !strings.Contains(page, "&lt;script&gt;alert(1)&lt;/script&gt;") {
 		t.Fatal("a host string was not escaped")
