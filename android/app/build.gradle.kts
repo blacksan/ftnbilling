@@ -52,9 +52,9 @@ android {
                 storePassword = signingValue("ANDROID_KEYSTORE_PASSWORD")
                 keyAlias = signingValue("ANDROID_KEY_ALIAS")
                 keyPassword = signingValue("ANDROID_KEY_PASSWORD")
-                // AGP leaves v1 (JAR) signing off for minSdk 24+. Android 8.0/8.1 phones (minSdk is 26) need it
-                // to read the signer of a downloaded update, so it is switched on explicitly. AGP 9.1.x still emits a
-                // v2-only APK, so the release workflow re-signs with apksigner (v1+v2+v3) before it verifies.
+                // The release is distributed as a v2-signed APK. AGP 9.1.x emits a v2-only APK for minSdk 24+
+                // (it does not write v1/JAR even with enableV1Signing = true); Android 9+ reads an update's
+                // signer from the v2 signature, which is what the admin phones run, so v1 is not required.
                 enableV1Signing = true
                 enableV2Signing = true
             }
