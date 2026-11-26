@@ -37,10 +37,6 @@ type dashDevice struct {
 	Rx, Tx               string
 }
 
-type dashRow struct {
-	When, A, B string
-}
-
 type dashCounter struct {
 	Name         string
 	Total, Delta uint64
@@ -89,9 +85,8 @@ func (s *Server) onuMetricsPage(w http.ResponseWriter, r *http.Request) {
 		d["UpdatedText"] = v.UpdatedAt.In(metrics.EAT).Format("2 Jan 2006, 15:04") + " EAT"
 	}
 	d["BucketText"] = bucketText(v.StepS, v.BucketS)
-	d["SpeedChart"], d["SpeedUnit"], d["SpeedRows"] = speedChart(v)
-	d["RxChart"], d["TxChart"], d["OptRows"] = opticalCharts(v)
-	d["TempChart"], d["VoltChart"], d["BiasChart"] = minorCharts(v)
+	d["SpeedChart"], d["SpeedUnit"] = speedChart(v)
+	d["RxChart"], d["TxChart"] = opticalCharts(v)
 	sortKey := q.Get("sort")
 	d["Sort"] = sortKey
 	d["Devices"] = deviceRows(v.Devices.List, sortKey)
@@ -162,7 +157,7 @@ func nan(p *float64, scale float64) float64 {
 }
 
 // speedChart draws download and upload over the window, in the unit that fits the peak, with the line rate as a dashed cap.
-func speedChart(v acs.DashboardView) (template.HTML, string, []dashRow) {
+func speedChart(v acs.DashboardView) (template.HTML, string) {
 	maxBps := 0.0
 	for _, p := range v.Throughput.Series {
 		for _, x := range []*float64{p.DownBps, p.UpBps} {
@@ -181,14 +176,9 @@ func speedChart(v acs.DashboardView) (template.HTML, string, []dashRow) {
 	n := len(v.Throughput.Series)
 	t := make([]time.Time, n)
 	dn, up := make([]float64, n), make([]float64, n)
-	rows := make([]dashRow, 0, 24)
 	for i, p := range v.Throughput.Series {
 		t[i] = time.Unix(p.T, 0)
 		dn[i], up[i] = nan(p.DownBps, scale), nan(p.UpBps, scale)
-	}
-	for _, i := range evenIdx(n, 24) {
-		p := v.Throughput.Series[i]
-		rows = append(rows, dashRow{When: whenText(p.T, v), A: rateCell(p.DownBps), B: rateCell(p.UpBps)})
 	}
 	opts := metrics.TimeChartOpts{From: v.From, To: v.To, T: t, Unit: unit, ZeroBase: true, GapSecs: gapFor(v), XLayout: xLayoutFor(v),
 		Label: "WAN throughput over time, download and upload", Empty: "No throughput readings in this window yet. They are computed from the ONU's WAN byte counters at each check-in.",
@@ -196,7 +186,7 @@ func speedChart(v acs.DashboardView) (template.HTML, string, []dashRow) {
 	if v.QoS.LineDown != nil && *v.QoS.LineDown > 0 && maxBps > 0 && *v.QoS.LineDown*scale <= 4*maxBps*scale {
 		opts.CapLine, opts.CapLabel = *v.QoS.LineDown*scale, "line rate (down)"
 	}
-	return metrics.TimeChart(opts), unit, rows
+	return metrics.TimeChart(opts), unit
 }
 
 func rateCell(p *float64) string {
@@ -204,29 +194,6 @@ func rateCell(p *float64) string {
 		return "-"
 	}
 	return acs.BitrateText(*p)
-}
-
-func whenText(unix int64, v acs.DashboardView) string {
-	return time.Unix(unix, 0).In(metrics.EAT).Format(map[bool]string{true: "15:04", false: "2 Jan 15:04"}[v.To.Sub(v.From) <= 36*time.Hour])
-}
-
-// evenIdx picks at most n indices spread evenly over a list of length total (always the first and the last).
-func evenIdx(total, n int) []int {
-	if total <= 0 {
-		return nil
-	}
-	if total <= n {
-		out := make([]int, total)
-		for i := range out {
-			out[i] = i
-		}
-		return out
-	}
-	out := make([]int, n)
-	for k := range out {
-		out[k] = int(math.Round(float64(k) * float64(total-1) / float64(n-1)))
-	}
-	return out
 }
 
 func opticalSeries(v acs.DashboardView, get func(acs.OpticalPoint) *float64) ([]time.Time, []float64) {
@@ -238,7 +205,7 @@ func opticalSeries(v acs.DashboardView, get func(acs.OpticalPoint) *float64) ([]
 	return t, vals
 }
 
-func opticalCharts(v acs.DashboardView) (rx, tx template.HTML, rows []dashRow) {
+func opticalCharts(v acs.DashboardView) (rx, tx template.HTML) {
 	mk := func(label, unit, name, color string, band metrics.Band, get func(acs.OpticalPoint) *float64) template.HTML {
 		t, vals := opticalSeries(v, get)
 		return metrics.TimeChart(metrics.TimeChartOpts{From: v.From, To: v.To, T: t, Unit: unit, Band: &band, GapSecs: gapFor(v), XLayout: xLayoutFor(v), Label: label,
@@ -247,30 +214,6 @@ func opticalCharts(v acs.DashboardView) (rx, tx template.HTML, rows []dashRow) {
 	}
 	rx = mk("Optical receive power over time (dBm)", "dBm", "Rx power", metrics.ColDown, rxBand, func(p acs.OpticalPoint) *float64 { return p.RxDBm })
 	tx = mk("Optical transmit power over time (dBm)", "dBm", "Tx power", metrics.ColUp, txBand, func(p acs.OpticalPoint) *float64 { return p.TxDBm })
-	for _, i := range evenIdx(len(v.Optical.History), 24) {
-		p := v.Optical.History[i]
-		rows = append(rows, dashRow{When: whenText(p.T, v), A: dbm(p.RxDBm), B: dbm(p.TxDBm)})
-	}
-	return
-}
-
-func dbm(p *float64) string {
-	if p == nil {
-		return "-"
-	}
-	return fmt.Sprintf("%.1f dBm", *p)
-}
-
-// minorCharts are the small optical-module charts (temperature, voltage, laser bias): only what the ONU gave.
-func minorCharts(v acs.DashboardView) (temp, volt, bias template.HTML) {
-	mk := func(label, unit string, color string, get func(acs.OpticalPoint) *float64) template.HTML {
-		t, vals := opticalSeries(v, get)
-		return metrics.TimeChart(metrics.TimeChartOpts{From: v.From, To: v.To, T: t, Unit: unit, GapSecs: gapFor(v), XLayout: xLayoutFor(v), Label: label, Height: 170,
-			Empty: "Not reported by this ONU in this window.", Series: []metrics.TimeLine{{Name: label, Color: color, Vals: vals}}})
-	}
-	temp = mk("Module temperature", "°C", metrics.ColCap, func(p acs.OpticalPoint) *float64 { return p.TempC })
-	volt = mk("Module voltage", "V", metrics.ColViol, func(p acs.OpticalPoint) *float64 { return p.VoltV })
-	bias = mk("Laser bias current", "mA", metrics.ColMag, func(p acs.OpticalPoint) *float64 { return p.BiasMA })
 	return
 }
 

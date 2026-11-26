@@ -4,29 +4,23 @@
 <p><span class="seg">{{range .Data.Ranges}}<a href="{{dashHref $id .Key $.Data.Sort}}"{{if eq .Key $rng}} class="on" aria-current="true"{{end}}>{{.Label}}</a>{{end}}</span></p>
 
 <section class="panel"><h2>Speed over time</h2>
-<p class="muted">WAN download and upload as the ONU's byte counters grew between check-ins{{if .Data.SpeedRows}}. Unit: {{.Data.SpeedUnit}}{{end}}.</p>
+<p class="muted">WAN download and upload as the ONU's byte counters grew between check-ins. Unit: {{.Data.SpeedUnit}}.</p>
 {{.Data.SpeedChart}}
-{{if .Data.SpeedRows}}<details class="mt-2"><summary>Numbers behind the chart</summary><div class="tw"><table class="rs"><thead><tr><th>Time</th><th class="n">Download</th><th class="n">Upload</th></tr></thead><tbody>
-{{range .Data.SpeedRows}}<tr><td data-label="Time">{{.When}}</td><td data-label="Download" class="n">{{.A}}</td><td data-label="Upload" class="n">{{.B}}</td></tr>{{end}}</tbody></table></div></details>{{end}}
 </section>
 
 <section class="panel"><h2>Optical levels</h2>
 <p class="muted">The green band is the usual healthy range for a GPON ONU; a line sliding toward or below its lower edge means a dirty, bent or failing fibre. The band is a guide, not something the ONU reports.</p>
 <div class="grid2"><div class="card"><b>Receive power (Rx)</b>{{.Data.RxChart}}</div><div class="card"><b>Transmit power (Tx)</b>{{.Data.TxChart}}</div></div>
-{{if .Data.OptRows}}<details class="mt-2"><summary>Numbers behind the charts</summary><div class="tw"><table class="rs"><thead><tr><th>Time</th><th class="n">Rx</th><th class="n">Tx</th></tr></thead><tbody>
-{{range .Data.OptRows}}<tr><td data-label="Time">{{.When}}</td><td data-label="Rx" class="n">{{.A}}</td><td data-label="Tx" class="n">{{.B}}</td></tr>{{end}}</tbody></table></div></details>{{end}}
-<div class="grid2 mt-3"><div class="card"><b>Module temperature</b>{{.Data.TempChart}}</div><div class="card"><b>Module voltage</b>{{.Data.VoltChart}}</div></div>
-<div class="grid2 mt-3"><div class="card"><b>Laser bias current</b>{{.Data.BiasChart}}</div></div>
 </section>
 
 <section class="panel"><h2>Devices behind the ONU</h2>
-<p class="muted">{{$V.Devices.Count}} active of {{$V.Devices.Total}} in the ONU's host table, as of the last read. Click a heading to sort; rates are as of the last two check-ins. Lease age is not reported by the ONU.</p>
-{{if .Data.Devices}}<div class="tw"><table class="rs"><thead><tr>
+<p class="muted">{{$V.Devices.Count}} active of {{$V.Devices.Total}} in the ONU's host table. Click a heading to sort.</p>
+{{if .Data.Devices}}<div class="tw"><table><thead><tr>
 <th><a href="{{dashHref $id $rng "name"}}">Name</a></th><th><a href="{{dashHref $id $rng "mac"}}">MAC</a></th><th><a href="{{dashHref $id $rng "ip"}}">IP</a></th><th><a href="{{dashHref $id $rng "link"}}">Connected by</a></th><th>State</th>
 <th class="n"><a href="{{dashHref $id $rng "down"}}">Down</a></th><th class="n"><a href="{{dashHref $id $rng "up"}}">Up</a></th><th class="n">Received</th><th class="n">Sent</th></tr></thead><tbody>
-{{range .Data.Devices}}<tr><td data-label="Name" class="wrap">{{if .Name}}{{.Name}}{{else}}<span class="muted">unnamed</span>{{end}}</td><td data-label="MAC"><code>{{.MAC}}</code></td><td data-label="IP"><code>{{.IP}}</code></td><td data-label="Connected by" class="wrap">{{.Iface}}</td>
-<td data-label="State"><span class="pill {{if .Active}}active{{else}}suspended{{end}}">{{if .Active}}active{{else}}idle{{end}}</span></td>
-<td data-label="Down" class="n">{{.Down}}</td><td data-label="Up" class="n">{{.Up}}</td><td data-label="Received" class="n">{{.Rx}}</td><td data-label="Sent" class="n">{{.Tx}}</td></tr>{{end}}</tbody></table></div>
+{{range .Data.Devices}}<tr><td class="wrap">{{if .Name}}{{.Name}}{{else}}<span class="muted">unnamed</span>{{end}}</td><td><code>{{.MAC}}</code></td><td><code>{{.IP}}</code></td><td class="wrap">{{.Iface}}</td>
+<td><span class="pill {{if .Active}}active{{else}}suspended{{end}}">{{if .Active}}active{{else}}idle{{end}}</span></td>
+<td class="n">{{.Down}}</td><td class="n">{{.Up}}</td><td class="n">{{.Rx}}</td><td class="n">{{.Tx}}</td></tr>{{end}}</tbody></table></div>
 {{else}}<p class="muted">The ONU has not given a host table.</p>{{end}}
 </section>
 
@@ -42,5 +36,4 @@
 {{range .Data.Counters}}<tr><td data-label="Counter"><code>{{.Name}}</code></td><td data-label="Total" class="n">{{.Total}}</td><td data-label="Since last check-in" class="n">{{.Delta}}</td></tr>{{end}}</tbody></table></div>{{end}}
 {{if $V.Gaps}}<h3 class="mt-3">What the ONU did not give</h3><ul class="muted">{{range $V.Gaps}}<li>{{.}}</li>{{end}}</ul>{{end}}
 </section>
-<p class="muted"><a href="/api/v1/onus/{{$id}}/metrics?range={{$rng}}">The same data as JSON</a> (needs an API sign-in).</p>
 {{template "afoot" .}}{{end}}
