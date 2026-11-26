@@ -16,11 +16,6 @@
 <div class="tile good">Active houses now<b>{{$R.ActiveFlats}} <small style="display:inline">of {{$R.TotalFlats}}</small></b><small>houses with a live session</small></div>
 </div>
 
-<h3>Things to look at</h3>
-{{range $R.Flags}}{{if eq .Level "warn"}}<div class="flag warn"><b>Check: {{.Title}}.</b> {{.Text}}</div>{{end}}{{end}}
-{{range $R.Flags}}{{if and (ne .Level "warn") (ne .Level "ok")}}<div class="flag nodata"><b>Waiting for data: {{.Title}}.</b> {{.Text}}</div>{{end}}{{end}}
-{{range $R.Flags}}{{if eq .Level "ok"}}<div class="flag ok compact"><b>Fine: {{.Title}}.</b> {{.Text}}</div>{{end}}{{end}}
-
 <h3>Throughput over time</h3>
 <div class="grid2">
 <div class="card"><b>WAN (to Safaricom)</b><div class="muted">Download = received on {{.Data.Cfg.WAN}}, upload = sent. Dashed line = capacity.</div>{{.Data.WANChart}}</div>
@@ -44,7 +39,7 @@
 <h3>Quality</h3>
 <div class="grid2"><div class="card"><b>Latency</b><div class="muted">Average ping round trip from the router.</div>{{.Data.LatChart}}</div>
 <div class="card"><b>Packet loss</b><div class="muted">Share of ping packets lost.</div>{{.Data.LossChart}}</div></div>
-<div class="mt-3 card"><b>Busy hours</b><div class="muted">Average WAN use by hour of day over the last {{if $R.BusyDays}}{{$R.BusyDays}}{{else}}14{{end}} day(s) of data.</div>{{.Data.Busy}}</div>
+<div class="mt-3 card"><b>Busy hours</b><div class="muted">Average WAN use by hour of day (EAT), % of capacity, over the last {{if $R.BusyDays}}{{$R.BusyDays}}{{else}}14{{end}} day(s) of data.</div>{{.Data.Busy}}</div>
 
 <h3>Ports</h3>
 <div class="tw"><table><tr><th>Interface</th><th>Role</th><th>Link</th><th class="n">Now rx / tx Mbps</th><th class="n">Peak rx / tx Mbps</th><th class="n">Peak vs capacity</th></tr>
