@@ -674,6 +674,7 @@ body.vprint{background:#fff;color:#000;padding:16px;font:14px var(--f-sans)}
 .f .chk-list label{display:flex}
 .f .pkgs{margin:0}
 .f.f-wide{max-width:none}
+.f.f-narrow{max-width:12rem}
 .tw td input.num{width:6rem}
 .tw td.ufm{min-width:15rem;max-width:20rem;white-space:normal}
 .f>textarea,.f .row>textarea{display:block;width:100%;min-height:88px;resize:vertical}

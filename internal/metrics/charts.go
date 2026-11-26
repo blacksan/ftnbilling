@@ -304,49 +304,58 @@ func BarsH(rows []BarRow, color, empty string) template.HTML {
 	return chartBox(b.String())
 }
 
-// HourStrip draws 24 cells (EAT hour of day) shaded by value (percent).
-// NaN cells are blank. The scale runs from 0 to the largest value (at least 10).
-func HourStrip(vals [24]float64) template.HTML {
-	const W, H = 560, 84
-	maxV, have := 10.0, false
+// barTick formats a y tick; steps under 1 keep two decimals so 0.25 does not read as 0.2.
+func barTick(v, step float64) string {
+	if step >= 1 {
+		return fmtTick(v)
+	}
+	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.2f", v), "0"), ".")
+}
+
+// HourBars draws a 24-bar chart (EAT hour of day on x, average WAN use as % of capacity on y).
+// NaN hours have no bar. The y axis runs from 0 to a round value above the observed peak, with
+// a floor of 1% so an all-near-zero day still draws a flat, readable chart without dividing by zero.
+func HourBars(vals [24]float64) template.HTML {
+	const W, H = 560, 200
+	const L, R, T, B = 40, 12, 22, 34
+	peak, have := 0.0, false
 	for _, v := range vals {
-		if !math.IsNaN(v) {
+		if finite(v) {
 			have = true
-			maxV = math.Max(maxV, v)
+			peak = math.Max(peak, math.Max(v, 0))
 		}
 	}
 	if !have {
 		return emptyChart(W, H, "busy hours", "No hourly data yet")
 	}
-	b := svgOpen(W, H, "average WAN utilisation by hour of day")
+	step := niceStep(math.Max(peak, 1), 4)
+	yMax := math.Ceil(math.Max(peak, 1)/step) * step
+	pw, ph := float64(W-L-R), float64(H-T-B)
+	y := func(v float64) float64 { return float64(T) + ph*(1-v/yMax) }
+	b := svgOpen(W, H, "average WAN utilisation by hour of day, EAT")
 	fmt.Fprintf(b, `<rect x="0.5" y="0.5" width="%d" height="%d" rx="6" class="cbg" fill="#ffffff" stroke="%s"/>`, W-1, H-1, colGrid)
-	cw := float64(W-24) / 24
+	for v := 0.0; v <= yMax+step/2; v += step {
+		fmt.Fprintf(b, `<line x1="%d" x2="%d" y1="%.1f" y2="%.1f" class="cg" stroke="%s" stroke-width="1"/>`, L, W-R, y(v), y(v), colGrid)
+		fmt.Fprintf(b, `<text x="%d" y="%.1f" text-anchor="end" font-size="11.5" class="cm" fill="%s">%s</text>`, L-6, y(v)+4, colMuted, barTick(v, step))
+	}
+	fmt.Fprintf(b, `<text x="8" y="14" font-size="11.5" class="cm" fill="%s">%% of capacity</text>`, colMuted)
+	slot := pw / 24
 	for h, v := range vals {
-		x := 12 + float64(h)*cw
-		if math.IsNaN(v) {
-			fmt.Fprintf(b, `<rect x="%.1f" y="12" width="%.1f" height="36" rx="3" class="cna" fill="#e2e8f0"/>`, x+1, cw-2)
-		} else {
-			t := v / maxV
-			// teal 50 to teal 600 (the brand ramp)
-			r := 237 + (26-237)*t
-			g := 247 + (109-247)*t
-			bl := 247 + (107-247)*t
-			txt := "hd" // cell text: dark on light cells, white on dark ones, in both themes
-			if t > 0.82 {
-				txt = "hw"
+		x := float64(L) + float64(h)*slot
+		if finite(v) {
+			v = math.Max(v, 0)
+			bh := ph * v / yMax
+			if v > 0 && bh < 1 {
+				bh = 1 // a tiny but real value stays visible
 			}
-			fmt.Fprintf(b, `<rect x="%.1f" y="12" width="%.1f" height="36" rx="3" fill="rgb(%.0f,%.0f,%.0f)"><title>%02d:00 EAT: %.1f%%</title></rect>`, x+1, cw-2, r, g, bl, h, v)
-			lab := fmt.Sprintf("%.0f", v)
-			if v < 10 {
-				lab = fmt.Sprintf("%.1f", v)
-			}
-			fmt.Fprintf(b, `<text x="%.1f" y="35" text-anchor="middle" font-size="10" class="%s">%s</text>`, x+cw/2, txt, lab)
+			fmt.Fprintf(b, `<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="2"%s fill="%s"><title>%s</title></rect>`,
+				x+slot*0.15, float64(T)+ph-bh, slot*0.7, bh, tokClass("fs", ColDown), ColDown, esc(fmt.Sprintf("%02d:00 EAT: %.1f%% of capacity", h, v)))
 		}
-		if h%3 == 0 {
-			fmt.Fprintf(b, `<text x="%.1f" y="64" text-anchor="middle" font-size="11.5" class="cm" fill="%s">%02d</text>`, x+cw/2, colMuted, h)
+		if h%6 == 0 {
+			fmt.Fprintf(b, `<text x="%.1f" y="%d" text-anchor="middle" font-size="11.5" class="cm" fill="%s">%02d</text>`, x+slot/2, H-16, colMuted, h)
 		}
 	}
-	fmt.Fprintf(b, `<text x="%d" y="79" font-size="11" class="cm" fill="%s">Hour of day (EAT). Number = average WAN use, %% of capacity. Darker = busier.</text>`, 12, colMuted)
+	fmt.Fprintf(b, `<text x="%d" y="%d" text-anchor="middle" font-size="11" class="cm" fill="%s">Hour of day (EAT)</text>`, L+int(pw)/2, H-3, colMuted)
 	b.WriteString(`</svg>`)
 	return chartBox(b.String())
 }

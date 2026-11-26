@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"encoding/binary"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -364,8 +365,8 @@ func TestReportEmptyAndRouterUnreachable(t *testing.T) {
 	for i := range nanHours {
 		nanHours[i] = math.NaN()
 	}
-	if !strings.Contains(string(HourStrip(nanHours)), "No hourly data yet") {
-		t.Fatal("empty strip")
+	if !strings.Contains(string(HourBars(nanHours)), "No hourly data yet") {
+		t.Fatal("empty bars")
 	}
 }
 
@@ -619,4 +620,46 @@ func TestIPoEUsageFromQueueCounters(t *testing.T) {
 	if got := c.codeForIP("10.5.50.60", t0.Add(2*time.Minute)); got != "K7Q2MX" {
 		t.Fatalf("ip->code %q", got)
 	}
+}
+
+func TestHourBars(t *testing.T) {
+	check := func(name string, v [24]float64, wantBars int) {
+		t.Helper()
+		out := string(HourBars(v))
+		if strings.Contains(out, "NaN") || strings.Contains(out, "Inf") {
+			t.Fatalf("%s: NaN/Inf in output", name)
+		}
+		if wantBars == 0 {
+			if strings.Contains(out, "<svg") {
+				t.Fatalf("%s: expected empty state", name)
+			}
+			return
+		}
+		if got := strings.Count(out, "<title>"); got != wantBars {
+			t.Fatalf("%s: %d bars, want %d", name, got, wantBars)
+		}
+		i := strings.Index(out, "<svg")
+		d := xml.NewDecoder(strings.NewReader(out[i : strings.LastIndex(out, "</svg>")+6]))
+		for {
+			if _, err := d.Token(); err != nil {
+				if err == io.EOF {
+					break
+				}
+				t.Fatalf("%s: not well-formed: %v", name, err)
+			}
+		}
+	}
+	var normal, zero, nan [24]float64
+	for i := range normal {
+		normal[i] = float64(i) * 1.7
+		nan[i] = math.NaN()
+	}
+	check("normal", normal, 24)
+	check("zero", zero, 24)
+	nan[3], nan[20] = 0.1, 0.05
+	check("sparse", nan, 2)
+	for i := range nan {
+		nan[i] = math.NaN()
+	}
+	check("empty", nan, 0)
 }

@@ -114,7 +114,7 @@ func (s *Server) adminMetrics(w http.ResponseWriter, r *http.Request) {
 	pg.Data = map[string]any{
 		"R": rep, "Periods": metrics.Periods, "Period": string(period), "Sort": sortKey,
 		"WANChart": wan, "OLTChart": olt, "TopChart": topChart, "SvcChart": svcBars(rep.Services),
-		"LatChart": latency, "LossChart": loss, "Busy": metrics.HourStrip(rep.Busy),
+		"LatChart": latency, "LossChart": loss, "Busy": metrics.HourBars(rep.Busy),
 		"Cfg": cfg, "Mock": s.cfg.RouterMock, "FUPTB": cfg.FUPTB,
 		"FUPTBUsed": rep.MonthGB / 1000, "FUPBar": clampPct(rep.FUPPct),
 		"C": map[string]any{"WANUtil": metrics.QoEWANUtilPct, "WANHours": metrics.QoEWANHours, "CapShare": metrics.QoECapSharePct,

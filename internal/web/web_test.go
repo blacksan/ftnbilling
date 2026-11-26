@@ -349,7 +349,7 @@ func TestMetricsPageRendersEmptyWithRouterDown(t *testing.T) {
 	a.rt.SetFail(io.ErrUnexpectedEOF)
 	for _, p := range []string{"today", "7d", "30d", "month", "bogus"} {
 		h := a.adminGet(t, "/admin/metrics?period="+p)
-		for _, want := range []string{"no data yet", "Things to look at", "<svg", "Waiting for data", "Busy hours", "WAN this month vs fair-use limit"} {
+		for _, want := range []string{"no data yet", "<svg", "Busy hours", "WAN this month vs fair-use limit"} {
 			if !strings.Contains(h, want) {
 				t.Errorf("%s: empty page lacks %q", p, want)
 			}
@@ -372,13 +372,23 @@ func TestMetricsPageWithDemoDataDrillDownSortAndCSV(t *testing.T) {
 	}
 	a.adminPost(t, "/admin/metrics/demo", url.Values{"period": {"7d"}})
 	h := a.adminGet(t, "/admin/metrics?period=7d")
-	for _, want := range []string{"Top 10 houses by download", "Services", "YouTube", "Flat 3B", "Mbps", "Download GB", "Time at cap", "Busy hours", "capacity 500", "Things to look at", "fair-use", "Packet loss", "WAN busy hours"} {
+	for _, want := range []string{"Top 10 houses by download", "Services", "YouTube", "Flat 3B", "Mbps", "Download GB", "Time at cap", "Busy hours", "capacity 500"} {
 		if !strings.Contains(h, want) {
 			t.Errorf("demo page lacks %q", want)
 		}
 	}
 	if strings.Contains(h, "NaN") {
 		t.Error("NaN in page")
+	}
+	for _, gone := range []string{"Things to look at", "Fine:", "Waiting for data", "Darker = busier"} {
+		if strings.Contains(h, gone) {
+			t.Errorf("advisory/old strip text %q still on the page", gone)
+		}
+	}
+	busy := h[strings.Index(h, "Busy hours"):]
+	busy = busy[:strings.Index(busy, "</div></div>")]
+	if !strings.Contains(busy, "<svg") || strings.Count(busy, ":00 EAT:") < 1 || strings.Count(busy, ":00 EAT:") > 24 || strings.Contains(busy, "Darker") {
+		t.Errorf("busy hours is not a bar chart: %.300s", busy)
 	}
 	if n := strings.Count(h, "<svg"); n < 7 {
 		t.Errorf("only %d charts", n)
